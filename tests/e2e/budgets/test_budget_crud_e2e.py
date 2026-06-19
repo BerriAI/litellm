@@ -27,27 +27,26 @@ def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager)
     assert row.budget_reset_at, "budget_duration did not schedule a reset"
 
     # Attach the budget to a key and confirm the key reflects it.
-    key = client.generate_key(budget_id=budget_id)
+    key = client.generate_key(extra_params={"budget_id": budget_id})
     resources.defer(lambda: client.delete_key(key))
-    info = client.gateway.key_info(key)
-    linked = info.litellm_budget_table
-    assert info.budget_id == budget_id or (linked is not None and linked.max_budget == 12.5), (
-        f"key does not reflect attached budget: {info.budget_id}, {linked}"
+    info = client.key_info(key)
+    linked = info.get("litellm_budget_table") or {}
+    assert info.get("budget_id") == budget_id or linked.get("max_budget") == 12.5, (
+        f"key does not reflect attached budget: {info.get('budget_id')}, {linked}"
     )
 
 
 def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManager) -> None:
     budget_id = client.create_budget(max_budget=1.0)
-    resources.defer(lambda: client.delete_budget(budget_id))
     client.delete_budget(budget_id)
     assert not client.budget_info(budget_id), "budget still present after delete"
 
 
 def test_budget_duration_schedules_reset_on_key(client: BudgetClient, resources: ResourceManager) -> None:
-    key = client.generate_key(max_budget=10.0, budget_duration="30d")
+    key = client.generate_key(max_budget=10.0, extra_params={"budget_duration": "30d"})
     resources.defer(lambda: client.delete_key(key))
 
-    reset_at = client.gateway.key_info(key).budget_reset_at
+    reset_at = client.key_info(key).get("budget_reset_at")
     assert reset_at, "budget_duration did not set budget_reset_at on the key"
 
     # budget_duration schedules a FUTURE reset. Don't assume now+30d exactly: the

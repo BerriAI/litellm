@@ -11,9 +11,8 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
-from e2e_http import require_successful_call
 from lifecycle import ResourceManager
+from proxy_client import require_successful_call, unique_marker
 
 pytestmark = pytest.mark.e2e
 
@@ -25,11 +24,11 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
         key,
         "claude-haiku-4-5",
         f"hi {unique_marker()}",
-        tags=[tag],
-        max_tokens=16,
+        metadata={"tags": [tag]},
+        extra_body={"max_tokens": 16},
     )
     if not result.ok and not is_budget_block(result):
-        require_successful_call(result)
+        require_successful_call(result)  # non-budget error -> skip
     return result
 
 
@@ -53,7 +52,7 @@ def test_tag_budget_blocks_tagged_requests(
     # A request with an unbudgeted tag on the same key is unaffected.
     free_tag = f"e2e-free-tag-{unique_marker()}"
     other = _tagged_call(client, scoped_key, free_tag)
+    require_successful_call(other)
     assert not is_budget_block(other), (
         f"unbudgeted tag {free_tag!r} was blocked by {budgeted_tag!r}'s budget"
     )
-    require_successful_call(other)

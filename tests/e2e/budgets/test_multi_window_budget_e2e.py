@@ -13,10 +13,8 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
-from e2e_http import require_successful_call
 from lifecycle import ResourceManager
-from models import BudgetWindow
+from proxy_client import require_successful_call, unique_marker
 
 pytestmark = pytest.mark.e2e
 
@@ -25,7 +23,7 @@ WINDOW_SECONDS = 30  # the tight window; calls succeed again only after it elaps
 
 def _call(client: BudgetClient, key: str):
     return client.chat(
-        key, "claude-haiku-4-5", f"window {unique_marker()}", max_tokens=16
+        key, "claude-haiku-4-5", f"window {unique_marker()}", extra_body={"max_tokens": 16}
     )
 
 
@@ -33,10 +31,12 @@ def test_short_window_blocks_then_resets(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
     key = client.generate_key(
-        budget_limits=[
-            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=3e-6),
-            BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
-        ]
+        extra_params={
+            "budget_limits": [
+                {"budget_duration": f"{WINDOW_SECONDS}s", "max_budget": 3e-6},
+                {"budget_duration": "1m", "max_budget": 1.0},  # roomy: never blocks
+            ]
+        }
     )
     resources.defer(lambda: client.delete_key(key))
 
@@ -52,19 +52,19 @@ def test_short_window_blocks_then_resets(
         time.sleep(2)
     assert blocked, f"{WINDOW_SECONDS}s window never enforced"
 
-    # 2. the window resets at the next wall-clock-aligned boundary (up to a window
-    #    after start), then the reset job (~15-20s rescheduler) zeroes the spend.
-    #    Allow generous headroom for that alignment + rescheduler latency; a stuck
-    #    rescheduler is caught by the wait-loop timeout, not this elapsed bound.
-    deadline = time.monotonic() + 150
+    # 2. the window resets at the next wall-clock-aligned boundary (so it can land
+    #    a little under WINDOW_SECONDS from creation) + the reset job. When a call
+    #    flows again the window has reset; the elapsed clock must be short enough
+    #    that this is the 30s window resetting, not the roomy 1m one.
+    deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         time.sleep(5)
         result = _call(client, key)
         if result.ok:
             elapsed = time.monotonic() - start
-            assert elapsed < WINDOW_SECONDS + 90, (
+            assert elapsed < WINDOW_SECONDS + 45, (
                 f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
             )
             return
         assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
-    pytest.fail(f"{WINDOW_SECONDS}s window never reset within 150s")
+    pytest.fail(f"{WINDOW_SECONDS}s window never reset within 90s")

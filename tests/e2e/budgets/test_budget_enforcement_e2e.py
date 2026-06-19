@@ -12,14 +12,13 @@ enforcement is broken -> fail.
 
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Type
+from typing import Callable, Dict, List, Type
 
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
-from e2e_http import require_successful_call
 from lifecycle import run_case
+from proxy_client import require_successful_call, unique_marker
 
 pytestmark = pytest.mark.e2e
 
@@ -28,14 +27,11 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
     block within a couple calls off real-time reservation counters; the end-user
     budget enforces off table spend that lands on the batch write, so it takes a
     few more. A non-budget error fails hard (never a skip)."""
+    extra: Dict[str, object] = {"max_tokens": 16}
+    if user:
+        extra["user"] = user
     for _ in range(40):
-        result = client.chat(
-            key,
-            "claude-haiku-4-5",
-            f"spend {unique_marker()}",
-            max_tokens=16,
-            user=user or None,
-        )
+        result = client.chat(key, "claude-haiku-4-5", f"spend {unique_marker()}", extra_body=extra)
         if is_budget_block(result):
             return
         require_successful_call(result)
@@ -79,7 +75,7 @@ class InternalUserBudgetCase(_BudgetCase):
         user_id = self.client.create_user(max_budget=3e-6)
         self._undo.append(lambda: self.client.delete_user(user_id))
         # personal key (no team) -> the user budget governs
-        self.key = self.client.generate_key(user_id=user_id)
+        self.key = self.client.generate_key(extra_params={"user_id": user_id})
         self._undo.append(lambda: self.client.delete_key(self.key))
 
 
@@ -108,7 +104,7 @@ class OrganizationBudgetCase(_BudgetCase):
             alias=f"e2e-budget-team-{unique_marker()}", organization_id=org_id
         )
         self._undo.append(lambda: self.client.delete_team(team_id))
-        self.key = self.client.generate_key(team_id=team_id)
+        self.key = self.client.generate_key(extra_params={"team_id": team_id})
         self._undo.append(lambda: self.client.delete_key(self.key))
 
 
@@ -123,12 +119,10 @@ class TeamMemberBudgetCase(_BudgetCase):
         user_id = self.client.create_user(max_budget=100.0)
         self._undo.append(lambda: self.client.delete_user(user_id))
         self.client.add_team_member(team_id, user_id, max_budget_in_team=3e-6)
-        self.key = self.client.generate_key(team_id=team_id, user_id=user_id)
+        self.key = self.client.generate_key(
+            extra_params={"team_id": team_id, "user_id": user_id}
+        )
         self._undo.append(lambda: self.client.delete_key(self.key))
-
-
-def _case_id(case_cls: Type[_BudgetCase]) -> str:
-    return case_cls.__name__
 
 
 @pytest.mark.parametrize(
@@ -140,7 +134,7 @@ def _case_id(case_cls: Type[_BudgetCase]) -> str:
         OrganizationBudgetCase,
         TeamMemberBudgetCase,
     ],
-    ids=_case_id,
+    ids=lambda c: c.__name__,
 )
 def test_budget_enforcement(
     client: BudgetClient, case_cls: Type[_BudgetCase]
