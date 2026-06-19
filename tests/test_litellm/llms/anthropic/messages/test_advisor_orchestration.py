@@ -659,6 +659,34 @@ def test_allow_client_side_advisor_credentials_defaults_true_outside_proxy():
             assert _allow_client_side_advisor_credentials() is True
 
 
+def test_advisor_gate_propagates_non_import_errors():
+    """Non-ImportError failures during the proxy module probe must not
+    default permissive. If the proxy is partially loaded and raises
+    RuntimeError, the gate should surface that rather than silently
+    returning True."""
+    import sys
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors import (
+        advisor,
+    )
+
+    original = sys.modules.get("litellm.proxy.proxy_server")
+
+    class _Broken:
+        def __getattr__(self, _name):
+            raise RuntimeError("partial proxy boot")
+
+    sys.modules["litellm.proxy.proxy_server"] = _Broken()
+    try:
+        with pytest.raises(RuntimeError, match="partial proxy boot"):
+            advisor._allow_client_side_advisor_credentials()
+    finally:
+        if original is None:
+            sys.modules.pop("litellm.proxy.proxy_server", None)
+        else:
+            sys.modules["litellm.proxy.proxy_server"] = original
+
+
 @pytest.mark.asyncio
 async def test_advisor_ignores_tool_credentials_when_clientside_disabled():
     """Driven by the real proxy flag (not a patched gate): with

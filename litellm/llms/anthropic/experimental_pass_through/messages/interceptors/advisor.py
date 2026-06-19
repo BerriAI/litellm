@@ -196,7 +196,7 @@ def _allow_client_side_advisor_credentials() -> bool:
     """
     try:
         from litellm.proxy.proxy_server import general_settings
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return True
     return general_settings.get("allow_client_side_credentials") is True
 
