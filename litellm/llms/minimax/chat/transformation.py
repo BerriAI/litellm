@@ -137,29 +137,39 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
 
                 content = delta.get("content", "")
                 if content and isinstance(content, str):
-                    reasoning_matches = re.findall(
-                        r"<think>(.*?)</think>", content, re.DOTALL
-                    )
-                    if reasoning_matches:
-                        self.pending_reasoning += "".join(reasoning_matches)
+                    if "<think>" in content and "</think>" in content:
+                        reasonings = re.findall(
+                            r"<think>(.*?)</think>", content, re.DOTALL
+                        )
+                        if reasonings:
+                            self.pending_reasoning += "".join(reasonings)
                         clean_content = re.sub(
                             r"<think>.*?</think>", "", content, flags=re.DOTALL
                         )
-                        delta["content"] = clean_content if clean_content else None
+                        delta["content"] = clean_content if clean_content.strip() else None
                         if self.pending_reasoning:
                             delta["reasoning_content"] = self.pending_reasoning
                             self.started_reasoning_content = True
-                    elif self.started_reasoning_content and not self.finished_reasoning_content:
+                    elif "<think>" in content and "</think>" not in content:
+                        clean_content = content.replace("<think>", "", 1)
+                        delta["content"] = None
+                        delta["reasoning_content"] = clean_content.strip()
+                        self.started_reasoning_content = True
+                    elif "</think>" in content and "<think>" not in content:
+                        parts = content.split("</think>", 1)
+                        before = parts[0].strip()
+                        after = parts[1] if len(parts) > 1 else ""
+                        if before:
+                            delta["reasoning_content"] = before
+                        delta["content"] = after if after.strip() else ("" if not after else None)
                         self.finished_reasoning_content = True
-                        self.pending_reasoning = ""
-                        clean_content = re.sub(
-                            r"</?think>", "", content
-                        )
-                        delta["content"] = clean_content if clean_content else None
-                    elif not self.started_reasoning_content:
-                        if "</think>" in content:
-                            clean_content = content.replace("</think>", "").replace("<think>", "")
-                            delta["content"] = clean_content if clean_content else None
+                    elif has_reasoning:
+                        pass
+                    elif not self.finished_reasoning_content and content.strip():
+                        if not self.started_reasoning_content:
+                            self.started_reasoning_content = True
+                        delta["reasoning_content"] = content.strip()
+                        delta["content"] = None
 
             return super().chunk_parser(chunk)
         except Exception:
