@@ -32,6 +32,8 @@ from models import (
     KeyInfo,
     KeyInfoParams,
     KeyInfoResponse,
+    ModelInfoEntry,
+    ModelInfoResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsParams,
@@ -93,6 +95,18 @@ class Gateway:
                 response_type=KeyInfoResponse,
             )
         ).info
+
+    def model_info(self) -> list[ModelInfoEntry]:
+        """Every configured deployment with the price the proxy resolved for it
+        (config override merged over cost-map defaults)."""
+        return unwrap(
+            self.transport.get(
+                "/model/info",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=ModelInfoResponse,
+            )
+        ).data
 
     # ---- LLM calls ------------------------------------------------------
 
