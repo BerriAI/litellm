@@ -137,6 +137,65 @@ def test_chat_boundary_preserves_cache_control_injection_points():
         ), f"{param.value} leaked past the chat-completion strip"
 
 
+def test_chat_boundary_strips_internal_params_from_splat_body():
+    """Regression: `cache_control_injection_points` is preserved in `optional_params`
+    so AmazonConverseConfig can consume it, but splat-style transforms (OpenAI,
+    Anthropic, OpenAI-compatible) build the wire body with `**optional_params` and
+    never pop it. The shared handler must therefore strip internal params from the
+    body returned by `transform_request` to prevent extraneous-field 400s on
+    strict-schema providers."""
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.types.utils import ModelResponse
+
+    handler = BaseLLMHTTPHandler()
+
+    captured: dict = {}
+
+    provider_config = Mock()
+    provider_config.should_fake_stream.return_value = False
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://example.invalid/chat"
+
+    def _splat_transform_request(*, model, messages, optional_params, **_):
+        return {"model": model, "messages": messages, **optional_params}
+
+    provider_config.transform_request.side_effect = _splat_transform_request
+
+    def _capture_sign_request(*, request_data, headers, **_):
+        captured["body"] = request_data
+        raise RuntimeError("stop after capture")
+
+    provider_config.sign_request.side_effect = _capture_sign_request
+
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded["cache_control_injection_points"] = [{"location": "tool_config"}]
+    seeded["temperature"] = 0.5
+
+    with pytest.raises(RuntimeError, match="stop after capture"):
+        handler.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=None,
+            custom_llm_provider="openai",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params=seeded,
+            timeout=10.0,
+            litellm_params={},
+            acompletion=False,
+            provider_config=provider_config,
+        )
+
+    body = captured["body"]
+    for param in LiteLLMInternalParam:
+        assert (
+            param.value not in body
+        ), f"{param.value} leaked into the wire body past the splat transform"
+    assert body["temperature"] == 0.5
+
+
 def test_prepare_fake_stream_request():
     # Initialize the BaseLLMHTTPHandler
     handler = BaseLLMHTTPHandler()

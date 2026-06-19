@@ -487,8 +487,9 @@ def strip_internal_params_from_chat_request_body(data: dict) -> dict:
     Strip variant for the chat-completion boundary that preserves keys consumed
     inside `transform_request` (currently `cache_control_injection_points`, which
     `AmazonConverseConfig` reads to append a `cachePoint` to Bedrock tool_config).
-    Splat-style transforms still call `strip_internal_params_from_request_body`
-    themselves before serialization, so the param never leaks into the wire body.
+    The shared chat handler re-applies `strip_internal_params_from_request_body`
+    to the body returned by `transform_request`, so splat-style transforms that
+    splat `**optional_params` into the wire body cannot leak the preserved key.
     """
     if not isinstance(data, dict):
         return data

@@ -10,6 +10,7 @@ import litellm.types
 import litellm.types.utils
 from litellm.litellm_core_utils.core_helpers import (
     strip_internal_params_from_chat_request_body,
+    strip_internal_params_from_request_body,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
@@ -376,6 +377,7 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = strip_internal_params_from_request_body(data)
 
         ## LOGGING
         logging_obj.pre_call(

@@ -31,8 +31,9 @@ LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS: frozenset[str] = (
 boundary. `cache_control_injection_points` is consumed inside `transform_request`
 by `AmazonConverseConfig` (it appends a `cachePoint` to the Bedrock tool list for
 ``location: "tool_config"``), so it must reach the transform on the
-``converse_like/`` and other shared HTTP handler routes. Splat-style transforms
-that never consume it strip the full set themselves before serialization."""
+``converse_like/`` and other shared HTTP handler routes. The shared HTTP handler
+re-applies the full strip to the body returned by `transform_request`, so
+splat-style transforms cannot leak the preserved key into the wire payload."""
 
 MCP_INTERNAL_PARAMS: frozenset[str] = frozenset(
     {

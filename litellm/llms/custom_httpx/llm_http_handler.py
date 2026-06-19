@@ -454,6 +454,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = strip_internal_params_from_request_body(data)
 
         if extra_body is not None:
             data = {**data, **extra_body}
