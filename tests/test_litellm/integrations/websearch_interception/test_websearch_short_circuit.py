@@ -61,6 +61,70 @@ class TestTryShortCircuitSearch:
         mock_search.assert_called_once_with("Search for Claude Code releases")
 
     @pytest.mark.asyncio
+    async def test_emit_native_blocks_flag_drives_native_output(self):
+        """emit_native_blocks=True yields native blocks even when the tool has
+        already been rewritten to litellm_web_search.
+
+        In the real request path the pre-request hook converts the native
+        web_search_* tool into the litellm_web_search standard form before the
+        short-circuit runs, so inspecting ``tools`` here no longer detects a
+        native client. The flag carries that signal across the conversion.
+        """
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("results", None)
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "litellm_web_search"},
+                    }
+                ],
+                custom_llm_provider="github_copilot",
+                emit_native_blocks=True,
+            )
+
+        block_types = [b["type"] for b in result["content"]]
+        assert "server_tool_use" in block_types
+        assert "web_search_tool_result" in block_types
+
+    @pytest.mark.asyncio
+    async def test_converted_tool_without_flag_stays_text_only(self):
+        """Converted tool + emit_native_blocks=False → text-only, no native blocks.
+
+        Non-native callers (those that sent the litellm_web_search standard tool)
+        must keep the original text-only payload.
+        """
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("results", None)
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "litellm_web_search"},
+                    }
+                ],
+                custom_llm_provider="github_copilot",
+                emit_native_blocks=False,
+            )
+
+        block_types = [b["type"] for b in result["content"]]
+        assert block_types == ["text"]
+
+    @pytest.mark.asyncio
     async def test_does_not_short_circuit_mixed_tools(self):
         """Mix of web_search and other tools → NOT short-circuited"""
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
