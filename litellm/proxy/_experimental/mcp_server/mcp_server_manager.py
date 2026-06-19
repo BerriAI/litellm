@@ -4513,4 +4513,19 @@ class MCPServerManager:
         return [server for server in results if server is not None]
 
 
-global_mcp_server_manager: MCPServerManager = MCPServerManager()
+def _make_global_mcp_server_manager() -> MCPServerManager:
+    """Pick the egress manager: v2 (UpstreamConnection-backed) when LITELLM_USE_V2_MCP_EGRESS is
+    set, else v1. The v2 import is lazy so it can subclass MCPServerManager without an import
+    cycle, and flag-off never touches the v2 module."""
+    from litellm.proxy._experimental.mcp_server.v2_egress import v2_egress_enabled
+
+    if v2_egress_enabled():
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager_v2 import (
+            MCPServerManagerV2,
+        )
+
+        return MCPServerManagerV2()
+    return MCPServerManager()
+
+
+global_mcp_server_manager: MCPServerManager = _make_global_mcp_server_manager()
