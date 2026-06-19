@@ -24,7 +24,7 @@ from litellm.proxy.auth_v2.authorization import (
     Role,
 )
 from litellm.proxy.auth_v2.authenticators.session import SessionAuthenticator
-from litellm.proxy.auth_v2.resolvers import IdentityResolver
+from litellm.proxy.auth_v2.resolvers import Resolver
 from litellm.proxy.auth_v2.sessions import (
     InMemorySessionStore,
     RedisSessionStore,
@@ -83,7 +83,7 @@ class AuthSecurity:
     def __init__(
         self,
         config: AuthConfig,
-        resolver: IdentityResolver,
+        resolver: Resolver,
         authorizer: Optional[Authorizer] = None,
         authenticators: Optional[List[Authenticator]] = None,
         basic_verifier: Optional[BasicAuthVerifier] = None,

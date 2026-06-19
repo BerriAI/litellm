@@ -55,10 +55,10 @@ class _FakeResolver:
     """Resolver double for the security-layer tests.
 
     These tests inject fully-formed Principals (arbitrary scopes/roles) keyed by
-    API key, which the production DbIdentityStore cannot express; DbIdentityStore
+    API key, which the production DbResolver cannot express; DbResolver
     has its own coverage in test_resolver.py. An API-key credential is looked up
     by its raw-key claim; anything else echoes the credential's subject. Returns a
-    fresh Principal per the IdentityResolver contract.
+    fresh Principal per the Resolver contract.
     """
 
     def __init__(self, by_key: Dict[str, Principal]) -> None:
