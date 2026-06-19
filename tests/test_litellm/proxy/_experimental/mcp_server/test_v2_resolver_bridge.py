@@ -324,3 +324,92 @@ async def test_token_exchange_server_maps_to_config():
     assert spec.config.client_secret.get_secret_value() == "csecret"
     assert spec.config.scopes == ("a", "b")
     assert spec.resource == "https://aud.example"  # audience preferred for the binding
+
+
+async def test_interactive_oauth2_no_delegate_maps_to_authorization_code():
+    # LIT-3795: a non-delegated interactive oauth2 server resolves to authorization_code
+    # (gateway-stored per-user token), so the caller JWT is never forwarded upstream.
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+        AuthorizationCodeConfig,
+    )
+
+    server = MCPServer(
+        server_id="oa1",
+        name="oa1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        delegate_auth_to_upstream=False,
+        client_id="cid",
+        client_secret="csecret",
+        authorization_url="https://idp/authorize",
+        token_url="https://idp/token",
+        scopes=["openid"],
+    )
+    spec = _to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, AuthorizationCodeConfig)
+    assert spec.config.token_url == "https://idp/token"
+    assert spec.config.client_id == "cid"
+
+
+async def test_interactive_oauth2_delegate_maps_to_passthrough():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import PassthroughConfig
+
+    server = MCPServer(
+        server_id="oa2",
+        name="oa2",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        delegate_auth_to_upstream=True,
+    )
+    spec = _to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, PassthroughConfig)
+
+
+async def test_none_oauth_passthrough_maps_to_passthrough():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import PassthroughConfig
+
+    server = MCPServer(
+        server_id="pt1",
+        name="pt1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.none,
+        oauth_passthrough=True,
+        extra_headers=["Authorization"],
+    )
+    spec = _to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, PassthroughConfig)
+
+
+async def test_none_without_passthrough_maps_to_none():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import NoneConfig
+
+    server = MCPServer(
+        server_id="n1",
+        name="n1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.none,
+    )
+    spec = _to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, NoneConfig)

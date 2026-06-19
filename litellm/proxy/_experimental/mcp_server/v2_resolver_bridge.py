@@ -47,6 +47,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ClientCredentialsConfig,
     CredError,
     NoneConfig,
+    PassthroughConfig,
     ServerSpec,
     SharedKey,
     StaticKeys,
@@ -111,6 +112,14 @@ def _provider() -> UpstreamCredentialProvider:
 def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     resource = server.url or server.server_id
     if server.auth_type in (None, MCPAuth.none):
+        # A none server opted into upstream OAuth passthrough forwards the caller's bearer; the
+        # passthrough arm sends the inbound token. Otherwise no upstream credential.
+        if server.is_oauth_passthrough:
+            return ServerSpec(
+                server_id=server.server_id,
+                resource=resource,
+                config=PassthroughConfig(),
+            )
         return ServerSpec(
             server_id=server.server_id, resource=resource, config=NoneConfig()
         )
@@ -171,7 +180,31 @@ def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 scopes=tuple(server.scopes or ()),
             ),
         )
-    return None  # other modes are not grafted yet
+    if server.needs_user_oauth_token:
+        # Interactive oauth2 (3LO), not M2M/exchange (handled above). delegate_auth_to_upstream
+        # forwards the caller token (passthrough); otherwise the gateway holds a per-user token
+        # (authorization_code). This split is the LIT-3795 fix: a non-delegated interactive oauth2
+        # server must not forward the caller JWT upstream.
+        if server.delegate_auth_to_upstream:
+            return ServerSpec(
+                server_id=server.server_id,
+                resource=resource,
+                config=PassthroughConfig(),
+            )
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=AuthorizationCodeConfig(
+                client_id=server.client_id,
+                client_secret=(
+                    SecretStr(server.client_secret) if server.client_secret else None
+                ),
+                authorization_url=server.authorization_url,
+                token_url=server.token_url,
+                scopes=tuple(server.scopes or ()),
+            ),
+        )
+    return None  # aws_sigv4 uses the aws_auth seam; misconfigured modes defer to v1
 
 
 def _added_headers(auth: httpx.Auth) -> Dict[str, str]:
