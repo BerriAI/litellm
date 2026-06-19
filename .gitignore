@@ -1,5 +1,6 @@
 .python-version
 .venv
+rust/target/
 .venv_policy_test
 .env
 .claude
