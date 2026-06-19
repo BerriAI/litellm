@@ -524,7 +524,14 @@ export default function KeyInfoView({
                     of{" "}
                     {currentKeyData.max_budget !== null
                       ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-                      : "Unlimited"}
+                      : (() => {
+                        const keyTeam = currentKeyData.team_id
+                          ? teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]
+                          : null;
+                        return keyTeam?.max_budget != null
+                          ? `$${formatNumberWithCommas(keyTeam.max_budget, 2)} (Team: ${keyTeam.team_alias || keyTeam.team_id}${keyTeam.budget_duration ? ` / ${keyTeam.budget_duration}` : ""})`
+                          : "Unlimited";
+                      })()}
                   </Text>
                 </div>
               </Card>

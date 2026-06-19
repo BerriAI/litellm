@@ -103,6 +103,8 @@ const baseAuthorized = {
   userEmail: null,
   disabledPersonalKeyCreation: null,
   showSSOBanner: false,
+  isLoading: false,
+  isAuthorized: true,
 };
 
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
@@ -151,10 +153,67 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
   it("renders 'Unlimited' when max_budget is null", async () => {
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: null }}
-        onClose={() => {}}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null } as any}
+        onClose={() => { }}
         keyId={"test-key-id"}
-        onKeyDataUpdate={() => {}}
+        onKeyDataUpdate={() => { }}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders team budget with alias and duration when key has no own budget but team has one", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [{ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" }] as any,
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-123" } as any}
+        onClose={() => { }}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => { }}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$1,200\.00 \(Team: Test Budget \/ 30d\)/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders team budget without duration when team has no budget_duration", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [{ team_id: "team-456", team_alias: "No Duration Team", max_budget: 500, budget_duration: null }] as any,
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as any}
+        onClose={() => { }}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => { }}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$500\.00 \(Team: No Duration Team\)/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders 'Unlimited' when key has no budget and team also has no budget", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [{ team_id: "team-789", team_alias: "Free Team", max_budget: null, budget_duration: null }] as any,
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-789" } as any}
+        onClose={() => { }}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => { }}
         teams={[]}
       />,
     );
@@ -163,3 +222,4 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     });
   });
 });
+
