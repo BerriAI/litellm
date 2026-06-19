@@ -1845,16 +1845,6 @@
       "count": 1
     }
   },
-  "src/components/survey/NudgePrompt.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/survey/SurveyModal.tsx": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
   "src/components/tag_management/TagTable.tsx": {
     "no-restricted-imports": {
       "count": 1

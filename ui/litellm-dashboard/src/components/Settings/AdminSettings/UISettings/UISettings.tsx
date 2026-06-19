@@ -28,7 +28,6 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
-  const disableUINudgesProperty = schema?.properties?.disable_ui_nudges;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -52,20 +51,6 @@ export default function UISettings() {
   const handleToggleTeamAdminDelete = (checked: boolean) => {
     updateSettings(
       { disable_team_admin_delete_team_user: checked },
-      {
-        onSuccess: () => {
-          NotificationManager.success(t("settingsPages.uISettings.updateSuccess"));
-        },
-        onError: (error) => {
-          NotificationManager.fromBackend(error);
-        },
-      },
-    );
-  };
-
-  const handleToggleDisableUINudges = (checked: boolean) => {
-    updateSettings(
-      { disable_ui_nudges: checked },
       {
         onSuccess: () => {
           NotificationManager.success(t("settingsPages.uISettings.updateSuccess"));
@@ -479,25 +464,6 @@ export default function UISettings() {
               <Typography.Text strong>{t("settingsPages.uISettings.disableCustomApiKeysLabel")}</Typography.Text>
               <Typography.Text type="secondary">
                 {disableCustomApiKeysProperty?.description ?? t("settingsPages.uISettings.disableCustomApiKeysDesc")}
-              </Typography.Text>
-            </Space>
-          </Space>
-
-          <Divider />
-
-          {/* Disable in-product UI nudges */}
-          <Space align="start" size="middle">
-            <Switch
-              checked={Boolean(values.disable_ui_nudges)}
-              disabled={isUpdating}
-              loading={isUpdating}
-              onChange={handleToggleDisableUINudges}
-              aria-label={disableUINudgesProperty?.description ?? t("settingsPages.uISettings.disableUINudgesLabel")}
-            />
-            <Space direction="vertical" size={4}>
-              <Typography.Text strong>{t("settingsPages.uISettings.disableUINudgesLabel")}</Typography.Text>
-              <Typography.Text type="secondary">
-                {disableUINudgesProperty?.description ?? t("settingsPages.uISettings.disableUINudgesDesc")}
               </Typography.Text>
             </Space>
           </Space>

@@ -3246,6 +3246,11 @@ all_litellm_params = (
         "order",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3434,6 +3439,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    PINSTRIPES = "pinstripes"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3477,6 +3483,7 @@ class SearchProviders(str, Enum):
     SERPER = "serper"
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
+    TINYFISH = "tinyfish"
 
 
 # Create a set of all search provider values for quick lookup
