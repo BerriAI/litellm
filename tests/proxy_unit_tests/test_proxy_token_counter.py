@@ -462,14 +462,14 @@ async def test_anthropic_endpoint_error_handling():
     anthropic_endpoints._read_request_body = mock_read_request_body
 
     try:
-        # Should raise HTTPException for missing model
-        with pytest.raises(HTTPException) as exc_info:
-            await count_tokens(mock_request, mock_user_api_key_dict)
+        response = await count_tokens(mock_request, mock_user_api_key_dict)
 
-        assert exc_info.value.status_code == 400
-        assert "model parameter is required" in str(exc_info.value.detail)
-
-        print("✅ Error handling test passed!")
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert "detail" not in body
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "model parameter is required" in body["error"]["message"]
 
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
@@ -1362,3 +1362,123 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
+async def _invoke_count_tokens_with_body(body: dict):
+    """Drive anthropic_count_tokens with a stubbed request body."""
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    mock_request = MagicMock(spec=Request)
+
+    async def mock_read_request_body(request):
+        return body
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    try:
+        return await anthropic_count_tokens(mock_request, MagicMock())
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
+
+
+def _assert_anthropic_error_envelope(response, status_code: int, expected_type: str):
+    """Top-level Anthropic shape, no FastAPI {"detail": ...} wrapper."""
+    assert response.status_code == status_code
+    body = json.loads(response.body)
+    assert "detail" not in body, f"unexpected FastAPI envelope wrap: {body}"
+    assert body["type"] == "error"
+    assert body["error"]["type"] == expected_type
+    assert isinstance(body["error"]["message"], str)
+    assert body["error"]["message"]
+    return body
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_missing_model_returns_anthropic_400():
+    """Missing `model` must produce an Anthropic-shaped 400, not an OpenAI envelope.
+
+    Regression for the same bug class as Greptile P2 on #30385: every error
+    path out of /v1/messages/count_tokens must match Anthropic's
+    {"type": "error", "error": {"type": ..., "message": ...}} schema.
+    """
+    response = await _invoke_count_tokens_with_body(
+        {"messages": [{"role": "user", "content": "hi"}]}
+    )
+    body = _assert_anthropic_error_envelope(response, 400, "invalid_request_error")
+    assert "model parameter is required" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_missing_messages_returns_anthropic_400():
+    response = await _invoke_count_tokens_with_body({"model": "claude-haiku-4-5"})
+    body = _assert_anthropic_error_envelope(response, 400, "invalid_request_error")
+    assert "messages parameter is required" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_httpexception_returns_anthropic_envelope():
+    """HTTPException raised by internal_token_counter must convert to Anthropic shape.
+
+    Before the fix, `except HTTPException: raise` re-raised, leaving FastAPI's
+    {"detail": ...} envelope visible to the Anthropic SDK client.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    mock_request = MagicMock(spec=Request)
+
+    async def mock_read_request_body(request):
+        return {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    async def mock_token_counter_http(request, call_endpoint=False):
+        raise HTTPException(status_code=503, detail={"error": "downstream unavailable"})
+
+    original_read = anthropic_endpoints._read_request_body
+    original_counter = proxy_server.token_counter
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    proxy_server.token_counter = mock_token_counter_http
+    try:
+        response = await anthropic_count_tokens(mock_request, MagicMock())
+        body = _assert_anthropic_error_envelope(response, 503, "api_error")
+        assert "downstream unavailable" in body["error"]["message"]
+    finally:
+        anthropic_endpoints._read_request_body = original_read
+        proxy_server.token_counter = original_counter
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_generic_exception_returns_anthropic_500():
+    """Regression for Greptile finding on PR #30385 at commit 40ecda47.
+
+    The bare `except Exception` fallback previously re-raised as
+    `HTTPException(500, detail={"error": ...})`, producing the FastAPI
+    {"detail": ...} wrapper. It must return an Anthropic-shaped 500.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    mock_request = MagicMock(spec=Request)
+
+    async def mock_read_request_body(request):
+        return {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    async def mock_token_counter_boom(request, call_endpoint=False):
+        raise RuntimeError("unexpected boom inside counter")
+
+    original_read = anthropic_endpoints._read_request_body
+    original_counter = proxy_server.token_counter
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    proxy_server.token_counter = mock_token_counter_boom
+    try:
+        response = await anthropic_count_tokens(mock_request, MagicMock())
+        body = _assert_anthropic_error_envelope(response, 500, "api_error")
+        assert "unexpected boom inside counter" in body["error"]["message"]
+    finally:
+        anthropic_endpoints._read_request_body = original_read
+        proxy_server.token_counter = original_counter
