@@ -132,7 +132,11 @@ class SemanticToolFilterHook(CustomLogger):
         2. Responses API function tools are always native.
         3. Everything else is looked up by name in the MCP registry.
         """
-        if isinstance(tool, dict) and "function" in tool and "type" in tool:
+        if (
+            isinstance(tool, dict)
+            and tool.get("type") == "function"
+            and isinstance(tool.get("function"), dict)
+        ):
             return False
         if (
             isinstance(tool, dict)
