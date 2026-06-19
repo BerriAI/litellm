@@ -3,8 +3,6 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 """
 
 from collections.abc import Sequence
-import json
-import base64
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
@@ -101,7 +99,6 @@ class LiteLLMCompletionResponsesConfig:
             "tools",
             "top_p",
             "user",
-            "context_management",
         ]
 
     @staticmethod
@@ -155,78 +152,41 @@ class LiteLLMCompletionResponsesConfig:
 
         # Return as-is for unknown formats
         return tool_choice
-
-    type Messages = List[
-        Union[
-            AllMessageValues,
-            GenericChatCompletionMessage,
-            ChatCompletionMessageToolCall,
-            ChatCompletionResponseMessage,
-            Message,
-        ]
-    ]
-
+    
     @staticmethod
     async def _compact_input(
         model: str,
-        input: Messages,
-        **kwargs,
-    ) -> Messages:
+        input: Union[str, ResponseInputParam],
+    ) -> Union[str, ResponseInputParam]:
         """
         Make a 2nd LLM call to compact/summarize the conversation history.
         Returns the compacted input as a single user message list.
         """
         import litellm
 
-        summary_args = {}
-        # summary_args.update(kwargs)
-        if "context_management" in summary_args:
-            del summary_args["context_management"]
-        summary_args["model"] = model
-        conversation_history = json.dumps(input)
-        summary_args["messages"] = [
-            {
-                "role": "user",
-                "content": f"Provide a summary of the conversation below in your response directly with no special formatting. Focus on the key points and important details. Be concise but include relevant context that would help answer the next user message. The summary should be in a compact format that captures the essence of the conversation history.\n\n<conversation>\n{conversation_history}\n</conversation>",
-            }
-        ]
-        # breakpoint()
-        summary_response = litellm.completion(**summary_args)
 
-        if not isinstance(summary_response, ModelResponse):
-            raise ValueError("Expected a ModelResponse object")
-
-        summary = (
-            summary_response.choices[0].message.content
-            if summary_response.choices
-            else ""
-        )
         return [
             {
-                "role": "developer",
-                "content": f"The following is a compacted summary of the prior conversation. Treat it as historical context, not as a new user request. Use it only to answer the latest user message.\n\n<conversation_summary>\nEarlier conversation: {summary}\n</conversation_summary>",
+                "type": "message",
+                "role": "user",
+                "content": "",
             }
         ]
 
     @staticmethod
-    def _cheap_token_counter(input: Messages) -> int:
+    def _cheap_token_counter(input: Union[str, ResponseInputParam]) -> int:
         """
         Cheaply estimate the token count of the input.
         ~4 chars per token for strings; for message lists, stringify first.
-
-        Note: 1. not using an actual tokenizer
-              2. transformation from ResponseInputParam to str is ugly and not precise
         """
-        json_str = json.dumps(input)
-        return len(json_str) // 4
+        pass
 
     @staticmethod
     async def _transform_context_management(
         model: str,
-        input: Messages,
+        input: Union[str, ResponseInputParam],
         context_management: Optional[List[Dict[str, Any]]],
-        **kwargs,
-    ) -> Tuple[Messages, bool]:
+    ) -> Union[str, ResponseInputParam]:
         """
         Handle context_management compaction for the Responses API -> Chat Completion path.
 
@@ -235,42 +195,17 @@ class LiteLLMCompletionResponsesConfig:
 
         Returns the (possibly compacted) input.
         """
-        if not context_management:
-            return input, False
-        ctx_mgmt_type = context_management[0].get("type", "")
-        ctx_mgmt_threshold = context_management[0].get("compact_threshold", 0)
-        if not ctx_mgmt_type or not ctx_mgmt_threshold:
-            return input, False
+        pass
 
-        # Note: for now skip compaction if input is a string or only has 1 message
-        if len(input) <= 1:
-            return input, False
-
-        # Note: exclude the last user message from token count since that's the new input we want to preserve in full
-        input_token_size = LiteLLMCompletionResponsesConfig._cheap_token_counter(
-            input[:-1]
-        )
-        if input_token_size < ctx_mgmt_threshold:
-            return input, False
-
-        compacted_input = await LiteLLMCompletionResponsesConfig._compact_input(
-            model=model,
-            input=input[:-1],
-            **kwargs,
-        )
-        # Append the latest user message back to the compacted history
-        compacted_input.append(input[-1])
-        return compacted_input, True
-
-    # @staticmethod
-    # def should_execute_compaction(
-    #     input_token_size: int,
-    #     context_management: Optional[List[Dict[str, Any]]],
-    # ) -> bool:
-    #     """
-    #     Check if compaction should be executed
-    #     """
-    #     pass
+    @staticmethod
+    def should_execute_compaction(
+        input_token_size: int,
+        context_management: Optional[List[Dict[str, Any]]],
+    ) -> bool:
+        """
+        Check if compaction should be executed
+        """
+        pass
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -309,7 +244,7 @@ class LiteLLMCompletionResponsesConfig:
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
-
+        
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -1093,14 +1028,6 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
-        elif input_item.get("type") == "compaction":
-            return [
-                json.loads(
-                    base64.b64decode(input_item.get("encrypted_content")).decode(
-                        "utf-8"
-                    )
-                )
-            ]
         else:
             content = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
@@ -2250,9 +2177,9 @@ class LiteLLMCompletionResponsesConfig:
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
             ):
-                output_details_dict["reasoning_tokens"] = (
-                    completion_details.reasoning_tokens
-                )
+                output_details_dict[
+                    "reasoning_tokens"
+                ] = completion_details.reasoning_tokens
             else:
                 output_details_dict["reasoning_tokens"] = 0
 

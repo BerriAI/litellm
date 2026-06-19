@@ -4,10 +4,35 @@ model_list:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
-  - model_name: claude-haiku
+  - model_name: text-embedding-3-small
     litellm_params:
-      model: claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: bedrock-claude-sonnet-3.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-opus-4.5
+    litellm_params:
+      model: "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/us.amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
 
 # MCP Server Configuration
 mcp_servers:

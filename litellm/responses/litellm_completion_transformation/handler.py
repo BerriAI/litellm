@@ -2,12 +2,8 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Union
 
-import base64
-import random
-import string
-import json
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -33,7 +29,6 @@ class LiteLLMCompletionTransformationHandler:
         custom_llm_provider: Optional[str] = None,
         _is_async: bool = False,
         stream: Optional[bool] = None,
-        context_management: Optional[List[Dict[str, Any]]] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Union[
@@ -43,16 +38,14 @@ class LiteLLMCompletionTransformationHandler:
             Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         ],
     ]:
-        litellm_completion_request: dict = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-                model=model,
-                input=input,
-                responses_api_request=responses_api_request,
-                custom_llm_provider=custom_llm_provider,
-                stream=stream,
-                extra_headers=extra_headers,
-                **kwargs,
-            )
+        litellm_completion_request: dict = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=input,
+            responses_api_request=responses_api_request,
+            custom_llm_provider=custom_llm_provider,
+            stream=stream,
+            extra_headers=extra_headers,
+            **kwargs,
         )
 
         if _is_async:
@@ -60,7 +53,6 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
                 request_input=input,
                 responses_api_request=responses_api_request,
-                context_management=context_management,
                 **kwargs,
             )
 
@@ -76,12 +68,10 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
-            responses_api_response: ResponsesAPIResponse = (
-                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                    chat_completion_response=litellm_completion_response,
-                    request_input=input,
-                    responses_api_request=responses_api_request,
-                )
+            responses_api_response: ResponsesAPIResponse = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                chat_completion_response=litellm_completion_response,
+                request_input=input,
+                responses_api_request=responses_api_request,
             )
 
             return responses_api_response
@@ -104,7 +94,6 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_request: dict,
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        context_management: Optional[List[Dict[str, Any]]] = None,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         previous_response_id: Optional[str] = responses_api_request.get(
@@ -116,26 +105,9 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
-        # breakpoint()
-        compacted = False
-        if context_management:
-            litellm_completion_request["messages"], compacted = (
-                await LiteLLMCompletionResponsesConfig._transform_context_management(
-                    model=litellm_completion_request.get("model", ""),
-                    input=litellm_completion_request.get("messages", []),
-                    context_management=context_management,
-                    **kwargs,
-                )
-            )
-            if compacted:
-                compact_input = litellm_completion_request["messages"][0]
-
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
-
-        if "context_management" in acompletion_args:
-            del acompletion_args["context_management"]
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -144,26 +116,11 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
-            responses_api_response: ResponsesAPIResponse = (
-                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                    chat_completion_response=litellm_completion_response,
-                    request_input=request_input,
-                    responses_api_request=responses_api_request,
-                )
+            responses_api_response: ResponsesAPIResponse = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                chat_completion_response=litellm_completion_response,
+                request_input=request_input,
+                responses_api_request=responses_api_request,
             )
-            if compacted:
-                responses_api_response.output.append(
-                    {
-                        "id": "cmp_"
-                        + "".join(
-                            random.choices(string.ascii_letters + string.digits, k=20)
-                        ),
-                        "type": "compaction",
-                        "encrypted_content": base64.b64encode(
-                            json.dumps(compact_input).encode("utf-8")
-                        ).decode("utf-8"),
-                    }
-                )
 
             return responses_api_response
 
