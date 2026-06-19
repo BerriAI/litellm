@@ -186,12 +186,12 @@ class LiteLLMCompletionResponsesConfig:
         """
         import litellm
 
-        await litellm.acompletion(model, input)
+        response = await litellm.acompletion(model, input)
         return [
             {
                 "type": "message",
                 "role": "user",
-                "content": "[Previous conversation summary: dummy",
+                "content": f"[Previous conversation summary: {response.choices[0].message.content}",
             }
         ]
 
