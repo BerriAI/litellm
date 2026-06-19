@@ -4411,7 +4411,10 @@ class PrismaClient:
         try:
             engine = self.writer_db._original_prisma._engine  # type: ignore[attr-defined]
             process = getattr(engine, "process", None) if engine is not None else None
-            if process is not None and getattr(process, "pid", None) == self._engine_pid:
+            if (
+                process is not None
+                and getattr(process, "pid", None) == self._engine_pid
+            ):
                 return process.poll() is None
         except (AttributeError, TypeError):
             pass
