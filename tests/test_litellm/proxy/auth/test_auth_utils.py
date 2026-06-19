@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
@@ -2478,6 +2479,15 @@ class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
     """When the caller redirects ``api_base``/``base_url`` without resupplying
     a key, the admin's deployment ``api_key`` must be dropped so the proxy
     doesn't forward its own credential to the caller-redirected upstream."""
+
+    @pytest.fixture(autouse=True)
+    def _proxy_running(self):
+        original = litellm.proxy_is_running
+        litellm.proxy_is_running = True
+        try:
+            yield
+        finally:
+            litellm.proxy_is_running = original
 
     def test_admin_api_key_cleared_when_base_overridden_without_key(self):
         from litellm.router_utils.clientside_credential_handler import (
