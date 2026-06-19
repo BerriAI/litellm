@@ -527,6 +527,10 @@ class AsyncHTTPHandler:
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
+        # Stored for the ConnectError/RemoteProtocolError retry path so the
+        # retry attempt keeps the caller's ssl_verify (False to disable) rather
+        # than silently re-enabling SSL verification. See #30778.
+        self._ssl_verify = ssl_verify
         self.client = self.create_client(
             timeout=timeout,
             event_hooks=event_hooks,
@@ -649,7 +653,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks,
+                ssl_verify=self._ssl_verify,
             )
             try:
                 return await self.single_connection_post_request(
@@ -712,7 +717,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks,
+                ssl_verify=self._ssl_verify,
             )
             try:
                 return await self.single_connection_post_request(
@@ -773,7 +779,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks,
+                ssl_verify=self._ssl_verify,
             )
             try:
                 return await self.single_connection_post_request(
@@ -834,7 +841,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks,
+                ssl_verify=self._ssl_verify,
             )
             try:
                 return await self.single_connection_post_request(

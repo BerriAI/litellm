@@ -38,6 +38,7 @@ class BaseLLMAIOHTTPHandler:
         client_session: Optional[aiohttp.ClientSession] = None,
         transport: Optional[LiteLLMAiohttpTransport] = None,
         connector: Optional[aiohttp.BaseConnector] = None,
+        ssl_verify: Optional[Union[bool, str]] = None,
     ):
         self.client_session = client_session
         self._owns_session = (
@@ -54,6 +55,11 @@ class BaseLLMAIOHTTPHandler:
             connector is None
         )  # Track if we own the connector for cleanup
 
+        # Stored so a lazily-created transport / per-request ssl= kwarg can
+        # honor the caller's SSL setting. Without this, aiohttp attaches a
+        # default SSL context even on plain http:// URLs (see #30778).
+        self.ssl_verify = ssl_verify
+
     def _get_or_create_transport(self) -> Optional[LiteLLMAiohttpTransport]:
         """Get existing transport or create a new one if needed."""
         if self.transport:
@@ -61,7 +67,9 @@ class BaseLLMAIOHTTPHandler:
 
         # Create a transport using AsyncHTTPHandler's logic
         try:
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport()
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=self.ssl_verify,
+            )
             self._owns_transport = True
             return self.transport
         except Exception:

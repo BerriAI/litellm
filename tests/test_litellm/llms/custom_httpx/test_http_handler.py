@@ -851,3 +851,85 @@ async def test_async_get_forwards_per_request_timeout():
         }
     finally:
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_base_llm_aiohttp_handler_accepts_ssl_verify():
+    """
+    Regression for #30778: ``BaseLLMAIOHTTPHandler.__init__`` must accept an
+    ``ssl_verify`` argument and forward it to the lazily-created
+    ``AsyncHTTPHandler._create_aiohttp_transport`` so the transport picks up
+    the caller's SSL setting (False to disable, etc.) instead of inheriting
+    aiohttp's default SSL context on plain http:// URLs.
+    """
+    from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+    captured = {}
+
+    def fake_create_aiohttp_transport(ssl_verify=None, **kwargs):
+        captured["ssl_verify"] = ssl_verify
+        return MagicMock()
+
+    original = AsyncHTTPHandler._create_aiohttp_transport
+    AsyncHTTPHandler._create_aiohttp_transport = staticmethod(
+        fake_create_aiohttp_transport
+    )
+    try:
+        handler = BaseLLMAIOHTTPHandler(ssl_verify=False)
+        # The constructor should have stored the value.
+        assert handler.ssl_verify is False
+        # Force lazy transport creation.
+        handler._get_or_create_transport()
+        assert captured["ssl_verify"] is False
+    finally:
+        AsyncHTTPHandler._create_aiohttp_transport = original
+
+
+@pytest.mark.asyncio
+async def test_async_handler_retry_forwards_ssl_verify():
+    """
+    Regression for #30778: the ``ConnectError``/``RemoteProtocolError`` retry
+    path on ``AsyncHTTPHandler.post/put/patch/delete`` must forward
+    ``ssl_verify`` to the new ``create_client`` call. Previously the retry
+    silently re-enabled SSL verification (the default) and broke callers
+    relying on ``ssl_verify=False`` for plain-http services like Ollama.
+    """
+    handler = AsyncHTTPHandler(ssl_verify=False)
+    # Sanity: the stored value matches what was passed in.
+    assert handler._ssl_verify is False
+
+    captured_ssl_verify = {}
+
+    def fake_create_client(*, timeout, event_hooks, ssl_verify=None, shared_session=None):
+        captured_ssl_verify["value"] = ssl_verify
+        # Return a real httpx client with a MockTransport so the post() body
+        # can still execute the retry path without touching the network.
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, request=req, json={"ok": True})
+            )
+        )
+
+    handler.create_client = fake_create_client  # type: ignore[assignment]
+
+    # Force the first send to raise ConnectError so we hit the retry branch.
+    call_count = {"n": 0}
+
+    def maybe_fail(req):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise httpx.ConnectError("boom", request=req)
+        return httpx.Response(200, request=req, json={"ok": True})
+
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(maybe_fail))
+    try:
+        await handler.post(
+            "http://example.invalid/post",
+            json={"x": 1},
+        )
+        # The retry path should have invoked create_client with the stored
+        # ssl_verify, NOT the default None/True.
+        assert captured_ssl_verify["value"] is False
+    finally:
+        await handler.client.aclose()
+        await handler.close()
