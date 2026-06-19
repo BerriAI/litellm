@@ -27,6 +27,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ClientCredentialsConfig,
     CredError,
     StaticKeys,
+    TokenExchangeConfig,
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok, Result
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -38,6 +39,60 @@ class _TokenResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     access_token: str
     expires_in: Optional[int] = None
+
+
+async def request_token(
+    endpoint: str, data: dict[str, str], clock: Clock
+) -> Result[StoredToken, CredError]:
+    """POST an OAuth token request and parse the response into a StoredToken.
+
+    Shared by the client_credentials grant and the RFC 8693 exchange (both hit a token endpoint
+    and read access_token / expires_in). Errors-as-values: network / 5xx -> upstream_unavailable,
+    4xx -> misconfigured, missing access_token -> misconfigured. The raw lifetime is stored; the
+    resolver arm's _REFRESH_BUFFER (= v1's default buffer) handles proactive re-mint.
+    """
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+    try:
+        response = await client.post(endpoint, data=data)
+    except Exception as e:  # network / timeout / DNS
+        return Error(
+            CredError.of_upstream_unavailable(f"token endpoint unreachable: {e}")
+        )
+    if response is None:
+        return Error(
+            CredError.of_upstream_unavailable("token endpoint returned no response")
+        )
+    if response.status_code >= 500:
+        return Error(
+            CredError.of_upstream_unavailable(
+                f"token endpoint returned {response.status_code}"
+            )
+        )
+    if response.status_code >= 400:
+        return Error(
+            CredError.of_misconfigured(
+                f"token request rejected ({response.status_code})"
+            )
+        )
+    try:
+        parsed = _TokenResponse.model_validate(response.json())
+    except ValidationError:
+        return Error(
+            CredError.of_misconfigured("token response missing a valid access_token")
+        )
+    ttl = timedelta(
+        seconds=(
+            parsed.expires_in
+            if parsed.expires_in is not None
+            else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+        )
+    )
+    return Ok(
+        StoredToken(
+            access_token=SecretStr(parsed.access_token),
+            expires_at=clock.now() + ttl,
+        )
+    )
 
 
 class HttpxClientCredentialsFetcher:
@@ -63,58 +118,47 @@ class HttpxClientCredentialsFetcher:
         if config.scopes:
             data["scope"] = " ".join(config.scopes)
 
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        try:
-            response = await client.post(config.token_url, data=data)
-        except Exception as e:  # network / timeout / DNS
-            return Error(
-                CredError.of_upstream_unavailable(
-                    f"client_credentials token endpoint unreachable: {e}"
-                )
-            )
+        return await request_token(config.token_url, data, self._clock)
 
-        if response is None:
-            return Error(
-                CredError.of_upstream_unavailable(
-                    "client_credentials token endpoint returned no response"
-                )
-            )
-        if response.status_code >= 500:
-            return Error(
-                CredError.of_upstream_unavailable(
-                    f"client_credentials token endpoint returned {response.status_code}"
-                )
-            )
-        if response.status_code >= 400:
+
+_TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
+
+
+class HttpxTokenExchanger:
+    """RFC 8693 token exchange (OBO) via litellm's configured httpx client.
+
+    Swaps the caller's inbound subject_token for a token bound to the upstream (audience=resource,
+    RFC 8707), mirroring v1's exchange grant: the gateway authenticates as an OAuth client via
+    client_id / client_secret. The inbound token is sent only to the exchange endpoint, never to
+    the upstream.
+    """
+
+    def __init__(self, clock: Optional[Clock] = None) -> None:
+        self._clock: Clock = clock or SystemClock()
+
+    async def exchange(
+        self, config: TokenExchangeConfig, subject_token: SecretStr, resource: str
+    ) -> Result[StoredToken, CredError]:
+        if not config.token_exchange_endpoint:
             return Error(
                 CredError.of_misconfigured(
-                    f"client_credentials grant rejected ({response.status_code})"
+                    "token_exchange: no exchange endpoint configured"
                 )
             )
-
-        try:
-            parsed = _TokenResponse.model_validate(response.json())
-        except ValidationError:
-            return Error(
-                CredError.of_misconfigured(
-                    "client_credentials response missing a valid access_token"
-                )
-            )
-        # Store the raw lifetime; the resolver arm's _REFRESH_BUFFER (60s, = v1's default
-        # buffer) handles proactive re-mint, so no buffer is subtracted here.
-        ttl = timedelta(
-            seconds=(
-                parsed.expires_in
-                if parsed.expires_in is not None
-                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-            )
-        )
-        return Ok(
-            StoredToken(
-                access_token=SecretStr(parsed.access_token),
-                expires_at=self._clock.now() + ttl,
-            )
-        )
+        data = {
+            "grant_type": _TOKEN_EXCHANGE_GRANT_TYPE,
+            "subject_token": subject_token.get_secret_value(),
+            "subject_token_type": config.subject_token_type,
+        }
+        if config.client_id:
+            data["client_id"] = config.client_id
+        if config.client_secret is not None:
+            data["client_secret"] = config.client_secret.get_secret_value()
+        if resource:
+            data["audience"] = resource
+        if config.scopes:
+            data["scope"] = " ".join(config.scopes)
+        return await request_token(config.token_exchange_endpoint, data, self._clock)
 
 
 class HttpxSigV4Signer:

@@ -166,14 +166,18 @@ class ClientCredentialsConfig(BaseModel):
 
 class TokenExchangeConfig(BaseModel):
     """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
-    audience (`server.resource`). The exchange runs at the IdP's token endpoint, discovered
-    (RFC 8414); only the inbound token type and an optional manual endpoint override are config.
+    audience (`server.resource`, RFC 8707). The gateway authenticates to the exchange endpoint as
+    an OAuth client (`client_id`/`client_secret`); the inbound token is sent only to that endpoint,
+    never to the upstream.
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     token_exchange_endpoint: str | None = None
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+    scopes: tuple[str, ...] = ()
 
 
 class SharedKey(BaseModel):

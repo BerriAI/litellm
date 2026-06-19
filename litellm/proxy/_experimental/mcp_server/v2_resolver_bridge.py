@@ -23,6 +23,7 @@ from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxClientCredentialsFetcher,
     HttpxSigV4Signer,
+    HttpxTokenExchanger,
     V1ByokCredentialStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import SystemClock
@@ -102,7 +103,7 @@ def _provider() -> UpstreamCredentialProvider:
         clock=SystemClock(),
         service_token_store=InMemoryServiceTokenStore(),
         client_credentials_fetcher=HttpxClientCredentialsFetcher(),
-        token_exchanger=unwired,
+        token_exchanger=HttpxTokenExchanger(),
         signer_factory=HttpxSigV4Signer(),
     )
 
@@ -135,6 +136,23 @@ def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 header_name="X-API-Key",
                 value_prefix="",
                 key_source=SharedKey(value=SecretStr(token)),
+            ),
+        )
+    if server.has_token_exchange_config:
+        # token_exchange takes precedence over client_credentials (matches v1's cascade); the arm
+        # binds the exchanged token to this resource (audience, RFC 8707).
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=server.audience or resource,
+            config=TokenExchangeConfig(
+                subject_token_type=server.subject_token_type,
+                token_exchange_endpoint=server.token_exchange_endpoint
+                or server.token_url,
+                client_id=server.client_id,
+                client_secret=(
+                    SecretStr(server.client_secret) if server.client_secret else None
+                ),
+                scopes=tuple(server.scopes or ()),
             ),
         )
     if (

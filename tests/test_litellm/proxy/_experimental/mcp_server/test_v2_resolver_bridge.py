@@ -295,3 +295,32 @@ async def test_byok_server_maps_to_byok_key_source():
     assert isinstance(spec.config, ApiKeyConfig)
     assert isinstance(spec.config.key_source, Byok)
     assert spec.config.header_name == "X-API-Key"
+
+
+async def test_token_exchange_server_maps_to_config():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import TokenExchangeConfig
+
+    server = MCPServer(
+        server_id="obo",
+        name="obo",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2_token_exchange,
+        client_id="cid",
+        client_secret="csecret",
+        token_exchange_endpoint="https://idp/exchange",
+        audience="https://aud.example",
+        scopes=["a", "b"],
+    )
+    spec = _to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.token_exchange_endpoint == "https://idp/exchange"
+    assert spec.config.client_id == "cid"
+    assert spec.config.client_secret is not None
+    assert spec.config.client_secret.get_secret_value() == "csecret"
+    assert spec.config.scopes == ("a", "b")
+    assert spec.resource == "https://aud.example"  # audience preferred for the binding

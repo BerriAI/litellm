@@ -11,6 +11,7 @@ from litellm.proxy._experimental.mcp_server import v2_port_bodies
 from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxClientCredentialsFetcher,
     HttpxSigV4Signer,
+    HttpxTokenExchanger,
     V1ByokCredentialStore,
     _classify_sigv4_error,
 )
@@ -21,6 +22,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AwsSigV4Config,
     ClientCredentialsConfig,
     StaticKeys,
+    TokenExchangeConfig,
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok
 
@@ -205,5 +207,61 @@ async def test_byok_store_db_error_is_upstream_unavailable():
         raise RuntimeError("db down")
 
     result = await V1ByokCredentialStore(reader=reader).get(_cred_key())
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+def _te_config(endpoint="https://idp/exchange", scopes=(), client_secret="csecret"):
+    return TokenExchangeConfig(
+        token_exchange_endpoint=endpoint,
+        client_id="cid",
+        client_secret=SecretStr(client_secret) if client_secret else None,
+        scopes=tuple(scopes),
+    )
+
+
+async def test_exchange_builds_rfc8693_grant(monkeypatch):
+    fake = _patch(
+        monkeypatch,
+        _FakeResponse(200, {"access_token": "exch-tok", "expires_in": 3600}),
+    )
+    result = await HttpxTokenExchanger().exchange(
+        _te_config(scopes=["a"]), SecretStr("inbound-jwt"), "https://up.example/mcp"
+    )
+    assert isinstance(result, Ok)
+    assert result.ok.access_token.get_secret_value() == "exch-tok"
+    d = fake.posted["data"]
+    assert d["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert d["subject_token"] == "inbound-jwt"
+    assert d["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+    assert d["client_id"] == "cid"
+    assert d["client_secret"] == "csecret"
+    assert d["audience"] == "https://up.example/mcp"  # bound to the resource (RFC 8707)
+    assert d["scope"] == "a"
+    assert fake.posted["url"] == "https://idp/exchange"
+
+
+async def test_exchange_no_endpoint_is_misconfigured():
+    result = await HttpxTokenExchanger().exchange(
+        _te_config(endpoint=None), SecretStr("jwt"), "https://up/mcp"
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+async def test_exchange_rejected_is_misconfigured(monkeypatch):
+    _patch(monkeypatch, _FakeResponse(400, {}))
+    result = await HttpxTokenExchanger().exchange(
+        _te_config(), SecretStr("jwt"), "https://up/mcp"
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+async def test_exchange_endpoint_down_is_upstream_unavailable(monkeypatch):
+    _patch(monkeypatch, _FakeResponse(503, {}))
+    result = await HttpxTokenExchanger().exchange(
+        _te_config(), SecretStr("jwt"), "https://up/mcp"
+    )
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
