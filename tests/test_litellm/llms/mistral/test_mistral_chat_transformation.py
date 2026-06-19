@@ -74,6 +74,45 @@ def test_mistral_strips_reasoning_content_from_assistant_input():
     assert assistant_messages[0]["content"] == "Hello there"
 
 
+def test_mistral_strips_reasoning_content_on_multimodal_path():
+    """reasoning_content must also be stripped when the conversation contains an
+    image/file content block, which takes the early-return multimodal path that
+    bypasses the per-message loop (issue #30835).
+    """
+    mistral_config = MistralConfig()
+    one_px_png = (
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1"
+        "HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )
+    messages: List[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is this?"},
+                {"type": "image_url", "image_url": {"url": one_px_png}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "A single pixel",
+            "reasoning_content": "the image is 1x1",  # type: ignore
+        },
+    ]
+
+    result = cast(
+        List[AllMessageValues],
+        mistral_config._transform_messages(
+            messages=messages, model="pixtral-12b-latest", is_async=False
+        ),
+    )
+
+    assistant_messages = [m for m in result if m["role"] == "assistant"]
+    assert assistant_messages, "assistant message should survive transformation"
+    assert all(
+        "reasoning_content" not in m for m in assistant_messages
+    ), "reasoning_content must be stripped even on the multimodal path"
+
+
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
 

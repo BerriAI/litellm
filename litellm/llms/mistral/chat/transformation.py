@@ -247,6 +247,12 @@ class MistralConfig(OpenAIGPTConfig):
         The above statement is not valid now. Need to plan to remove all the #1,2,3
         Mistral API supports content as a list.
         """
+        ## 0. reasoning_content is output-only; Mistral rejects it on input regardless of
+        ## which path below handles the message, so strip it up front (issue #30835)
+        messages = [
+            MistralConfig._handle_reasoning_content_in_message(m) for m in messages
+        ]
+
         ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
         for m in messages:
             _content_block = m.get("content")
@@ -265,7 +271,6 @@ class MistralConfig(OpenAIGPTConfig):
         new_messages: List[AllMessageValues] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
-            m = MistralConfig._handle_reasoning_content_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
             if MistralConfig._is_empty_assistant_message(m):
                 continue
