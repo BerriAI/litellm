@@ -86,7 +86,41 @@ def _extract_loggable(
     """
     model: str = kwargs.get("model", "")
     messages: Any = kwargs.get("messages")
-    metadata: Any = kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}
+
+    # Root metadata (user-supplied tags, etc.)
+    metadata: Any = dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
+
+    # Merge proxy identity fields from litellm_params.metadata.  Sensitive
+    # header/key values are filtered so raw auth tokens never reach the log.
+    _SENSITIVE_KEYS = frozenset({
+        "user_api_key",
+        "Authorization",
+        "authorization",
+        "token",
+        "api_key",
+    })
+    _PROXY_IDENTITY_KEYS = frozenset({
+        "user_api_key_user_id",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+        "user_api_key_alias",
+        "user_id",
+        "team_id",
+        "org_id",
+    })
+    try:
+        lp_meta: Any = (
+            (kwargs.get("litellm_params") or {}).get("metadata") or {}
+        )
+        for k, v in lp_meta.items():
+            if k in _SENSITIVE_KEYS:
+                continue
+            # Always include explicit proxy identity keys; skip other
+            # litellm_params.metadata keys to avoid unexpected bleed.
+            if k in _PROXY_IDENTITY_KEYS:
+                metadata.setdefault(k, v)
+    except Exception:
+        pass
 
     # Timing
     latency_ms: Optional[int] = None
@@ -167,6 +201,14 @@ class AsqavLogger(CustomLogger):
     ASQAV_REDACT_CONTENT
         Set to "false" to store message/response content in the clear instead
         of as SHA-256 digests.  Defaults to "true" (digest only).
+
+    Multi-worker limitation: this logger is designed for a single audit writer
+    per log file.  The threading.Lock serializes concurrent threads within one
+    process; it does NOT serialize across OS processes.  In a multi-worker
+    proxy deployment, run a single dedicated audit-writer process, or use a
+    shared filesystem with OS-level exclusive locking (fcntl.flock) via a
+    custom wrapper.  Without this, multiple workers will produce records with
+    duplicate seq/prev_hash values and verify_chain will report a break.
     """
 
     def __init__(
@@ -293,8 +335,27 @@ class AsqavLogger(CustomLogger):
             parent = os.path.dirname(self._log_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            with open(self._log_path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+            # Tighten permissions on an existing file before appending so a
+            # file created by a previous run with a permissive umask is locked
+            # down.  Create new files via os.open with 0o600 to skip umask.
+            if os.path.exists(self._log_path):
+                os.chmod(self._log_path, 0o600)
+            fd = os.open(
+                self._log_path,
+                os.O_CREAT | os.O_WRONLY | os.O_APPEND,
+                0o600,
+            )
+            try:
+                with os.fdopen(fd, "a", encoding="utf-8", closefd=True) as fh:
+                    fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+            except Exception:
+                # fdopen owns fd; if it raises before returning the context
+                # manager the fd may still be open - close defensively.
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
             return True
         except Exception:
             verbose_logger.warning(

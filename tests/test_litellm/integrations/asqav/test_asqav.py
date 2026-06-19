@@ -589,3 +589,90 @@ def test_redact_content_false_stores_plaintext(tmp_path) -> None:
     records = _read_records(path)
     assert records[0]["messages"][0]["content"] == "visible prompt"
     assert records[0]["response_content"] == "visible response"
+
+
+# ---------------------------------------------------------------------------
+# New regression tests (must FAIL before the corresponding fix is applied)
+# ---------------------------------------------------------------------------
+
+
+def test_audit_log_file_created_with_0600_perms(tmp_path) -> None:
+    """Veria Medium: audit log must be created with mode 0600.
+
+    With a standard 022 umask, plain open(..., 'a') produces 0644, which lets
+    other local users read the log.  The fix creates via os.open with 0o600 and
+    chmods an existing file to 0600 before appending.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    logger = _logger_at(path)
+    start, end = _make_times()
+
+    logger.log_success_event(
+        kwargs=_make_kwargs(),
+        response_obj=_make_response(),
+        start_time=start,
+        end_time=end,
+    )
+
+    assert os.path.exists(path), "audit log was not created"
+    mode_octal = oct(os.stat(path).st_mode)[-3:]
+    assert mode_octal == "600", (
+        f"audit log has mode {mode_octal}, expected 600"
+    )
+
+
+def test_proxy_identity_metadata_attributed_in_record(tmp_path) -> None:
+    """Veria Medium: proxy identity fields from litellm_params.metadata must
+    appear in the logged record's metadata.
+
+    user_api_key_user_id, team_id, org_id, and key_alias live under
+    kwargs['litellm_params']['metadata'], not at kwargs root.  Records written
+    without reading that sub-dict have no proxy attribution.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    logger = _logger_at(path)
+    start, end = _make_times()
+
+    kwargs = _make_kwargs()
+    kwargs["litellm_params"] = {
+        "metadata": {
+            "user_api_key_user_id": "user-abc",
+            "user_api_key_team_id": "team-xyz",
+            "user_api_key_org_id": "org-123",
+            "user_api_key_alias": "my-key",
+            # sensitive values that must NOT be persisted
+            "user_api_key": "sk-secret-12345",
+            "Authorization": "Bearer sk-secret-12345",
+        }
+    }
+
+    logger.log_success_event(
+        kwargs=kwargs,
+        response_obj=_make_response(),
+        start_time=start,
+        end_time=end,
+    )
+
+    records = _read_records(path)
+    meta = records[0]["metadata"]
+    assert meta.get("user_api_key_user_id") == "user-abc", (
+        "user_api_key_user_id not attributed in record"
+    )
+    assert meta.get("user_api_key_team_id") == "team-xyz", (
+        "user_api_key_team_id not attributed in record"
+    )
+    # Sensitive fields must be filtered out
+    assert "user_api_key" not in meta, "raw api key leaked into record metadata"
+    assert "Authorization" not in meta, "auth header leaked into record metadata"
+
+
+def test_multiworker_flock_guard_documented_or_implemented(tmp_path) -> None:
+    """Veria Medium: the multi-worker limitation must be documented in the
+    class docstring (or, if fcntl is used, the lock must serialize cross-process
+    writes).  This test checks for the docstring acknowledgement.
+    """
+    import inspect
+    doc = inspect.getdoc(AsqavLogger) or ""
+    assert "single" in doc.lower() or "flock" in doc.lower() or "worker" in doc.lower(), (
+        "AsqavLogger docstring must document the single-writer / multi-worker limitation"
+    )
