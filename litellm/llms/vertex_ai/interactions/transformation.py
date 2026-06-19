@@ -1,4 +1,5 @@
 from typing import Dict, List, Optional, Protocol, Tuple, Union, cast
+from urllib.parse import urlparse
 
 import httpx
 
@@ -20,6 +21,9 @@ from litellm.types.interactions import (
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+_DEFAULT_VERTEX_AI_INTERACTIONS_API_BASE = "https://aiplatform.googleapis.com"
+_TRUSTED_GOOGLE_API_HOST_SUFFIX = ".googleapis.com"
 
 
 class VertexAIInteractionsAuth(Protocol):
@@ -210,12 +214,9 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         cancel: bool = False,
         stream: Optional[bool] = None,
     ) -> str:
-        _, project_id = self._get_access_token(litellm_params=litellm_params)
-        base_url = (api_base or "https://aiplatform.googleapis.com").rstrip("/")
-        url = (
-            f"{base_url}/{self.api_version}/projects/{project_id}"
-            "/locations/global/interactions"
-        )
+        base_url = self._get_api_base(api_base=api_base)
+        project_id = self._get_project_id(litellm_params=litellm_params)
+        url = f"{base_url}/{self.api_version}/projects/{project_id}/locations/global/interactions"
         if interaction_id is not None:
             encoded_interaction_id = encode_url_path_segment(
                 interaction_id, field_name="interaction_id"
@@ -226,6 +227,36 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         if stream:
             url = f"{url}?alt=sse"
         return url
+
+    @staticmethod
+    def _get_api_base(api_base: Optional[str]) -> str:
+        if api_base is None or api_base == "":
+            return _DEFAULT_VERTEX_AI_INTERACTIONS_API_BASE
+
+        base_url = api_base.rstrip("/")
+        parsed_api_base = urlparse(base_url)
+        hostname = parsed_api_base.hostname
+        if (
+            parsed_api_base.scheme != "https"
+            or hostname is None
+            or not hostname.endswith(_TRUSTED_GOOGLE_API_HOST_SUFFIX)
+        ):
+            raise ValueError(
+                "Vertex AI interactions api_base must be a trusted Google API HTTPS endpoint"
+            )
+        return base_url
+
+    def _get_project_id(
+        self,
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
+    ) -> str:
+        params_dict = cast(Dict, litellm_params or {})
+        vertex_project = VertexBase.safe_get_vertex_ai_project(params_dict)
+        if vertex_project is not None:
+            return vertex_project
+
+        _, project_id = self._get_access_token(litellm_params=litellm_params)
+        return project_id
 
     def _get_access_token(
         self,

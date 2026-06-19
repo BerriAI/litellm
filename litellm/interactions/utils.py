@@ -23,12 +23,7 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
     "agent_config",
 }
 
-_VERTEX_AI_LYRIA_INTERACTIONS_MODELS = frozenset(
-    {
-        "lyria-3-clip-preview",
-        "lyria-3-pro-preview",
-    }
-)
+_VERTEX_AI_INTERACTIONS_ENDPOINT = "/v1beta/interactions"
 
 
 def get_provider_interactions_api_config(
@@ -55,7 +50,7 @@ def get_provider_interactions_api_config(
         return GoogleAIStudioInteractionsConfig()
 
     if provider == LlmProviders.VERTEX_AI.value or provider == "vertex_ai":
-        if _is_vertex_ai_lyria_interactions_model(model=model):
+        if model is None or _supports_vertex_ai_interactions(model=model):
             from litellm.llms.vertex_ai.interactions.transformation import (
                 VertexAIInteractionsConfig,
             )
@@ -65,11 +60,19 @@ def get_provider_interactions_api_config(
     return None
 
 
-def _is_vertex_ai_lyria_interactions_model(model: Optional[str]) -> bool:
+def _supports_vertex_ai_interactions(model: Optional[str]) -> bool:
     if model is None:
         return False
 
-    return model.replace("vertex_ai/", "", 1) in _VERTEX_AI_LYRIA_INTERACTIONS_MODELS
+    import litellm
+
+    model_key = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+    model_info = litellm.model_cost.get(model_key, {})
+    supported_endpoints = model_info.get("supported_endpoints")
+    return (
+        isinstance(supported_endpoints, list)
+        and _VERTEX_AI_INTERACTIONS_ENDPOINT in supported_endpoints
+    )
 
 
 class InteractionsAPIRequestUtils:

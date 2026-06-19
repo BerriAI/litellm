@@ -1,5 +1,8 @@
 from typing import List, Optional, Tuple
 
+import litellm
+import pytest
+
 from litellm.interactions.utils import get_provider_interactions_api_config
 from litellm.llms.vertex_ai.interactions.transformation import (
     VertexAIInteractionsConfig,
@@ -75,6 +78,49 @@ def test_get_complete_url_appends_alt_sse_for_streaming() -> None:
     )
 
 
+def test_get_complete_url_reuses_project_from_params_without_second_auth_call() -> None:
+    vertex_auth = FakeVertexAuth()
+    config = VertexAIInteractionsConfig(vertex_auth=vertex_auth)
+
+    config.validate_environment(
+        headers={},
+        model="lyria-3-pro-preview",
+        litellm_params=GenericLiteLLMParams(vertex_project="music-project"),
+    )
+    url = config.get_complete_url(
+        api_base=None,
+        model="lyria-3-pro-preview",
+        litellm_params={"vertex_project": "music-project"},
+    )
+
+    assert (
+        url
+        == "https://aiplatform.googleapis.com/v1beta1/projects/music-project/locations/global/interactions"
+    )
+    assert vertex_auth.calls == [(None, "music-project")]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://attacker.example",
+        "http://aiplatform.googleapis.com",
+    ],
+)
+def test_get_complete_url_rejects_untrusted_api_base(api_base: str) -> None:
+    config = VertexAIInteractionsConfig(vertex_auth=FakeVertexAuth())
+
+    with pytest.raises(
+        ValueError,
+        match="trusted Google API HTTPS endpoint",
+    ):
+        config.get_complete_url(
+            api_base=api_base,
+            model="lyria-3-pro-preview",
+            litellm_params={"vertex_project": "music-project"},
+        )
+
+
 def test_interaction_id_urls_are_encoded() -> None:
     config = VertexAIInteractionsConfig(vertex_auth=FakeVertexAuth())
 
@@ -129,7 +175,25 @@ def test_transform_request_strips_vertex_ai_prefix() -> None:
     }
 
 
-def test_vertex_ai_lyria_models_route_to_interactions_config() -> None:
+def test_vertex_ai_models_with_interactions_endpoint_route_to_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/lyria-3-clip-preview",
+        {"supported_endpoints": ["/v1beta/interactions"]},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/lyria-3-pro-preview",
+        {"supported_endpoints": ["/v1beta/interactions"]},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/gemini-2.5-flash",
+        {"supported_endpoints": ["/v1/chat/completions"]},
+    )
+
     assert isinstance(
         get_provider_interactions_api_config(
             provider="vertex_ai",
@@ -150,4 +214,11 @@ def test_vertex_ai_lyria_models_route_to_interactions_config() -> None:
             model="gemini-2.5-flash",
         )
         is None
+    )
+
+
+def test_vertex_ai_interaction_operations_route_without_model() -> None:
+    assert isinstance(
+        get_provider_interactions_api_config(provider="vertex_ai"),
+        VertexAIInteractionsConfig,
     )

@@ -37320,6 +37320,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/lyria-002": {
+        "audio_seconds_per_prediction": 30,
         "litellm_provider": "vertex_ai",
         "max_audio_length_hours": 0.009111111111111111,
         "max_audio_per_prompt": 4,
