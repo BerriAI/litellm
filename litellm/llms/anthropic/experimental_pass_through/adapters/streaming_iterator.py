@@ -423,7 +423,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                is_final_chunk = chunk.choices[0].finish_reason is not None
+                # Upstream may emit usage-only / metadata chunks with no choices;
+                # only the last chunk with a finish_reason should drive applied_edits.
+                is_final_chunk = bool(chunk.choices) and chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
@@ -646,7 +648,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                is_final_chunk = chunk.choices[0].finish_reason is not None
+                # Upstream may emit usage-only / metadata chunks with no choices;
+                # only the last chunk with a finish_reason should drive applied_edits.
+                is_final_chunk = bool(chunk.choices) and chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
@@ -889,7 +893,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # Example logic - customize based on your needs:
         # If chunk indicates a tool call
-        if chunk.choices[0].finish_reason is not None:
+        # Usage-only / metadata chunks have no choices and never start a new
+        # content block; treat them the same as a finished chunk.
+        if not chunk.choices or chunk.choices[0].finish_reason is not None:
             return False
 
         (
