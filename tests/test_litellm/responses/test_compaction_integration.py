@@ -113,3 +113,51 @@ async def test_no_recompaction_when_under_threshold():
     new_cmp = [i for i in response.output if i.get("type") == "compaction" and i.get("id") != "cmp_prior_001"]
 
     assert not new_cmp
+
+
+@pytest.mark.asyncio
+async def test_recompaction():
+
+    """Case 3: prior compaction item + short message, under threshold → no new compaction"""
+
+    import base64
+
+    prior_cmp = {
+
+        "type": "compaction",
+
+        "id": "cmp_prior_001",
+
+        "encrypted_content": base64.b64encode(b"Previous conversation summary.").decode(),
+
+    }
+
+    response = await litellm.aresponses(
+
+        model="claude-haiku-4-5-20251001",
+
+        input=[
+
+            prior_cmp,
+
+            {"type": "message", "role": "user", "content": "hello" * 500},
+
+            {"type": "message", "role": "user", "content": "What was the main issue?"},
+
+        ],
+
+        context_management=[{"type": "compaction", "compact_threshold": 100}],
+
+        store=False,
+
+        max_output_tokens=100,
+
+    )
+
+    assert response is not None
+
+    new_cmp = [i for i in response.output if i.get("type") == "compaction" and i.get("id") != "cmp_prior_001"]
+
+    assert new_cmp
+     
+# what happens if the compaction is still too long?
