@@ -4394,6 +4394,8 @@ class PrismaClient:
     def _is_engine_alive(self) -> bool:
         if self._engine_pid <= 0:
             return True
+        if sys.platform == "win32":
+            return self._is_engine_alive_windows()
         try:
             os.kill(self._engine_pid, 0)
             return True
@@ -4401,6 +4403,19 @@ class PrismaClient:
             return False
         except (PermissionError, OSError):
             return True
+
+    def _is_engine_alive_windows(self) -> bool:
+        # os.kill(pid, 0) on Windows calls TerminateProcess — it kills the
+        # process rather than checking liveness. Use Popen.poll() instead,
+        # which returns None while the process is still running.
+        try:
+            engine = self.writer_db._original_prisma._engine  # type: ignore[attr-defined]
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                return process.poll() is None
+        except (AttributeError, TypeError):
+            pass
+        return True
 
     @staticmethod
     def _reap_all_zombies() -> set:
@@ -4615,14 +4630,12 @@ class PrismaClient:
         )
 
     async def _poll_engine_proc(self) -> None:
-        """poll via os.kill(pid, 0) every 1s.
+        """Poll engine process liveness every 1s via _is_engine_alive().
         Only used when BOTH waitpid thread and pidfd are unavailable
-        (e.g., PID is not our child process and pidfd_open fails)
+        (e.g., on Windows, or when PID is not our child process).
         """
         while self._watching_engine and self._engine_pid > 0:
-            try:
-                os.kill(self._engine_pid, 0)
-            except ProcessLookupError:
+            if not self._is_engine_alive():
                 dead_pid = self._engine_pid
                 if self._consume_expected_death(dead_pid):
                     verbose_proxy_logger.info(
@@ -4643,13 +4656,6 @@ class PrismaClient:
                     reason="engine_process_death",
                     force=True,
                 )
-                return
-            except (PermissionError, OSError):
-                verbose_proxy_logger.debug(
-                    "Cannot signal PID %s; stopping engine poll.",
-                    self._engine_pid,
-                )
-                self._cleanup_engine_watcher()
                 return
             await asyncio.sleep(1)
 
