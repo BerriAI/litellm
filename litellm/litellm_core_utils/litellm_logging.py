@@ -3305,7 +3305,11 @@ class Logging(LiteLLMLoggingBaseClass):
         elif isinstance(result, dict):
             dict_result = result
         else:
-            raise ValueError("Google GenAI Generate Content: httpx_response is None")
+            raise ValueError(
+                f"Google GenAI Generate Content: no valid httpx_response "
+                f"(got {type(httpx_response).__name__!r}) and result is not a dict "
+                f"(got {type(result).__name__!r}); cannot log response"
+            )
         result = litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
