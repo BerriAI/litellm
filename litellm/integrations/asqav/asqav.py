@@ -92,26 +92,28 @@ def _extract_loggable(
 
     # Merge proxy identity fields from litellm_params.metadata.  Sensitive
     # header/key values are filtered so raw auth tokens never reach the log.
-    _SENSITIVE_KEYS = frozenset({
-        "user_api_key",
-        "Authorization",
-        "authorization",
-        "token",
-        "api_key",
-    })
-    _PROXY_IDENTITY_KEYS = frozenset({
-        "user_api_key_user_id",
-        "user_api_key_team_id",
-        "user_api_key_org_id",
-        "user_api_key_alias",
-        "user_id",
-        "team_id",
-        "org_id",
-    })
+    _SENSITIVE_KEYS = frozenset(
+        {
+            "user_api_key",
+            "Authorization",
+            "authorization",
+            "token",
+            "api_key",
+        }
+    )
+    _PROXY_IDENTITY_KEYS = frozenset(
+        {
+            "user_api_key_user_id",
+            "user_api_key_team_id",
+            "user_api_key_org_id",
+            "user_api_key_alias",
+            "user_id",
+            "team_id",
+            "org_id",
+        }
+    )
     try:
-        lp_meta: Any = (
-            (kwargs.get("litellm_params") or {}).get("metadata") or {}
-        )
+        lp_meta: Any = (kwargs.get("litellm_params") or {}).get("metadata") or {}
         for k, v in lp_meta.items():
             if k in _SENSITIVE_KEYS:
                 continue

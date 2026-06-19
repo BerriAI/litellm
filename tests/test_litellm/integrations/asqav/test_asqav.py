@@ -342,21 +342,23 @@ def test_seq_counter_restored_after_restart(tmp_path) -> None:
     logger1 = _logger_at(path)
     _append_n(logger1, 5)
     records_after_first = _read_records(path)
-    assert records_after_first[-1]["seq"] == 4, "sanity: last seq from first process is 4"
+    assert (
+        records_after_first[-1]["seq"] == 4
+    ), "sanity: last seq from first process is 4"
 
     # Second "process": new instance reads the tail.
     logger2 = _logger_at(path)
-    assert logger2._call_count == 5, (
-        f"_call_count not restored: expected 5, got {logger2._call_count}"
-    )
+    assert (
+        logger2._call_count == 5
+    ), f"_call_count not restored: expected 5, got {logger2._call_count}"
 
     # Writing one more record must produce seq=5, not seq=0.
     _append_n(logger2, 1)
     records = _read_records(path)
     assert len(records) == 6
-    assert records[5]["seq"] == 5, (
-        f"seq reset after restart: expected 5, got {records[5]['seq']}"
-    )
+    assert (
+        records[5]["seq"] == 5
+    ), f"seq reset after restart: expected 5, got {records[5]['seq']}"
 
     # The full chain must also pass integrity verification.
     ok, msg = logger2.verify_chain(path)
@@ -616,9 +618,7 @@ def test_audit_log_file_created_with_0600_perms(tmp_path) -> None:
 
     assert os.path.exists(path), "audit log was not created"
     mode_octal = oct(os.stat(path).st_mode)[-3:]
-    assert mode_octal == "600", (
-        f"audit log has mode {mode_octal}, expected 600"
-    )
+    assert mode_octal == "600", f"audit log has mode {mode_octal}, expected 600"
 
 
 def test_proxy_identity_metadata_attributed_in_record(tmp_path) -> None:
@@ -655,12 +655,12 @@ def test_proxy_identity_metadata_attributed_in_record(tmp_path) -> None:
 
     records = _read_records(path)
     meta = records[0]["metadata"]
-    assert meta.get("user_api_key_user_id") == "user-abc", (
-        "user_api_key_user_id not attributed in record"
-    )
-    assert meta.get("user_api_key_team_id") == "team-xyz", (
-        "user_api_key_team_id not attributed in record"
-    )
+    assert (
+        meta.get("user_api_key_user_id") == "user-abc"
+    ), "user_api_key_user_id not attributed in record"
+    assert (
+        meta.get("user_api_key_team_id") == "team-xyz"
+    ), "user_api_key_team_id not attributed in record"
     # Sensitive fields must be filtered out
     assert "user_api_key" not in meta, "raw api key leaked into record metadata"
     assert "Authorization" not in meta, "auth header leaked into record metadata"
@@ -672,7 +672,8 @@ def test_multiworker_flock_guard_documented_or_implemented(tmp_path) -> None:
     writes).  This test checks for the docstring acknowledgement.
     """
     import inspect
+
     doc = inspect.getdoc(AsqavLogger) or ""
-    assert "single" in doc.lower() or "flock" in doc.lower() or "worker" in doc.lower(), (
-        "AsqavLogger docstring must document the single-writer / multi-worker limitation"
-    )
+    assert (
+        "single" in doc.lower() or "flock" in doc.lower() or "worker" in doc.lower()
+    ), "AsqavLogger docstring must document the single-writer / multi-worker limitation"
