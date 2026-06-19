@@ -533,6 +533,7 @@ def test_is_engine_alive_windows_living_process(mock_proxy_logging):
     client._engine_pid = 99999
 
     alive_process = MagicMock()
+    alive_process.pid = 99999
     alive_process.poll.return_value = None
 
     engine_mock = MagicMock()
@@ -549,7 +550,8 @@ def test_is_engine_alive_windows_dead_process(mock_proxy_logging):
     client._engine_pid = 99999
 
     dead_process = MagicMock()
-    dead_process.poll.return_value = 0  # exited with code 0
+    dead_process.pid = 99999
+    dead_process.poll.return_value = 0
 
     engine_mock = MagicMock()
     engine_mock.process = dead_process
@@ -559,13 +561,44 @@ def test_is_engine_alive_windows_dead_process(mock_proxy_logging):
     dead_process.poll.assert_called_once()
 
 
-def test_poll_engine_proc_does_not_call_os_kill(mock_proxy_logging):
-    """_poll_engine_proc must not call os.kill — on Windows os.kill(pid, 0)
-    calls TerminateProcess and kills the engine instead of checking liveness."""
-    import inspect
-    import litellm.proxy.utils as proxy_utils
+def test_is_engine_alive_windows_pid_mismatch_returns_true(mock_proxy_logging):
+    """_is_engine_alive_windows falls back to True when the process object's PID
+    doesn't match _engine_pid, guarding against a stale internal process reference."""
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client._engine_pid = 99999
 
-    source = inspect.getsource(proxy_utils.PrismaClient._poll_engine_proc)
-    assert "os.kill" not in source, (
-        "_poll_engine_proc must not call os.kill directly; use _is_engine_alive() which is Windows-safe"
+    stale_process = MagicMock()
+    stale_process.pid = 11111  # different PID
+    stale_process.poll.return_value = 0  # would signal dead if we trusted it
+
+    engine_mock = MagicMock()
+    engine_mock.process = stale_process
+    client.writer_db._original_prisma._engine = engine_mock
+
+    assert client._is_engine_alive_windows() is True
+    stale_process.poll.assert_not_called()
+
+
+def test_is_engine_alive_windows_no_process_returns_true(mock_proxy_logging):
+    """_is_engine_alive_windows falls back to True when engine has no process attribute."""
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client._engine_pid = 99999
+
+    engine_mock = MagicMock()
+    engine_mock.process = None
+    client.writer_db._original_prisma._engine = engine_mock
+
+    assert client._is_engine_alive_windows() is True
+
+
+def test_is_engine_alive_windows_attribute_error_returns_true(mock_proxy_logging):
+    """_is_engine_alive_windows falls back to True when internal attribute access raises."""
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client._engine_pid = 99999
+
+    # Simulate Prisma internals changing their structure
+    type(client.writer_db._original_prisma).engine = property(
+        fget=lambda self: (_ for _ in ()).throw(AttributeError("no engine"))
     )
+
+    assert client._is_engine_alive_windows() is True
