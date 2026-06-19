@@ -210,6 +210,74 @@
     "default_model_placeholder": "claude-3-opus"
   },
   {
+    "provider": "Bedrock_Mantle",
+    "provider_display_name": "Amazon Bedrock Mantle",
+    "litellm_provider": "bedrock_mantle",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Bedrock Mantle API Key",
+        "placeholder": null,
+        "tooltip": "API Key for Bedrock Mantle. You can provide the raw key or the environment variable (e.g. `os.environ/BEDROCK_MANTLE_API_KEY`).",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base URL",
+        "placeholder": "https://bedrock-mantle.us-east-1.api.aws/v1",
+        "tooltip": "Bedrock Mantle API base URL. Defaults to https://bedrock-mantle.us-east-1.api.aws/v1. You can provide the raw value or the environment variable (e.g. `os.environ/BEDROCK_MANTLE_API_BASE`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_access_key_id",
+        "label": "AWS Access Key ID",
+        "placeholder": null,
+        "tooltip": "AWS Access Key ID for Bedrock Mantle authentication. You can provide the raw key or the environment variable (e.g. `os.environ/AWS_ACCESS_KEY_ID`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_secret_access_key",
+        "label": "AWS Secret Access Key",
+        "placeholder": null,
+        "tooltip": "AWS Secret Access Key for Bedrock Mantle authentication. You can provide the raw key or the environment variable (e.g. `os.environ/AWS_SECRET_ACCESS_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_region_name",
+        "label": "AWS Region Name",
+        "placeholder": "us-east-1",
+        "tooltip": "AWS region for Bedrock Mantle. Defaults to us-east-1. You can provide the raw value or the environment variable (e.g. `os.environ/BEDROCK_MANTLE_REGION` or `os.environ/AWS_REGION_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_token",
+        "label": "AWS Session Token",
+        "placeholder": null,
+        "tooltip": "Temporary credentials session token. You can provide the raw token or the environment variable (e.g. `os.environ/AWS_SESSION_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "claude-3-opus"
+  },
+  {
     "provider": "Anthropic",
     "provider_display_name": "Anthropic",
     "litellm_provider": "anthropic",
