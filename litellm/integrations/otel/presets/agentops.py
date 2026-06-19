@@ -16,7 +16,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_logger
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
 _AGENTOPS_ENDPOINT = "https://otlp.agentops.cloud/v1/traces"
@@ -59,6 +63,7 @@ def agentops_preset(
                     options=(
                         {"api_key": settings.api_key} if settings.api_key else None
                     ),
+                    owner=ExporterOwner.AGENTOPS,
                 ),
             ],
             "resource_attributes": {
