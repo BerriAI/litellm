@@ -2,12 +2,17 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
-from typing import List, Optional, Tuple
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+    OpenAIChatCompletionStreamingHandler,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ModelResponseStream
 
 
 class MinimaxChatConfig(OpenAIGPTConfig):
@@ -25,20 +30,12 @@ class MinimaxChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        """
-        Get MiniMax API key from environment or parameters.
-        """
         return api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
 
     @staticmethod
     def get_api_base(
         api_base: Optional[str] = None,
     ) -> str:
-        """
-        Get MiniMax API base URL.
-        Defaults to international endpoint: https://api.minimax.io/v1
-        For China, set to: https://api.minimaxi.com/v1
-        """
         return (
             api_base
             or get_secret_str("MINIMAX_API_BASE")
@@ -54,14 +51,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        """
-        Get the complete URL for MiniMax OpenAI API.
-        Override to ensure we use MiniMax's endpoint.
-        """
-        # Get the base URL (either provided or default MiniMax endpoint)
         base_url = self.get_api_base(api_base=api_base)
-
-        # Ensure it ends with /chat/completions
         if base_url.endswith("/chat/completions"):
             return base_url
         elif base_url.endswith("/v1"):
@@ -77,26 +67,100 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         tools: Optional[List[ChatCompletionToolParam]] = None,
     ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
-        """
-        Override to preserve cache_control for MiniMax.
-        MiniMax supports cache_control - don't strip it.
-        """
-        # MiniMax supports cache_control, so return messages and tools unchanged
         return messages, tools
 
     def get_supported_openai_params(self, model: str) -> list:
-        """
-        Get supported OpenAI parameters for MiniMax.
-        Adds reasoning_split and thinking to the list of supported params.
-        """
         base_params = super().get_supported_openai_params(model=model)
         additional_params = ["reasoning_split"]
-
-        # Add thinking parameter if model supports reasoning
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider="minimax"):
                 additional_params.append("thinking")
         except Exception:
             pass
-
         return base_params + additional_params
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Any,
+        sync_stream: Optional[bool] = None,
+        json_mode: Optional[bool] = None,
+    ):
+        return MinimaxChatResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
+    """
+    MiniMax streaming response iterator that handles reasoning_content extraction.
+
+    MiniMax streaming responses can contain:
+    1. reasoning_details array - converts to reasoning_content
+    2. <think>...</think> tags in content - extracts to reasoning_content
+    3. "reasoning" field (alias for reasoning_content) - clears from content
+    """
+
+    started_reasoning_content: bool = False
+    finished_reasoning_content: bool = False
+    pending_reasoning: str = ""
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            choices = chunk.get("choices", [])
+
+            for choice in choices:
+                delta = choice.get("delta", {})
+
+                # MiniMax uses "reasoning" (not "reasoning_content") in streaming chunks
+                # The parent class maps "reasoning" -> "reasoning_content"
+                # We clear content when either reasoning field is present
+                has_reasoning = (
+                    delta.get("reasoning_content")
+                    or delta.get("reasoning")
+                )
+                if has_reasoning:
+                    delta["content"] = None
+                    self.started_reasoning_content = True
+
+                reasoning_details = delta.get("reasoning_details")
+                if reasoning_details and isinstance(reasoning_details, list):
+                    reasoning_text = ""
+                    for detail in reasoning_details:
+                        if isinstance(detail, dict) and detail.get("text"):
+                            reasoning_text += detail.get("text", "")
+                    if reasoning_text:
+                        delta["reasoning_content"] = reasoning_text
+                        delta["content"] = None
+                        self.started_reasoning_content = True
+
+                content = delta.get("content", "")
+                if content and isinstance(content, str):
+                    reasoning_matches = re.findall(
+                        r"<think>(.*?)</think>", content, re.DOTALL
+                    )
+                    if reasoning_matches:
+                        self.pending_reasoning += "".join(reasoning_matches)
+                        clean_content = re.sub(
+                            r"<think>.*?</think>", "", content, flags=re.DOTALL
+                        )
+                        delta["content"] = clean_content if clean_content else None
+                        if self.pending_reasoning:
+                            delta["reasoning_content"] = self.pending_reasoning
+                            self.started_reasoning_content = True
+                    elif self.started_reasoning_content and not self.finished_reasoning_content:
+                        self.finished_reasoning_content = True
+                        self.pending_reasoning = ""
+                        clean_content = re.sub(
+                            r"</?think>", "", content
+                        )
+                        delta["content"] = clean_content if clean_content else None
+                    elif not self.started_reasoning_content:
+                        if "</think>" in content:
+                            clean_content = content.replace("</think>", "").replace("<think>", "")
+                            delta["content"] = clean_content if clean_content else None
+
+            return super().chunk_parser(chunk)
+        except Exception:
+            return super().chunk_parser(chunk)
