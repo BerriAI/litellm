@@ -1043,6 +1043,130 @@ async def test_failure_hook_keeps_error_information_traceback_by_default(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_resolve_spend_tracking_org_id_falls_back_to_team_org():
+    """A key with no org_id of its own must attribute spend to its team's org,
+    so org spend/budget tracking sees the usage. Mirrors the auth-time fallback
+    in auth_checks._organization_max_budget_check."""
+    mock_team_obj = MagicMock()
+    mock_team_obj.organization_id = "org-from-team"
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ) as mock_get_team,
+    ):
+        resolved = await _ProxyDBLogger._resolve_spend_tracking_org_id(
+            org_id=None, team_id="team-123"
+        )
+
+    assert resolved == "org-from-team"
+    mock_get_team.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_spend_tracking_org_id_prefers_explicit_org_id():
+    """When the key already carries an org_id, keep it and skip the team lookup."""
+    with patch(
+        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+        new_callable=AsyncMock,
+    ) as mock_get_team:
+        resolved = await _ProxyDBLogger._resolve_spend_tracking_org_id(
+            org_id="explicit-org", team_id="team-123"
+        )
+
+    assert resolved == "explicit-org"
+    mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_spend_tracking_org_id_no_team_returns_none():
+    """No org_id and no team_id means there is nothing to attribute org spend to."""
+    with patch(
+        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+        new_callable=AsyncMock,
+    ) as mock_get_team:
+        resolved = await _ProxyDBLogger._resolve_spend_tracking_org_id(
+            org_id=None, team_id=None
+        )
+
+    assert resolved is None
+    mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_attributes_org_spend_via_team():
+    """End-to-end through the cost callback: a team key with no org_id of its own
+    must still record spend against the team's organization. Before the fallback,
+    org_id stayed None and org spend/budget were never tracked."""
+    logger = _ProxyDBLogger()
+
+    mock_team_obj = MagicMock()
+    mock_team_obj.organization_id = "org-from-team"
+
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed_key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "team-123",
+                # no user_api_key_org_id - the key inherits org via its team
+            },
+        },
+        "standard_logging_object": {
+            "response_cost": 0.5,
+            "request_tags": None,
+        },
+        "stream": False,
+    }
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+    mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+    mock_increment_spend_counters = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            mock_increment_spend_counters,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.update_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
+    ):
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+    assert (
+        mock_proxy_logging.db_spend_update_writer.update_database.call_args.kwargs[
+            "org_id"
+        ]
+        == "org-from-team"
+    )
+    mock_increment_spend_counters.assert_awaited_once()
+    assert mock_increment_spend_counters.call_args.kwargs["org_id"] == "org-from-team"
+
+
+@pytest.mark.asyncio
 async def test_failure_hook_drops_error_information_traceback_when_env_set(
     monkeypatch,
 ):

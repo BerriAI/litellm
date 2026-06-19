@@ -205,7 +205,10 @@ class _ProxyDBLogger(CustomLogger):
             )
             user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
             team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
-            org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
+            org_id = await self._resolve_spend_tracking_org_id(
+                org_id=cast(Optional[str], metadata.get("user_api_key_org_id", None)),
+                team_id=team_id,
+            )
             key_alias = cast(Optional[str], metadata.get("user_api_key_alias", None))
             end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Optional[StandardLoggingPayload] = kwargs.get(
@@ -332,6 +335,49 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
+
+    @staticmethod
+    async def _resolve_spend_tracking_org_id(
+        org_id: Optional[str], team_id: Optional[str]
+    ) -> Optional[str]:
+        """Resolve the organization a request's spend rolls up to.
+
+        A key created under a team that belongs to an organization carries no
+        organization_id of its own, so without this fallback its spend never
+        reaches the org's spend column or daily org aggregate. Org budgets then
+        fail to enforce once the in-memory reservation counter expires or across
+        workers that don't share it, because the persisted floor stays at zero.
+        This mirrors the auth-time fallback in
+        auth_checks._organization_max_budget_check so spend attribution and
+        budget enforcement agree on the same org.
+        """
+        if org_id is not None or team_id is None:
+            return org_id
+
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return org_id
+
+        try:
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Failed to resolve org_id from team_id=%s for spend tracking",
+                team_id,
+            )
+            return org_id
+
+        return team_object.organization_id
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
