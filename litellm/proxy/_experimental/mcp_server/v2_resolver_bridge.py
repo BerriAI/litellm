@@ -22,6 +22,7 @@ from pydantic import SecretStr
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxClientCredentialsFetcher,
+    HttpxSigV4Signer,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import SystemClock
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
@@ -38,7 +39,9 @@ from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
     StoredToken,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+    Ambient,
     ApiKeyConfig,
+    AssumeRole,
     AuthorizationCodeConfig,
     AwsSigV4Config,
     ClientCredentialsConfig,
@@ -46,6 +49,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     NoneConfig,
     ServerSpec,
     SharedKey,
+    StaticKeys,
     Subject,
     TokenExchangeConfig,
 )
@@ -99,7 +103,7 @@ def _provider() -> UpstreamCredentialProvider:
         service_token_store=InMemoryServiceTokenStore(),
         client_credentials_fetcher=HttpxClientCredentialsFetcher(),
         token_exchanger=unwired,
-        signer_factory=unwired,
+        signer_factory=HttpxSigV4Signer(),
     )
 
 
@@ -179,3 +183,72 @@ async def resolve_v2_auth_value(server: MCPServer) -> Optional[Dict[str, str]]:
         f"attached {sorted(headers)}" if headers else "no auth header",
     )
     return headers
+
+
+def _to_aws_sigv4_config(server: MCPServer) -> Optional[AwsSigV4Config]:
+    region = server.aws_region_name or "us-east-1"
+    service = server.aws_service_name or "bedrock-agentcore"
+    if server.aws_role_name:
+        # v2's AssumeRole assumes via the ambient/default chain. v1 also supports assuming with
+        # explicit base keys, which v2 can't represent yet, so defer that case to v1.
+        if server.aws_access_key_id or server.aws_secret_access_key:
+            return None
+        return AwsSigV4Config(
+            region=region,
+            service=service,
+            credentials=AssumeRole(
+                role_arn=server.aws_role_name,
+                session_name=server.aws_session_name,
+            ),
+        )
+    if server.aws_access_key_id and server.aws_secret_access_key:
+        return AwsSigV4Config(
+            region=region,
+            service=service,
+            credentials=StaticKeys(
+                access_key_id=server.aws_access_key_id,
+                secret_access_key=SecretStr(server.aws_secret_access_key),
+                session_token=(
+                    SecretStr(server.aws_session_token)
+                    if server.aws_session_token
+                    else None
+                ),
+            ),
+        )
+    return AwsSigV4Config(region=region, service=service, credentials=Ambient())
+
+
+async def resolve_v2_aws_auth(server: MCPServer) -> Optional[httpx.Auth]:
+    """Resolve `aws_sigv4` via the v2 resolver into the SigV4 signer, or None to defer to v1.
+
+    SigV4 signs every request, so (unlike the header modes) the result is attached to the
+    connection as `MCPClient.aws_auth` rather than extracted into a header.
+    """
+    if not v2_resolver_enabled():
+        return None
+    if server.auth_type != MCPAuth.aws_sigv4:
+        return None
+    config = _to_aws_sigv4_config(server)
+    if config is None:
+        return None
+    result = await _provider().resolve(
+        Subject(tenant_id="", subject_id="", inbound_token=None),
+        ServerSpec(
+            server_id=server.server_id,
+            resource=server.url or server.server_id,
+            config=config,
+        ),
+    )
+    if isinstance(result, Error):
+        verbose_logger.warning(
+            "v2 MCP resolver failed to build aws_sigv4 signer for server %s: %s; "
+            "falling back to v1",
+            server.server_id,
+            result.error.summary,
+        )
+        return None
+    verbose_logger.info(
+        "v2 MCP resolver handled server %s (auth_type=aws_sigv4): attached SigV4 signer",
+        server.server_id,
+    )
+    return result.ok

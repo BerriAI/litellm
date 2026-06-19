@@ -5,12 +5,14 @@ headers must be byte-identical to what v1 produces, and every other mode (or any
 fall back to v1 unchanged.
 """
 
+import httpx
 import pytest
 
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
     resolve_v2_auth_value,
+    resolve_v2_aws_auth,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -139,3 +141,100 @@ async def test_client_credentials_graft_end_to_end(v2_on, monkeypatch):
     assert await resolve_v2_auth_value(_m2m_server()) == {
         "Authorization": "Bearer m2m-tok"
     }
+
+
+def _aws_server(**aws):
+    return MCPServer(
+        server_id="aws",
+        name="aws",
+        transport=MCPTransport.http,
+        url="https://svc.us-east-1.amazonaws.com/mcp",
+        auth_type=MCPAuth.aws_sigv4,
+        **aws,
+    )
+
+
+async def test_aws_sigv4_flag_off_defers_to_v1(v2_off):
+    server = _aws_server(aws_access_key_id="AKIA", aws_secret_access_key="s")
+    assert await resolve_v2_aws_auth(server) is None
+
+
+async def test_aws_sigv4_non_aws_server_returns_none(v2_on):
+    assert await resolve_v2_aws_auth(_server(MCPAuth.api_key, "k")) is None
+
+
+async def test_aws_sigv4_static_keys_returns_signing_auth(v2_on):
+    server = _aws_server(
+        aws_access_key_id="AKIATEST",
+        aws_secret_access_key="secret",
+        aws_region_name="us-east-1",
+    )
+    auth = await resolve_v2_aws_auth(server)
+    assert auth is not None
+    req = httpx.Request(
+        "POST", "https://svc.us-east-1.amazonaws.com/mcp", content=b"{}"
+    )
+    signed = next(auth.auth_flow(req))
+    assert signed.headers["Authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIATEST/"
+    )
+    assert "X-Amz-Date" in signed.headers
+
+
+async def test_aws_sigv4_config_maps_static_keys(v2_on):
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_aws_sigv4_config,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import StaticKeys
+
+    cfg = _to_aws_sigv4_config(
+        _aws_server(
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="s",
+            aws_region_name="eu-west-1",
+        )
+    )
+    assert cfg is not None
+    assert cfg.region == "eu-west-1"
+    assert isinstance(cfg.credentials, StaticKeys)
+    assert cfg.credentials.access_key_id == "AKIA"
+
+
+async def test_aws_sigv4_config_maps_assume_role(v2_on):
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_aws_sigv4_config,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import AssumeRole
+
+    cfg = _to_aws_sigv4_config(
+        _aws_server(aws_role_name="arn:aws:iam::1:role/r", aws_session_name="sess")
+    )
+    assert cfg is not None
+    assert isinstance(cfg.credentials, AssumeRole)
+    assert cfg.credentials.role_arn == "arn:aws:iam::1:role/r"
+
+
+async def test_aws_sigv4_config_role_with_base_keys_defers_to_v1(v2_on):
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_aws_sigv4_config,
+    )
+
+    cfg = _to_aws_sigv4_config(
+        _aws_server(
+            aws_role_name="arn:aws:iam::1:role/r",
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="s",
+        )
+    )
+    assert cfg is None
+
+
+async def test_aws_sigv4_config_defaults_to_ambient(v2_on):
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_aws_sigv4_config,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import Ambient
+
+    cfg = _to_aws_sigv4_config(_aws_server())
+    assert cfg is not None
+    assert isinstance(cfg.credentials, Ambient)

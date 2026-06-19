@@ -56,6 +56,15 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
+
+# v2 aws_sigv4 graft: SigV4 signs per request, so it attaches via MCPClient.aws_auth rather than
+# the header seam resolve_mcp_auth uses. Guarded so a missing optional dep degrades to v1.
+try:
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        resolve_v2_aws_auth,
+    )
+except ImportError:
+    resolve_v2_aws_auth = None  # type: ignore[assignment]
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -2005,18 +2014,22 @@ class MCPServerManager:
             # For HTTP/SSE transports
             server_url = server.url or ""
 
-            # Create SigV4 auth if configured
+            # Create SigV4 auth if configured. The v2 resolver owns this when the flag is on
+            # (returns the signer to attach as aws_auth); otherwise v1 builds it.
             aws_auth = None
             if server.auth_type == MCPAuth.aws_sigv4:
-                aws_auth = MCPSigV4Auth(
-                    aws_access_key_id=server.aws_access_key_id,
-                    aws_secret_access_key=server.aws_secret_access_key,
-                    aws_session_token=server.aws_session_token,
-                    aws_region_name=server.aws_region_name,
-                    aws_service_name=server.aws_service_name,
-                    aws_role_name=server.aws_role_name,
-                    aws_session_name=server.aws_session_name,
-                )
+                if resolve_v2_aws_auth is not None:
+                    aws_auth = await resolve_v2_aws_auth(server)
+                if aws_auth is None:
+                    aws_auth = MCPSigV4Auth(
+                        aws_access_key_id=server.aws_access_key_id,
+                        aws_secret_access_key=server.aws_secret_access_key,
+                        aws_session_token=server.aws_session_token,
+                        aws_region_name=server.aws_region_name,
+                        aws_service_name=server.aws_service_name,
+                        aws_role_name=server.aws_role_name,
+                        aws_session_name=server.aws_session_name,
+                    )
 
             return MCPClient(
                 server_url=server_url,
