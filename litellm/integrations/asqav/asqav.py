@@ -5,17 +5,11 @@ a SHA-256 chain hash over its own canonical fields plus the previous record's
 hash, giving a tamper-evident sequence that can be verified entirely offline
 with stdlib tools.
 
-Optional async checkpoint: when ASQAV_API_KEY and ASQAV_CHECKPOINT_INTERVAL
-are set, the logger submits the current chain head to the Asqav cloud API on
-a background thread every N calls.  The per-call hot path is always zero
-network.
-
 Design goals (matching the on-device ask from litellm#25329):
 - Zero runtime dependencies beyond Python stdlib + litellm itself.
 - Never breaks an LLM call: every code path is wrapped fail-soft.
 - Does not log message content by default; logs content digests so
   auditors can prove a payload was present without reconstructing it.
-- The optional cloud step is import-guarded and never blocks the proxy.
 """
 
 from __future__ import annotations
@@ -32,10 +26,6 @@ from typing import Any, BinaryIO, Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
-    httpxSpecialProvider,
-)
 
 __all__ = ["AsqavLogger"]
 
@@ -177,23 +167,12 @@ class AsqavLogger(CustomLogger):
     ASQAV_REDACT_CONTENT
         Set to "false" to store message/response content in the clear instead
         of as SHA-256 digests.  Defaults to "true" (digest only).
-
-    ASQAV_API_KEY  (optional)
-        Asqav cloud API key.  When set together with ASQAV_CHECKPOINT_INTERVAL,
-        the logger submits the chain head to https://api.asqav.com on a
-        background thread every N calls.
-
-    ASQAV_CHECKPOINT_INTERVAL  (optional, default 100)
-        How many calls between cloud checkpoints.  Only used when
-        ASQAV_API_KEY is set.
     """
 
     def __init__(
         self,
         log_path: Optional[str] = None,
         redact_content: bool = True,
-        api_key: Optional[str] = None,
-        checkpoint_interval: int = 100,
     ) -> None:
         super().__init__()
 
@@ -204,10 +183,6 @@ class AsqavLogger(CustomLogger):
             os.environ.get("ASQAV_REDACT_CONTENT", "true").lower() != "false"
             if log_path is None
             else redact_content
-        )
-        self._api_key: Optional[str] = api_key or os.environ.get("ASQAV_API_KEY")
-        self._checkpoint_interval: int = int(
-            os.environ.get("ASQAV_CHECKPOINT_INTERVAL", str(checkpoint_interval))
         )
 
         self._lock: threading.Lock = threading.Lock()
@@ -221,8 +196,7 @@ class AsqavLogger(CustomLogger):
     def __repr__(self) -> str:
         return (
             f"AsqavLogger(log_path={self._log_path!r},"
-            f" redact_content={self._redact_content},"
-            f" cloud_checkpoint={'enabled' if self._api_key else 'disabled'})"
+            f" redact_content={self._redact_content})"
         )
 
     # ------------------------------------------------------------------
@@ -308,14 +282,6 @@ class AsqavLogger(CustomLogger):
 
                 self._prev_hash = record_hash
                 self._call_count += 1
-                checkpoint_now = (
-                    self._api_key is not None
-                    and self._call_count % self._checkpoint_interval == 0
-                )
-
-            # The cloud checkpoint (when configured) stays outside the lock.
-            if checkpoint_now:
-                self._schedule_checkpoint(chain_head=record_hash, seq=seq)
 
         except Exception:
             verbose_logger.debug(
@@ -336,46 +302,6 @@ class AsqavLogger(CustomLogger):
                 f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}"
             )
             return False
-
-    # ------------------------------------------------------------------
-    # Async cloud checkpoint
-    # ------------------------------------------------------------------
-
-    def _schedule_checkpoint(self, chain_head: str, seq: int) -> None:
-        """Fire-and-forget: submit chain head to Asqav on a daemon thread."""
-        if not self._api_key:
-            return
-
-        api_key = self._api_key
-
-        def _do_checkpoint() -> None:
-            try:
-                # Only the chain head and sequence number leave the machine;
-                # the local log path stays client-side.
-                client = _get_httpx_client()
-                resp = client.post(
-                    url="https://api.asqav.com/v1/checkpoints",
-                    json={
-                        "chain_head": chain_head,
-                        "seq": seq,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "X-Source": "litellm-asqav-callback",
-                    },
-                    timeout=10,
-                )
-                verbose_logger.debug(
-                    f"[AsqavLogger] Checkpoint submitted, status={resp.status_code}"
-                )
-            except Exception:
-                verbose_logger.debug(
-                    f"[AsqavLogger] Checkpoint failed (non-fatal): {traceback.format_exc()}"
-                )
-
-        t = threading.Thread(target=_do_checkpoint, daemon=True)
-        t.start()
 
     # ------------------------------------------------------------------
     # CustomLogger hooks

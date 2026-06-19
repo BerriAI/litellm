@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import importlib
 import importlib.util
@@ -75,34 +75,20 @@ def _stub_litellm_deps() -> None:
     utils_mod = types.ModuleType("litellm.types.utils")
     sys.modules["litellm.types.utils"] = utils_mod
 
-    # litellm.llms.custom_httpx.http_handler stub (asqav.py imports
-    # _get_httpx_client and httpxSpecialProvider from this module).
-    class _FakeHTTPHandler:
-        """Minimal sync HTTP client stub used by asqav's checkpoint path."""
-
-        def post(self, url: str, **kwargs: object) -> "_FakeResponse":  # type: ignore[override]
-            return _FakeResponse()
-
-    class _FakeResponse:
-        status_code: int = 200
-
-    class _httpxSpecialProvider:
-        LoggingCallback = "logging_callback"
-
+    # litellm.llms stubs (kept minimal; asqav.py no longer imports from
+    # litellm.llms.custom_httpx.http_handler, but other litellm internals may
+    # still need the package hierarchy present during import resolution).
     llms_pkg = types.ModuleType("litellm.llms")
     sys.modules["litellm.llms"] = llms_pkg
     custom_httpx_pkg = types.ModuleType("litellm.llms.custom_httpx")
     sys.modules["litellm.llms.custom_httpx"] = custom_httpx_pkg
     http_handler_mod = types.ModuleType("litellm.llms.custom_httpx.http_handler")
-    http_handler_mod._get_httpx_client = lambda: _FakeHTTPHandler()  # type: ignore[attr-defined]
-    http_handler_mod.httpxSpecialProvider = _httpxSpecialProvider  # type: ignore[attr-defined]
     sys.modules["litellm.llms.custom_httpx.http_handler"] = http_handler_mod
 
-    # litellm.types.llms stub (httpxSpecialProvider lives there in some paths)
+    # litellm.types.llms stub
     types_llms_pkg = types.ModuleType("litellm.types.llms")
     sys.modules["litellm.types.llms"] = types_llms_pkg
     custom_http_mod = types.ModuleType("litellm.types.llms.custom_http")
-    custom_http_mod.httpxSpecialProvider = _httpxSpecialProvider  # type: ignore[attr-defined]
     sys.modules["litellm.types.llms.custom_http"] = custom_http_mod
 
 
@@ -158,7 +144,7 @@ def _make_times() -> tuple:
 
 
 def _logger_at(path: str) -> AsqavLogger:
-    return AsqavLogger(log_path=path, redact_content=True, api_key=None)
+    return AsqavLogger(log_path=path, redact_content=True)
 
 
 def _append_n(logger: AsqavLogger, n: int) -> None:
@@ -460,12 +446,10 @@ def test_latency_ms_is_computed(tmp_path) -> None:
     assert records[0]["latency_ms"] == 1000
 
 
-def test_no_api_key_no_checkpoint_thread(tmp_path) -> None:
-    """When ASQAV_API_KEY is not set, no background thread is spawned."""
+def test_no_background_threads_spawned(tmp_path) -> None:
+    """Local-only logger must not spawn background threads."""
     path = str(tmp_path / "audit.jsonl")
-    logger = AsqavLogger(
-        log_path=path, redact_content=True, api_key=None, checkpoint_interval=1
-    )
+    logger = AsqavLogger(log_path=path, redact_content=True)
     start, end = _make_times()
 
     before = threading.active_count()
@@ -476,12 +460,11 @@ def test_no_api_key_no_checkpoint_thread(tmp_path) -> None:
         end_time=end,
     )
     after = threading.active_count()
-    # No new threads should have been spawned.
     assert after <= before
 
 
 # ---------------------------------------------------------------------------
-# Concurrency, restart with large records, repr, checkpoint payload
+# Concurrency, restart with large records, repr
 # ---------------------------------------------------------------------------
 
 
@@ -555,57 +538,13 @@ def test_restart_resumes_chain_when_last_record_exceeds_4kb(tmp_path) -> None:
     assert ok is True, f"Chain broken across restart with large record: {msg}"
 
 
-def test_repr_reports_config_and_omits_api_key(tmp_path) -> None:
+def test_repr_shows_log_path_and_redact(tmp_path) -> None:
     path = str(tmp_path / "audit.jsonl")
-    logger = AsqavLogger(log_path=path, redact_content=True, api_key="sk-secret-123")
+    logger = AsqavLogger(log_path=path, redact_content=True)
 
     r = repr(logger)
     assert "AsqavLogger" in r
     assert path in r
-    assert "cloud_checkpoint=enabled" in r
-    assert "sk-secret-123" not in r
-
-
-def test_checkpoint_payload_contains_only_chain_head_and_seq(tmp_path) -> None:
-    """The checkpoint POST body must not leak the local log path."""
-    path = str(tmp_path / "audit.jsonl")
-    logger = AsqavLogger(
-        log_path=path, redact_content=True, api_key="sk-test", checkpoint_interval=1
-    )
-    start, end = _make_times()
-    done = threading.Event()
-    captured: dict = {}
-
-    fake_response = MagicMock()
-    fake_response.status_code = 200
-
-    fake_client = MagicMock()
-
-    def _fake_post(url: str, json: dict, headers: dict, timeout: float):  # type: ignore[override]
-        captured["url"] = url
-        captured["json"] = json
-        captured["headers"] = headers
-        done.set()
-        return fake_response
-
-    fake_client.post.side_effect = _fake_post
-
-    # Patch _get_httpx_client inside the asqav module so the daemon thread
-    # uses our fake client instead of the real shared httpx pool.
-    with patch.object(_asqav_module, "_get_httpx_client", return_value=fake_client):
-        logger.log_success_event(
-            kwargs=_make_kwargs(),
-            response_obj=_make_response(),
-            start_time=start,
-            end_time=end,
-        )
-        assert done.wait(timeout=5), "Checkpoint thread never submitted"
-
-    payload = captured["json"]
-    assert set(payload) == {"chain_head", "seq"}
-    assert payload["seq"] == 0
-    assert len(payload["chain_head"]) == 64
-    assert path not in json.dumps(payload)
 
 
 def test_async_hooks_write_records(tmp_path) -> None:
@@ -637,7 +576,7 @@ def test_async_hooks_write_records(tmp_path) -> None:
 
 def test_redact_content_false_stores_plaintext(tmp_path) -> None:
     path = str(tmp_path / "audit.jsonl")
-    logger = AsqavLogger(log_path=path, redact_content=False, api_key=None)
+    logger = AsqavLogger(log_path=path, redact_content=False)
     start, end = _make_times()
 
     logger.log_success_event(
