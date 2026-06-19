@@ -81,6 +81,50 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter = SecretRedactionFilter()
 
 
+def _parse_disabled_access_log_paths() -> frozenset:
+    """
+    Parse LITELLM_DISABLE_ACCESS_LOG_PATHS env var into a frozenset of paths.
+
+    Comma-separated list of exact request paths whose access-log lines should
+    be dropped (e.g. health checks, root probes, metrics scrapes that flood
+    logs). Empty/unset disables filtering.
+    """
+    raw = os.getenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", "")
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
+_DISABLED_ACCESS_LOG_PATHS = _parse_disabled_access_log_paths()
+
+
+class HealthCheckAccessLogFilter(logging.Filter):
+    """
+    Drops uvicorn.access records for request paths in
+    LITELLM_DISABLE_ACCESS_LOG_PATHS. Uvicorn passes args as
+    (client_addr, method, full_path, http_version, status). Path is matched
+    against the portion before any query string.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _DISABLED_ACCESS_LOG_PATHS:
+            return True
+        try:
+            args = record.args
+            if not isinstance(args, tuple) or len(args) < 3:
+                return True
+            full_path = args[2]
+            if not isinstance(full_path, str):
+                return True
+            path = full_path.split("?", 1)[0]
+            if path in _DISABLED_ACCESS_LOG_PATHS:
+                return False
+        except Exception:
+            return True
+        return True
+
+
+_healthcheck_filter = HealthCheckAccessLogFilter()
+
+
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
@@ -278,6 +322,11 @@ def _suppress_loggers():
     apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
     apscheduler_scheduler_logger.setLevel(logging.WARNING)
 
+    # Drop access-log lines for paths in LITELLM_DISABLE_ACCESS_LOG_PATHS
+    # (covers the non-JSON path; JSON path wires the filter via log_config).
+    if _DISABLED_ACCESS_LOG_PATHS:
+        logging.getLogger("uvicorn.access").addFilter(_healthcheck_filter)
+
 
 # Call the suppression function
 _suppress_loggers()
@@ -336,7 +385,7 @@ def _get_uvicorn_json_log_config():
     # Use the module-level log_level variable for consistency
     uvicorn_log_level = log_level.upper()
 
-    log_config = {
+    log_config: Dict[str, Any] = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
@@ -350,6 +399,11 @@ def _get_uvicorn_json_log_config():
                 "()": json_formatter_class,
             },
         },
+        "filters": {
+            "healthcheck": {
+                "()": "litellm._logging.HealthCheckAccessLogFilter",
+            },
+        },
         "handlers": {
             "default": {
                 "formatter": "json",
@@ -360,6 +414,7 @@ def _get_uvicorn_json_log_config():
                 "formatter": "access",
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stdout",
+                "filters": ["healthcheck"],
             },
         },
         "loggers": {
