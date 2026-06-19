@@ -100,7 +100,7 @@ def print_verbose(print_statement):
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkParsed:
-    response_obj: Dict[str, Any]
+    response_obj: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1163,9 +1163,9 @@ class CustomStreamWrapper:
         self,
         chunk: Any,
         model_response: ModelResponseStream,
-        completion_obj: Dict[str, Any],
+        completion_obj: dict[str, Any],
     ) -> _ProviderChunkResult:
-        response_obj: Dict[str, Any] = {}
+        response_obj: dict[str, Any] = {}
         if (
             isinstance(chunk, ModelResponseStream)
             and self.custom_llm_provider is not None
@@ -1245,7 +1245,7 @@ class CustomStreamWrapper:
                 ].items():
                     setattr(model_response, key, value)
 
-            response_obj = cast(Dict[str, Any], anthropic_response_obj)
+            response_obj = cast(dict[str, Any], anthropic_response_obj)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
             response_obj = self.handle_replicate_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1413,7 +1413,7 @@ class CustomStreamWrapper:
             if not isinstance(chunk, str):
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
-                Dict[str, Any],
+                dict[str, Any],
                 litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
@@ -1533,10 +1533,10 @@ class CustomStreamWrapper:
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
-        response_obj: Dict[str, Any] = {}
+        response_obj: dict[str, Any] = {}
         try:
             # return this for all models
-            completion_obj: Dict[str, Any] = {"content": ""}
+            completion_obj: dict[str, Any] = {"content": ""}
             dispatch_result = self._dispatch_provider_chunk(
                 chunk=chunk,
                 model_response=model_response,
