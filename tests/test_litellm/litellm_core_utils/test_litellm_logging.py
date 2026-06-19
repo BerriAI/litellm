@@ -1726,11 +1726,23 @@ def test_get_usage_as_dict():
 
     # Test case 1: None response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
 
     # Test case 2: Empty response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
 
     # Test case 3: combined_usage_object takes priority
     combined = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -1752,7 +1764,13 @@ def test_get_usage_as_dict():
     result = StandardLoggingPayloadSetup.get_usage_as_dict(
         response_obj={"id": "resp-1", "choices": []}
     )
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
 
 
 def test_append_system_prompt_messages():

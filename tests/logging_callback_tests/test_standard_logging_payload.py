@@ -1105,8 +1105,12 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
 # --- cache token tests ---
 
-def _make_usage(cache_read: int = 0, cache_creation: int = 0, ptd_cached: int = 0) -> Usage:
+
+def _make_usage(
+    cache_read: int = 0, cache_creation: int = 0, ptd_cached: int = 0
+) -> Usage:
     from litellm.types.utils import PromptTokensDetailsWrapper
+
     u = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     u._cache_read_input_tokens = cache_read
     u._cache_creation_input_tokens = cache_creation
@@ -1154,3 +1158,29 @@ def test_get_usage_as_dict_from_response_obj():
     d = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"usage": usage})
     assert d["cache_read_input_tokens"] == 300
     assert d["cache_creation_input_tokens"] == 100
+
+
+def test_inject_cache_tokens_prefers_private_attr_then_prompt_tokens_details():
+    """Direct coverage for the _inject_cache_tokens helper: the private
+    Anthropic/Bedrock attrs win, with a prompt_tokens_details.cached_tokens
+    fallback for OpenAI/Gemini/DeepSeek."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Private attrs present → used directly.
+    anthropic = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    anthropic._cache_read_input_tokens = 200
+    anthropic._cache_creation_input_tokens = 500
+    d = StandardLoggingPayloadSetup._inject_cache_tokens({}, anthropic)
+    assert d["cache_read_input_tokens"] == 200
+    assert d["cache_creation_input_tokens"] == 500
+
+    # No private attr → fall back to prompt_tokens_details.cached_tokens.
+    openai = Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+    )
+    d = StandardLoggingPayloadSetup._inject_cache_tokens({}, openai)
+    assert d["cache_read_input_tokens"] == 80
+    assert d["cache_creation_input_tokens"] == 0

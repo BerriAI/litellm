@@ -5197,8 +5197,10 @@ class StandardLoggingPayloadSetup:
             )
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
-                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    _raw
+                usage = (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        _raw
+                    )
                 )
                 return StandardLoggingPayloadSetup._inject_cache_tokens(
                     usage.model_dump(), usage
@@ -5223,13 +5225,23 @@ class StandardLoggingPayloadSetup:
           2. prompt_tokens_details.cached_tokens — set by OpenAI, Gemini, DeepSeek
 
         cache_creation_input_tokens: Anthropic and Bedrock only via private attr.
+
+        Reads prompt_tokens_details off the Usage object (not ``d``) so the
+        result is correct regardless of what the caller passes as ``d``.
+        prompt_tokens_details may be a Pydantic wrapper (attribute access) or a
+        dict, so tolerate both.
         """
-        ptd = d.get("prompt_tokens_details") or {}
-        ptd_cached = (ptd.get("cached_tokens") or 0) if isinstance(ptd, dict) else 0
+        ptd = getattr(usage, "prompt_tokens_details", None)
+        if isinstance(ptd, dict):
+            ptd_cached = ptd.get("cached_tokens") or 0
+        else:
+            ptd_cached = getattr(ptd, "cached_tokens", 0) or 0
         d["cache_read_input_tokens"] = (
             getattr(usage, "_cache_read_input_tokens", 0) or ptd_cached
         )
-        d["cache_creation_input_tokens"] = getattr(usage, "_cache_creation_input_tokens", 0) or 0
+        d["cache_creation_input_tokens"] = (
+            getattr(usage, "_cache_creation_input_tokens", 0) or 0
+        )
         return d
 
     @staticmethod
@@ -5927,7 +5939,9 @@ def get_standard_logging_object_payload(
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
             cache_read_input_tokens=usage_dict.get("cache_read_input_tokens", 0),
-            cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens", 0),
+            cache_creation_input_tokens=usage_dict.get(
+                "cache_creation_input_tokens", 0
+            ),
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(
