@@ -439,9 +439,11 @@ def is_request_body_safe(
     # tool dict and its nested function object
     for tool in _iter_request_tools(request_body.get("tools")):
         _check_banned_params(tool, general_settings, llm_router, model)
+        _check_base_override_has_api_key(tool)
         function = tool.get("function")
         if isinstance(function, dict):
             _check_banned_params(function, general_settings, llm_router, model)
+            _check_base_override_has_api_key(function)
     return True
 
 

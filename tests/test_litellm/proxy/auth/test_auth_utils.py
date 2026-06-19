@@ -2405,6 +2405,75 @@ class TestIsRequestBodySafeScansTools:
         )
 
 
+class TestIsRequestBodySafeToolBaseOverrideRequiresApiKey:
+    """Greptile P1 follow-up #2: the api_key co-presence requirement that guards
+    a root-level and nested-config ``api_base`` override must also apply to each
+    ``tools`` entry and its nested ``function`` object. With
+    ``allow_client_side_credentials`` on, a tool-entry ``api_base`` clears the
+    banned-param gate; a provider interceptor (e.g. the advisor tool) then reads
+    api_base/api_key off that entry and falls back to a server-side credential
+    when no caller key is paired. The gate descended into tool entries for the
+    banned-param check but skipped the api_key check, so the override cleared
+    the opt-in without proving caller credential ownership."""
+
+    def test_tool_entry_base_override_without_api_key_is_rejected(self):
+        with pytest.raises(ValueError, match="requires a caller-supplied api_key"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "tools": [
+                        {
+                            "type": "advisor_20260301",
+                            "api_base": "http://127.0.0.1:8911/v1",
+                        }
+                    ],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_nested_function_base_override_without_api_key_is_rejected(self):
+        with pytest.raises(ValueError, match="requires a caller-supplied api_key"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "x",
+                                "api_base": "http://127.0.0.1:8911/v1",
+                            },
+                        }
+                    ],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_tool_entry_base_override_with_paired_api_key_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "tools": [
+                        {
+                            "type": "advisor_20260301",
+                            "api_base": "http://127.0.0.1:8911/v1",
+                            "api_key": "sk-caller-byok",
+                        }
+                    ],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
 class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
     """When the caller redirects ``api_base``/``base_url`` without resupplying
     a key, the admin's deployment ``api_key`` must be dropped so the proxy
