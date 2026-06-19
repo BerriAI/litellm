@@ -4568,44 +4568,28 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
 def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     from fastapi.responses import RedirectResponse
 
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
     from litellm.proxy.utils import _get_docs_url
 
-    cleanup_router_config_variables()
-    filepath = os.path.dirname(os.path.abspath(__file__))
-    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
-    # Ensure docs are mounted on a non-root path to trigger redirect logic
     monkeypatch.setenv("DOCS_URL", "/docs")
-
     test_redirect_url = "/ui"
     monkeypatch.setenv("ROOT_REDIRECT_URL", test_redirect_url)
-
-    asyncio.run(initialize(config=config_fp, debug=True))
 
     docs_url = _get_docs_url()
     root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
 
-    # Remove any existing "/" route that might interfere
-    routes_to_remove = []
-    for route in app.routes:
-        if hasattr(route, "path") and route.path == "/":
-            if hasattr(route, "methods") and "GET" in route.methods:
-                routes_to_remove.append(route)
-            elif not hasattr(route, "methods"):  # Catch-all routes
-                routes_to_remove.append(route)
+    # Use a fresh app so we don't have to mutate global state (which doesn't
+    # survive fastapi 0.137+'s compiled routing cache).
+    test_app = FastAPI(docs_url=docs_url)
 
-    for route in routes_to_remove:
-        app.routes.remove(route)
+    if docs_url != "/" and root_redirect_url is not None:
 
-    # Add the redirect route if conditions are met (matching the actual implementation)
-    if docs_url != "/" and root_redirect_url:
-
-        @app.get("/", include_in_schema=False)
-        async def root_redirect():
+        @test_app.get("/", include_in_schema=False)
+        async def _root_redirect():
             return RedirectResponse(url=root_redirect_url)
 
-    client = TestClient(app)
-    response = client.get("/", follow_redirects=False)
+    with TestClient(test_app) as client:
+        response = client.get("/", follow_redirects=False)
+
     assert response.status_code == 307
     assert response.headers["location"] == test_redirect_url
 

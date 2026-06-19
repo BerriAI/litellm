@@ -56,11 +56,22 @@ def test_routes_on_litellm_proxy():
         except Exception as exc:
             print(f"warning: failed to force-load {feat.name}: {exc}")
 
+    # fastapi 0.137+ stores included routers lazily as _IncludedRouter objects;
+    # _iter_included_route_candidates flattens them with prefixes applied.
+    try:
+        from fastapi.routing import _iter_included_route_candidates
+
+        route_iter = _iter_included_route_candidates(app.routes)
+    except ImportError:
+        route_iter = app.routes
+
     _all_routes = []
-    for route in app.routes:
-        _path_as_str = str(route.path)
+    for route in route_iter:
+        _path_as_str = getattr(route, "path", None)
+        if _path_as_str is None:
+            continue
+        _path_as_str = str(_path_as_str)
         if ":path" in _path_as_str:
-            # remove the :path
             _path_as_str = _path_as_str.replace(":path", "")
         _all_routes.append(_path_as_str)
 
