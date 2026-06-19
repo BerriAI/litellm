@@ -195,7 +195,9 @@ guardrails:
     litellm_params:
       guardrail: litellm_content_filter
       mode: "pre_call"
-      default_on: true
+      # Not default_on: this is a shared dev config. Opt in per request with
+      # "guardrails": ["pii-content-filter"] so other contributors' unrelated
+      # local testing isn't silently affected.
       patterns:
         - pattern_type: "prebuilt"
           pattern_name: "us_ssn"
