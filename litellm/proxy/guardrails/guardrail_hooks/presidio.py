@@ -724,6 +724,54 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count=masked_entity_count,
             )
 
+    async def _mask_tool_call_arguments(
+        self,
+        messages: List[Any],
+        presidio_config: Optional[dict],
+        data: dict,
+    ) -> None:
+        """Mask PII in tool_call/function_call arguments across all messages."""
+        tool_tasks: List[Any] = []
+        tool_targets: List[Any] = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            for tool_call in m.get("tool_calls") or []:
+                function = (
+                    tool_call.get("function")
+                    if isinstance(tool_call, dict)
+                    else None
+                )
+                if isinstance(function, dict) and isinstance(
+                    function.get("arguments"), str
+                ):
+                    tool_tasks.append(
+                        self.check_pii(
+                            text=function["arguments"],
+                            output_parse_pii=self.output_parse_pii,
+                            presidio_config=presidio_config,
+                            request_data=data,
+                        )
+                    )
+                    tool_targets.append((function, "arguments"))
+            function_call = m.get("function_call")
+            if isinstance(function_call, dict) and isinstance(
+                function_call.get("arguments"), str
+            ):
+                tool_tasks.append(
+                    self.check_pii(
+                        text=function_call["arguments"],
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=presidio_config,
+                        request_data=data,
+                    )
+                )
+                tool_targets.append((function_call, "arguments"))
+        if tool_tasks:
+            tool_results = await asyncio.gather(*tool_tasks)
+            for (container, key), result in zip(tool_targets, tool_results):
+                container[key] = result
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -802,48 +850,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
-            # Also mask PII in tool_call / function_call arguments. Gather
-            # coroutines to match the parallel dispatch used for content above.
-            tool_tasks: List[Any] = []
-            tool_targets: List[Any] = []
-            for m in messages:
-                if not isinstance(m, dict):
-                    continue
-                for tool_call in m.get("tool_calls") or []:
-                    function = (
-                        tool_call.get("function")
-                        if isinstance(tool_call, dict)
-                        else None
-                    )
-                    if isinstance(function, dict) and isinstance(
-                        function.get("arguments"), str
-                    ):
-                        tool_tasks.append(
-                            self.check_pii(
-                                text=function["arguments"],
-                                output_parse_pii=self.output_parse_pii,
-                                presidio_config=presidio_config,
-                                request_data=data,
-                            )
-                        )
-                        tool_targets.append((function, "arguments"))
-                function_call = m.get("function_call")
-                if isinstance(function_call, dict) and isinstance(
-                    function_call.get("arguments"), str
-                ):
-                    tool_tasks.append(
-                        self.check_pii(
-                            text=function_call["arguments"],
-                            output_parse_pii=self.output_parse_pii,
-                            presidio_config=presidio_config,
-                            request_data=data,
-                        )
-                    )
-                    tool_targets.append((function_call, "arguments"))
-            if tool_tasks:
-                tool_results = await asyncio.gather(*tool_tasks)
-                for (container, key), result in zip(tool_targets, tool_results):
-                    container[key] = result
+            await self._mask_tool_call_arguments(messages, presidio_config, data)
 
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
