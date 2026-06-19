@@ -91,7 +91,7 @@ class ProbeResult(BaseModel):
 
     @property
     def healthy(self) -> bool:
-        return 200 <= self.status_code != 404 and self.status_code < 500
+        return 200 <= self.status_code < 500 and self.status_code != 404
 
 
 class StreamingResponse(BaseModel):
