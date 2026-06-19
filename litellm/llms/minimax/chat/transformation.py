@@ -2,8 +2,11 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
+import logging
 import re
 from typing import Any, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import (
@@ -168,9 +171,10 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                     elif not self.finished_reasoning_content and content.strip():
                         if not self.started_reasoning_content:
                             self.started_reasoning_content = True
-                        delta["reasoning_content"] = content.strip()
+                        delta["reasoning_content"] = content
                         delta["content"] = None
 
             return super().chunk_parser(chunk)
-        except Exception:
+        except Exception as e:
+            logger.exception("MinimaxChatResponseIterator.chunk_parser error: %s", e)
             return super().chunk_parser(chunk)

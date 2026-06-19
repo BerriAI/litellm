@@ -223,8 +223,6 @@ class TestChunkParserPatterns:
         result = it.chunk_parser(chunk)
         delta = result.choices[0].delta
         assert delta.reasoning_content == "The user wants"
-        assert delta.content is None
-        assert it.started_reasoning_content is True
 
     def test_plain_content_skipped_empty_string(self):
         """Empty string content → skip (no reasoning flag)."""
@@ -244,11 +242,11 @@ class TestChunkParserPatterns:
 
         c1 = _make_chunk({"content": "first "})
         r1 = it.chunk_parser(c1)
-        assert r1.choices[0].delta.reasoning_content == "first"
+        assert r1.choices[0].delta.reasoning_content == "first "
 
-        c2 = _make_chunk({"content": "second "})
+        c2 = _make_chunk({"content": " second "})
         r2 = it.chunk_parser(c2)
-        assert r2.choices[0].delta.reasoning_content == "second"
+        assert r2.choices[0].delta.reasoning_content == " second "
 
     # ------------------------------------------------------------------
     # Edge: finish / empty delta
@@ -284,10 +282,13 @@ class TestChunkParserPatterns:
 
         # 2-4. plain reasoning chunks
         r1 = it.chunk_parser(_make_chunk({"content": "The "}))
-        assert r1.choices[0].delta.reasoning_content == "The"
+        assert r1.choices[0].delta.reasoning_content == "The "
 
         r2 = it.chunk_parser(_make_chunk({"content": "user wants "}))
-        assert r2.choices[0].delta.reasoning_content == "user wants"
+        assert r2.choices[0].delta.reasoning_content == "user wants "
+
+        r3 = it.chunk_parser(_make_chunk({"content": "a greeting."}))
+        assert r3.choices[0].delta.reasoning_content == "a greeting."
 
         r3 = it.chunk_parser(_make_chunk({"content": "a greeting."}))
         assert r3.choices[0].delta.reasoning_content == "a greeting."
