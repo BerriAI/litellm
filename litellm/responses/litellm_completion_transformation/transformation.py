@@ -186,7 +186,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         import litellm
 
-        response = await litellm.acompletion(model, input)
+        response = await litellm.acompletion(model, input + [{"type": "message", "role": "user", "content": "compact this conversation"}])
         return [
             {
                 "type": "message",
@@ -211,7 +211,7 @@ class LiteLLMCompletionResponsesConfig:
             elif type(item.get("content")) is str:
                 total += len(item.get("content")) // 4
             elif item.get("encrypted_content"):
-                total += len(item.get("encrypted_content")) // 4
+                total += len(base64.b64decode(item.get("encrypted_content")).decode()) // 4
             else:
                 raise ValueError("missing content")
         return total
