@@ -686,3 +686,95 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     # Even if LiteLLM_Params construction fails the deployment should survive
     result = expand_wildcard_deployments_for_model_info([deployment])
     assert result == [deployment]
+
+
+def test_filter_models_by_user_access_exact_match():
+    from litellm.proxy.auth.model_checks import filter_models_by_user_access
+
+    result = filter_models_by_user_access(
+        models=["claude-3-haiku", "claude-3-sonnet", "gpt-4o"],
+        user_allowed_models=["claude-3-haiku"],
+    )
+    assert result == ["claude-3-haiku"]
+
+
+def test_filter_models_by_user_access_wildcard_preserves_inference_parity():
+    """
+    Regression for Greptile finding on PR #29748: the discovery-side
+    `filter_models_by_user_access` and the inference-side
+    `is_model_allowed_by_pattern` must agree on every model+pattern pair.
+
+    The previous `fnmatch.fnmatchcase` implementation treated `.` as a
+    literal character while the inference-time check treats it as a regex
+    metacharacter (`.*` substitution applied to `*` only, leaving `.` as
+    "any char"). For real Bedrock-style names like
+    `bedrock/anthropic.claude-3-5-sonnet`, both matchers would agree on
+    the canonical input. The divergence appears in edge inputs where
+    something other than `.` sits in the dotted position: regex would
+    let the model through at call time, while fnmatch would silently
+    hide it from `/v1/models` (over-filter). The user experience is
+    "I can call this model but I cannot see it in the catalog".
+
+    Asserts parity between the two functions across both cases.
+    """
+    from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
+    from litellm.proxy.auth.model_checks import filter_models_by_user_access
+
+    models = [
+        "bedrock/anthropic.claude-3-5-sonnet",
+        "bedrock/anthropicXclaude-3-5-sonnet",
+    ]
+    pattern = "bedrock/anthropic.claude*"
+    filtered = filter_models_by_user_access(
+        models=models, user_allowed_models=[pattern]
+    )
+
+    for m in models:
+        inference_allows = is_model_allowed_by_pattern(m, pattern)
+        if inference_allows:
+            assert m in filtered, (
+                f"discovery hid {m!r} (pattern={pattern!r}) that inference "
+                f"would let through; fnmatch vs regex divergence regressed"
+            )
+        else:
+            assert m not in filtered, (
+                f"discovery exposed {m!r} (pattern={pattern!r}) that inference "
+                f"would reject"
+            )
+
+
+def test_filter_models_by_user_access_wildcard_provider_prefix():
+    """`anthropic/*` matches every model under the anthropic/ namespace."""
+    from litellm.proxy.auth.model_checks import filter_models_by_user_access
+
+    result = filter_models_by_user_access(
+        models=[
+            "anthropic/claude-3-haiku",
+            "anthropic/claude-3-sonnet",
+            "openai/gpt-4o",
+            "bedrock/anthropic.claude-3-5-sonnet",
+        ],
+        user_allowed_models=["anthropic/*"],
+    )
+    assert result == [
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-3-sonnet",
+    ]
+
+
+def test_filter_models_by_user_access_wildcard_global_star():
+    """Bare `*` matches every model (parity with inference catch-all)."""
+    from litellm.proxy.auth.model_checks import filter_models_by_user_access
+
+    models = ["claude-3-haiku", "openai/gpt-4o", "bedrock/foo.bar"]
+    assert filter_models_by_user_access(models, ["*"]) == models
+
+
+def test_filter_models_by_user_access_preserves_input_order():
+    from litellm.proxy.auth.model_checks import filter_models_by_user_access
+
+    result = filter_models_by_user_access(
+        models=["b-model", "a-model", "c-model"],
+        user_allowed_models=["*"],
+    )
+    assert result == ["b-model", "a-model", "c-model"]

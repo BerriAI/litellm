@@ -1,13 +1,13 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
-import fnmatch
 from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
@@ -239,7 +239,12 @@ def filter_models_by_user_access(
     """
     Return the subset of `models` that the user is allowed to see, given
     the (already-expanded) `user_allowed_models` list. Supports exact
-    match plus `fnmatch` wildcards (e.g. `anthropic/*`, `*`).
+    match plus `*` wildcards (e.g. `anthropic/*`, `*`).
+
+    Wildcard semantics mirror the inference-time check
+    `is_model_allowed_by_pattern` (regex-based, `*` -> `.*`) so a model
+    accepted by `can_user_call_model` cannot be hidden by this filter,
+    and vice versa.
 
     Caller is responsible for short-circuiting before calling when
     `user_allowed_models` is empty, contains `all-proxy-models`
@@ -252,7 +257,7 @@ def filter_models_by_user_access(
     for m in models:
         if m in exact:
             out.append(m)
-        elif patterns and any(fnmatch.fnmatchcase(m, p) for p in patterns):
+        elif patterns and any(is_model_allowed_by_pattern(m, p) for p in patterns):
             out.append(m)
     return out
 
