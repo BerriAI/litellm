@@ -269,6 +269,60 @@ class TestImageEditCustomPricing:
         assert use_custom_pricing_for_model(litellm_params) is False
 
 
+class TestImageEditOpenRouterImageConfig:
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/30753
+
+    image_config is honored on OpenRouter image generation but was silently dropped on
+    image edits: the default edit path never merged non_default_params (which still carries
+    image_config) before calling the handler, unlike the bedrock/stability/black_forest_labs
+    branches. OpenRouter's transform forwards extra top-level params, so once image_config
+    survives the merge it reaches the provider.
+    """
+
+    def test_openrouter_image_edit_forwards_image_config(self):
+        from litellm.images.main import image_edit
+
+        image_config = {"aspect_ratio": "16:9", "image_size": "2K"}
+
+        with (
+            patch(
+                "litellm.images.main.get_llm_provider",
+                return_value=(
+                    "google/gemini-3-pro-image-preview",
+                    "openrouter",
+                    None,
+                    None,
+                ),
+            ),
+            patch(
+                "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.images.main._get_ImageEditRequestUtils",
+                return_value=MagicMock(
+                    get_requested_image_edit_optional_param=MagicMock(return_value={}),
+                    get_optional_params_image_edit=MagicMock(return_value={}),
+                ),
+            ),
+            patch("litellm.images.main.base_llm_http_handler") as mock_handler,
+        ):
+            mock_handler.image_edit_handler.return_value = MagicMock()
+
+            image_edit(
+                image=b"fake-image-data",
+                prompt="add a red border",
+                model="openrouter/google/gemini-3-pro-image-preview",
+                image_config=image_config,
+            )
+
+        forwarded = mock_handler.image_edit_handler.call_args.kwargs[
+            "image_edit_optional_request_params"
+        ]
+        assert forwarded.get("image_config") == image_config
+
+
 class TestImageEditHandlerCredentialsForwarding:
     """
     Regression tests for Vertex AI image_edit credentials bug.

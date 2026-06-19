@@ -963,6 +963,8 @@ def image_edit(
                 client=kwargs.get("client"),
                 aimage_edit=_is_async,
             )
+        if custom_llm_provider == "openrouter":
+            image_edit_request_params.update(non_default_params)
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,
