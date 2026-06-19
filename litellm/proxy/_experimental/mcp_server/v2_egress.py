@@ -31,21 +31,36 @@ from typing import (
 )
 
 import httpx
-from mcp import ClientSession
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.sse import sse_client
+from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._types import MCPTransport
 from litellm.proxy.gateway.mcp.result import Error, Ok, Result
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from anyio.streams.memory import (
+        MemoryObjectReceiveStream,
+        MemoryObjectSendStream,
+    )
     from mcp import ReadResourceResult, Resource
+    from mcp.shared.message import SessionMessage
     from mcp.types import CallToolResult, GetPromptResult, Prompt
     from mcp.types import Tool as MCPTool
     from pydantic import AnyUrl
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    _Streams = tuple[
+        MemoryObjectReceiveStream[SessionMessage | Exception],
+        MemoryObjectSendStream[SessionMessage],
+    ]
 
 _T = TypeVar("_T")
 
@@ -160,29 +175,71 @@ class UpstreamConnection:
 
     The v2 egress transport: attaches ``resolve()``'s ``httpx.Auth`` (and any static/env-var
     headers) to the connection through litellm's httpx client (SSL/proxy config), opens a
-    streamable-http ``ClientSession`` per request, and returns typed results (errors-as-values).
-    Replaces v1's ``MCPClient`` for the modes routed through the v2 manager. (sse/stdio transports
-    and the prompt/resource ops land in later steps.)
+    ``ClientSession`` per request over the server's transport (streamable-http, sse, or stdio),
+    and returns typed results (errors-as-values). Replaces v1's ``MCPClient`` for the modes routed
+    through the v2 manager.
     """
 
     def __init__(
         self,
-        server_url: str,
+        server_url: Optional[str] = None,
         *,
+        transport: MCPTransport = MCPTransport.http,
         auth: Optional[httpx.Auth] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 60.0,
+        command: Optional[str] = None,
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> None:
         self._server_url = server_url
+        self._transport = transport
         self._auth = auth
         self._extra_headers = extra_headers
         self._timeout = timeout
+        self._command = command
+        self._args = args
+        self._env = env
 
-    async def _run(
-        self, operation: Callable[[ClientSession], Awaitable[_T]]
-    ) -> Result[_T, ConnError]:
-        # The resolved auth (and any static/env-var headers) ride on the httpx client; SSL/proxy
-        # config comes from litellm's get_ssl_configuration, matching v1's connection behavior.
+    def _http_client_factory(self) -> Callable[..., httpx.AsyncClient]:
+        def factory(
+            *,
+            headers: Optional[Dict[str, str]] = None,
+            timeout: Optional[httpx.Timeout] = None,
+            auth: Optional[httpx.Auth] = None,
+        ) -> httpx.AsyncClient:
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=auth,
+                verify=get_ssl_configuration(None),
+                follow_redirects=True,
+            )
+
+        return factory
+
+    @contextlib.asynccontextmanager
+    async def _session_streams(self) -> AsyncGenerator[_Streams, None]:
+        # The resolved auth and static/env-var headers ride on the httpx client (SDK 1.26: not the
+        # transport kwargs); SSL/proxy config comes from litellm's get_ssl_configuration. Normalizes
+        # all three transports to a (read, write) stream pair (streamable-http yields a third value).
+        if self._transport == MCPTransport.stdio:
+            params = StdioServerParameters(
+                command=self._command or "", args=self._args or [], env=self._env
+            )
+            async with stdio_client(params) as (read_stream, write_stream, *_):
+                yield read_stream, write_stream
+            return
+        if self._transport == MCPTransport.sse:
+            async with sse_client(
+                url=self._server_url or "",
+                timeout=self._timeout,
+                headers=self._extra_headers,
+                auth=self._auth,
+                httpx_client_factory=self._http_client_factory(),
+            ) as (read_stream, write_stream, *_):
+                yield read_stream, write_stream
+            return
         http_client = httpx.AsyncClient(
             headers=self._extra_headers,
             timeout=httpx.Timeout(self._timeout),
@@ -192,17 +249,24 @@ class UpstreamConnection:
         )
         try:
             async with streamable_http_client(
-                url=self._server_url, http_client=http_client
-            ) as (read_stream, write_stream, _):
+                url=self._server_url or "", http_client=http_client
+            ) as (read_stream, write_stream, *_):
+                yield read_stream, write_stream
+        finally:
+            with contextlib.suppress(Exception):
+                await http_client.aclose()
+
+    async def _run(
+        self, operation: Callable[[ClientSession], Awaitable[_T]]
+    ) -> Result[_T, ConnError]:
+        try:
+            async with self._session_streams() as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     result = await operation(session)
             return Ok(result)
         except Exception as e:  # transport / protocol failures -> ConnError
             return Error(_classify_conn_error(e))
-        finally:
-            with contextlib.suppress(Exception):
-                await http_client.aclose()
 
     async def list_tools(self) -> Result[List[MCPTool], ConnError]:
         async def op(session: ClientSession) -> List[MCPTool]:

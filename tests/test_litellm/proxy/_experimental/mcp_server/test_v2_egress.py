@@ -2,6 +2,7 @@
 
 import contextlib
 import socket
+import sys
 import threading
 import time
 
@@ -32,13 +33,13 @@ def test_egress_flag_falsey_values(monkeypatch, value):
 
 
 @contextlib.contextmanager
-def _serve(app):
-    """Serve an ASGI app on a free port in a background thread; yield its /mcp url."""
+def _serve(app, path="/mcp"):
+    """Serve an ASGI app on a free port in a background thread; yield its endpoint url."""
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
-    url = f"http://127.0.0.1:{port}/mcp"
+    url = f"http://127.0.0.1:{port}{path}"
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     )
@@ -103,6 +104,20 @@ def echo_server_url():
 def protected_server_url():
     with _serve(_echo_app(token="secret-token")) as url:
         yield url, "secret-token"
+
+
+@pytest.fixture
+def sse_server_url():
+    from mcp.server.fastmcp import FastMCP
+
+    mcp = FastMCP("egress-sse-test")
+
+    @mcp.tool()
+    def echo(text: str) -> str:
+        return f"echo: {text}"
+
+    with _serve(mcp.sse_app(), path="/sse") as url:
+        yield url
 
 
 @pytest.mark.asyncio
@@ -178,3 +193,41 @@ async def test_upstream_connection_prompts_and_resources(echo_server_url):
     read = await conn.read_resource(target.uri)
     assert isinstance(read, Ok)
     assert read.ok.contents  # at least one content block
+
+
+@pytest.mark.asyncio
+async def test_upstream_connection_stdio(tmp_path):
+    from litellm.proxy._experimental.mcp_server.v2_egress import UpstreamConnection
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.gateway.mcp.result import Ok
+
+    script = tmp_path / "stdio_server.py"
+    script.write_text(
+        "from mcp.server.fastmcp import FastMCP\n"
+        "mcp = FastMCP('stdio-test')\n"
+        "@mcp.tool()\n"
+        "def ping() -> str:\n"
+        "    return 'pong'\n"
+        "mcp.run(transport='stdio')\n"
+    )
+    conn = UpstreamConnection(
+        transport=MCPTransport.stdio, command=sys.executable, args=[str(script)]
+    )
+    tools = await conn.list_tools()
+    assert isinstance(tools, Ok)
+    assert any(t.name == "ping" for t in tools.ok)
+
+
+@pytest.mark.asyncio
+async def test_upstream_connection_sse(sse_server_url):
+    from litellm.proxy._experimental.mcp_server.v2_egress import UpstreamConnection
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import NoOpAuth
+    from litellm.proxy.gateway.mcp.result import Ok
+
+    conn = UpstreamConnection(
+        sse_server_url, transport=MCPTransport.sse, auth=NoOpAuth()
+    )
+    tools = await conn.list_tools()
+    assert isinstance(tools, Ok)
+    assert any(t.name == "echo" for t in tools.ok)
