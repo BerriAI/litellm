@@ -813,22 +813,24 @@ class ContentFilterGuardrail(CustomGuardrail):
                 p for p in self.compiled_patterns if is_contextual(p)
             )
 
-        simple_patterns = tuple(
-            p for p in self.compiled_patterns if not is_contextual(p)
-        )
-        if not simple_patterns:
+        indexed_simple_patterns = [
+            (i, p) for i, p in enumerate(self.compiled_patterns) if not is_contextual(p)
+        ]
+        if not indexed_simple_patterns:
             return AlwaysMatchPrefilter(), tuple(self.compiled_patterns)
 
-        prefilter, uncovered_indices = build_rust_pattern_prefilter(
-            [p["regex"].pattern for p in simple_patterns]
+        prefilter, uncovered_positions = build_rust_pattern_prefilter(
+            [p["regex"].pattern for _, p in indexed_simple_patterns]
         )
-        uncovered_simple_patterns = {
-            id(p) for i, p in enumerate(simple_patterns) if i in uncovered_indices
+        uncovered_original_indices = {
+            original_index
+            for position, (original_index, _) in enumerate(indexed_simple_patterns)
+            if position in uncovered_positions
         }
         always_run_patterns = tuple(
             p
-            for p in self.compiled_patterns
-            if is_contextual(p) or id(p) in uncovered_simple_patterns
+            for i, p in enumerate(self.compiled_patterns)
+            if is_contextual(p) or i in uncovered_original_indices
         )
         return prefilter, always_run_patterns
 
