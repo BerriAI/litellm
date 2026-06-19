@@ -208,6 +208,33 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 content["image_url"]["url"] = f"{url}#transform=inline"
         return content
 
+    @staticmethod
+    def _sanitize_tool_schema(node: Any) -> Any:
+        """Recursively strip JSON Schema keys that Fireworks AI's tool-parameter
+        validator rejects.
+
+        Fireworks rejects ``title`` anywhere in a tool's parameter schema and
+        rejects ``default`` when its value is ``None`` (Pydantic emits both by
+        default). The drop_params flag only strips top-level OpenAI params, not
+        nested fields inside tool schemas, so callers using Pydantic-generated
+        tool schemas (e.g. via MCP servers like Coralogix / DevRev) hit a 400:
+
+            JSON Schema not supported: could not understand the instance
+            {'default': None, 'title': 'Page Size'}
+
+        This helper walks the schema and removes those keys while preserving
+        non-null defaults and every other field.
+        """
+        if isinstance(node, dict):
+            return {
+                k: FireworksAIConfig._sanitize_tool_schema(v)
+                for k, v in node.items()
+                if k != "title" and not (k == "default" and v is None)
+            }
+        if isinstance(node, list):
+            return [FireworksAIConfig._sanitize_tool_schema(item) for item in node]
+        return node
+
     def _transform_tools(
         self, tools: List[OpenAIChatCompletionToolParam]
     ) -> List[OpenAIChatCompletionToolParam]:
@@ -219,6 +246,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             params = function.get("parameters")
             if isinstance(params, dict):
                 unpack_legacy_defs(params)
+                function["parameters"] = self._sanitize_tool_schema(params)
         return tools
 
     def _transform_messages_helper(
