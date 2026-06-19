@@ -427,6 +427,55 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         assert "litellm_logging_obj" not in request_data
 
 
+class TestPostCallFailureHookLiftsRecoveredPartialSpend:
+    """A stream that broke mid-flight still billed the provider for the chunks
+    already delivered. The streaming handler stashes that recovered usage and
+    cost on the logging object; post_call_failure_hook must lift them onto
+    request_data before the logging object is popped, so the failure-path spend
+    callbacks (which run after the pop) record the real partial spend.
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_recovered_usage_and_cost(self):
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "combined_usage_object": recovered_usage,
+            "response_cost": 3.5e-05,
+        }
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 3.5e-05
+        assert "litellm_logging_obj" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_no_recovered_usage_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import ModelGroupInfo
 
