@@ -108,6 +108,8 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
     pending_reasoning: str = ""
+    plain_chunk_count: int = 0
+    MAX_PLAIN_CHUNKS: int = 30
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
@@ -123,6 +125,7 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                 if has_reasoning:
                     delta["content"] = None
                     self.started_reasoning_content = True
+                    self.plain_chunk_count = 0
 
                 reasoning_details = delta.get("reasoning_details")
                 if reasoning_details and isinstance(reasoning_details, list):
@@ -134,6 +137,7 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         delta["reasoning_content"] = reasoning_text
                         delta["content"] = None
                         self.started_reasoning_content = True
+                        self.plain_chunk_count = 0
 
                 content = delta.get("content", "")
                 if content and isinstance(content, str):
@@ -168,9 +172,11 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                             after if after.strip() else ("" if not after else None)
                         )
                         self.finished_reasoning_content = True
-                    elif not self.finished_reasoning_content and content.strip():
+                        self.plain_chunk_count = 0
+                    elif not self.finished_reasoning_content and self.plain_chunk_count < self.MAX_PLAIN_CHUNKS and content.strip():
                         if not self.started_reasoning_content:
                             self.started_reasoning_content = True
+                        self.plain_chunk_count += 1
                         delta["reasoning_content"] = content
                         delta["content"] = None
 
