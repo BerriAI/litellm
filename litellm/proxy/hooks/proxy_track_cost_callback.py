@@ -162,9 +162,20 @@ class _ProxyDBLogger(CustomLogger):
             if obj_start is not None:
                 actual_start_time = obj_start
 
+        # A stream that broke mid-flight still billed the provider for the
+        # chunks already delivered. ``post_call_failure_hook`` lifts that
+        # recovered cost onto request_data (the usage rides along in
+        # ``combined_usage_object`` for the token columns), so attribute the
+        # real partial spend to this failure row instead of zero.
+        recovered_response_cost = 0.0
+        if isinstance(request_data.get("combined_usage_object"), litellm.Usage):
+            recovered_response_cost = max(
+                float(request_data.get("response_cost") or 0.0), 0.0
+            )
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
-            response_cost=0.0,
+            response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
             end_user_id=user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,

@@ -2985,6 +2985,151 @@ def test_combine_fallback_usage():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_failure():
+    """A mid-stream failure with no successful fallback raises and is logged as
+    a failure, so the router must never dispatch it as a success. Partial-spend
+    recovery for the failure row happens in the streaming handler, not here, so
+    this guards only against reintroducing a success log for a failed stream.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices, Usage
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+        ],
+        set_verbose=True,
+    )
+
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="The Roman Empire began when",
+    )
+
+    def _make_interrupted_model_response():
+        partial_chunk = litellm.ModelResponseStream(
+            id="chatcmpl-partial-1",
+            created=1742056047,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
+        )
+
+        class _RaisingStream:
+            def __init__(self):
+                self.index = 0
+                self.chunks = [partial_chunk]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.index == 0:
+                    self.index += 1
+                    return partial_chunk
+                raise error
+
+        stream = _RaisingStream()
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.model_call_details = {}
+        setattr(stream, "model", "gpt-4")
+        setattr(stream, "custom_llm_provider", "openai")
+        setattr(stream, "logging_obj", logging_obj)
+        return stream, logging_obj
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Terminal path: no successful fallback -> the error propagates and the
+    # router never dispatches a success for the failed stream.
+    model_response, logging_obj = _make_interrupted_model_response()
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=model_response,
+            messages=messages,
+            initial_kwargs=dict(initial_kwargs),
+        )
+        collected = []
+        with pytest.raises(MidStreamFallbackError):
+            async for chunk in result:
+                collected.append(chunk)
+
+    assert len(collected) == 1
+    logging_obj.dispatch_success_handlers.assert_not_called()
+
+    # Fallback success: the fallback stream owns success accounting via
+    # _combine_fallback_usage, so this iterator must not dispatch its own.
+    model_response, logging_obj = _make_interrupted_model_response()
+
+    class _FallbackStream:
+        def __init__(self, items):
+            self.items = items
+            self.index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    fallback_stream = _FallbackStream(
+        [
+            litellm.ModelResponseStream(
+                id="chatcmpl-fallback-1",
+                model="gpt-3.5-turbo",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content=" continued", role="assistant"),
+                    )
+                ],
+            )
+        ]
+    )
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=model_response,
+            messages=messages,
+            initial_kwargs=dict(initial_kwargs),
+        )
+        collected = []
+        async for chunk in result:
+            collected.append(chunk)
+
+    assert len(collected) == 2
+    logging_obj.dispatch_success_handlers.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_team_scoped_model_fallback():
     """
     Test that fallback works correctly for team-scoped models.
