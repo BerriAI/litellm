@@ -412,16 +412,38 @@ def test_initialize_guardrail_resolves_default_on_env_var_false(monkeypatch):
     assert callback.default_on is False
 
 
-def test_initialize_guardrail_unsets_default_on_env_var_falls_back_false(monkeypatch):
+def test_initialize_guardrail_unsets_default_on_env_var_falls_back_false(
+    monkeypatch, caplog
+):
     captured: dict = {}
     monkeypatch.delenv("LITELLM_TEST_DEFAULT_ON_MISSING", raising=False)
-    handler = _init_handler_with_fake_initializer(
-        captured, "os.environ/LITELLM_TEST_DEFAULT_ON_MISSING"
-    )
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        handler = _init_handler_with_fake_initializer(
+            captured, "os.environ/LITELLM_TEST_DEFAULT_ON_MISSING"
+        )
 
     assert captured["default_on"] is False
     callback = handler.guardrail_id_to_custom_guardrail["default-on-env-var"]
     assert callback.default_on is False
+    assert "LITELLM_TEST_DEFAULT_ON_MISSING" in caplog.text
+
+
+def test_initialize_guardrail_unrecognized_default_on_env_value_warns(
+    monkeypatch, caplog
+):
+    captured: dict = {}
+    monkeypatch.setenv("LITELLM_TEST_DEFAULT_ON_UNRECOGNIZED", "yes")
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        _init_handler_with_fake_initializer(
+            captured, "os.environ/LITELLM_TEST_DEFAULT_ON_UNRECOGNIZED"
+        )
+
+    assert captured["default_on"] is False
+    assert "LITELLM_TEST_DEFAULT_ON_UNRECOGNIZED" in caplog.text
 
 
 def test_initialize_guardrail_non_prefixed_bool_string_not_env_resolved(monkeypatch):

@@ -448,9 +448,17 @@ class InMemoryGuardrailHandler:
             if isinstance(default_on_raw, str) and default_on_raw.startswith(
                 "os.environ/"
             ):
+                resolved_default_on = get_secret_bool(default_on_raw)
+                if resolved_default_on is None:
+                    verbose_proxy_logger.warning(
+                        "Guardrail default_on env var %s could not be resolved "
+                        "to a bool (unset or value not 'true'/'false'); "
+                        "defaulting to False",
+                        default_on_raw,
+                    )
                 litellm_params_data = {
                     **litellm_params_data,
-                    "default_on": get_secret_bool(default_on_raw),
+                    "default_on": resolved_default_on,
                 }
             litellm_params = LitellmParams(**litellm_params_data)
         else:
