@@ -186,7 +186,9 @@ class LiteLLMCompletionResponsesConfig:
         """
         import litellm
 
-
+        print("acompletion start")
+        await litellm.acompletion(model, input)
+        print("acompletion end")
         return [
             {
                 "type": "message",
