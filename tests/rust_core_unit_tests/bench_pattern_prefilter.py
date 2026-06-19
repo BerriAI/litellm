@@ -89,6 +89,14 @@ def _rust_prefilter(text: str) -> bool:
     return PREFILTER.any_match(text)
 
 
+def _with_prefilter_check(text: str) -> bool:
+    if PREFILTER.any_match(text):
+        return _python_loop(text)
+    return False
+
+
+MATCHING_TEXT = "My SSN is 123-45-6789, can you confirm it looks valid?"
+
 CLEAN_TEXTS = {
     "short  (~10 words)": "Can you help me write a short poem about the ocean at sunset?",
     "medium (~80 words)": (
@@ -115,14 +123,14 @@ CLEAN_TEXTS = {
     ),
 }
 
-WARMUP = 200
+ITERATIONS_PER_BATCH = 200
 REPEATS = 5
 
 
 def _measure_us(fn, arg) -> float:
-    fn(arg)
-    times = timeit.repeat(lambda: fn(arg), number=WARMUP, repeat=REPEATS)
-    return min(times) / WARMUP * 1_000_000
+    fn(arg)  # untimed warm-up call, separate from the timed batches below
+    times = timeit.repeat(lambda: fn(arg), number=ITERATIONS_PER_BATCH, repeat=REPEATS)
+    return min(times) / ITERATIONS_PER_BATCH * 1_000_000
 
 
 def main() -> None:
@@ -161,6 +169,19 @@ def main() -> None:
     print()
     print("rust: one combined NFA pass tests all eligible patterns simultaneously.")
     print("python: each pattern runs its own re.search call over the same text.")
+    print()
+
+    print("Worst case: text that actually matches, where the pre-filter can't")
+    print("skip anything and the full pattern loop runs either way. This is the")
+    print("added cost of the pre-filter check itself, not a speedup.")
+    print()
+    assert _python_loop(MATCHING_TEXT) is True
+    assert _with_prefilter_check(MATCHING_TEXT) is True
+    old_us = _measure_us(_python_loop, MATCHING_TEXT)
+    new_us = _measure_us(_with_prefilter_check, MATCHING_TEXT)
+    print(f"without pre-filter check:  {old_us:.2f}us")
+    print(f"with pre-filter check:     {new_us:.2f}us")
+    print(f"added overhead:            {new_us - old_us:+.2f}us")
     print()
 
 
