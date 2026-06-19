@@ -219,7 +219,7 @@
         "label": "Bedrock Mantle API Key",
         "placeholder": null,
         "tooltip": "API Key for Bedrock Mantle. You can provide the raw key or the environment variable (e.g. `os.environ/BEDROCK_MANTLE_API_KEY`).",
-        "required": true,
+        "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null
