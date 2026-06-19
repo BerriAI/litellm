@@ -426,6 +426,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
+from litellm.proxy.middleware.security_headers_middleware import (
+    SecurityHeadersMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -1757,6 +1760,7 @@ app.add_middleware(
 
 app.add_middleware(PrometheusAuthMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 def mount_swagger_ui():
@@ -13707,26 +13711,24 @@ async def fallback_login(request: Request):
 
     # get url from request
     redirect_url = get_custom_url(str(request.base_url))
-    ui_username = os.getenv("UI_USERNAME")
     if redirect_url.endswith("/"):
         redirect_url += "sso/callback"
     else:
         redirect_url += "/sso/callback"
 
-    if ui_username is not None:
-        # No Google, Microsoft SSO
-        # Use UI Credentials set in .env
-        from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(
-            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
-        )
-    else:
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(
-            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
-        )
+    hide_default_credentials_hint = (
+        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
+        or general_settings.get("hide_default_credentials_hint", False) is True
+    )
+    return HTMLResponse(
+        content=build_ui_login_form(
+            show_deprecation_banner=False,
+            hide_default_credentials_hint=hide_default_credentials_hint,
+        ),
+        status_code=200,
+    )
 
 
 @router.post(
