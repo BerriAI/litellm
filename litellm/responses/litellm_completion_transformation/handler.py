@@ -105,6 +105,19 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
+        #print(request_input)
+        input_token_size = LiteLLMCompletionResponsesConfig._cheap_token_counter(request_input)
+        #print(input_token_size, responses_api_request)
+        compaction_item = None
+        if LiteLLMCompletionResponsesConfig.should_execute_compaction(input_token_size, responses_api_request.get("context_management")):
+            request_input, compaction_item = await LiteLLMCompletionResponsesConfig._apply_compaction_to_messages(litellm_completion_request["model"], request_input)
+            litellm_completion_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=litellm_completion_request["model"],
+                input=request_input,
+                responses_api_request=ResponsesAPIOptionalRequestParams(**responses_api_request),
+            )
+            
+
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
@@ -121,7 +134,8 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
                 responses_api_request=responses_api_request,
             )
-
+            if compaction_item:
+                responses_api_response.output = [compaction_item] + responses_api_response.output
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):

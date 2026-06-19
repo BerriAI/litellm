@@ -186,9 +186,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         import litellm
 
-        print("acompletion start")
         await litellm.acompletion(model, input)
-        print("acompletion end")
         return [
             {
                 "type": "message",
@@ -207,7 +205,10 @@ class LiteLLMCompletionResponsesConfig:
             return len(input) // 4
         total = 0
         for item in input:
-            if item.get("content"):
+            if type(item.get("content")) is list:
+                for msg in item.get("content"):
+                    total += len(msg["text"]) // 4
+            elif type(item.get("content")) is str:
                 total += len(item.get("content")) // 4
             elif item.get("encrypted_content"):
                 total += len(item.get("encrypted_content")) // 4
