@@ -153,9 +153,18 @@ def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
     vertex_jsonl_content = []
     for _openai_jsonl_content in openai_jsonl_content:
         openai_request_body = _openai_jsonl_content.get("body") or {}
+        _model = openai_request_body.get("model", "")
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        
+        try:
+            _model, _, _, _ = get_llm_provider(model=_model)
+            _model = VertexGeminiConfig.get_model_for_vertex_ai_url(model=_model)
+        except Exception:
+            pass
+        
         vertex_request_body = _transform_request_body(
             messages=openai_request_body.get("messages", []),
-            model=openai_request_body.get("model", ""),
+            model=_model,
             optional_params=map_openai_to_vertex_params(openai_request_body),
             custom_llm_provider="vertex_ai",
             litellm_params={},
