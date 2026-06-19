@@ -10,8 +10,9 @@ load-bearing behavior: soft != block.
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
+from e2e_config import unique_marker
+from e2e_http import require_successful_call
 from lifecycle import ResourceManager
-from proxy_client import require_successful_call, unique_marker
 
 pytestmark = pytest.mark.e2e
 
@@ -20,14 +21,12 @@ def test_soft_budget_does_not_block(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
     # soft far below max: spend crosses soft immediately, stays under max.
-    key = client.generate_key(
-        max_budget=1000.0, extra_params={"soft_budget": 1e-9}
-    )
+    key = client.generate_key(max_budget=1000.0, soft_budget=1e-9)
     resources.defer(lambda: client.delete_key(key))
 
     for _ in range(3):
         result = client.chat(
-            key, "claude-haiku-4-5", f"hi {unique_marker()}", extra_body={"max_tokens": 16}
+            key, "claude-haiku-4-5", f"hi {unique_marker()}", max_tokens=16
         )
         require_successful_call(result)  # skip if provider unavailable
         assert not is_budget_block(result), (

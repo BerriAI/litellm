@@ -13,8 +13,10 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
+from e2e_config import unique_marker
+from e2e_http import require_successful_call
 from lifecycle import ResourceManager
-from proxy_client import require_successful_call, unique_marker
+from models import BudgetWindow
 
 pytestmark = pytest.mark.e2e
 
@@ -23,7 +25,7 @@ WINDOW_SECONDS = 30  # the tight window; calls succeed again only after it elaps
 
 def _call(client: BudgetClient, key: str):
     return client.chat(
-        key, "claude-haiku-4-5", f"window {unique_marker()}", extra_body={"max_tokens": 16}
+        key, "claude-haiku-4-5", f"window {unique_marker()}", max_tokens=16
     )
 
 
@@ -31,12 +33,10 @@ def test_short_window_blocks_then_resets(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
     key = client.generate_key(
-        extra_params={
-            "budget_limits": [
-                {"budget_duration": f"{WINDOW_SECONDS}s", "max_budget": 3e-6},
-                {"budget_duration": "1m", "max_budget": 1.0},  # roomy: never blocks
-            ]
-        }
+        budget_limits=[
+            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=3e-6),
+            BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
+        ]
     )
     resources.defer(lambda: client.delete_key(key))
 

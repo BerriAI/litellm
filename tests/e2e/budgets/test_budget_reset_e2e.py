@@ -13,22 +13,23 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
+from e2e_config import unique_marker
+from e2e_http import require_successful_call
 from lifecycle import ResourceManager
-from proxy_client import require_successful_call, unique_marker
 
 pytestmark = pytest.mark.e2e
 
 
 def _call(client: BudgetClient, key: str):
     return client.chat(
-        key, "claude-haiku-4-5", f"reset {unique_marker()}", extra_body={"max_tokens": 16}
+        key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16
     )
 
 
 def test_key_budget_resets_after_duration(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
-    key = client.generate_key(max_budget=3e-6, extra_params={"budget_duration": "30s"})
+    key = client.generate_key(max_budget=3e-6, budget_duration="30s")
     resources.defer(lambda: client.delete_key(key))
 
     # 1. exceed the budget -> litellm returns budget_exceeded
