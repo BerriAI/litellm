@@ -60,11 +60,15 @@ def test_extra_body_with_safe_fields_is_allowed():
 
 def test_admin_opt_in_still_permits_extra_body_credentials():
     # ``allow_client_side_credentials`` is the admin escape; descending
-    # into ``extra_body`` must preserve it.
+    # into ``extra_body`` must preserve it. A base override still requires
+    # the paired ``api_key`` in the same nested dict.
     body = {
         "model": "openai/gpt-4",
         "messages": [{"role": "user", "content": "x"}],
-        "extra_body": {"api_base": "https://my-private-openai.internal"},
+        "extra_body": {
+            "api_base": "https://my-private-openai.internal",
+            "api_key": "sk-caller-byok",
+        },
     }
     assert is_request_body_safe(
         request_body=body,
