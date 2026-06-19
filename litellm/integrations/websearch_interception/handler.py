@@ -92,6 +92,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: List[Dict],
         tools: Optional[List[Dict]],
         custom_llm_provider: Optional[str],
+        emit_native_blocks: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Short-circuit web-search-only requests by executing the search directly.
@@ -108,6 +109,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             messages: Messages list from the request
             tools: Tools list from the request
             custom_llm_provider: Provider name
+            emit_native_blocks: True when the client sent an Anthropic-native
+                web_search_* tool (computed before the pre-request hook
+                rewrote it into the litellm_web_search standard form).
 
         Returns:
             An AnthropicMessagesResponse dict if short-circuited, or None to
@@ -174,6 +178,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             (t for t in tools if is_anthropic_native_web_search_tool(t)),
             None,
         )
+        is_native = emit_native_blocks or native_tool is not None
 
         # Execute search — keep the structured SearchResponse so the native
         # block can carry per-result url/title/page_age.
@@ -186,9 +191,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_result_text, structured = f"Search failed: {e}", None
 
         content: List[Dict[str, Any]] = []
-        if native_tool is not None:
+        if is_native:
             tool_use_id = f"srvtoolu_{uuid.uuid4().hex}"
-            tool_name = native_tool.get("name") or "web_search"
+            tool_name = (native_tool or {}).get("name") or "web_search"
             content.append(
                 {
                     "type": "server_tool_use",
@@ -221,7 +226,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         verbose_logger.debug(
             "WebSearchInterception: Short-circuit search completed, "
             f"returning synthetic response ({len(search_result_text)} chars, "
-            f"native_blocks={native_tool is not None})"
+            f"native_blocks={is_native})"
         )
         return response
 
