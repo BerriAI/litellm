@@ -1120,7 +1120,9 @@ async def test_resolve_spend_tracking_org_id_skips_lookup_without_db():
 @pytest.mark.asyncio
 async def test_resolve_spend_tracking_org_id_swallows_team_lookup_failure():
     """A failing team lookup must not break cost tracking; fall back to the
-    original org_id instead of letting the exception propagate."""
+    original org_id instead of letting the exception propagate. The failure is
+    a silent org-attribution gap in production, so it must surface at warning
+    level (not debug) for operators to notice."""
     with (
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
@@ -1130,6 +1132,9 @@ async def test_resolve_spend_tracking_org_id_swallows_team_lookup_failure():
             new_callable=AsyncMock,
             side_effect=Exception("team not found"),
         ) as mock_get_team,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.verbose_proxy_logger.warning"
+        ) as mock_warning,
     ):
         resolved = await _ProxyDBLogger._resolve_spend_tracking_org_id(
             org_id=None, team_id="team-123"
@@ -1137,6 +1142,8 @@ async def test_resolve_spend_tracking_org_id_swallows_team_lookup_failure():
 
     assert resolved is None
     mock_get_team.assert_awaited_once()
+    mock_warning.assert_called_once()
+    assert "team-123" in mock_warning.call_args.args
 
 
 @pytest.mark.asyncio

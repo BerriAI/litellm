@@ -370,10 +370,12 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Failed to resolve org_id from team_id=%s for spend tracking",
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to resolve org_id from team_id=%s for spend tracking; "
+                "org spend for this request will be unattributed: %s",
                 team_id,
+                e,
             )
             return org_id
 
