@@ -17,7 +17,6 @@ from litellm.types.utils import (
     Choices,
     ModelResponse,
     ModelResponseStream,
-    PromptTokensDetailsWrapper,
     Usage,
 )
 
@@ -261,7 +260,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         XAI API returns empty string for finish_reason when using tools,
         so we need to fix this after the standard OpenAI transformation.
 
-        Also handles X.AI web search usage tracking by extracting num_sources_used.
+        Also handles X.AI web search usage tracking.
         """
 
         # First, let the parent class handle the standard transformation
@@ -368,25 +367,20 @@ class XAIChatConfig(OpenAIGPTConfig):
         self, model_response: ModelResponse, raw_response_json: dict
     ) -> None:
         """
-        Extract num_sources_used from X.AI response and map it to web_search_requests.
+        Copy usage.server_side_tool_usage_details from the provider usage block
+        onto model_response.usage for tool cost calculation.
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             return
 
         usage: Usage = model_response.usage
-        num_sources_used = None
-        response_usage = raw_response_json.get("usage", {})
-        if isinstance(response_usage, dict) and "num_sources_used" in response_usage:
-            num_sources_used = response_usage.get("num_sources_used")
-
-        # Map num_sources_used to web_search_requests for cost detection
-        if num_sources_used is not None and num_sources_used > 0:
-            if usage.prompt_tokens_details is None:
-                usage.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-            usage.prompt_tokens_details.web_search_requests = int(num_sources_used)
-            setattr(usage, "num_sources_used", int(num_sources_used))
-            verbose_logger.debug(f"X.AI web search sources used: {num_sources_used}")
+        response_usage = raw_response_json.get("usage")
+        if not isinstance(response_usage, dict):
+            return
+        details = response_usage.get("server_side_tool_usage_details")
+        if details is not None:
+            setattr(usage, "server_side_tool_usage_details", details)
+            verbose_logger.debug(f"X.AI server_side_tool_usage_details: {details}")
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(

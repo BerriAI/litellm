@@ -1067,12 +1067,25 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
+        usage_kwargs: Dict[str, Any] = {}
+        # Keep xAI tool billing fields; dropped if we only pass token fields below.
+        if isinstance(usage_input, dict):
+            if usage_input.get("server_side_tool_usage_details") is not None:
+                usage_kwargs["server_side_tool_usage_details"] = usage_input[
+                    "server_side_tool_usage_details"
+                ]
+        else:
+            details = getattr(response_api_usage, "server_side_tool_usage_details", None)
+            if details is not None:
+                usage_kwargs["server_side_tool_usage_details"] = details
+
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
+            **usage_kwargs,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

@@ -9,7 +9,6 @@ import sys
 import litellm
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
-    PromptTokensDetailsWrapper,
     Usage,
 )
 
@@ -354,75 +353,28 @@ class TestXAICostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_web_search_cost_calculation(self):
-        """Test web search cost calculation for X.AI models."""
-        # Test with web_search_requests in prompt_tokens_details (primary path)
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=100,
-                web_search_requests=3,  # 3 sources used
-            ),
+    def test_web_search_cost_via_server_side_tool_usage_details(self):
+        """usage.server_side_tool_usage_details.web_search_calls at $5/1k."""
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {
+                "web_search_calls": 3,
+                "x_search_calls": 0,
+                "code_interpreter_calls": 0,
+                "file_search_calls": 0,
+                "mcp_calls": 0,
+                "document_search_calls": 0,
+            },
         )
 
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
+        assert math.isclose(web_search_cost, 3 * (5.0 / 1000.0), rel_tol=1e-10)
 
-        # Expected cost: 3 sources * $0.025 per source = $0.075
-        expected_cost = 3 * (25.0 / 1000.0)  # 3 * $0.025
-
-        assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
-        assert math.isclose(web_search_cost, 0.075, rel_tol=1e-10)
-
-    def test_web_search_cost_fallback_calculation(self):
-        """Test web search cost calculation using fallback num_sources_used."""
-        # Test fallback: num_sources_used on usage object
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-        )
-        # Manually set num_sources_used (as done by transformation layer)
-        setattr(usage, "num_sources_used", 5)
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: 5 sources * $0.025 per source = $0.125
-        expected_cost = 5 * (25.0 / 1000.0)  # 5 * $0.025
-
-        assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
-        assert math.isclose(web_search_cost, 0.125, rel_tol=1e-10)
-
-    def test_web_search_no_sources_used(self):
-        """Test web search cost calculation when no sources are used."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=100,
-                web_search_requests=0,  # No web search
-            ),
-        )
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: 0 sources * $0.025 per source = $0.0
-        assert web_search_cost == 0.0
-
-    def test_web_search_cost_without_prompt_tokens_details(self):
-        """Test web search cost calculation when prompt_tokens_details is None."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-        )
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: No web search data = $0.0
-        assert web_search_cost == 0.0
+    def test_web_search_cost_zero_without_details(self):
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
 
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""

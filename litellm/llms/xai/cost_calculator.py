@@ -4,13 +4,16 @@ Helper util for handling XAI-specific cost calculation
 - Handles XAI-specific reasoning token billing (billed as part of completion tokens)
 """
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Mapping, Tuple
 
 from litellm.types.utils import Usage
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo
+
+# https://docs.x.ai/developers/pricing#tools-pricing
+_WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
 
 
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
@@ -64,29 +67,17 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     Calculate the cost of web search requests for X.AI models.
 
-    X.AI Live Search costs $25 per 1,000 sources used.
-    Each source costs $0.025.
-
-    The number of sources is stored in prompt_tokens_details.web_search_requests
-    by the transformation layer to be compatible with the existing detection system.
+    Uses usage.server_side_tool_usage_details.web_search_calls at $5 / 1k calls
+    (xAI tools pricing), not legacy num_sources_used / web_search_requests.
     """
-    # Cost per source used: $25 per 1,000 sources = $0.025 per source
-    cost_per_source = 25.0 / 1000.0  # $0.025
-
-    num_sources_used = 0
-
-    if (
-        hasattr(usage, "prompt_tokens_details")
-        and usage.prompt_tokens_details is not None
-        and hasattr(usage.prompt_tokens_details, "web_search_requests")
-        and usage.prompt_tokens_details.web_search_requests is not None
-    ):
-        num_sources_used = int(usage.prompt_tokens_details.web_search_requests)
-
-    # Fallback: try to get from num_sources_used if set directly
-    elif hasattr(usage, "num_sources_used") and usage.num_sources_used is not None:
-        num_sources_used = int(usage.num_sources_used)
-
-    total_cost = cost_per_source * num_sources_used
-
-    return total_cost
+    _ = model_info
+    details = getattr(usage, "server_side_tool_usage_details", None)
+    if not isinstance(details, Mapping):
+        return 0.0
+    try:
+        web_search_calls = int(details.get("web_search_calls") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if web_search_calls <= 0:
+        return 0.0
+    return _WEB_SEARCH_COST_PER_CALL * web_search_calls
