@@ -163,6 +163,24 @@ describe("KeyInfoView", () => {
     });
   });
 
+  it("bounds the detail panel scroll container to the viewport so edit form actions stay reachable", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    const { container } = renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    const scrollContainer = container.querySelector(".overflow-y-auto");
+    expect(scrollContainer).not.toBeNull();
+    expect(scrollContainer!.className).toContain("max-h-[85vh]");
+  });
+
   it("should not render tags in metadata textarea", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
