@@ -22,7 +22,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timezone
-from typing import Any, BinaryIO, Dict, Optional, Tuple
+from typing import Any, BinaryIO, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -40,7 +40,7 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _canonical_bytes(record: Dict[str, Any]) -> bytes:
+def _canonical_bytes(record: dict[str, Any]) -> bytes:
     """Stable canonical serialisation for hashing.
 
     We sort keys and use separators=(',', ':') so the byte sequence is
@@ -72,12 +72,12 @@ def _content_digest(value: Any) -> Optional[str]:
 
 
 def _extract_loggable(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     response_obj: Any,
     start_time: Any,
     end_time: Any,
     status: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Pull metadata + digests out of a callback invocation.
 
     Message content and response text are never stored in the clear; only their
@@ -231,7 +231,7 @@ class AsqavLogger(CustomLogger):
 
     def _build_and_append(
         self,
-        kwargs: Dict[str, Any],
+        kwargs: dict[str, Any],
         response_obj: Any,
         start_time: Any,
         end_time: Any,
@@ -240,8 +240,7 @@ class AsqavLogger(CustomLogger):
         """Build one audit record and append it to the JSONL log.
 
         seq/prev_hash assignment and the file write happen under _lock so the
-        on-disk order always matches the chain order.  The cloud checkpoint
-        (if configured) runs outside the lock on a daemon thread.
+        on-disk order always matches the chain order.
         """
         try:
             loggable = _extract_loggable(
@@ -269,7 +268,7 @@ class AsqavLogger(CustomLogger):
 
                 # The fields that enter the hash are fixed and canonical so that
                 # an auditor can reproduce the digest from the log alone.
-                hashable: Dict[str, Any] = {
+                hashable: dict[str, Any] = {
                     "seq": seq,
                     "ts": datetime.now(tz=timezone.utc).isoformat(),
                     "prev_hash": self._prev_hash,
@@ -288,7 +287,7 @@ class AsqavLogger(CustomLogger):
                 f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}"
             )
 
-    def _write_record(self, record: Dict[str, Any]) -> bool:
+    def _write_record(self, record: dict[str, Any]) -> bool:
         """Append one record to the log file. Returns False if the write failed."""
         try:
             parent = os.path.dirname(self._log_path)
@@ -308,17 +307,17 @@ class AsqavLogger(CustomLogger):
     # ------------------------------------------------------------------
 
     def log_success_event(
-        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
     def log_failure_event(
-        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
-        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -330,7 +329,7 @@ class AsqavLogger(CustomLogger):
         )
 
     async def async_log_failure_event(
-        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -345,7 +344,7 @@ class AsqavLogger(CustomLogger):
     # Chain verification (utility; not called on the hot path)
     # ------------------------------------------------------------------
 
-    def verify_chain(self, log_path: Optional[str] = None) -> Tuple[bool, str]:
+    def verify_chain(self, log_path: Optional[str] = None) -> tuple[bool, str]:
         """Verify the integrity of the audit log at log_path.
 
         Returns (True, "ok") when every record's hash matches its content and
