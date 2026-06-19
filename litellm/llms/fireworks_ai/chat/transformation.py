@@ -15,7 +15,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionImageObject,
     ChatCompletionToolParam,
     OpenAIChatCompletionToolParam,
 )
@@ -60,8 +59,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
     logprobs: Optional[int] = None
     reasoning_effort: Optional[str] = None
 
-    # Non OpenAI parameters - Fireworks AI only params
-    prompt_truncate_length: Optional[int] = None
+    prompt_truncate_len: Optional[int] = None
     context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None
 
     def __init__(
@@ -80,7 +78,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         user: Optional[str] = None,
         logprobs: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
-        prompt_truncate_length: Optional[int] = None,
+        prompt_truncate_len: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
         locals_ = locals().copy()
@@ -108,8 +106,31 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "response_format",
             "user",
             "logprobs",
-            "prompt_truncate_length",
+            "prompt_truncate_len",
             "context_length_exceeded_behavior",
+            "seed",
+            "top_logprobs",
+            "min_p",
+            "typical_p",
+            "repetition_penalty",
+            "mirostat_target",
+            "mirostat_lr",
+            "logit_bias",
+            "echo",
+            "echo_last",
+            "ignore_eos",
+            "prompt_cache_key",
+            "prompt_cache_isolation_key",
+            "raw_output",
+            "perf_metrics_in_response",
+            "return_token_ids",
+            "safe_tokenization",
+            "service_tier",
+            "metadata",
+            "speculation",
+            "prediction",
+            "stream_options",
+            "sampling_mask",
         ]
 
         # Only add tools for models that support function calling
@@ -133,9 +154,10 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
 
-        # Only add reasoning_effort for models that support it
+        # Only add reasoning params for models that support it
         if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("reasoning_effort")
+            supported_params.append("reasoning_history")
 
         return supported_params
 
@@ -174,39 +196,18 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     optional_params["response_format"] = value
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
+            elif param == "reasoning_effort":
+                if value is True:
+                    optional_params["reasoning_effort"] = "medium"
+                elif value is False:
+                    optional_params["reasoning_effort"] = "none"
+                else:
+                    optional_params["reasoning_effort"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
 
         return optional_params
-
-    def _add_transform_inline_image_block(
-        self,
-        content: ChatCompletionImageObject,
-        model: str,
-        disable_add_transform_inline_image_block: Optional[bool],
-    ) -> ChatCompletionImageObject:
-        """
-        Add transform_inline to the image_url (allows non-vision models to parse documents/images/etc.)
-        - ignore if model is a vision model
-        - ignore if user has disabled this feature
-        """
-        if (
-            "vision" in model or disable_add_transform_inline_image_block
-        ):  # allow user to toggle this feature.
-            return content
-        if isinstance(content["image_url"], str):
-            # Skip base64 data URLs — appending #transform=inline corrupts the
-            # base64 payload and causes an "Incorrect padding" decode error on
-            # the Fireworks side.  Data URLs are already inlined by definition.
-            # Lower-case before checking: URI schemes are case-insensitive (RFC 3986).
-            if not content["image_url"].lower().startswith("data:"):
-                content["image_url"] = f"{content['image_url']}#transform=inline"
-        elif isinstance(content["image_url"], dict):
-            url = content["image_url"]["url"]
-            if not url.lower().startswith("data:"):
-                content["image_url"]["url"] = f"{url}#transform=inline"
-        return content
 
     def _transform_tools(
         self, tools: List[OpenAIChatCompletionToolParam]
@@ -225,37 +226,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, litellm_params: dict
     ) -> List[AllMessageValues]:
         """
-        Add 'transform=inline' to the url of the image_url
+        Strip fields not permitted by FireworksAI from messages.
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             filter_value_from_dict,
-            migrate_file_to_image_url,
         )
 
-        disable_add_transform_inline_image_block = cast(
-            Optional[bool],
-            litellm_params.get("disable_add_transform_inline_image_block")
-            or litellm.disable_add_transform_inline_image_block,
-        )
-        ## For any 'file' message type with pdf content, move to 'image_url' message type
         for message in messages:
-            if message["role"] == "user":
-                _message_content = message.get("content")
-                if _message_content is not None and isinstance(_message_content, list):
-                    for idx, content in enumerate(_message_content):
-                        if content["type"] == "file":
-                            _message_content[idx] = migrate_file_to_image_url(content)
-        for message in messages:
-            if message["role"] == "user":
-                _message_content = message.get("content")
-                if _message_content is not None and isinstance(_message_content, list):
-                    for content in _message_content:
-                        if content["type"] == "image_url":
-                            content = self._add_transform_inline_image_block(
-                                content=content,
-                                model=model,
-                                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
-                            )
             filter_value_from_dict(cast(dict, message), "cache_control")
             # Remove fields not permitted by FireworksAI (additionalProperties: false
             # on their ChatMessage schema) that may cause:
@@ -362,12 +339,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         supports_reasoning_value = self._get_model_cost_capability(
             model=model, capability="supports_reasoning"
         )
+        supports_vision_value = self._get_model_cost_capability(
+            model=model, capability="supports_vision"
+        )
+        supports_pdf_input_value = self._get_model_cost_capability(
+            model=model, capability="supports_pdf_input"
+        )
 
         provider_specific_model_info: ProviderSpecificModelInfo = {
             "supports_function_calling": True,
             "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
-            "supports_pdf_input": True,  # via document inlining
-            "supports_vision": True,  # via document inlining
         }
 
         if supports_function_calling_value is not None:
@@ -379,6 +360,14 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if supports_reasoning_value:
             provider_specific_model_info["supports_reasoning"] = (
                 supports_reasoning_value
+            )
+
+        if supports_vision_value is not None:
+            provider_specific_model_info["supports_vision"] = supports_vision_value
+
+        if supports_pdf_input_value is not None:
+            provider_specific_model_info["supports_pdf_input"] = (
+                supports_pdf_input_value
             )
 
         return provider_specific_model_info
@@ -402,6 +391,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools = self._transform_tools(tools=optional_params["tools"])
             optional_params["tools"] = tools
+        if optional_params.get("stream"):
+            stream_options = optional_params.get("stream_options")
+            if stream_options is None:
+                optional_params["stream_options"] = {"include_usage": True}
+            elif stream_options.get("include_usage") is not False:
+                optional_params["stream_options"] = {
+                    **stream_options,
+                    "include_usage": True,
+                }
         return super().transform_request(
             model=model,
             messages=messages,
@@ -494,7 +492,35 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 )
             )
 
-        response._hidden_params = {"additional_headers": additional_headers}
+        hidden_params: dict = {"additional_headers": additional_headers}
+
+        if "perf_metrics" in completion_response:
+            hidden_params["fireworks_perf_metrics"] = completion_response[
+                "perf_metrics"
+            ]
+        if "prompt_token_ids" in completion_response:
+            hidden_params["fireworks_prompt_token_ids"] = completion_response[
+                "prompt_token_ids"
+            ]
+
+        raw_choices = completion_response.get("choices") or []
+        fireworks_raw_outputs = [
+            choice["raw_output"]
+            for choice in raw_choices
+            if isinstance(choice, dict) and "raw_output" in choice
+        ]
+        if fireworks_raw_outputs:
+            hidden_params["fireworks_raw_outputs"] = fireworks_raw_outputs
+
+        fireworks_token_ids = [
+            choice["token_ids"]
+            for choice in raw_choices
+            if isinstance(choice, dict) and "token_ids" in choice
+        ]
+        if fireworks_token_ids:
+            hidden_params["fireworks_token_ids"] = fireworks_token_ids
+
+        response._hidden_params = hidden_params
 
         return response
 
