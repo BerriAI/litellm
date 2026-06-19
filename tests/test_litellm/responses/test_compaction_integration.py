@@ -118,7 +118,7 @@ async def test_no_recompaction_when_under_threshold():
 @pytest.mark.asyncio
 async def test_recompaction():
 
-    """Case 3: prior compaction item + short message, under threshold → no new compaction"""
+    """Case 4: prior compaction item + long message over threshold, recompact"""
 
     import base64
 
@@ -156,8 +156,48 @@ async def test_recompaction():
 
     assert response is not None
 
+    assert prior_cmp not in response.output
     new_cmp = [i for i in response.output if i.get("type") == "compaction" and i.get("id") != "cmp_prior_001"]
 
     assert new_cmp
-     
+
+@pytest.mark.asyncio
+async def test_retrieve_information_from_summary():
+
+    """Case 5: check if model can read compacted summary"""
+
+    import base64
+
+    prior_cmp = {
+
+        "type": "compaction",
+
+        "id": "cmp_prior_001",
+
+        "encrypted_content": base64.b64encode(b"Previous conversation summary: just the word hello 137 times").decode(),
+
+    }
+
+    response = await litellm.aresponses(
+
+        model="claude-haiku-4-5-20251001",
+
+        input=[
+
+            prior_cmp,
+
+            {"type": "message", "role": "user", "content": "How many times did I say hello?"},
+
+        ],
+
+        context_management=[{"type": "compaction", "compact_threshold": 100}],
+
+        store=False,
+
+        max_output_tokens=100,
+
+    )
+
+    assert "137" in response.output[0].content[0].text
+
 # what happens if the compaction is still too long?
