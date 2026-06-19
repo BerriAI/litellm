@@ -176,9 +176,10 @@ describe("KeyInfoView", () => {
       />,
     );
 
-    const scrollContainer = container.querySelector(".overflow-y-auto");
-    expect(scrollContainer).not.toBeNull();
-    expect(scrollContainer!.className).toContain("max-h-[85vh]");
+    const boundedScrollContainers = Array.from(container.querySelectorAll(".overflow-y-auto")).filter((el) =>
+      el.classList.contains("max-h-[85vh]"),
+    );
+    expect(boundedScrollContainers).toHaveLength(1);
   });
 
   it("should not render tags in metadata textarea", async () => {
