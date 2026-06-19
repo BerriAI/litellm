@@ -32,21 +32,18 @@ from models import (
     KeyInfo,
     KeyInfoParams,
     KeyInfoResponse,
-    ModelInfoEntry,
-    ModelInfoResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsParams,
 )
 from e2e_config import (
-    CONTROL_PLANE_BASE_URL,
     MASTER_KEY,
     POLL_INTERVAL,
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
 )
-from transport import HttpTransport, SplitTransport, Transport
+from transport import HttpTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
@@ -96,18 +93,6 @@ class Gateway:
                 response_type=KeyInfoResponse,
             )
         ).info
-
-    def model_info(self) -> list[ModelInfoEntry]:
-        """Every configured deployment with the price the proxy resolved for it
-        (config override merged over cost-map defaults)."""
-        return unwrap(
-            self.transport.get(
-                "/model/info",
-                headers=self.transport.master,
-                params=NoBody(),
-                response_type=ModelInfoResponse,
-            )
-        ).data
 
     # ---- LLM calls ------------------------------------------------------
 
@@ -189,22 +174,13 @@ class Gateway:
 
 
 def build_gateway() -> Gateway:
-    """The Gateway every suite's client is built from: a SplitTransport that routes
-    LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
-    control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
-    base URLs are the same for a monolithic proxy, so routing is then a no-op."""
+    """The Gateway every suite's client is built from: an HttpTransport pointed at
+    the configured proxy, with the shared poll budget."""
     return Gateway(
-        transport=SplitTransport(
-            data=HttpTransport(
-                base_url=PROXY_BASE_URL,
-                master_key=MASTER_KEY,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
-            control=HttpTransport(
-                base_url=CONTROL_PLANE_BASE_URL,
-                master_key=MASTER_KEY,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
+        transport=HttpTransport(
+            base_url=PROXY_BASE_URL,
+            master_key=MASTER_KEY,
+            request_timeout=REQUEST_TIMEOUT,
         ),
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
