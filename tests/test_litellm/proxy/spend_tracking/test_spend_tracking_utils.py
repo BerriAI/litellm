@@ -7,7 +7,6 @@ from datetime import timezone
 from typing import Any, cast
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -15,7 +14,6 @@ sys.path.insert(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
@@ -30,12 +28,14 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
     _is_master_key,
+    _redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
     _sanitize_error_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
 )
+from litellm.proxy.utils import hash_token
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -661,8 +661,6 @@ def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_
     assert payload["model"] == "openai/gpt-4.1"
     assert payload["user"] == "test_user"
 
-    print(f"✅ Test passed! api_key preserved: {payload['api_key']}")
-
 
 @pytest.mark.asyncio
 @patch("litellm.proxy.proxy_server.master_key", "sk-master-key")
@@ -809,18 +807,6 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     # Verify other fields
     assert payload.get("model") == "gpt-3.5-turbo"
     assert payload.get("user") == "test_user"
-
-    print("\n" + "=" * 80)
-    print("✅ CRITICAL E2E TEST PASSED")
-    print("=" * 80)
-    print(f"Token: {data['token']}")
-    print(f"Payload api_key: {payload_api_key}")
-    print(f"Match: {data['token'] == payload_api_key}")
-    print("=" * 80)
-    print("Production incident bug is FIXED and protected:")
-    print("- Failed requests preserve api_key through entire flow")
-    print("- Both SpendLogs AND DailyUserSpend will have correct api_key")
-    print("=" * 80 + "\n")
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -2073,3 +2059,255 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
+
+
+# ── _redact_logged_api_key unit tests ──────────────────────────────────────
+
+
+def test_redact_logged_api_key_none_returns_none():
+    assert _redact_logged_api_key(None) is None
+
+
+def test_redact_logged_api_key_empty_string_returns_none():
+    assert _redact_logged_api_key("") is None
+
+
+def test_redact_logged_api_key_sk_key_is_hashed():
+    raw = "sk-1234secret"
+    result = _redact_logged_api_key(raw)
+    assert result == hash_token(raw)
+    assert result is not None
+    assert not result.startswith("sk-")
+    assert len(result) == 64
+
+
+def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
+    raw = "sk-1234secret"
+    result_plain = _redact_logged_api_key(raw)
+    result_bearer = _redact_logged_api_key(f"Bearer {raw}")
+    assert result_bearer == result_plain
+
+
+def test_redact_logged_api_key_bearer_case_insensitive():
+    raw = "sk-1234secret"
+    result_lower = _redact_logged_api_key(f"bearer {raw}")
+    result_upper = _redact_logged_api_key(f"BEARER {raw}")
+    expected = hash_token(raw)
+    assert result_lower == expected
+    assert result_upper == expected
+
+
+def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
+    raw = "anthropic-raw-key-xyz"
+    result = _redact_logged_api_key(raw)
+    assert result is not None
+    assert result != raw
+    assert len(result) == 64
+    assert result == hash_token(raw)
+
+
+def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(already_hashed, already_hashed=True)
+    assert result == already_hashed
+    assert hash_token(already_hashed) != result  # no double-hash
+
+
+def test_redact_logged_api_key_sha256_without_flag_is_hashed():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(already_hashed)
+    assert result is not None
+    assert result != already_hashed
+    assert len(result) == 64
+    assert result == hash_token(already_hashed)
+
+
+def test_redact_logged_api_key_hashed_jwt_passes_through():
+    jwt_hash = "hashed-jwt-" + "a" * 64
+    result = _redact_logged_api_key(jwt_hash)
+    assert result == jwt_hash
+
+
+def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
+    short_jwt = "hashed-jwt-tooshort"
+    result = _redact_logged_api_key(short_jwt)
+    assert result is not None
+    assert result != short_jwt
+    assert len(result) == 64
+    assert result == hash_token(short_jwt)
+
+
+def test_redact_logged_api_key_bearer_only_returns_none():
+    # "bearer " with nothing after stripping is equivalent to no key
+    assert _redact_logged_api_key("bearer ") is None
+    assert _redact_logged_api_key("Bearer ") is None
+    assert _redact_logged_api_key("BEARER ") is None
+
+
+# ── _get_spend_logs_metadata key-hash invariant tests ─────────────────────
+
+
+def test_get_spend_logs_metadata_sk_key_hashed():
+    raw = "sk-1234secret"
+    meta = _get_spend_logs_metadata({"user_api_key": raw})
+    assert meta["user_api_key"] == hash_token(raw)
+    assert meta["user_api_key"] is not None
+    result = meta["user_api_key"]
+    assert result is not None
+    assert not result.startswith("sk-")
+    assert len(result) == 64
+
+
+def test_get_spend_logs_metadata_bearer_sk_key_hashed_same_as_plain():
+    raw = "sk-1234secret"
+    meta_plain = _get_spend_logs_metadata({"user_api_key": raw})
+    meta_bearer = _get_spend_logs_metadata({"user_api_key": f"Bearer {raw}"})
+    assert meta_bearer["user_api_key"] == meta_plain["user_api_key"]
+
+
+def test_get_spend_logs_metadata_non_sk_raw_key_hashed():
+    raw = "anthropic-raw-key-xyz"
+    meta = _get_spend_logs_metadata({"user_api_key": raw})
+    result = meta["user_api_key"]
+    assert result is not None
+    assert result != raw
+    assert len(result) == 64
+
+
+def test_get_spend_logs_metadata_already_hashed_unchanged_with_provenance():
+    already_hashed = hash_token("sk-some-key")
+    meta = _get_spend_logs_metadata(
+        {"user_api_key": already_hashed, "user_api_key_hash": already_hashed}
+    )
+    assert meta["user_api_key"] == already_hashed
+    assert hash_token(already_hashed) != meta["user_api_key"]  # no double-hash
+
+
+def test_get_spend_logs_metadata_already_hashed_no_provenance_is_rehashed():
+    already_hashed = hash_token("sk-some-key")
+    meta = _get_spend_logs_metadata({"user_api_key": already_hashed})
+    assert meta["user_api_key"] != already_hashed
+    assert meta["user_api_key"] == hash_token(already_hashed)
+
+
+def test_get_spend_logs_metadata_provenance_bypass_requires_hash_match():
+    already_hashed = hash_token("sk-some-key")
+    different_hash = hash_token("sk-other-key")
+    meta = _get_spend_logs_metadata(
+        {"user_api_key": already_hashed, "user_api_key_hash": different_hash}
+    )
+    assert meta["user_api_key"] == hash_token(already_hashed)
+
+
+def test_get_spend_logs_metadata_hashed_jwt_unchanged():
+    jwt_hash = "hashed-jwt-" + "b" * 64
+    meta = _get_spend_logs_metadata({"user_api_key": jwt_hash})
+    assert meta["user_api_key"] == jwt_hash
+
+
+def test_get_spend_logs_metadata_none_key_is_none():
+    meta = _get_spend_logs_metadata({"user_api_key": None})
+    assert meta["user_api_key"] is None
+
+
+# ── get_logging_payload key-hash invariant tests ───────────────────────────
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_non_sk_raw_key_both_fields_hashed():
+    raw = "anthropic-raw-key-xyz"
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": raw,
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] != raw
+    assert len(payload["api_key"]) == 64
+
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] != raw
+    assert parsed_meta["user_api_key"] is not None
+    assert len(parsed_meta["user_api_key"]) == 64
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_empty_key_slp_none_is_empty_string_not_none_literal():
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_user_id": "test_user",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == "", (
+        f"Expected empty string but got {payload['api_key']!r}; "
+        "dropping _redact_logged_api_key's 'or \"\"' guard would yield 'None' here"
+    )
+
+
+def test_get_spend_logs_metadata_sibling_fields_preserved():
+    raw = "anthropic-raw-key-xyz"
+    meta = _get_spend_logs_metadata(
+        {
+            "user_api_key": raw,
+            "user_api_key_alias": "my-alias",
+            "user_api_key_team_id": "team-123",
+        }
+    )
+    assert meta["user_api_key"] == hash_token(raw)
+    assert meta["user_api_key_alias"] == "my-alias"
+    assert meta["user_api_key_team_id"] == "team-123"
+
+
+def test_redact_logged_api_key_partial_sha256_is_hashed():
+    partial_hex = "a" * 63
+    result = _redact_logged_api_key(partial_hex)
+    assert result is not None
+    assert result != partial_hex
+    assert len(result) == 64
+    assert result == hash_token(partial_hex)
+
+
+def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(f"Bearer {already_hashed}", already_hashed=True)
+    assert result == already_hashed
+    assert hash_token(already_hashed) != result
+
+
+def test_redact_logged_api_key_bearer_sha256_without_flag_is_hashed():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(f"Bearer {already_hashed}")
+    assert result is not None
+    assert result != already_hashed
+    assert result == hash_token(already_hashed)
