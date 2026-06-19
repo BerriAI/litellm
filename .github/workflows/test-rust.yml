@@ -1,0 +1,99 @@
+name: Rust Extension Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+    paths:
+      - "rust/**"
+      - "tests/rust_core_unit_tests/**"
+      - "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/**"
+      - ".github/workflows/test-rust.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-test:
+    name: cargo fmt / clippy / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: cargo fmt --check
+        working-directory: rust
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: rust
+        run: cargo clippy --all-targets --release -- -D warnings
+
+      - name: cargo test
+        working-directory: rust
+        run: cargo test
+
+  python-rust-ffi-boundary:
+    name: Python <-> Rust FFI boundary tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.94.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+
+      - name: Install Python dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Build litellm_core extension
+        # rust/pyproject.toml makes uv treat rust/ as its own project root, so
+        # a plain `cd rust && uv run maturin develop` would target rust/.venv
+        # instead of the venv pytest actually uses. Point VIRTUAL_ENV/PATH at
+        # the repo's venv explicitly and run maturin via uvx (no project
+        # context) so the built extension lands where pytest will look for it.
+        run: |
+          export VIRTUAL_ENV="$PWD/.venv"
+          export PATH="$VIRTUAL_ENV/bin:$PATH"
+          cd rust
+          uvx --from maturin==1.9.4 maturin develop --release
+
+      - name: Run Python <-> Rust FFI boundary tests
+        run: uv run --no-sync pytest tests/rust_core_unit_tests/ -v
