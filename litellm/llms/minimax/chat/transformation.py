@@ -173,7 +173,11 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         )
                         self.finished_reasoning_content = True
                         self.plain_chunk_count = 0
-                    elif not self.finished_reasoning_content and self.plain_chunk_count < self.MAX_PLAIN_CHUNKS and content.strip():
+                    elif (
+                        not self.finished_reasoning_content
+                        and self.plain_chunk_count < self.MAX_PLAIN_CHUNKS
+                        and content.strip()
+                    ):
                         if not self.started_reasoning_content:
                             self.started_reasoning_content = True
                         self.plain_chunk_count += 1
