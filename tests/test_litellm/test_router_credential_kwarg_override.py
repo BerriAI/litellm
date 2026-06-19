@@ -281,6 +281,34 @@ def test_router_clears_deployment_api_key_on_base_override():
     assert forwarded.get("api_key") != "sk-deployment-secret"
 
 
+def test_dynamic_params_keep_deployment_key_on_base_override_in_sdk_mode():
+    """In SDK mode (proxy_is_running=False), redirecting api_base must
+    leave the deployment's api_key in litellm_params so the redirected
+    call still authenticates. The proxy is the security boundary; SDK
+    callers are downstream of it (they wrote both deployment config and
+    request kwargs, so there is no exfil to prevent)."""
+    original = litellm.proxy_is_running
+    litellm.proxy_is_running = False
+    try:
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        litellm_params = {
+            "api_key": "sk-deployment-pinned",
+            "api_base": "https://api.openai.com/v1",
+            "model": "openai/gpt-4o-mini",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=litellm_params,
+            request_kwargs={"api_base": "http://localhost:8080"},
+        )
+        assert out["api_key"] == "sk-deployment-pinned"
+        assert out["api_base"] == "http://localhost:8080"
+    finally:
+        litellm.proxy_is_running = original
+
+
 def test_router_forwards_caller_api_key_on_base_override():
     """When the caller supplies their own key alongside the base override, that
     key is used, not the deployment's."""
