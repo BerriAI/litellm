@@ -5,6 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import base64
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+import uuid
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
@@ -170,7 +171,7 @@ class LiteLLMCompletionResponsesConfig:
         compaction_item = {
             "type": "compaction",
             "encrypted_content": base64.b64encode(compacted_message["content"].encode()).decode(),
-            "id": "cmp_0"
+            "id": f"cmp_{uuid.uuid4()}"
         }
         return [compacted_message, last_user_msg], compaction_item
 
