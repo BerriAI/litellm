@@ -1099,6 +1099,47 @@ async def test_resolve_spend_tracking_org_id_no_team_returns_none():
 
 
 @pytest.mark.asyncio
+async def test_resolve_spend_tracking_org_id_skips_lookup_without_db():
+    """With no DB client we cannot resolve the team's org, so return the original
+    org_id without attempting a lookup rather than crashing cost tracking."""
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team,
+    ):
+        resolved = await _ProxyDBLogger._resolve_spend_tracking_org_id(
+            org_id=None, team_id="team-123"
+        )
+
+    assert resolved is None
+    mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_spend_tracking_org_id_swallows_team_lookup_failure():
+    """A failing team lookup must not break cost tracking; fall back to the
+    original org_id instead of letting the exception propagate."""
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=Exception("team not found"),
+        ) as mock_get_team,
+    ):
+        resolved = await _ProxyDBLogger._resolve_spend_tracking_org_id(
+            org_id=None, team_id="team-123"
+        )
+
+    assert resolved is None
+    mock_get_team.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_attributes_org_spend_via_team():
     """End-to-end through the cost callback: a team key with no org_id of its own
     must still record spend against the team's organization. Before the fallback,
