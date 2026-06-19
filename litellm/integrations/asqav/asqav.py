@@ -1,0 +1,470 @@
+"""Asqav local-first audit-log callback for LiteLLM.
+
+Each LLM call appends one record to a local JSONL file.  Every record carries
+a SHA-256 chain hash over its own canonical fields plus the previous record's
+hash, giving a tamper-evident sequence that can be verified entirely offline
+with stdlib tools.
+
+Optional async checkpoint: when ASQAV_API_KEY and ASQAV_CHECKPOINT_INTERVAL
+are set, the logger submits the current chain head to the Asqav cloud API on
+a background thread every N calls.  The per-call hot path is always zero
+network.
+
+Design goals (matching the on-device ask from litellm#25329):
+- Zero runtime dependencies beyond Python stdlib + litellm itself.
+- Never breaks an LLM call: every code path is wrapped fail-soft.
+- Does not log message content by default; logs content digests so
+  auditors can prove a payload was present without reconstructing it.
+- The optional cloud step is import-guarded and never blocks the proxy.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import threading
+import time
+import traceback
+from datetime import datetime, timezone
+from typing import Any, BinaryIO, Dict, Optional, Tuple
+
+from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import (
+    _get_httpx_client,
+    httpxSpecialProvider,
+)
+
+__all__ = ["AsqavLogger"]
+
+# Sentinel used as the genesis prev_hash (no predecessor).
+_GENESIS_HASH = "0" * 64
+
+# Default log path; can be overridden via ASQAV_LOG_PATH.
+_DEFAULT_LOG_PATH = os.path.join(os.path.expanduser("~"), ".litellm_asqav_audit.jsonl")
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _canonical_bytes(record: Dict[str, Any]) -> bytes:
+    """Stable canonical serialisation for hashing.
+
+    We sort keys and use separators=(',', ':') so the byte sequence is
+    deterministic across Python versions and platforms.
+    """
+    return json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _read_tail(fh: BinaryIO, size: int) -> bytes:
+    """Read backwards from the end of fh until the buffer contains the entire
+    last line, doubling the window each pass so records of any length survive
+    a restart."""
+    chunk_size = 4096
+    while True:
+        read_size = min(chunk_size, size)
+        fh.seek(size - read_size)
+        tail = fh.read(read_size)
+        if read_size == size or b"\n" in tail.rstrip(b"\n"):
+            return tail
+        chunk_size *= 2
+
+
+def _content_digest(value: Any) -> Optional[str]:
+    """Return a SHA-256 hex digest of a content value, or None if empty."""
+    if value is None:
+        return None
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return _sha256_hex(raw)
+
+
+def _extract_loggable(
+    kwargs: Dict[str, Any],
+    response_obj: Any,
+    start_time: Any,
+    end_time: Any,
+    status: str,
+) -> Dict[str, Any]:
+    """Pull metadata + digests out of a callback invocation.
+
+    Message content and response text are never stored in the clear; only their
+    SHA-256 digests appear in the log so callers can prove a payload existed
+    without reconstructing it.
+    """
+    model: str = kwargs.get("model", "")
+    messages: Any = kwargs.get("messages")
+    metadata: Any = kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}
+
+    # Timing
+    latency_ms: Optional[int] = None
+    try:
+        if start_time is not None and end_time is not None:
+            latency_ms = int((end_time - start_time).total_seconds() * 1000)
+    except Exception:
+        pass
+
+    # Usage
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    finish_reason: Optional[str] = None
+    provider_request_id: Optional[str] = None
+    try:
+        if hasattr(response_obj, "usage") and response_obj.usage:
+            prompt_tokens = response_obj.usage.prompt_tokens
+            completion_tokens = response_obj.usage.completion_tokens
+            total_tokens = response_obj.usage.total_tokens
+        if hasattr(response_obj, "choices") and response_obj.choices:
+            finish_reason = response_obj.choices[0].finish_reason
+        if hasattr(response_obj, "_hidden_params"):
+            provider_request_id = response_obj._hidden_params.get(
+                "x-request-id"
+            ) or response_obj._hidden_params.get("cf-ray")
+    except Exception:
+        pass
+
+    # Content digests (not content itself)
+    messages_digest: Optional[str] = _content_digest(messages)
+
+    response_content_digest: Optional[str] = None
+    try:
+        if hasattr(response_obj, "choices") and response_obj.choices:
+            content = response_obj.choices[0].message.content
+            response_content_digest = _content_digest(content)
+    except Exception:
+        pass
+
+    # Standard logging payload may carry call_id / litellm_call_id
+    call_id: Optional[str] = None
+    try:
+        slp: Any = kwargs.get("standard_logging_object")
+        if slp and isinstance(slp, dict):
+            call_id = slp.get("id") or slp.get("litellm_call_id")
+    except Exception:
+        pass
+    if not call_id:
+        call_id = kwargs.get("litellm_call_id") or kwargs.get(
+            "id", str(int(time.time() * 1e6))
+        )
+
+    return {
+        "call_id": call_id,
+        "model": model,
+        "status": status,
+        "latency_ms": latency_ms,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "finish_reason": finish_reason,
+        "provider_request_id": provider_request_id,
+        "messages_digest": messages_digest,
+        "response_content_digest": response_content_digest,
+        "metadata": {k: v for k, v in (metadata or {}).items() if isinstance(k, str)},
+    }
+
+
+class AsqavLogger(CustomLogger):
+    """Tamper-evident local-first audit-log callback for LiteLLM.
+
+    Configuration (all via environment variables):
+
+    ASQAV_LOG_PATH
+        Path to the JSONL audit log.  Defaults to ~/.litellm_asqav_audit.jsonl.
+
+    ASQAV_REDACT_CONTENT
+        Set to "false" to store message/response content in the clear instead
+        of as SHA-256 digests.  Defaults to "true" (digest only).
+
+    ASQAV_API_KEY  (optional)
+        Asqav cloud API key.  When set together with ASQAV_CHECKPOINT_INTERVAL,
+        the logger submits the chain head to https://api.asqav.com on a
+        background thread every N calls.
+
+    ASQAV_CHECKPOINT_INTERVAL  (optional, default 100)
+        How many calls between cloud checkpoints.  Only used when
+        ASQAV_API_KEY is set.
+    """
+
+    def __init__(
+        self,
+        log_path: Optional[str] = None,
+        redact_content: bool = True,
+        api_key: Optional[str] = None,
+        checkpoint_interval: int = 100,
+    ) -> None:
+        super().__init__()
+
+        self._log_path: str = log_path or os.environ.get(
+            "ASQAV_LOG_PATH", _DEFAULT_LOG_PATH
+        )
+        self._redact_content: bool = (
+            os.environ.get("ASQAV_REDACT_CONTENT", "true").lower() != "false"
+            if log_path is None
+            else redact_content
+        )
+        self._api_key: Optional[str] = api_key or os.environ.get("ASQAV_API_KEY")
+        self._checkpoint_interval: int = int(
+            os.environ.get("ASQAV_CHECKPOINT_INTERVAL", str(checkpoint_interval))
+        )
+
+        self._lock: threading.Lock = threading.Lock()
+        self._call_count: int = 0
+        self._prev_hash: str = _GENESIS_HASH
+
+        # Load chain state from an existing log file so we chain correctly
+        # across process restarts.
+        self._load_chain_tail()
+
+    def __repr__(self) -> str:
+        return (
+            f"AsqavLogger(log_path={self._log_path!r},"
+            f" redact_content={self._redact_content},"
+            f" cloud_checkpoint={'enabled' if self._api_key else 'disabled'})"
+        )
+
+    # ------------------------------------------------------------------
+    # Chain state persistence
+    # ------------------------------------------------------------------
+
+    def _load_chain_tail(self) -> None:
+        """Read the last line of an existing log file to resume the chain."""
+        try:
+            if not os.path.exists(self._log_path):
+                return
+            with open(self._log_path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                if size == 0:
+                    return
+                tail = _read_tail(fh, size)
+            lines = [ln for ln in tail.split(b"\n") if ln.strip()]
+            if not lines:
+                return
+            last_record = json.loads(lines[-1].decode("utf-8"))
+            self._prev_hash = last_record.get("record_hash", _GENESIS_HASH)
+            self._call_count = last_record.get("seq", -1) + 1
+        except Exception:
+            verbose_logger.debug(
+                f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}"
+            )
+
+    # ------------------------------------------------------------------
+    # Core record append
+    # ------------------------------------------------------------------
+
+    def _build_and_append(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,
+        status: str,
+    ) -> None:
+        """Build one audit record and append it to the JSONL log.
+
+        seq/prev_hash assignment and the file write happen under _lock so the
+        on-disk order always matches the chain order.  The cloud checkpoint
+        (if configured) runs outside the lock on a daemon thread.
+        """
+        try:
+            loggable = _extract_loggable(
+                kwargs, response_obj, start_time, end_time, status
+            )
+
+            if not self._redact_content:
+                # Store content in the clear when the operator explicitly opts in.
+                loggable["messages"] = kwargs.get("messages")
+                try:
+                    if hasattr(response_obj, "choices") and response_obj.choices:
+                        loggable["response_content"] = response_obj.choices[
+                            0
+                        ].message.content
+                except Exception:
+                    pass
+
+            # The file write happens under the same lock that assigns seq and
+            # prev_hash, so records always land on disk in chain order even
+            # when callbacks fire concurrently.  Chain state only advances
+            # after a successful write; a failed write drops the record and
+            # the chain continues from the last record actually on disk.
+            with self._lock:
+                seq = self._call_count
+
+                # The fields that enter the hash are fixed and canonical so that
+                # an auditor can reproduce the digest from the log alone.
+                hashable: Dict[str, Any] = {
+                    "seq": seq,
+                    "ts": datetime.now(tz=timezone.utc).isoformat(),
+                    "prev_hash": self._prev_hash,
+                    **loggable,
+                }
+                record_hash = _sha256_hex(_canonical_bytes(hashable))
+
+                if not self._write_record({**hashable, "record_hash": record_hash}):
+                    return
+
+                self._prev_hash = record_hash
+                self._call_count += 1
+                checkpoint_now = (
+                    self._api_key is not None
+                    and self._call_count % self._checkpoint_interval == 0
+                )
+
+            # The cloud checkpoint (when configured) stays outside the lock.
+            if checkpoint_now:
+                self._schedule_checkpoint(chain_head=record_hash, seq=seq)
+
+        except Exception:
+            verbose_logger.debug(
+                f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}"
+            )
+
+    def _write_record(self, record: Dict[str, Any]) -> bool:
+        """Append one record to the log file. Returns False if the write failed."""
+        try:
+            parent = os.path.dirname(self._log_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(self._log_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+            return True
+        except Exception:
+            verbose_logger.warning(
+                f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}"
+            )
+            return False
+
+    # ------------------------------------------------------------------
+    # Async cloud checkpoint
+    # ------------------------------------------------------------------
+
+    def _schedule_checkpoint(self, chain_head: str, seq: int) -> None:
+        """Fire-and-forget: submit chain head to Asqav on a daemon thread."""
+        if not self._api_key:
+            return
+
+        api_key = self._api_key
+
+        def _do_checkpoint() -> None:
+            try:
+                # Only the chain head and sequence number leave the machine;
+                # the local log path stays client-side.
+                client = _get_httpx_client()
+                resp = client.post(
+                    url="https://api.asqav.com/v1/checkpoints",
+                    json={
+                        "chain_head": chain_head,
+                        "seq": seq,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "X-Source": "litellm-asqav-callback",
+                    },
+                    timeout=10,
+                )
+                verbose_logger.debug(
+                    f"[AsqavLogger] Checkpoint submitted, status={resp.status_code}"
+                )
+            except Exception:
+                verbose_logger.debug(
+                    f"[AsqavLogger] Checkpoint failed (non-fatal): {traceback.format_exc()}"
+                )
+
+        t = threading.Thread(target=_do_checkpoint, daemon=True)
+        t.start()
+
+    # ------------------------------------------------------------------
+    # CustomLogger hooks
+    # ------------------------------------------------------------------
+
+    def log_success_event(
+        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
+
+    def log_failure_event(
+        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
+
+    async def async_log_success_event(
+        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        await asyncio.to_thread(
+            self._build_and_append,
+            kwargs,
+            response_obj,
+            start_time,
+            end_time,
+            "success",
+        )
+
+    async def async_log_failure_event(
+        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        await asyncio.to_thread(
+            self._build_and_append,
+            kwargs,
+            response_obj,
+            start_time,
+            end_time,
+            "failure",
+        )
+
+    # ------------------------------------------------------------------
+    # Chain verification (utility; not called on the hot path)
+    # ------------------------------------------------------------------
+
+    def verify_chain(self, log_path: Optional[str] = None) -> Tuple[bool, str]:
+        """Verify the integrity of the audit log at log_path.
+
+        Returns (True, "ok") when every record's hash matches its content and
+        its prev_hash matches the previous record's hash.  Returns
+        (False, reason) on the first violation found.
+
+        This method is intentionally a pure stdlib utility so auditors can
+        paste it anywhere.
+        """
+        path = log_path or self._log_path
+        try:
+            prev_hash = _GENESIS_HASH
+            with open(path, encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+
+                    stored_hash = record.get("record_hash", "")
+                    # Recompute hash over all fields except record_hash itself.
+                    hashable = {k: v for k, v in record.items() if k != "record_hash"}
+                    computed_hash = _sha256_hex(_canonical_bytes(hashable))
+
+                    if computed_hash != stored_hash:
+                        return (
+                            False,
+                            f"line {lineno}: hash mismatch"
+                            f" (stored={stored_hash[:12]},"
+                            f" computed={computed_hash[:12]})",
+                        )
+
+                    rec_prev = record.get("prev_hash", _GENESIS_HASH)
+                    if rec_prev != prev_hash:
+                        return (
+                            False,
+                            f"line {lineno}: prev_hash chain break"
+                            f" (expected={prev_hash[:12]},"
+                            f" got={rec_prev[:12]})",
+                        )
+
+                    prev_hash = stored_hash
+
+            return True, "ok"
+        except FileNotFoundError:
+            return False, f"log file not found: {path}"
+        except Exception as exc:
+            return False, f"verification error: {exc}"
