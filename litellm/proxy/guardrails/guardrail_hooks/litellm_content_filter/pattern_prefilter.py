@@ -5,7 +5,7 @@ semantics for patterns that might.
 """
 
 from dataclasses import dataclass
-from typing import FrozenSet, List, Protocol, Tuple
+from typing import Protocol
 
 
 class PatternPrefilter(Protocol):
@@ -22,8 +22,8 @@ class AlwaysMatchPrefilter:
 
 
 def build_rust_pattern_prefilter(
-    pattern_sources: List[str],
-) -> Tuple[PatternPrefilter, FrozenSet[int]]:
+    pattern_sources: list[str],
+) -> tuple[PatternPrefilter, frozenset[int]]:
     """
     Build a Rust-backed prefilter for `pattern_sources`.
 

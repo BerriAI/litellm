@@ -175,7 +175,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         llm_router: Optional[Router] = None,
         image_model: Optional[str] = None,
         competitor_intent_config: Optional[Dict[str, Any]] = None,
-        pattern_prefilter: Optional[PatternPrefilter] = None,
+        pattern_prefilter: PatternPrefilter | None = None,
         **kwargs,
     ):
         """
@@ -791,8 +791,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             raise
 
     def _build_pattern_prefilter(
-        self, injected_prefilter: Optional[PatternPrefilter]
-    ) -> Tuple[PatternPrefilter, Tuple[Dict[str, Any], ...]]:
+        self, injected_prefilter: PatternPrefilter | None
+    ) -> tuple[PatternPrefilter, tuple[dict[str, Any], ...]]:
         """
         Partition compiled_patterns into ones a fast pre-filter can rule out
         and ones that must always run (contextual keyword-proximity patterns,
@@ -805,7 +805,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         proven cannot match. It never changes what gets matched or masked.
         """
 
-        def is_contextual(p: Dict[str, Any]) -> bool:
+        def is_contextual(p: dict[str, Any]) -> bool:
             return p["keyword_regex"] is not None or p["allow_word_numbers"]
 
         if injected_prefilter is not None:
