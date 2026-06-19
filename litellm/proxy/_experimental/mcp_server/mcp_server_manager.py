@@ -214,7 +214,7 @@ def _should_strip_caller_authorization(
     )
 
 
-def _extract_upstream_auth_failure(
+def extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[Tuple[int, Optional[str]]]:
     """Walk the exception tree looking for an HTTP 401/403 response from the
@@ -2847,7 +2847,7 @@ class MCPServerManager:
             return []
         except Exception as e:
             if should_surface_upstream_auth:
-                auth_info = _extract_upstream_auth_failure(e)
+                auth_info = extract_upstream_auth_failure(e)
                 if auth_info is not None:
                     status_code, www_authenticate = auth_info
                     verbose_logger.info(

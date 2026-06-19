@@ -123,12 +123,12 @@ class MCPEgressManager(Protocol):
 class ConnError(BaseModel):
     """A connection/transport failure to an upstream MCP server, modeled as a value.
 
-    Discriminated on ``tag`` so callers can route on it (a 401 is surfaced to the client to
-    trigger the upstream OAuth flow; transient/transport failures map to a 503).
+    Discriminated on ``tag``: an upstream 401/403 is surfaced to the client to trigger the
+    upstream OAuth flow; any other transport failure maps to a 503.
     """
 
     model_config = ConfigDict(frozen=True)
-    tag: Literal["unauthorized", "upstream_unavailable", "protocol_error"]
+    tag: Literal["unauthorized", "upstream_unavailable"]
     summary: str
 
     @classmethod
@@ -139,31 +139,19 @@ class ConnError(BaseModel):
     def of_upstream_unavailable(cls, summary: str) -> "ConnError":
         return cls(tag="upstream_unavailable", summary=summary)
 
-    @classmethod
-    def of_protocol_error(cls, summary: str) -> "ConnError":
-        return cls(tag="protocol_error", summary=summary)
-
-
-_TRANSIENT_ERROR_NAMES = (
-    "ConnectError",
-    "ConnectTimeout",
-    "ReadTimeout",
-    "WriteTimeout",
-    "PoolTimeout",
-    "TimeoutException",
-    "ConnectionError",
-    "RemoteProtocolError",
-)
-
 
 def _classify_conn_error(error: Exception) -> ConnError:
-    response = getattr(error, "response", None)
-    if getattr(response, "status_code", None) == 401:
-        return ConnError.of_unauthorized(f"upstream returned 401: {error}")
-    if type(error).__name__ == "McpError":
-        return ConnError.of_protocol_error(f"MCP protocol error: {error}")
-    if type(error).__name__ in _TRANSIENT_ERROR_NAMES:
-        return ConnError.of_upstream_unavailable(f"upstream unreachable: {error}")
+    # Reuse v1's exception-tree walk (it handles the SDK's anyio ExceptionGroup and the
+    # __cause__/__context__ chains portably) to spot an upstream 401/403; anything else is a
+    # transport failure. Imported lazily to avoid an import cycle at the manager swap.
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        extract_upstream_auth_failure,
+    )
+
+    auth_failure = extract_upstream_auth_failure(error)
+    if auth_failure is not None:
+        status_code, _ = auth_failure
+        return ConnError.of_unauthorized(f"upstream returned {status_code}")
     return ConnError.of_upstream_unavailable(f"upstream connection failed: {error}")
 
 

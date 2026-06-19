@@ -1,5 +1,6 @@
 """Tests for the v2 MCP egress transport: the flag and the UpstreamConnection."""
 
+import contextlib
 import socket
 import threading
 import time
@@ -30,27 +31,16 @@ def test_egress_flag_falsey_values(monkeypatch, value):
     assert v2_egress_enabled() is False
 
 
-@pytest.fixture
-def echo_server_url():
-    """A no-auth streamable-http FastMCP server with one `echo` tool, in a background thread."""
-    from mcp.server.fastmcp import FastMCP
-
-    mcp = FastMCP("egress-echo-test", stateless_http=True)
-
-    @mcp.tool()
-    def echo(text: str) -> str:
-        return f"echo: {text}"
-
+@contextlib.contextmanager
+def _serve(app):
+    """Serve an ASGI app on a free port in a background thread; yield its /mcp url."""
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
     url = f"http://127.0.0.1:{port}/mcp"
-
     server = uvicorn.Server(
-        uvicorn.Config(
-            mcp.streamable_http_app(), host="127.0.0.1", port=port, log_level="error"
-        )
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -67,6 +57,44 @@ def echo_server_url():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+def _echo_app(token=None):
+    """A stateless streamable-http FastMCP app with one `echo` tool, optionally Bearer-gated."""
+    from mcp.server.fastmcp import FastMCP
+
+    mcp = FastMCP("egress-test", stateless_http=True)
+
+    @mcp.tool()
+    def echo(text: str) -> str:
+        return f"echo: {text}"
+
+    app = mcp.streamable_http_app()
+    if token is not None:
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse
+
+        class _BearerCheck(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                authorized = request.headers.get("authorization") == f"Bearer {token}"
+                if request.url.path.startswith("/mcp") and not authorized:
+                    return JSONResponse({"error": "unauthorized"}, status_code=401)
+                return await call_next(request)
+
+        app.add_middleware(_BearerCheck)
+    return app
+
+
+@pytest.fixture
+def echo_server_url():
+    with _serve(_echo_app()) as url:
+        yield url
+
+
+@pytest.fixture
+def protected_server_url():
+    with _serve(_echo_app(token="secret-token")) as url:
+        yield url, "secret-token"
 
 
 @pytest.mark.asyncio
@@ -95,3 +123,25 @@ async def test_upstream_connection_unreachable_is_upstream_unavailable():
     result = await conn.list_tools()
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_upstream_connection_401_is_unauthorized(protected_server_url):
+    from litellm.proxy._experimental.mcp_server.v2_egress import UpstreamConnection
+    from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
+        NoOpAuth,
+        StaticHeaderAuth,
+    )
+    from litellm.proxy.gateway.mcp.result import Error, Ok
+
+    url, token = protected_server_url
+
+    rejected = await UpstreamConnection(url, auth=NoOpAuth()).list_tools()
+    assert isinstance(rejected, Error)
+    assert rejected.error.tag == "unauthorized"
+
+    authed = await UpstreamConnection(
+        url, auth=StaticHeaderAuth(f"Bearer {token}")
+    ).list_tools()
+    assert isinstance(authed, Ok)
+    assert any(t.name == "echo" for t in authed.ok)
