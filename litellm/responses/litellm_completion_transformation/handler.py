@@ -49,7 +49,6 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         if _is_async:
-            print("entering async")
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
                 request_input=input,
