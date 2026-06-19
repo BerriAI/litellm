@@ -179,7 +179,17 @@ class LiteLLMCompletionResponsesConfig:
         Cheaply estimate the token count of the input.
         ~4 chars per token for strings; for message lists, stringify first.
         """
-        pass
+        if isinstance(input, str):
+            return len(input) // 4
+        total = 0
+        for item in input:
+            if item.get("content"):
+                total += len(item.get("content")) // 4
+            elif item.get("encrypted_content"):
+                total += len(item.get("encrypted_content")) // 4
+            else:
+                raise ValueError("missing content")
+        return total
 
     @staticmethod
     async def _transform_context_management(
