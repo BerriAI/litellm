@@ -282,8 +282,19 @@ def _strip_deployment_owned_credential_kwargs(kwargs: dict) -> None:
     Run before merging request ``kwargs`` over deployment ``litellm_params``
     so user input cannot override the server-pinned credential fields.
     """
+    dropped = {
+        k: v
+        for k, v in ((k, kwargs.get(k)) for k in _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS)
+        if v not in (None, "", {}, [])
+    }
     for key in _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS:
         kwargs.pop(key, None)
+    if dropped:
+        verbose_router_logger.warning(
+            "Router stripped caller-supplied deployment-owned kwargs before merge: %s. "
+            "These fields are pinned per deployment and cannot be overridden per call.",
+            sorted(dropped),
+        )
 
 
 class Router:

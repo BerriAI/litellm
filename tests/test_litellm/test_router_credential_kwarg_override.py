@@ -9,10 +9,36 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import Router
+from litellm._logging import verbose_router_logger
 from litellm.router import (
     _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS,
     _strip_deployment_owned_credential_kwargs,
 )
+
+
+def test_strip_helper_warns_once_on_dropped_nonempty_value():
+    kwargs = {"temperature": 0.2, "vertex_project": "caller-project"}
+    with patch.object(verbose_router_logger, "warning") as mock_warn:
+        _strip_deployment_owned_credential_kwargs(kwargs)
+    mock_warn.assert_called_once()
+    logged_keys = mock_warn.call_args.args[1]
+    assert "vertex_project" in logged_keys
+    # The value is a credential surface and must never be logged.
+    assert "caller-project" not in str(mock_warn.call_args)
+
+
+def test_strip_helper_silent_when_nothing_dropped():
+    with patch.object(verbose_router_logger, "warning") as mock_warn:
+        _strip_deployment_owned_credential_kwargs({"temperature": 0.2})
+    mock_warn.assert_not_called()
+
+
+def test_strip_helper_silent_on_present_but_empty_values():
+    with patch.object(verbose_router_logger, "warning") as mock_warn:
+        _strip_deployment_owned_credential_kwargs(
+            {"vertex_project": "", "aws_access_key_id": None, "region_name": {}}
+        )
+    mock_warn.assert_not_called()
 
 
 def test_strip_helper_removes_credential_kwargs_in_place():
@@ -128,6 +154,33 @@ def test_router_strips_caller_credential_kwargs_before_merge():
     _, forwarded = mock_completion.call_args
     assert "vertex_project" in forwarded
     assert forwarded["vertex_project"] == "deployment-value"
+
+
+def test_router_completion_warns_when_credential_kwarg_stripped():
+    """The strip is security-correct but backwards-incompatible for SDK Router
+    callers who previously passed per-call ``vertex_project`` / ``api_version``.
+    A single warning when a non-empty value is dropped surfaces the change."""
+    router = _router()
+    mock_response = litellm.ModelResponse(choices=[{"message": {"content": "ok"}}])
+
+    with (
+        patch.object(litellm, "completion", MagicMock(return_value=mock_response)),
+        patch.object(verbose_router_logger, "warning") as mock_warn,
+    ):
+        router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_project="caller-project",
+        )
+
+    strip_warnings = [
+        call
+        for call in mock_warn.call_args_list
+        if "deployment-owned kwargs" in str(call.args[0])
+    ]
+    assert len(strip_warnings) == 1
+    assert "vertex_project" in strip_warnings[0].args[1]
+    assert "caller-project" not in str(strip_warnings[0])
 
 
 @pytest.mark.asyncio

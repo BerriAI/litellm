@@ -1788,10 +1788,17 @@ class TestIsRequestBodySafeNestedConfig:
 
     def test_nested_api_base_allowed_when_admin_opts_in(self):
         """Admins who explicitly enable client-side credential passthrough
-        keep the existing escape hatch — same UX as for root-level."""
+        keep the existing escape hatch — same UX as for root-level. The base
+        override must carry the caller's own ``api_key`` in the same nested
+        dict, otherwise the provider re-resolves a server-side credential."""
         assert (
             is_request_body_safe(
-                request_body={"litellm_embedding_config": {"api_base": "https://my-azure.example.com"}},
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_base": "https://my-azure.example.com",
+                        "api_key": "sk-caller-byok",
+                    }
+                },
                 general_settings={"allow_client_side_credentials": True},
                 llm_router=None,
                 model="milvus-store",
@@ -1851,6 +1858,49 @@ class TestIsRequestBodySafeNestedConfig:
                 general_settings={},
                 llm_router=None,
                 model="x",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeNestedBaseOverrideRequiresApiKey:
+    """Greptile P1-A: the api_key co-presence requirement that guards a
+    root-level ``api_base`` override must also apply inside each
+    ``_NESTED_CONFIG_KEYS`` container. Those dicts are spread as ``**kwargs``
+    into the outbound call, so a base override smuggled into
+    ``litellm_embedding_config`` / ``extra_body`` with no paired ``api_key``
+    re-resolves a server-side credential from the environment exactly like the
+    root-level case — only the gate descended into the nested dict for the
+    banned-param check but skipped the api_key check, so the nested override
+    cleared the opt-in without proving caller credential ownership."""
+
+    @pytest.mark.parametrize("nested_key", ["litellm_embedding_config", "extra_body"])
+    def test_nested_base_override_without_api_key_is_rejected(self, nested_key):
+        with pytest.raises(ValueError, match="requires a caller-supplied api_key"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    nested_key: {"api_base": "http://127.0.0.1:8911/v1"},
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    @pytest.mark.parametrize("nested_key", ["litellm_embedding_config", "extra_body"])
+    def test_nested_base_override_with_paired_api_key_is_allowed(self, nested_key):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    nested_key: {
+                        "api_base": "http://127.0.0.1:8911/v1",
+                        "api_key": "sk-caller-byok",
+                    },
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
             )
             is True
         )

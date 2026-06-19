@@ -430,6 +430,7 @@ def is_request_body_safe(
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model)
+            _check_base_override_has_api_key(nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
