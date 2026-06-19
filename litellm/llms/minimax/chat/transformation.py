@@ -116,10 +116,7 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                 # MiniMax uses "reasoning" (not "reasoning_content") in streaming chunks
                 # The parent class maps "reasoning" -> "reasoning_content"
                 # We clear content when either reasoning field is present
-                has_reasoning = (
-                    delta.get("reasoning_content")
-                    or delta.get("reasoning")
-                )
+                has_reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                 if has_reasoning:
                     delta["content"] = None
                     self.started_reasoning_content = True
@@ -146,7 +143,9 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         clean_content = re.sub(
                             r"<think>.*?</think>", "", content, flags=re.DOTALL
                         )
-                        delta["content"] = clean_content if clean_content.strip() else None
+                        delta["content"] = (
+                            clean_content if clean_content.strip() else None
+                        )
                         if self.pending_reasoning:
                             delta["reasoning_content"] = self.pending_reasoning
                             self.started_reasoning_content = True
@@ -162,7 +161,9 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         after = parts[1] if len(parts) > 1 else ""
                         if before:
                             delta["reasoning_content"] = before
-                        delta["content"] = after if after.strip() else ("" if not after else None)
+                        delta["content"] = (
+                            after if after.strip() else ("" if not after else None)
+                        )
                         self.finished_reasoning_content = True
                     elif not self.finished_reasoning_content and content.strip():
                         if not self.started_reasoning_content:
