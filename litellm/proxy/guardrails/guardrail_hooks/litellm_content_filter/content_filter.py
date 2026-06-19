@@ -48,6 +48,12 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     Mode,
 )
+
+from .pattern_prefilter import (
+    AlwaysMatchPrefilter,
+    PatternPrefilter,
+    build_rust_pattern_prefilter,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     BlockedWordDetection,
     CategoryKeywordDetection,
@@ -169,6 +175,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         llm_router: Optional[Router] = None,
         image_model: Optional[str] = None,
         competitor_intent_config: Optional[Dict[str, Any]] = None,
+        pattern_prefilter: Optional[PatternPrefilter] = None,
         **kwargs,
     ):
         """
@@ -241,6 +248,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.compiled_patterns: List[Dict[str, Any]] = []
         for pattern_config in normalized_patterns:
             self._add_pattern(pattern_config)
+
+        self._pattern_prefilter, self._always_run_patterns = (
+            self._build_pattern_prefilter(pattern_prefilter)
+        )
 
         # Warn if using during_call with MASK action (unstable)
         if self.event_hook == GuardrailEventHooks.during_call and any(
@@ -778,6 +789,48 @@ class ContentFilterGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"Error adding pattern {pattern_config}: {e}")
             raise
+
+    def _build_pattern_prefilter(
+        self, injected_prefilter: Optional[PatternPrefilter]
+    ) -> Tuple[PatternPrefilter, Tuple[Dict[str, Any], ...]]:
+        """
+        Partition compiled_patterns into ones a fast pre-filter can rule out
+        and ones that must always run (contextual keyword-proximity patterns,
+        or any pattern whose regex syntax the pre-filter can't represent).
+
+        Returns the pre-filter and the "always run" subset. When the
+        pre-filter reports no match, _filter_single_text only iterates the
+        "always run" subset; otherwise it iterates compiled_patterns in full,
+        unchanged. The pre-filter therefore only ever skips patterns it has
+        proven cannot match. It never changes what gets matched or masked.
+        """
+
+        def is_contextual(p: Dict[str, Any]) -> bool:
+            return p["keyword_regex"] is not None or p["allow_word_numbers"]
+
+        if injected_prefilter is not None:
+            return injected_prefilter, tuple(
+                p for p in self.compiled_patterns if is_contextual(p)
+            )
+
+        simple_patterns = tuple(
+            p for p in self.compiled_patterns if not is_contextual(p)
+        )
+        if not simple_patterns:
+            return AlwaysMatchPrefilter(), tuple(self.compiled_patterns)
+
+        prefilter, uncovered_indices = build_rust_pattern_prefilter(
+            [p["regex"].pattern for p in simple_patterns]
+        )
+        uncovered_simple_patterns = {
+            id(p) for i, p in enumerate(simple_patterns) if i in uncovered_indices
+        }
+        always_run_patterns = tuple(
+            p
+            for p in self.compiled_patterns
+            if is_contextual(p) or id(p) in uncovered_simple_patterns
+        )
+        return prefilter, always_run_patterns
 
     def _load_blocked_words_file(self, file_path: str) -> None:
         """
@@ -1456,8 +1509,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                 keyword, category_name, severity, action, text, detections
             )
 
-        # Check regex patterns - process ALL patterns, not just first match
-        for pattern_entry in self.compiled_patterns:
+        # Check regex patterns - process ALL patterns, not just first match.
+        # The pre-filter only ever narrows this to a subset it has proven
+        # cannot match; when it can't rule anything out, this is identical
+        # to iterating self.compiled_patterns directly.
+        patterns_to_check = (
+            self.compiled_patterns
+            if self._pattern_prefilter.any_match(text)
+            else self._always_run_patterns
+        )
+        for pattern_entry in patterns_to_check:
             spans = self._find_pattern_spans(text, pattern_entry)
             if spans:
                 pattern_name = pattern_entry["pattern_name"]
