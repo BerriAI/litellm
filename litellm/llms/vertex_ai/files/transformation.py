@@ -255,6 +255,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         named as: litellm-vertex-{model}-{uuid}
         """
         _model = openai_jsonl_content[0].get("body", {}).get("model", "")
+        _model = _resolve_vertex_model_name(model=_model)
         if "publishers/google/models" not in _model:
             _model = f"publishers/google/models/{_model}"
         safe_model_path = sanitize_cloud_object_path(_model, fallback="model")
@@ -929,3 +930,50 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
             bytes=gcs_upload_response.get("size", 0),
             object="file",
         )
+
+def _resolve_vertex_model_name(model: str) -> str:
+    """
+    Resolve the Vertex AI model name from a LiteLLM model name.
+
+    Handles model names like:
+    - 'gemini/3-5-flash-custom' -> 'gemini-3.5-flash' (database-registered model)
+    - '
+    - 'vertex_ai/gemini-3.5-flash' -> 'gemini-3.5-flash'
+    - 'gemini-3.5-flash' -> 'gemini-3.5-flash'
+
+    Args:
+        model: The LiteLLM model name
+
+    Returns:
+        The Vertex AI model name to use in the API request
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None:
+            model_list = llm_router.get_model_list(model_name=model)
+            print(f"Model list from llm_router for model '{model}': {model_list}")
+            if model_list:
+                deployment = model_list[0]
+                litellm_params = deployment.get("litellm_params", {})
+                model = litellm_params.get("model", "")
+                # if litellm_model:
+                #     if litellm_model.startswith("vertex_ai/"):
+                #         return litellm_model[len("vertex_ai/"):]
+                #     elif litellm_model.startswith("gemini/"):
+                #         return litellm_model[len("gemini/"):]
+                #     return litellm_model
+    except Exception as e:
+        print(f"Error resolving model name from llm_router: {e}")
+        pass
+
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    try:
+        _model, _, _, _ = get_llm_provider(model=model)
+        model = VertexGeminiConfig.get_model_for_vertex_ai_url(model=_model)
+    except Exception as e:
+        print(f"Error resolving model name from get_llm_provider: {e}")
+        pass
+    print(f"Resolved model name for Vertex AI: {model}")
+    return model
