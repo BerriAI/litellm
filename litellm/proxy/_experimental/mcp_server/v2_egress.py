@@ -217,3 +217,29 @@ class UpstreamConnection:
             return await session.call_tool(name, arguments)
 
         return await self._run(op)
+
+    async def list_prompts(self) -> Result[List[Prompt], ConnError]:
+        async def op(session: ClientSession) -> List[Prompt]:
+            return (await session.list_prompts()).prompts
+
+        return await self._run(op)
+
+    async def get_prompt(
+        self, name: str, arguments: Optional[Dict[str, str]] = None
+    ) -> Result[GetPromptResult, ConnError]:
+        async def op(session: ClientSession) -> GetPromptResult:
+            return await session.get_prompt(name, arguments)
+
+        return await self._run(op)
+
+    async def list_resources(self) -> Result[List[Resource], ConnError]:
+        async def op(session: ClientSession) -> List[Resource]:
+            return (await session.list_resources()).resources
+
+        return await self._run(op)
+
+    async def read_resource(self, uri: AnyUrl) -> Result[ReadResourceResult, ConnError]:
+        async def op(session: ClientSession) -> ReadResourceResult:
+            return await session.read_resource(uri)
+
+        return await self._run(op)

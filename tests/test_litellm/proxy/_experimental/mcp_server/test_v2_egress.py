@@ -69,6 +69,14 @@ def _echo_app(token=None):
     def echo(text: str) -> str:
         return f"echo: {text}"
 
+    @mcp.prompt()
+    def greet(name: str) -> str:
+        return f"Hello {name}"
+
+    @mcp.resource("data://info")
+    def info() -> str:
+        return "resource-info"
+
     app = mcp.streamable_http_app()
     if token is not None:
         from starlette.middleware.base import BaseHTTPMiddleware
@@ -145,3 +153,28 @@ async def test_upstream_connection_401_is_unauthorized(protected_server_url):
     ).list_tools()
     assert isinstance(authed, Ok)
     assert any(t.name == "echo" for t in authed.ok)
+
+
+@pytest.mark.asyncio
+async def test_upstream_connection_prompts_and_resources(echo_server_url):
+    from litellm.proxy._experimental.mcp_server.v2_egress import UpstreamConnection
+    from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import NoOpAuth
+    from litellm.proxy.gateway.mcp.result import Ok
+
+    conn = UpstreamConnection(echo_server_url, auth=NoOpAuth())
+
+    prompts = await conn.list_prompts()
+    assert isinstance(prompts, Ok)
+    assert any(p.name == "greet" for p in prompts.ok)
+
+    got = await conn.get_prompt("greet", {"name": "Ada"})
+    assert isinstance(got, Ok)
+    assert got.ok.messages  # the rendered prompt has at least one message
+
+    resources = await conn.list_resources()
+    assert isinstance(resources, Ok)
+    target = next(r for r in resources.ok if str(r.uri) == "data://info")
+
+    read = await conn.read_resource(target.uri)
+    assert isinstance(read, Ok)
+    assert read.ok.contents  # at least one content block
