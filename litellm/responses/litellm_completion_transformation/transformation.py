@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import base64
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
@@ -154,6 +155,27 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
     
     @staticmethod
+    async def _apply_compaction_to_messages(model: str, messages: Union[str, ResponseInputParam]):
+        if isinstance(messages, str):
+            raise ValueError("single user message above compaction threshold")
+        last_user_msg_idx = -1
+        for i, message in enumerate(messages):
+            if message.get("role") == "user":
+                last_user_msg_idx = i
+        last_user_msg = messages.pop(last_user_msg_idx)
+        
+
+        compacted_message = (await LiteLLMCompletionResponsesConfig._compact_input(model, messages))[0]
+        #print(compacted_message)
+        compaction_item = {
+            "type": "compaction",
+            "encrypted_content": base64.b64encode(compacted_message["content"].encode()).decode(),
+            "id": "cmp_0"
+        }
+        return [compacted_message, last_user_msg], compaction_item
+
+
+    @staticmethod
     async def _compact_input(
         model: str,
         input: Union[str, ResponseInputParam],
@@ -169,7 +191,7 @@ class LiteLLMCompletionResponsesConfig:
             {
                 "type": "message",
                 "role": "user",
-                "content": "",
+                "content": "[Previous conversation summary: dummy",
             }
         ]
 
@@ -233,7 +255,7 @@ class LiteLLMCompletionResponsesConfig:
                 break # could valueerror on multiple compaction objs, didn't find that necessary here
         if compact_threshold == 0:
             return False
-        return input_token_size > compact_threshold
+        return input_token_size >= compact_threshold
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -1056,6 +1078,10 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
+        elif LiteLLMCompletionResponsesConfig._is_input_item_compaction(input_item):
+            return LiteLLMCompletionResponsesConfig._transform_responses_api_compaction_to_chat_completion_message(
+                compaction_item=input_item
+            ) # probably need a proper type for compaction item instead of ripping json
         else:
             content = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
@@ -1089,6 +1115,10 @@ class LiteLLMCompletionResponsesConfig:
         Check if the input item is a function call
         """
         return input_item.get("type") == "function_call"
+    
+    @staticmethod
+    def _is_input_item_compaction(input_item: Any) -> bool:
+        return input_item.get("type") == "compaction"
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
@@ -1283,6 +1313,17 @@ class LiteLLMCompletionResponsesConfig:
         )
 
         return [chat_completion_response_message]
+
+    @staticmethod
+    def _transform_responses_api_compaction_to_chat_completion_message(compaction_item: Any):
+        if not compaction_item.get("encrypted_content"):
+            # irl maybe a log here
+            return []
+        return [{
+            "type": "message",
+            "role": "user",
+            "content": base64.b64decode(compaction_item["encrypted_content"]).decode() # should be a util for this, and need it in the token counter
+        }]
 
     @staticmethod
     def _resolve_file_id(item: Dict[str, Any]) -> Optional[str]:
