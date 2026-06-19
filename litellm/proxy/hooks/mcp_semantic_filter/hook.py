@@ -5,7 +5,7 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -65,12 +65,14 @@ class SemanticToolFilterHook(CustomLogger):
         self,
         tools: List[Any],
         user_api_key_dict: "UserAPIKeyAuth",
+        call_type: str = "acompletion",
     ) -> List[Dict[str, Any]]:
         """
         Expand MCP references to actual tool definitions.
 
-        Reuses LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format
-        which internally does: parse -> fetch -> filter -> deduplicate -> transform
+        Uses the correct OpenAI format based on call_type:
+        - "completion"/"acompletion" -> chat format with {type: "function", function: {...}} wrapper
+        - "aresponses" -> responses format with flat {name, parameters, type: "function", ...}
         """
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
@@ -82,13 +84,23 @@ class SemanticToolFilterHook(CustomLogger):
         if not mcp_tools:
             return []
 
-        # Use single combined method instead of 3 separate calls
-        # This already handles: fetch -> filter by allowed_tools -> deduplicate -> transform
+        # Fetch and filter MCP tools without format transformation
         (
-            openai_tools,
+            deduplicated_mcp_tools,
             _,
-        ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
-            user_api_key_auth=user_api_key_dict, mcp_tools_with_litellm_proxy=mcp_tools
+        ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+            user_api_key_auth=user_api_key_dict,
+            mcp_tools_with_litellm_proxy=mcp_tools,
+        )
+
+        # Select the correct format for the endpoint
+        target_format: Literal["responses", "chat"] = "responses"
+        if call_type in ("completion", "acompletion"):
+            target_format = "chat"
+
+        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
+            deduplicated_mcp_tools,
+            target_format=target_format,
         )
 
         # Convert Pydantic models to dicts for compatibility
@@ -172,7 +184,9 @@ class SemanticToolFilterHook(CustomLogger):
             )
 
             try:
-                expanded_tools = await self._expand_mcp_tools(tools, user_api_key_dict)
+                expanded_tools = await self._expand_mcp_tools(
+                    tools, user_api_key_dict, call_type=call_type
+                )
 
                 if not expanded_tools:
                     verbose_proxy_logger.warning(
@@ -288,17 +302,25 @@ class SemanticToolFilterHook(CustomLogger):
         return headers
 
     def _get_tool_names_csv(self, tools: List[Any]) -> str:
-        """Extract tool names and return as CSV string."""
+        """Extract tool names and return as CSV string.
+
+        Handles both OpenAI formats:
+        - Chat format: {"type": "function", "function": {"name": ...}}
+        - Responses format: {"name": ..., "type": "function"}
+        """
         if not tools:
             return ""
 
         tool_names = []
         for tool in tools:
-            name = (
-                tool.get("name", "")
-                if isinstance(tool, dict)
-                else getattr(tool, "name", "")
-            )
+            if isinstance(tool, dict):
+                func = tool.get("function")
+                if isinstance(func, dict):
+                    name = func.get("name", "")
+                else:
+                    name = tool.get("name", "")
+            else:
+                name = getattr(tool, "name", "")
             if name:
                 tool_names.append(name)
 

@@ -88,14 +88,25 @@ class SemanticMCPToolFilter:
             raise
 
     def _extract_tool_info(self, tool) -> tuple[str, str]:
-        """Extract name and description from MCP tool or OpenAI function dict."""
+        """Extract name and description from MCP tool or OpenAI tool dict.
+
+        Handles both OpenAI formats:
+        - Chat format: {"type": "function", "function": {"name": ..., "description": ...}}
+        - Responses format: {"name": ..., "description": ..., "type": "function"}
+        """
         name: str
         description: str
 
         if isinstance(tool, dict):
-            # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
+            func = tool.get("function")
+            if isinstance(func, dict):
+                # Chat completions format with nested "function" key
+                name = func.get("name", "")
+                description = func.get("description", name)
+            else:
+                # Responses API flat format
+                name = tool.get("name", "")
+                description = tool.get("description", name)
         else:
             # MCPTool object
             name = str(tool.name)
