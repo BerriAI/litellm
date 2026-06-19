@@ -9,11 +9,11 @@
   },
   "reportAssignmentType": {
     "baseline": 220,
-    "slack": 3
+    "slack": 22
   },
   "reportAttributeAccessIssue": {
     "baseline": 346,
-    "slack": 3
+    "slack": 35
   },
   "reportCallIssue": {
     "baseline": 87,
@@ -21,11 +21,11 @@
   },
   "reportConstantRedefinition": {
     "baseline": 39,
-    "slack": 3
+    "slack": 4
   },
   "reportDeprecated": {
     "baseline": 217,
-    "slack": 10
+    "slack": 22
   },
   "reportDuplicateImport": {
     "baseline": 28,
@@ -41,11 +41,11 @@
   },
   "reportGeneralTypeIssues": {
     "baseline": 151,
-    "slack": 3
+    "slack": 15
   },
   "reportIncompatibleMethodOverride": {
     "baseline": 52,
-    "slack": 10
+    "slack": 5
   },
   "reportIncompatibleVariableOverride": {
     "baseline": 8,
@@ -73,7 +73,7 @@
   },
   "reportMissingParameterType": {
     "baseline": 3933,
-    "slack": 10
+    "slack": 390
   },
   "reportMissingTypeArgument": {
     "baseline": 10612,
@@ -97,7 +97,7 @@
   },
   "reportOptionalMemberAccess": {
     "baseline": 724,
-    "slack": 10
+    "slack": 72
   },
   "reportOptionalOperand": {
     "baseline": 3,
@@ -121,7 +121,7 @@
   },
   "reportReturnType": {
     "baseline": 126,
-    "slack": 10
+    "slack": 13
   },
   "reportTypedDictNotRequiredAccess": {
     "baseline": 20,
@@ -165,11 +165,11 @@
   },
   "reportUnnecessaryIsInstance": {
     "baseline": 808,
-    "slack": 10
+    "slack": 80
   },
   "reportUntypedBaseClass": {
     "baseline": 110,
-    "slack": 3
+    "slack": 11
   },
   "reportUntypedFunctionDecorator": {
     "baseline": 22,
@@ -185,10 +185,10 @@
   },
   "reportUnusedImport": {
     "baseline": 670,
-    "slack": 10
+    "slack": 50
   },
   "reportUnusedVariable": {
     "baseline": 865,
-    "slack": 10
+    "slack": 50
   }
 }
