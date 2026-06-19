@@ -27,7 +27,7 @@ def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager)
     assert row.budget_reset_at, "budget_duration did not schedule a reset"
 
     # Attach the budget to a key and confirm the key reflects it.
-    key = client.generate_key(extra_params={"budget_id": budget_id})
+    key = client.generate_key(budget_id=budget_id)
     resources.defer(lambda: client.delete_key(key))
     info = client.gateway.key_info(key)
     linked = info.litellm_budget_table
@@ -43,7 +43,7 @@ def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManag
 
 
 def test_budget_duration_schedules_reset_on_key(client: BudgetClient, resources: ResourceManager) -> None:
-    key = client.generate_key(max_budget=10.0, extra_params={"budget_duration": "30d"})
+    key = client.generate_key(max_budget=10.0, budget_duration="30d")
     resources.defer(lambda: client.delete_key(key))
 
     reset_at = client.gateway.key_info(key).budget_reset_at

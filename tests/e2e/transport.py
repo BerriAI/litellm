@@ -25,6 +25,16 @@ class Transport(Protocol):
         self, path: str, *, headers: BaseModel, json: BaseModel
     ) -> StreamingResponse: ...
 
+    def send(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        params: BaseModel | None = None,
+        stream: bool = False,
+    ) -> StreamingResponse: ...
+
     def get[R: BaseModel](
         self,
         path: str,
@@ -105,6 +115,24 @@ class HttpTransport:
     ) -> StreamingResponse:
         return e2e_http.stream(
             self._url(path), headers=headers, json=json, timeout=self.request_timeout
+        )
+
+    def send(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        params: BaseModel | None = None,
+        stream: bool = False,
+    ) -> StreamingResponse:
+        return e2e_http.send(
+            self._url(path),
+            headers=headers,
+            json=json,
+            params=params,
+            stream=stream,
+            timeout=self.request_timeout,
         )
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult:

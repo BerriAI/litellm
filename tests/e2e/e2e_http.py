@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Generic, Iterator, Literal, NewType, TypeVar, cast
 
+import pytest
 import requests
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -137,8 +138,25 @@ def is_ok[R: BaseModel](result: Result[R]) -> bool:
             return False
 
 
+def require_successful_call(result: StreamingResponse) -> None:
+    """A call that should have succeeded but didn't is a hard failure, never a skip:
+    if the proxy can't make a call it's expected to, the test must fail."""
+    if result.ok:
+        return
+    pytest.fail(
+        f"upstream call failed (status {result.status_code}); body={result.body[:300]}"
+    )
+
+
 def _headers(headers: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
+    return {key: str(value) for key, value in dumped.items()}
+
+
+def _params(params: BaseModel | None) -> dict[str, str]:
+    if params is None:
+        return {}
+    dumped: dict[str, object] = params.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
 
 
@@ -232,24 +250,10 @@ def probe(
     return ProbeResult(status_code=resp.status_code, body=resp.text)
 
 
-def stream(
-    url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0
-) -> StreamingResponse:
-    """Streaming (SSE) call: consumes the stream counting events, and captures the
-    x-litellm-call-id + content-type headers. Body is elided."""
-    try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            stream=True,
-            timeout=timeout,
-        )
-    except requests.RequestException as exc:
-        return StreamingResponse(status_code=-1, body=str(exc))
+def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingResponse:
     call_id = _hdr(resp, "x-litellm-call-id")
     content_type = _hdr(resp, "content-type")
-    if not (200 <= resp.status_code < 300):
+    if not stream or not (200 <= resp.status_code < 300):
         return StreamingResponse(
             status_code=resp.status_code,
             call_id=call_id,
@@ -265,3 +269,38 @@ def stream(
         body="<streamed>",
         chunks=chunks,
     )
+
+
+def send(
+    url: URL,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    params: BaseModel | None = None,
+    stream: bool = False,
+    timeout: float = 60.0,
+) -> StreamingResponse:
+    """Raw POST returning the unparsed HTTP outcome: status, full body, and the
+    x-litellm-call-id header. For native/passthrough bodies and for calls judged by
+    status rather than a typed JSON model (e.g. a budget block is a non-2xx). With
+    ``stream=True`` the SSE body is consumed and its events counted instead."""
+    try:
+        resp = requests.post(
+            str(url),
+            headers=_headers(headers),
+            params=_params(params),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            stream=stream,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return StreamingResponse(status_code=-1, body=str(exc))
+    return _streaming_outcome(resp, stream)
+
+
+def stream(
+    url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0
+) -> StreamingResponse:
+    """Streaming (SSE) call: consumes the stream counting events, and captures the
+    x-litellm-call-id + content-type headers. Body is elided."""
+    return send(url, headers=headers, json=json, stream=True, timeout=timeout)

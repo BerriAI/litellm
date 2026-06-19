@@ -13,14 +13,22 @@ A passthrough call returning non-2xx fails hard (never a skip); once it returns
 
 import pytest
 
+from e2e_config import unique_marker
+from e2e_http import StreamingResponse, require_successful_call
 from models import SpendLogRow
-from passthrough_client import PassthroughClient, PassthroughResult
-from proxy_client import require_successful_call, unique_marker
+from passthrough_client import (
+    AnthropicTool,
+    GeminiFunctionDeclaration,
+    GeminiTool,
+    JsonSchema,
+    JsonSchemaProperty,
+    PassthroughClient,
+)
 
 pytestmark = pytest.mark.e2e
 
 
-def _fetch_cost_breakdown(client: PassthroughClient, result: PassthroughResult) -> SpendLogRow:
+def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) -> SpendLogRow:
     """The passthrough call's logged row, polled until it carries a cost.
 
     Asserts (not skips) that a 2xx passthrough call produced a costed row - the
@@ -76,19 +84,19 @@ def test_gemini_passthrough_tool_call_logs_cost(
         "gemini-2.5-flash",
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
-            {
-                "functionDeclarations": [
-                    {
-                        "name": "get_weather",
-                        "description": "Get the weather for a city",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"city": {"type": "string"}},
-                            "required": ["city"],
-                        },
-                    }
+            GeminiTool(
+                function_declarations=[
+                    GeminiFunctionDeclaration(
+                        name="get_weather",
+                        description="Get the weather for a city",
+                        parameters=JsonSchema(
+                            type="object",
+                            properties={"city": JsonSchemaProperty(type="string")},
+                            required=["city"],
+                        ),
+                    )
                 ]
-            }
+            )
         ],
     )
     require_successful_call(result)
@@ -133,15 +141,15 @@ def test_anthropic_passthrough_tool_call_logs_cost(
         "claude-haiku-4-5",
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
-            {
-                "name": "get_weather",
-                "description": "Get the weather for a city",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
+            AnthropicTool(
+                name="get_weather",
+                description="Get the weather for a city",
+                input_schema=JsonSchema(
+                    type="object",
+                    properties={"city": JsonSchemaProperty(type="string")},
+                    required=["city"],
+                ),
+            )
         ],
     )
     require_successful_call(result)

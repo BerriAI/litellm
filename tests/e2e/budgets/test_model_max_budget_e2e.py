@@ -11,8 +11,9 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block, model_budget
+from e2e_config import unique_marker
+from e2e_http import require_successful_call
 from lifecycle import ResourceManager
-from proxy_client import require_successful_call, unique_marker
 
 pytestmark = pytest.mark.e2e
 
@@ -21,9 +22,7 @@ FREE_MODEL = "gemini-2.5-flash"
 
 
 def _call(client: BudgetClient, key: str, model: str):
-    result = client.chat(
-        key, model, f"hi {unique_marker()}", extra_body={"max_tokens": 16}
-    )
+    result = client.chat(key, model, f"hi {unique_marker()}", max_tokens=16)
     if not result.ok and not is_budget_block(result):
         require_successful_call(result)  # non-budget error -> skip
     return result
@@ -33,11 +32,9 @@ def test_model_max_budget_isolates_per_model(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
     key = client.generate_key(
-        extra_params={
-            "model_max_budget": {
-                **model_budget(CAPPED_MODEL, 1e-6),
-                **model_budget(FREE_MODEL, 1000.0),
-            }
+        model_max_budget={
+            **model_budget(CAPPED_MODEL, 1e-6),
+            **model_budget(FREE_MODEL, 1000.0),
         }
     )
     resources.defer(lambda: client.delete_key(key))
