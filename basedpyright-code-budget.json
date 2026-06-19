@@ -1,10 +1,10 @@
 {
   "reportAny": {
-    "baseline": 24954,
+    "baseline": 24989,
     "slack": 2500
   },
   "reportArgumentType": {
-    "baseline": 1863,
+    "baseline": 1934,
     "slack": 180
   },
   "reportAssignmentType": {
@@ -12,11 +12,11 @@
     "slack": 3
   },
   "reportAttributeAccessIssue": {
-    "baseline": 335,
+    "baseline": 346,
     "slack": 3
   },
   "reportCallIssue": {
-    "baseline": 77,
+    "baseline": 87,
     "slack": 10
   },
   "reportConstantRedefinition": {
@@ -120,7 +120,7 @@
     "slack": 3
   },
   "reportReturnType": {
-    "baseline": 118,
+    "baseline": 126,
     "slack": 10
   },
   "reportTypedDictNotRequiredAccess": {
@@ -136,19 +136,19 @@
     "slack": 3000
   },
   "reportUnknownLambdaType": {
-    "baseline": 76,
+    "baseline": 75,
     "slack": 10
   },
   "reportUnknownMemberType": {
-    "baseline": 27322,
+    "baseline": 27037,
     "slack": 2500
   },
   "reportUnknownParameterType": {
-    "baseline": 13636,
+    "baseline": 13612,
     "slack": 1000
   },
   "reportUnknownVariableType": {
-    "baseline": 21776,
+    "baseline": 21445,
     "slack": 2000
   },
   "reportUnnecessaryCast": {
@@ -156,7 +156,7 @@
     "slack": 10
   },
   "reportUnnecessaryComparison": {
-    "baseline": 680,
+    "baseline": 683,
     "slack": 10
   },
   "reportUnnecessaryContains": {
@@ -164,7 +164,7 @@
     "slack": 3
   },
   "reportUnnecessaryIsInstance": {
-    "baseline": 807,
+    "baseline": 808,
     "slack": 10
   },
   "reportUntypedBaseClass": {
