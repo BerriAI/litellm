@@ -2956,7 +2956,12 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
-        self.model_call_details["response_cost"] = 0
+        # A stream interrupted mid-flight still billed the provider for the
+        # chunks already delivered; the router stashes that recovered usage as
+        # ``combined_usage_object`` and pre-computes its cost, so preserve it
+        # here instead of zeroing the spend on an otherwise-failed request.
+        if self.model_call_details.get("combined_usage_object") is None:
+            self.model_call_details["response_cost"] = 0
 
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):
             self.model_call_details.setdefault("litellm_params", {})
