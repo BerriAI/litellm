@@ -895,7 +895,7 @@ class BaseLLMHTTPHandler:
         data = provider_config.transform_embedding_request(
             model=model,
             input=input,
-            optional_params=optional_params,
+            optional_params=strip_internal_params_from_request_body(optional_params),
             headers=headers,
         )
 

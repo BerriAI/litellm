@@ -18,6 +18,67 @@ from litellm.llms.custom_httpx.llm_http_handler import (
 from litellm.types.router import GenericLiteLLMParams
 
 
+def test_embedding_strips_internal_params_from_request_body():
+    """Regression: the embedding path must strip LiteLLM-internal optional_params
+    before the request body is built. Several embedding transforms (e.g. VoyageAI)
+    splat optional_params into the wire body, so a leaked internal knob such as
+    cache_control_injection_points would 400 on a strict-schema provider -- the
+    same failure the chat path already prevents on line 450."""
+    from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.types.utils import EmbeddingResponse
+    from litellm.utils import ProviderConfigManager
+
+    handler = BaseLLMHTTPHandler()
+
+    captured: dict = {}
+
+    def _capture_post(*args, **kwargs):
+        captured["data"] = kwargs["data"]
+        return httpx.Response(
+            200,
+            json={
+                "model": "voyage-3",
+                "object": "list",
+                "data": [{"embedding": [0.1], "index": 0, "object": "embedding"}],
+                "usage": {"total_tokens": 1},
+            },
+            request=httpx.Request("POST", "https://api.voyageai.com/v1/embeddings"),
+        )
+
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post = Mock(side_effect=_capture_post)
+
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded["output_dimension"] = 256
+
+    with patch.object(
+        ProviderConfigManager,
+        "get_provider_embedding_config",
+        return_value=VoyageEmbeddingConfig(),
+    ):
+        handler.embedding(
+            model="voyage-3",
+            input=["hello world"],
+            timeout=10.0,
+            custom_llm_provider="voyage",
+            logging_obj=Mock(),
+            api_base=None,
+            optional_params=seeded,
+            litellm_params={},
+            model_response=EmbeddingResponse(),
+            api_key="test-key",
+            client=mock_client,
+        )
+
+    body = captured["data"]
+    for param in LiteLLMInternalParam:
+        assert (
+            param.value not in body
+        ), f"{param.value} leaked into voyage embedding body"
+    assert "output_dimension" in body
+
+
 def test_prepare_fake_stream_request():
     # Initialize the BaseLLMHTTPHandler
     handler = BaseLLMHTTPHandler()

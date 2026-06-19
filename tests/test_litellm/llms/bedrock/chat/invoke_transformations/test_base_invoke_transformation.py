@@ -71,3 +71,35 @@ def test_invoke_request_does_not_leak_internal_params(model):
     for param in LiteLLMInternalParam:
         assert param.value not in serialized, f"{param.value} leaked into {model} body"
     assert "max_tokens" in serialized and "temperature" in serialized
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "amazon.nova-micro-v1:0",
+        "twelvelabs.pegasus-1-2-v1:0",
+        "openai.gpt-oss-20b-1:0",
+    ],
+)
+def test_invoke_delegate_paths_do_not_leak_internal_params(model):
+    """The anthropic, nova, twelvelabs and openai invoke providers delegate to a
+    sub-transform instead of building the body from inference_params. Those
+    delegates splat optional_params into their own request body, so the internal
+    knobs must be stripped before the hand-off or they leak just like the
+    inference_params splat did (#30371)."""
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded.update({"temperature": 0.5})
+
+    request_body = AmazonInvokeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=seeded,
+        litellm_params={},
+        headers={},
+    )
+
+    serialized = json.dumps(request_body)
+    for param in LiteLLMInternalParam:
+        assert param.value not in serialized, f"{param.value} leaked into {model} body"
+    assert "temperature" in serialized

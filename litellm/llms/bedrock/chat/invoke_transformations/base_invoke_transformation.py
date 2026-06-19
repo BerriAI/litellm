@@ -152,8 +152,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
     ) -> dict:
         ## SETUP ##
-        stream = optional_params.pop("stream", None)
-        optional_params.pop("stream_chunk_size", None)
+        sanitized_params = strip_internal_params_from_request_body(
+            copy.deepcopy(optional_params)
+        )
+        stream = sanitized_params.pop("stream", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name = litellm_params.get("hf_model_name", None)
 
@@ -165,12 +167,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = strip_internal_params_from_request_body(
-            copy.deepcopy(optional_params)
-        )
         inference_params = {
             k: v
-            for k, v in inference_params.items()
+            for k, v in sanitized_params.items()
             if k not in self.aws_authentication_params
         }
         request_data: dict = {}
@@ -197,7 +196,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 litellm.AmazonAnthropicClaudeConfig().transform_request(
                     model=model,
                     messages=messages,
-                    optional_params=optional_params,
+                    optional_params=sanitized_params,
                     litellm_params=litellm_params,
                     headers=headers,
                 )
@@ -208,7 +207,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,
                 messages=messages,
-                optional_params=optional_params,
+                optional_params=sanitized_params,
                 litellm_params=litellm_params,
                 headers=headers,
             )
@@ -239,7 +238,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
                 model=model,
                 messages=messages,
-                optional_params=optional_params,
+                optional_params=sanitized_params,
                 litellm_params=litellm_params,
                 headers=headers,
             )
@@ -248,7 +247,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             return litellm.AmazonBedrockOpenAIConfig().transform_request(
                 model=model,
                 messages=messages,
-                optional_params=optional_params,
+                optional_params=sanitized_params,
                 litellm_params=litellm_params,
                 headers=headers,
             )
