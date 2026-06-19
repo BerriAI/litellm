@@ -119,14 +119,9 @@ class LiteLLMCompletionTransformationHandler:
         # breakpoint()
         compacted = False
         if context_management:
-            model = litellm_completion_request.get("model", "")
-            provider = litellm_completion_request.get("custom_llm_provider", "")
-            if provider:
-                model = provider + "/" + model
-
             litellm_completion_request["messages"], compacted = (
                 await LiteLLMCompletionResponsesConfig._transform_context_management(
-                    model=model,
+                    model=litellm_completion_request.get("model", ""),
                     input=litellm_completion_request.get("messages", []),
                     context_management=context_management,
                     **kwargs,
