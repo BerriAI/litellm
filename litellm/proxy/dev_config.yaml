@@ -189,3 +189,17 @@ general_settings:
 litellm_settings:
   drop_params: True
   telemetry: False
+
+guardrails:
+  - guardrail_name: "pii-content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      default_on: true
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "us_ssn"
+          action: "BLOCK"
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
