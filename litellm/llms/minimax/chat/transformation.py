@@ -3,7 +3,7 @@ MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's 
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import (
@@ -150,6 +150,7 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         if self.pending_reasoning:
                             delta["reasoning_content"] = self.pending_reasoning
                             self.started_reasoning_content = True
+                            self.pending_reasoning = ""
                     elif "<think>" in content and "</think>" not in content:
                         clean_content = content.replace("<think>", "", 1)
                         delta["content"] = None
@@ -163,8 +164,6 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                             delta["reasoning_content"] = before
                         delta["content"] = after if after.strip() else ("" if not after else None)
                         self.finished_reasoning_content = True
-                    elif has_reasoning:
-                        pass
                     elif not self.finished_reasoning_content and content.strip():
                         if not self.started_reasoning_content:
                             self.started_reasoning_content = True
