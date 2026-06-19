@@ -200,4 +200,49 @@ async def test_retrieve_information_from_summary():
 
     assert "137" in response.output[0].content[0].text
 
+@pytest.mark.asyncio
+async def test_round_trip():
+
+    """Case 6: Take the compaction item from turn 1's output. Send it back as input in turn 2. Does turn 2 succeed?"""
+
+    fat_message = "word " * 5000
+
+    response = await litellm.aresponses(
+
+        model="claude-haiku-4-5-20251001",
+
+        input=[
+
+            {"type": "message", "role": "user", "content": "Help me debug a production incident."},
+
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": fat_message}]},
+
+            {"type": "message", "role": "user", "content": "We are seeing intermittent 502s from one provider path."},
+
+        ],
+
+        context_management=[{"type": "compaction", "compact_threshold": 100}],
+
+        store=False,
+
+        max_output_tokens=200,
+
+    )
+
+    assert response is not None
+
+    assert response.output[-1].get("type") == "compaction"
+
+    assert response.output[-1].get("encrypted_content")
+
+    compaction_item = response.output[-1]
+    response = await litellm.aresponses(
+        model="claude-haiku-4-5-20251001",
+        input=[
+            compaction_item,
+        ]
+    )
+
+    assert response.output[-1].get("type") == "message"
+
 # what happens if the compaction is still too long?
