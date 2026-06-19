@@ -41,6 +41,39 @@ async def test_mistral_chat_transformation():
     )
 
 
+def test_mistral_strips_reasoning_content_from_assistant_input():
+    """Regression for https://github.com/BerriAI/litellm/issues/30835
+
+    `reasoning_content` is an output-only field; replaying it back as input made
+    Mistral reject the request with a 422 `extra_forbidden` error. It must be dropped
+    from assistant input messages while being preserved on every other role.
+    """
+    mistral_config = MistralConfig()
+    messages: List[AllMessageValues] = [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "assistant",
+            "content": "Hello there",
+            "reasoning_content": "the user greeted me, so I greet back",  # type: ignore
+        },
+        {"role": "user", "content": "And again"},
+    ]
+
+    result = cast(
+        List[AllMessageValues],
+        mistral_config._transform_messages(
+            messages=messages, model="mistral-medium-3-5", is_async=False
+        ),
+    )
+
+    assistant_messages = [m for m in result if m["role"] == "assistant"]
+    assert assistant_messages, "assistant message should survive transformation"
+    assert all(
+        "reasoning_content" not in m for m in assistant_messages
+    ), "reasoning_content must be stripped from assistant input messages"
+    assert assistant_messages[0]["content"] == "Hello there"
+
+
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
 

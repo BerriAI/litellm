@@ -265,6 +265,7 @@ class MistralConfig(OpenAIGPTConfig):
         new_messages: List[AllMessageValues] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
+            m = MistralConfig._handle_reasoning_content_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
             if MistralConfig._is_empty_assistant_message(m):
                 continue
@@ -408,6 +409,19 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
         return cleaned_tools
+
+    @classmethod
+    def _handle_reasoning_content_in_message(
+        cls, message: AllMessageValues
+    ) -> AllMessageValues:
+        """
+        Mistral rejects `reasoning_content` on input assistant messages with a 422
+        `extra_forbidden` error. It is an output-only field, so drop it when a prior
+        assistant turn is replayed back as input.
+        """
+        if message["role"] == "assistant":
+            message.pop("reasoning_content", None)  # type: ignore
+        return message
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
