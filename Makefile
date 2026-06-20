@@ -135,11 +135,11 @@ lint-black: format-check
 lint-ruff-budget: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py
 
-# CI-parity strict gate: fetch the target branch fresh and count against a
-# throwaway merge into HEAD, so a local pass means the CI check will pass too.
+# Strict gate, invoked the same way CI does in test-linting.yml so a local pass
+# means the CI check will pass too.
 lint-gate: install-dev
 	git fetch origin litellm_internal_staging
-	$(UV_RUN) python scripts/ruff_strict_gate.py --ci-parity --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
 
 lint-ruff-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update

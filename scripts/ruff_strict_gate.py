@@ -6,11 +6,8 @@ gate counts each rule across the whole tree and fails when a rule is both over
 its ceiling and higher than the base it merges into, so a change is blamed for
 the violations it adds, never for drift that already exists in the base.
 
-By default the base is the merge-base of the current branch, which is fast but
-diverges from CI: CI runs against the synthetic merge ref, so its base is the
-*current* tip of the target branch plus whatever drift landed since you forked.
-Pass --ci-parity to reproduce CI exactly by counting against a throwaway merge
-of the base into HEAD.
+The base is the merge-base of the current branch with --base; this matches CI,
+which checks out the PR head sha and runs the gate against the PR's base sha.
 """
 
 import argparse
@@ -140,7 +137,7 @@ def introduced(violations: list, changed: dict) -> list:
     return [v for v in violations if v.line in changed.get(v.file, set())]
 
 
-def gather_fast(base: str) -> GateInputs:
+def gather(base: str) -> GateInputs:
     base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
     diff = _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
     return GateInputs(
@@ -148,33 +145,6 @@ def gather_fast(base: str) -> GateInputs:
         base_counts(base_point),
         parse_changed_lines(diff),
     )
-
-
-def gather_ci_parity(base: str) -> GateInputs:
-    with _temp_worktree("HEAD") as worktree:
-        merge = subprocess.run(
-            ["git", "merge", "--no-commit", "--no-ff", base],
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-        )
-        if merge.returncode != 0:
-            subprocess.run(
-                ["git", "merge", "--abort"],
-                cwd=worktree,
-                capture_output=True,
-                text=True,
-            )
-            raise SystemExit(
-                f"ci-parity: merging {base} into HEAD conflicts; rebase your branch first"
-            )
-        shutil.copy(STRICT_CONFIG, worktree / "ruff-strict.toml")
-        head = collect_violations(worktree, worktree / "ruff-strict.toml")
-        diff = _run(
-            ["git", "diff", base, "--unified=0", "--no-color", "--", TARGET],
-            cwd=worktree,
-        )
-        return GateInputs(head, base_counts(base), parse_changed_lines(diff))
 
 
 def report(breaches: list, new: list, base: str) -> None:
@@ -192,9 +162,9 @@ def report(breaches: list, new: list, base: str) -> None:
     print(f"BREACHED RULES: {summary}")
 
 
-def cmd_check(base: str, ci_parity: bool) -> None:
+def cmd_check(base: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
-    inputs = gather_ci_parity(base) if ci_parity else gather_fast(base)
+    inputs = gather(base)
     breaches = evaluate(count_by_rule(inputs.head), inputs.base, budget)
     if not breaches:
         print(f"OK: every strict rule is within its codebase ceiling (base {base})")
@@ -216,13 +186,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
-    parser.add_argument(
-        "--ci-parity",
-        action="store_true",
-        help="count against a throwaway merge of --base into HEAD, matching CI",
-    )
     args = parser.parse_args()
-    cmd_update() if args.update else cmd_check(args.base, args.ci_parity)
+    cmd_update() if args.update else cmd_check(args.base)
 
 
 if __name__ == "__main__":
