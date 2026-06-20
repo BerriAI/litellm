@@ -423,9 +423,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                # Upstream may emit usage-only / metadata chunks with no choices;
+                # Upstream may emit usage-only / metadata chunks with no
+                # choices. The hold-and-merge path above absorbs them into the
+                # final ``message_delta``; outside of that path they carry no
+                # content for the client and translating them would emit an
+                # empty ``content_block_delta`` SSE event. Skip the chunk.
+                if not chunk.choices and not will_merge_into_held:
+                    continue
                 # only the last chunk with a finish_reason should drive applied_edits.
-                is_final_chunk = bool(chunk.choices) and chunk.choices[0].finish_reason is not None
+                is_final_chunk = (
+                    bool(chunk.choices) and chunk.choices[0].finish_reason is not None
+                )
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
@@ -648,9 +656,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                # Upstream may emit usage-only / metadata chunks with no choices;
+                # Upstream may emit usage-only / metadata chunks with no
+                # choices. The hold-and-merge path above absorbs them into the
+                # final ``message_delta``; outside of that path they carry no
+                # content for the client and translating them would emit an
+                # empty ``content_block_delta`` SSE event. Skip the chunk.
+                if not chunk.choices and not will_merge_into_held:
+                    continue
                 # only the last chunk with a finish_reason should drive applied_edits.
-                is_final_chunk = bool(chunk.choices) and chunk.choices[0].finish_reason is not None
+                is_final_chunk = (
+                    bool(chunk.choices) and chunk.choices[0].finish_reason is not None
+                )
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
