@@ -15,7 +15,7 @@
 #Full details on guardrails here: https://docs.litellm.ai/docs/proxy/guardrails/bedrock
 general_settings:
   store_prompts_in_spend_logs: true
-  master_key: "sk-1234"
+  master_key: os.environ/LITELLM_MASTER_KEY
   proxy_batch_write_at: 60
   database_connection_pool_limit: 10
   # disable_error_logs: True
@@ -33,6 +33,11 @@ general_settings:
 #   LITELLM_LOG: "DEBUG"
 litellm_settings:
   drop_params: True
+  # Spend counters inherit this as their Redis TTL, so an idle counter goes cold and
+  # the next request reseeds it from the DB; kept short to exercise the cross-pod
+  # reseed path in test_spend_counter_reseed_e2e. Response-cache writes pass their own
+  # ttl and are unaffected.
+  default_redis_ttl: 20
   request_timeout: 600
   num_retries: 3
   json_logs: true
@@ -67,6 +72,16 @@ litellm_settings:
   #type: redis-semantic
   #similarity_threshold: 0.8   # similarity threshold for semantic cache
   #redis_semantic_cache_embedding_model: text-embedding-ada-002 # only works with text-embedding-ada-002 for now... https://github.com/BerriAI/litellm/issues/4001
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+  allowed_fails: 5
+  cooldown_time: 30
+  # When gemini deployments are exhausted (provider 429 / auth), cross over to
+  # working models. Exercised by tests/e2e/router/test_rate_limiter.py.
+  fallbacks:
+    - gemini-2.5-flash: ["gpt-5.5", "claude-haiku-4-5"]
 
 #ttl: Optional[float]
 #default_in_memory_ttl: Optional[float]
