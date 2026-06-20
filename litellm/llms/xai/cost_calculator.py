@@ -4,9 +4,9 @@ Helper util for handling XAI-specific cost calculation
 - Handles XAI-specific reasoning token billing (billed as part of completion tokens)
 """
 
-from typing import TYPE_CHECKING, Mapping, Tuple
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple
 
-from litellm.types.utils import Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
 if TYPE_CHECKING:
@@ -14,6 +14,27 @@ if TYPE_CHECKING:
 
 # https://docs.x.ai/developers/pricing#tools-pricing
 _WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
+
+
+def apply_server_side_tool_usage_details_to_usage(
+    usage: Usage, details: Optional[Mapping[str, Any]]
+) -> None:
+    """
+    Attach server_side_tool_usage_details and mirror web_search_calls onto
+    prompt_tokens_details.web_search_requests for built-in tool cost gating.
+    """
+    if details is None:
+        return
+    setattr(usage, "server_side_tool_usage_details", details)
+    try:
+        web_search_calls = int(details.get("web_search_calls") or 0)
+    except (TypeError, ValueError):
+        return
+    if web_search_calls <= 0:
+        return
+    if usage.prompt_tokens_details is None:
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper()
+    usage.prompt_tokens_details.web_search_requests = web_search_calls
 
 
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:

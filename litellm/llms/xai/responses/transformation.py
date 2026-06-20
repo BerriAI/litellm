@@ -8,6 +8,9 @@ from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.cost_calculator import (
+    apply_server_side_tool_usage_details_to_usage,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -106,7 +109,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return
 
         if isinstance(response.usage, Usage):
-            setattr(response.usage, "server_side_tool_usage_details", details)
+            apply_server_side_tool_usage_details_to_usage(response.usage, details)
             return
 
         chat_usage = (
@@ -114,7 +117,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 response.usage
             )
         )
-        setattr(chat_usage, "server_side_tool_usage_details", details)
+        apply_server_side_tool_usage_details_to_usage(chat_usage, details)
         response.usage = chat_usage  # type: ignore[assignment]
 
     def _transform_web_search_tool(
