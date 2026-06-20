@@ -251,9 +251,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         for message in messages:
             if message["role"] == "user":
                 _message_content = message.get("content")
-                if _message_content is not None and isinstance(
-                    _message_content, list
-                ):
+                if _message_content is not None and isinstance(_message_content, list):
                     for content in _message_content:
                         if not isinstance(content, dict):
                             continue
