@@ -14,8 +14,12 @@ from litellm.llms.xai.cost_calculator import (
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
@@ -78,6 +82,31 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         self._attach_server_side_tool_usage_details_to_usage(response)
         return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        """
+        Preserve xAI tool usage on streaming terminal events for cost logging.
+
+        Completed/incomplete/failed events embed a full ResponsesAPIResponse; without
+        attaching server_side_tool_usage_details here, stream=true web_search usage is
+        dropped when usage is normalized for billing.
+        """
+        event = super().transform_streaming_response(
+            model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj
+        )
+        if isinstance(
+            event,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            embedded_response = getattr(event, "response", None)
+            if isinstance(embedded_response, ResponsesAPIResponse):
+                self._attach_server_side_tool_usage_details_to_usage(embedded_response)
+        return event
 
     @staticmethod
     def _server_side_tool_usage_details_from_usage(usage: Any) -> Any:
