@@ -54,7 +54,9 @@ export default function PluginSettings() {
 
   const openEdit = (idx: number) => {
     setEditingIndex(idx);
-    form.setFieldsValue(plugins[idx]);
+    // plugin_key arrives redacted ("***"); start it blank so an untouched save
+    // keeps the stored credential instead of overwriting it with the placeholder.
+    form.setFieldsValue({ ...plugins[idx], plugin_key: "" });
     setModalOpen(true);
   };
 
@@ -160,7 +162,9 @@ export default function PluginSettings() {
             label="Plugin Key"
             extra="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
           >
-            <Input.Password placeholder="sk-... (optional)" />
+            <Input.Password
+              placeholder={editingIndex !== null ? "Leave blank to keep current key" : "sk-... (optional)"}
+            />
           </Form.Item>
         </Form>
       </Modal>

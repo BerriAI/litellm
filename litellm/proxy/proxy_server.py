@@ -14941,6 +14941,41 @@ async def update_config(
 Keep it more precise, to prevent overwrite other values unintentially
 """
 
+_PLUGIN_KEY_REDACTED = "***"
+
+
+def _preserve_redacted_plugin_keys(incoming: object, existing: object) -> object:
+    """Restore real plugin_key values the client never sees.
+
+    /config/field/info redacts every plugin_key to ``"***"``, so an admin
+    editing a plugin posts that placeholder (or a blank, when the UI clears the
+    field) straight back. Treat a blank or redacted plugin_key as "keep the
+    stored credential" by sourcing it from the existing config; only a real,
+    non-redacted value replaces it, and a blank with no stored key drops the
+    field entirely instead of persisting the placeholder.
+    """
+    if not isinstance(incoming, list):
+        return incoming
+
+    stored_keys = {
+        p["name"]: p["plugin_key"]
+        for p in (existing if isinstance(existing, list) else [])
+        if isinstance(p, dict) and p.get("name") and p.get("plugin_key")
+    }
+
+    def resolve(plugin: object) -> object:
+        if not isinstance(plugin, dict):
+            return plugin
+        key = plugin.get("plugin_key")
+        if key not in (None, "", _PLUGIN_KEY_REDACTED):
+            return plugin
+        name = plugin.get("name")
+        if name in stored_keys:
+            return {**plugin, "plugin_key": stored_keys[name]}
+        return {k: v for k, v in plugin.items() if k != "plugin_key"}
+
+    return [resolve(p) for p in incoming]
+
 
 @router.post(
     "/config/field/update",
@@ -15007,7 +15042,13 @@ async def update_config_general_settings(
 
     ## update db
 
-    general_settings[data.field_name] = data.field_value
+    field_value = data.field_value
+    if data.field_name == "plugins":
+        field_value = _preserve_redacted_plugin_keys(
+            field_value, general_settings.get("plugins")
+        )
+
+    general_settings[data.field_name] = field_value
 
     response = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
