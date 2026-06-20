@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import List, Optional, cast
+from typing import Optional
 
 import httpx
 
@@ -43,14 +43,16 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
             api_params=watsonx_api_params,
         )
 
-        if isinstance(input, list) and (
-            len(input) > 0 and (isinstance(input[0], list) or isinstance(input[0], int))
-        ):
-            raise ValueError("WatsonX embeddings require a string or list of strings")
-
-        inputs: List[str] = (
-            cast(List[str], input) if isinstance(input, list) else [input]
-        )
+        if isinstance(input, str):
+            inputs: list[str] = [input]
+        elif isinstance(input, list):
+            if len(input) > 0 and isinstance(input[0], (list, int)):
+                raise ValueError(
+                    "WatsonX embeddings require a string or list of strings"
+                )
+            inputs = input
+        else:
+            inputs = [input]
 
         return {
             "inputs": inputs,
