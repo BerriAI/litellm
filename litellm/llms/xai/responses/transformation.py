@@ -77,15 +77,31 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return response
 
     @staticmethod
+    def _server_side_tool_usage_details_from_usage(usage: Any) -> Any:
+        if usage is None:
+            return None
+        if isinstance(usage, dict):
+            return usage.get("server_side_tool_usage_details")
+        details = getattr(usage, "server_side_tool_usage_details", None)
+        if details is not None:
+            return details
+        model_extra = getattr(usage, "model_extra", None) or getattr(
+            usage, "__pydantic_extra__", None
+        )
+        if isinstance(model_extra, dict):
+            return model_extra.get("server_side_tool_usage_details")
+        return None
+
+    @staticmethod
     def _attach_server_side_tool_usage_details_to_usage(
         response: ResponsesAPIResponse,
     ) -> None:
         if response.usage is None:
             return
 
-        details = getattr(response.usage, "server_side_tool_usage_details", None)
-        if details is None and isinstance(response.usage, dict):
-            details = response.usage.get("server_side_tool_usage_details")
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
+            response.usage
+        )
         if details is None:
             return
 
