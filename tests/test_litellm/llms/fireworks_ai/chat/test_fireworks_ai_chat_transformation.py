@@ -635,6 +635,35 @@ def test_get_supported_openai_params_includes_all_fireworks_params():
     assert missing == [], f"Missing params: {missing}"
 
 
+def test_native_openai_params_flow_end_to_end_with_drop_params_false():
+    """
+    The OpenAI-native params Fireworks supports (seed, top_logprobs, logit_bias,
+    prompt_cache_key, service_tier, prediction) previously hit
+    ``UnsupportedParamsError`` with ``drop_params=False`` because they were absent
+    from ``get_supported_openai_params``. Listing them must let them survive the
+    ``get_optional_params`` gate and reach the request, not just appear in the
+    supported list. Asserting via ``get_optional_params`` (the real gate) rather
+    than ``map_openai_params`` catches a revert of the supported-params additions,
+    which a list-membership check would not.
+    """
+    native = {
+        "seed": 42,
+        "top_logprobs": 3,
+        "logit_bias": {"1": 1},
+        "prompt_cache_key": "cache-key",
+        "service_tier": "auto",
+        "prediction": {"type": "content", "content": "x"},
+    }
+    optional_params = litellm.get_optional_params(
+        model="accounts/fireworks/models/llama-v3-70b-instruct",
+        custom_llm_provider="fireworks_ai",
+        drop_params=False,
+        **native,
+    )
+    for key, value in native.items():
+        assert optional_params.get(key) == value
+
+
 def test_prompt_truncate_len_correct_name():
     config = FireworksAIConfig()
     params = config.get_supported_openai_params(_REASONING_MODEL)
