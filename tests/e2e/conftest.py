@@ -63,7 +63,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _require_live_proxy() -> None:
+def require_live_proxy() -> None:
     """Skip the entire session unless a proxy answers its liveness probe."""
     try:
         resp = requests.get(f"{PROXY_BASE_URL}/health/liveliness", timeout=5)
