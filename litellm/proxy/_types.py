@@ -2146,11 +2146,11 @@ class PluginConfig(LiteLLMPydanticObjectBase):
     """A single external service registered as an embeddable UI plugin."""
 
     name: str = Field(description="unique plugin identifier (kebab-case)")
-    display_name: Optional[str] = Field(
+    display_name: str | None = Field(
         None, description="human-readable label shown in the UI view switcher"
     )
     url: str = Field(description="base URL of the plugin service")
-    plugin_key: Optional[str] = Field(
+    plugin_key: str | None = Field(
         None,
         description="plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls",
     )
@@ -2164,7 +2164,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     completion_model: Optional[str] = Field(
         None, description="proxy level default model for all chat completion calls"
     )
-    plugins: Optional[List[PluginConfig]] = Field(
+    plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
     )
     key_management_system: Optional[KeyManagementSystem] = Field(
