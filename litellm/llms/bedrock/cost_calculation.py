@@ -10,29 +10,24 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
 
-# AWS charges a ~10% surcharge for cross-region inference profiles (us./eu./ap. prefixes)
-_CROSS_REGION_INFERENCE_SURCHARGE = 1.1
+# Routing prefixes stripped before model-info lookup, ordered longest-first so
+# that "bedrock/converse/" is matched before the shorter "bedrock/" prefix.
+_BEDROCK_ROUTING_PREFIXES = ("bedrock/converse/", "bedrock/", "converse/")
 
 
-def _is_cross_region_inference_model(model: str) -> bool:
-    """Return True if *model* uses a Bedrock cross-region inference prefix.
+def _strip_bedrock_routing_prefix(model: str) -> str:
+    """Return *model* with any leading Bedrock routing prefix removed.
 
-    Cross-region inference profile IDs begin with a geographic abbreviation
-    followed by a dot, e.g. ``us.anthropic.claude-sonnet-4-6``.  AWS bills
-    these at a ~10% premium over the equivalent base-model price.
+    litellm may pass model strings that still carry provider or converse routing
+    prefixes (e.g. ``bedrock/converse/us.anthropic.claude-sonnet-4-6``).
+    ``get_model_info`` looks up the canonical key without these prefixes, so
+    stripping them first ensures the correct price entry — including cross-region
+    keys such as ``us.*`` — is found and used.
     """
-    from litellm.llms.bedrock.common_utils import (
-        get_bedrock_cross_region_inference_regions,
-    )
-
-    stripped = model
-    for prefix in ("bedrock/", "converse/"):
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix) :]
-            break
-
-    potential_region = stripped.split(".", 1)[0]
-    return potential_region in get_bedrock_cross_region_inference_regions()
+    for prefix in _BEDROCK_ROUTING_PREFIXES:
+        if model.startswith(prefix):
+            return model[len(prefix):]
+    return model
 
 
 def cost_per_token(
@@ -43,18 +38,15 @@ def cost_per_token(
 
     Follows the same logic as Anthropic's cost per token calculation.
 
-    For cross-region inference profiles (us./eu./ap. prefixes), applies the AWS
-    10% surcharge on top of the base-model token prices.
+    Cross-region inference model prices (``us.*``, ``eu.*``, ``ap.*``) are
+    already encoded in ``model_prices_and_context_window.json`` with the correct
+    surcharge applied — no additional multiplier is needed here.  The prefix
+    stripping ensures that callers using ``bedrock/converse/us.*`` style strings
+    still resolve to the correct cross-region price entry.
     """
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
+    return generic_cost_per_token(
+        model=_strip_bedrock_routing_prefix(model),
         usage=usage,
         custom_llm_provider="bedrock",
         service_tier=service_tier,
     )
-
-    if _is_cross_region_inference_model(model):
-        prompt_cost *= _CROSS_REGION_INFERENCE_SURCHARGE
-        completion_cost *= _CROSS_REGION_INFERENCE_SURCHARGE
-
-    return prompt_cost, completion_cost
