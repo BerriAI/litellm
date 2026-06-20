@@ -146,6 +146,15 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 key_source=SharedKey(value=SecretStr(token)),
             ),
         )
+    if server.auth_type == MCPAuth.aws_sigv4:
+        # Reuse the SigV4 config builder; the resolver's aws_sigv4 arm turns it into the botocore
+        # signer (an httpx.Auth) that signs each upstream request.
+        aws_config = _to_aws_sigv4_config(server)
+        if aws_config is None:
+            return None  # AssumeRole with explicit base keys: not representable yet, defer to v1
+        return ServerSpec(
+            server_id=server.server_id, resource=resource, config=aws_config
+        )
     if server.has_token_exchange_config:
         # token_exchange takes precedence over client_credentials (matches v1's cascade); the arm
         # binds the exchanged token to this resource (audience, RFC 8707).

@@ -413,3 +413,28 @@ async def test_none_without_passthrough_maps_to_none():
     spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, NoneConfig)
+
+
+async def test_aws_sigv4_server_maps_to_config():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import to_server_spec
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+        AwsSigV4Config,
+        StaticKeys,
+    )
+
+    server = MCPServer(
+        server_id="sig1",
+        name="sig1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.aws_sigv4,
+        aws_access_key_id="AKIA",
+        aws_secret_access_key="secret",
+        aws_region_name="us-west-2",
+        aws_service_name="bedrock-agentcore",
+    )
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, AwsSigV4Config)
+    assert isinstance(spec.config.credentials, StaticKeys)
+    assert spec.config.region == "us-west-2"
