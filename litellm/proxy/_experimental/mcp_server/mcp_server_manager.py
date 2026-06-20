@@ -13,7 +13,19 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 
 import anyio
@@ -4523,4 +4535,20 @@ def _make_global_mcp_server_manager() -> MCPServerManager:
     return MCPServerManagerV2()
 
 
-global_mcp_server_manager: MCPServerManager = _make_global_mcp_server_manager()
+_global_mcp_server_manager: Optional[MCPServerManager] = None
+
+if TYPE_CHECKING:
+    global_mcp_server_manager: MCPServerManager
+
+
+def __getattr__(name: str) -> MCPServerManager:
+    # PEP 562 lazy singleton: instantiating at import time would import the v2 subclass while this
+    # module is still loading (a v1<->v2 cycle, import-order dependent), so the manager is built on
+    # first access instead. Tests that reassign global_mcp_server_manager set a real attribute that
+    # shadows this.
+    if name == "global_mcp_server_manager":
+        global _global_mcp_server_manager
+        if _global_mcp_server_manager is None:
+            _global_mcp_server_manager = _make_global_mcp_server_manager()
+        return _global_mcp_server_manager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

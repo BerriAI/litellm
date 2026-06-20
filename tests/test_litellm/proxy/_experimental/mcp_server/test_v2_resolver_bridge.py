@@ -11,7 +11,7 @@ import pytest
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-    _to_subject,
+    to_subject,
     resolve_v2_auth_value,
     resolve_v2_aws_auth,
 )
@@ -108,13 +108,13 @@ def _m2m_server():
 
 async def test_client_credentials_maps_to_config():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import (
         ClientCredentialsConfig,
     )
 
-    spec = _to_server_spec(_m2m_server())
+    spec = to_server_spec(_m2m_server())
     assert spec is not None
     assert isinstance(spec.config, ClientCredentialsConfig)
     assert spec.config.client_id == "cid"
@@ -244,7 +244,7 @@ async def test_aws_sigv4_config_defaults_to_ambient(v2_on):
 
 async def test_to_subject_maps_v1_identity():
     auth = UserAPIKeyAuth(token="sk-test", user_id="u1", org_id="org1", team_id="t1")
-    subj = _to_subject(auth, "inbound-jwt")
+    subj = to_subject(auth, "inbound-jwt")
     assert subj.subject_id == "u1"
     assert subj.tenant_id == "org1"  # org preferred over team
     assert subj.inbound_token is not None
@@ -252,7 +252,7 @@ async def test_to_subject_maps_v1_identity():
 
 
 async def test_to_subject_anonymous_when_no_auth():
-    subj = _to_subject(None, None)
+    subj = to_subject(None, None)
     assert subj.subject_id == ""
     assert subj.tenant_id == ""
     assert subj.inbound_token is None
@@ -260,7 +260,7 @@ async def test_to_subject_anonymous_when_no_auth():
 
 async def test_to_subject_falls_back_to_team_and_blanks_missing_user():
     auth = UserAPIKeyAuth(token="sk-test", team_id="team-x")
-    subj = _to_subject(auth, None)
+    subj = to_subject(auth, None)
     assert subj.tenant_id == "team-x"  # no org -> team
     assert (
         subj.subject_id == ""
@@ -278,7 +278,7 @@ async def test_resolve_v2_auth_value_threads_identity_without_breaking_static(v2
 
 async def test_byok_server_maps_to_byok_key_source():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import ApiKeyConfig, Byok
 
@@ -290,7 +290,7 @@ async def test_byok_server_maps_to_byok_key_source():
         auth_type=MCPAuth.api_key,
         is_byok=True,
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, ApiKeyConfig)
     assert isinstance(spec.config.key_source, Byok)
@@ -299,7 +299,7 @@ async def test_byok_server_maps_to_byok_key_source():
 
 async def test_token_exchange_server_maps_to_config():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import TokenExchangeConfig
 
@@ -315,7 +315,7 @@ async def test_token_exchange_server_maps_to_config():
         audience="https://aud.example",
         scopes=["a", "b"],
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.token_exchange_endpoint == "https://idp/exchange"
@@ -330,7 +330,7 @@ async def test_interactive_oauth2_no_delegate_maps_to_authorization_code():
     # LIT-3795: a non-delegated interactive oauth2 server resolves to authorization_code
     # (gateway-stored per-user token), so the caller JWT is never forwarded upstream.
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import (
         AuthorizationCodeConfig,
@@ -350,7 +350,7 @@ async def test_interactive_oauth2_no_delegate_maps_to_authorization_code():
         token_url="https://idp/token",
         scopes=["openid"],
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, AuthorizationCodeConfig)
     assert spec.config.token_url == "https://idp/token"
@@ -359,7 +359,7 @@ async def test_interactive_oauth2_no_delegate_maps_to_authorization_code():
 
 async def test_interactive_oauth2_delegate_maps_to_passthrough():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import PassthroughConfig
 
@@ -372,14 +372,14 @@ async def test_interactive_oauth2_delegate_maps_to_passthrough():
         oauth2_flow="authorization_code",
         delegate_auth_to_upstream=True,
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, PassthroughConfig)
 
 
 async def test_none_oauth_passthrough_maps_to_passthrough():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import PassthroughConfig
 
@@ -392,14 +392,14 @@ async def test_none_oauth_passthrough_maps_to_passthrough():
         oauth_passthrough=True,
         extra_headers=["Authorization"],
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, PassthroughConfig)
 
 
 async def test_none_without_passthrough_maps_to_none():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import NoneConfig
 
@@ -410,6 +410,6 @@ async def test_none_without_passthrough_maps_to_none():
         url="https://up.example/mcp",
         auth_type=MCPAuth.none,
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, NoneConfig)

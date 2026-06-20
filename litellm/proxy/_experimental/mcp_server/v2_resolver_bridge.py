@@ -91,7 +91,7 @@ class _Unwired:
 
 
 @functools.lru_cache(maxsize=1)
-def _provider() -> UpstreamCredentialProvider:
+def provider() -> UpstreamCredentialProvider:
     # Real bodies are wired as their modes are grafted. token_refresher stays unwired: the bridge's
     # V1OAuthTokenStore returns currently-valid tokens (v1 refreshes on read), so the resolver's
     # proactive-refresh path is inert until v1 retires.
@@ -108,7 +108,7 @@ def _provider() -> UpstreamCredentialProvider:
     )
 
 
-def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
+def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     resource = server.url or server.server_id
     if server.auth_type in (None, MCPAuth.none):
         # A none server opted into upstream OAuth passthrough forwards the caller's bearer; the
@@ -219,7 +219,7 @@ def _added_headers(auth: httpx.Auth) -> Dict[str, str]:
     }
 
 
-def _to_subject(
+def to_subject(
     user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]
 ) -> Subject:
     """Map v1's authenticated principal onto the v2 Subject.
@@ -246,11 +246,11 @@ async def resolve_v2_auth_value(
     """Resolve `none`/`api_key` via the v2 resolver, or return None to defer to v1."""
     if not v2_resolver_enabled():
         return None
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     if spec is None:
         return None
-    result = await _provider().resolve(
-        _to_subject(user_api_key_auth, subject_token), spec
+    result = await provider().resolve(
+        to_subject(user_api_key_auth, subject_token), spec
     )
     if isinstance(result, Error):
         verbose_logger.warning(
@@ -315,7 +315,7 @@ async def resolve_v2_aws_auth(server: MCPServer) -> Optional[httpx.Auth]:
     config = _to_aws_sigv4_config(server)
     if config is None:
         return None
-    result = await _provider().resolve(
+    result = await provider().resolve(
         Subject(tenant_id="", subject_id="", inbound_token=None),
         ServerSpec(
             server_id=server.server_id,
