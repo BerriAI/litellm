@@ -220,23 +220,6 @@ class TestResponseAPILoggingUtils:
             and result.prompt_tokens_details.cached_tokens == 2
         )
 
-    def test_transform_response_api_usage_preserves_extra_usage_fields(self):
-        """Non-standard usage keys pass through for provider cost tracking."""
-        usage = {
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "total_tokens": 15,
-            "server_side_tool_usage_details": {"web_search_calls": 2},
-            "num_server_side_tools_used": 2,
-        }
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-            usage
-        )
-        assert getattr(result, "server_side_tool_usage_details", None) == {
-            "web_search_calls": 2
-        }
-        assert getattr(result, "num_server_side_tools_used", None) == 2
-
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""
         # Setup

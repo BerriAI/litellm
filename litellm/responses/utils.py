@@ -979,20 +979,6 @@ class ResponsesAPIRequestUtils:
 
 
 class ResponseAPILoggingUtils:
-    # Standard Responses usage keys mapped explicitly below; extras pass through to Usage.
-    _RESPONSE_API_USAGE_MAPPED_KEYS = frozenset(
-        {
-            "input_tokens",
-            "output_tokens",
-            "total_tokens",
-            "input_tokens_details",
-            "output_tokens_details",
-            "input_token_details",
-            "output_token_details",
-            "cost",  # handled separately after Usage construction
-        }
-    )
-
     @staticmethod
     def _is_response_api_usage(usage: Union[dict, ResponseAPIUsage]) -> bool:
         """returns True if usage is from OpenAI Response API"""
@@ -1001,39 +987,6 @@ class ResponseAPILoggingUtils:
         if "input_tokens" in usage and "output_tokens" in usage:
             return True
         return False
-
-    @staticmethod
-    def _extra_fields_from_response_api_usage(
-        usage_input: Union[dict, ResponseAPIUsage],
-        response_api_usage: ResponseAPIUsage,
-    ) -> Dict[str, Any]:
-        """
-        Preserve provider/extension usage fields not part of the standard token mapping.
-
-        ResponseAPIUsage allows extra attributes; without forwarding them, the rebuilt
-        chat Usage would drop fields needed for provider-specific cost tracking.
-        """
-        extras: Dict[str, Any] = {}
-        if isinstance(usage_input, dict):
-            for key, value in usage_input.items():
-                if (
-                    key not in ResponseAPILoggingUtils._RESPONSE_API_USAGE_MAPPED_KEYS
-                    and value is not None
-                ):
-                    extras[key] = value
-            return extras
-
-        model_extra = getattr(response_api_usage, "model_extra", None) or getattr(
-            response_api_usage, "__pydantic_extra__", None
-        )
-        if isinstance(model_extra, dict):
-            for key, value in model_extra.items():
-                if (
-                    key not in ResponseAPILoggingUtils._RESPONSE_API_USAGE_MAPPED_KEYS
-                    and value is not None
-                ):
-                    extras[key] = value
-        return extras
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
@@ -1114,18 +1067,12 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
-        usage_kwargs = ResponseAPILoggingUtils._extra_fields_from_response_api_usage(
-            usage_input=usage_input,
-            response_api_usage=response_api_usage,
-        )
-
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
-            **usage_kwargs,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage
