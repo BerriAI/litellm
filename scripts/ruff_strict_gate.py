@@ -14,6 +14,7 @@ of the base into HEAD.
 """
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -47,9 +49,9 @@ class Breach(NamedTuple):
 
 
 class GateInputs(NamedTuple):
-    head: list
-    base: dict
-    changed: dict
+    head: list[Violation]
+    base: dict[str, int]
+    changed: dict[str, set[int]]
 
 
 def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
@@ -86,18 +88,29 @@ def count_by_rule(violations: list) -> dict:
     return dict(Counter(v.code for v in violations))
 
 
-def base_counts(ref: str) -> dict:
-    parent = Path(tempfile.mkdtemp(prefix="ruff_base_"))
+@contextlib.contextmanager
+def _temp_worktree(ref: str) -> Iterator[Path]:
+    parent = Path(tempfile.mkdtemp(prefix="ruff_wt_"))
     worktree = parent / "wt"
+    _run(["git", "worktree", "add", "--detach", str(worktree), ref])
     try:
-        _run(["git", "worktree", "add", "--detach", str(worktree), ref])
+        yield worktree
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def base_counts(ref: str) -> dict:
+    with _temp_worktree(ref) as worktree:
         shutil.copy(STRICT_CONFIG, worktree / "ruff-strict.toml")
         return count_by_rule(
             collect_violations(worktree, worktree / "ruff-strict.toml")
         )
-    finally:
-        _run(["git", "worktree", "remove", "--force", str(worktree)])
-        shutil.rmtree(parent, ignore_errors=True)
 
 
 def parse_changed_lines(diff_text: str) -> dict:
@@ -138,10 +151,7 @@ def gather_fast(base: str) -> GateInputs:
 
 
 def gather_ci_parity(base: str) -> GateInputs:
-    parent = Path(tempfile.mkdtemp(prefix="ruff_merge_"))
-    worktree = parent / "wt"
-    try:
-        _run(["git", "worktree", "add", "--detach", str(worktree), "HEAD"])
+    with _temp_worktree("HEAD") as worktree:
         merge = subprocess.run(
             ["git", "merge", "--no-commit", "--no-ff", base],
             cwd=worktree,
@@ -149,7 +159,12 @@ def gather_ci_parity(base: str) -> GateInputs:
             text=True,
         )
         if merge.returncode != 0:
-            _run(["git", "merge", "--abort"], cwd=worktree)
+            subprocess.run(
+                ["git", "merge", "--abort"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
             raise SystemExit(
                 f"ci-parity: merging {base} into HEAD conflicts; rebase your branch first"
             )
@@ -160,9 +175,6 @@ def gather_ci_parity(base: str) -> GateInputs:
             cwd=worktree,
         )
         return GateInputs(head, base_counts(base), parse_changed_lines(diff))
-    finally:
-        _run(["git", "worktree", "remove", "--force", str(worktree)])
-        shutil.rmtree(parent, ignore_errors=True)
 
 
 def report(breaches: list, new: list, base: str) -> None:
