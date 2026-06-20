@@ -44,6 +44,9 @@ export function buildOnboardingUrl({
   if (hasUserSetupSso) {
     return new URL(uiPath, baseUrl).toString();
   }
+  if (!invitationId) {
+    return "";
+  }
   const action = resetPassword ? "&action=reset_password" : "";
   return new URL(`${uiPath}/onboarding?invitation_id=${invitationId}${action}`, baseUrl).toString();
 }

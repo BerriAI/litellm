@@ -56,4 +56,15 @@ describe("buildOnboardingUrl", () => {
       }),
     ).toBe("");
   });
+
+  it("returns an empty string rather than an invitation_id=undefined link when the id is not ready", () => {
+    expect(
+      buildOnboardingUrl({
+        baseUrl: "http://localhost:4000/",
+        invitationId: undefined,
+        hasUserSetupSso: false,
+        resetPassword: false,
+      }),
+    ).toBe("");
+  });
 });
