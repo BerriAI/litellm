@@ -1,12 +1,9 @@
-import json
 import os
 import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -25,12 +22,15 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
         (AmazonAnthropicClaudeConfig, "anthropic.claude-sonnet-4-6"),
     ],
 )
-def test_transform_request_drops_stream_chunk_size(config, model):
+def test_signed_invoke_body_drops_stream_chunk_size(config, model):
     """stream_chunk_size is a LiteLLM-internal knob for re-chunking the HTTP
     response stream. Leaking it into the provider request body makes Bedrock
     reject the whole request: ValidationException 'stream_chunk_size: Extra
-    inputs are not permitted'."""
-    request_body = config().transform_request(
+    inputs are not permitted'. The two invoke transform entry points build the
+    body differently, so this asserts on the actual signed wire bytes that both
+    funnel through, regardless of which transform produced them."""
+    cfg = config()
+    request_body = cfg.transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params={"stream": True, "stream_chunk_size": 2048, "max_tokens": 10},
@@ -38,4 +38,16 @@ def test_transform_request_drops_stream_chunk_size(config, model):
         headers={},
     )
 
-    assert "stream_chunk_size" not in json.dumps(request_body)
+    _, signed_body = cfg.sign_request(
+        headers={},
+        optional_params={},
+        request_data=request_body,
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/{}/invoke".format(model),
+        api_key="test-bearer-token",
+        model=model,
+        stream=True,
+    )
+
+    assert signed_body is not None
+    assert "stream_chunk_size" not in signed_body.decode()
+    assert "max_tokens" in signed_body.decode()

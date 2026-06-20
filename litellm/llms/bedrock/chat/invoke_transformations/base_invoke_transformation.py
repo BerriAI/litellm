@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
 )
+from litellm.types.llms.bedrock import LITELLM_CONTROL_PARAM_KEYS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
@@ -150,7 +151,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        optional_params.pop("stream_chunk_size", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name = litellm_params.get("hf_model_name", None)
 
@@ -167,6 +167,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             k: v
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
+            and k not in LITELLM_CONTROL_PARAM_KEYS
         }
         request_data: dict = {}
         if provider == "cohere":
