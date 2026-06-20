@@ -435,6 +435,14 @@ class CallTypes(str, Enum):
     alist_container_files = "alist_container_files"
     upload_container_file = "upload_container_file"
     aupload_container_file = "aupload_container_file"
+    create_sandbox = "create_sandbox"
+    acreate_sandbox = "acreate_sandbox"
+    delete_sandbox = "delete_sandbox"
+    adelete_sandbox = "adelete_sandbox"
+    run_code = "run_code"
+    arun_code = "arun_code"
+    code_interpreter_tool = "code_interpreter_tool"
+    acode_interpreter_tool = "acode_interpreter_tool"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -3488,6 +3496,15 @@ class SearchProviders(str, Enum):
 
 # Create a set of all search provider values for quick lookup
 SearchProvidersSet = {provider.value for provider in SearchProviders}
+
+
+class SandboxProviders(str, Enum):
+    """
+    Enum for code execution sandbox provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+
+    E2B = "e2b"
 
 
 class LiteLLMLoggingBaseClass:
