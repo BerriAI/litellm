@@ -92,8 +92,8 @@ def count_by_rule(violations: list) -> dict:
 def _temp_worktree(ref: str) -> Iterator[Path]:
     parent = Path(tempfile.mkdtemp(prefix="ruff_wt_"))
     worktree = parent / "wt"
-    _run(["git", "worktree", "add", "--detach", str(worktree), ref])
     try:
+        _run(["git", "worktree", "add", "--detach", str(worktree), ref])
         yield worktree
     finally:
         subprocess.run(
