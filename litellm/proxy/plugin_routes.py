@@ -174,20 +174,16 @@ async def list_plugins(
 ) -> list[dict[str, str]]:
     """Return registered plugins for authenticated UI callers.
 
-    plugin_key is only returned to proxy admins — not to regular users —
-    so plugin credentials cannot be extracted by non-admin callers.
+    plugin_key is never returned — the browser never needs it (the proxy injects
+    it server-side from the registry), and exposing it here would leak the
+    credential into React state and DevTools.  Admin key management goes through
+    the redacted /config/field/info path instead.
     """
-    is_admin = getattr(user_api_key_dict, "user_role", None) == "proxy_admin"
     return [
         {
             "name": plugin.name,
             "display_name": plugin.display_name or plugin.name,
             "url": plugin.url,
-            **(
-                {"plugin_key": plugin.plugin_key}
-                if is_admin and plugin.plugin_key
-                else {}
-            ),
         }
         for plugin in _plugin_registry.values()
     ]

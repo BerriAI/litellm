@@ -105,8 +105,9 @@ def test_registered_plugins_appear_in_list_without_restart() -> None:
     assert asyncio.run(list_plugins(user_api_key_dict=_admin())) == []
 
 
-def test_plugin_key_is_exposed_only_to_admins() -> None:
-    """plugin_key is a credential; non-admin callers must never receive it."""
+def test_plugin_key_is_never_returned_to_the_browser() -> None:
+    """plugin_key is a credential the UI never needs; /api/plugins must omit it
+    for every caller, admin included, so it never lands in browser state."""
     register_plugins_from_config(
         {
             "plugins": [
@@ -123,8 +124,9 @@ def test_plugin_key_is_exposed_only_to_admins() -> None:
     admin_entry = asyncio.run(list_plugins(user_api_key_dict=_admin()))[0]
     user_entry = asyncio.run(list_plugins(user_api_key_dict=_non_admin()))[0]
 
-    assert admin_entry.get("plugin_key") == "sk-secret"
+    assert "plugin_key" not in admin_entry
     assert "plugin_key" not in user_entry
+    assert admin_entry["url"] == "http://localhost:9"
 
     register_plugins_from_config({})
 
