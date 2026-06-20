@@ -388,6 +388,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif endpoint == "https://pinstripes.io/v1":
+                        custom_llm_provider = "pinstripes"
+                        dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")
                     elif endpoint == "https://gigachat.devices.sberbank.ru/api/v1":
                         custom_llm_provider = "gigachat"
                         dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
@@ -646,7 +649,7 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key, litellm_params=litellm_params
+            api_base, api_key, litellm_params=litellm_params, model=model
         )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
