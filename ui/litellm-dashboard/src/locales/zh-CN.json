@@ -631,8 +631,8 @@
     },
     "deleteModal": {
       "title": "删除团队？",
-      "alertMessage": "警告：此团队有 {{count}} 个关联密钥。删除团队将同时删除所有关联密钥，此操作不可逆。",
-      "message": "确定要删除此团队及其所有密钥吗？此操作无法撤销。",
+      "alertMessage": "警告：此团队有 {{count}} 个关联密钥。删除团队将同时删除所有关联密钥，以及为此团队创建的全部模型，此操作不可逆。",
+      "message": "确定要删除此团队、其所有密钥以及为它创建的全部模型吗？此操作无法撤销。",
       "resourceInformationTitle": "团队信息",
       "labelTeamId": "团队 ID",
       "labelTeamName": "团队名称",

@@ -631,8 +631,8 @@
     },
     "deleteModal": {
       "title": "Delete Team?",
-      "alertMessage": "Warning: This team has {{count}} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.",
-      "message": "Are you sure you want to delete this team and all its keys? This action cannot be undone.",
+      "alertMessage": "Warning: This team has {{count}} keys associated with it. Deleting the team will also delete all associated keys, along with any models created for this team. This action is irreversible.",
+      "message": "Are you sure you want to delete this team, all its keys, and any models created for it? This action cannot be undone.",
       "resourceInformationTitle": "Team Information",
       "labelTeamId": "Team ID",
       "labelTeamName": "Team Name",

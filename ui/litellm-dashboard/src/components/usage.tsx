@@ -549,7 +549,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
             {t("usage.dbLimitGuide")}
           </Text>
           <Button className="mt-4">
-            <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
+            <a href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">
               {t("usage.viewUsageGuide")}
             </a>
           </Button>
