@@ -19903,6 +19903,7 @@
         "mode": "chat",
         "output_cost_per_token": 0.00000005,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -19927,6 +19928,7 @@
         "mode": "chat",
         "output_cost_per_token": 0.00000005,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
