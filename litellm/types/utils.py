@@ -3171,6 +3171,7 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
