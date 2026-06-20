@@ -86,7 +86,7 @@ def test_remote_env_base_resolves_to_local(monkeypatch):
     assert _resolve_base() == _LOCAL_DEFAULT
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "0.0.0.0"])
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
 def test_loopback_env_base_is_honored(monkeypatch, host):
     base = f"http://{host}:9191"
     monkeypatch.setenv("FAKE_OPENAI_API_BASE", base)

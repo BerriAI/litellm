@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 _LOCAL_DEFAULT: Final = "http://127.0.0.1:8190"
-_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "0.0.0.0", "::1"})
+_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def _resolve_base() -> str:
