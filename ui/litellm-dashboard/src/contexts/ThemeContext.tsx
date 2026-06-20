@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useDarkMode } from "@/hooks/useDarkMode";
 
 interface ThemeContextType {
   logoUrl: string | null;
   setLogoUrl: (url: string | null) => void;
   faviconUrl: string | null;
   setFaviconUrl: (url: string | null) => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -26,6 +29,7 @@ interface ThemeProviderProps {
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessToken }) => {
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
+  const { isDarkMode, toggleDarkMode } = useDarkMode();
 
   useEffect(() => {
     const loadThemeSettings = async () => {
@@ -71,7 +75,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
   }, [faviconUrl]);
 
   return (
-    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl }}>
+    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl, isDarkMode, toggleDarkMode }}>
       {children}
     </ThemeContext.Provider>
   );

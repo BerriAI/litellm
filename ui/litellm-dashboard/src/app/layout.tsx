@@ -13,13 +13,33 @@ export const metadata: Metadata = {
   icons: { icon: "./favicon.ico" },
 };
 
+// Runs before hydration to set the dark class from the stored preference, avoiding a flash of light mode
+const themeScript = `
+  (function() {
+    try {
+      var stored = localStorage.getItem('litellm-dark-mode');
+      var isDark = stored === null
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        : stored === 'true';
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      }
+    } catch (e) {}
+  })();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Static, developer-controlled theme bootstrap; must run before paint to prevent a flash of light mode */}
+        {/* eslint-disable-next-line react/no-danger */}
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className={inter.className}>
         <ReactQueryProvider>
           <AntdGlobalProvider>{children}</AntdGlobalProvider>

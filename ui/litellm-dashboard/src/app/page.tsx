@@ -43,16 +43,16 @@ import { MemoryView } from "@/components/MemoryView";
 import WorkflowRuns from "@/components/workflow_runs";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
-import { ThemeProvider } from "@/contexts/ThemeContext";
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, consumeReturnUrl, isValidReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { formatUserRole, isAdminRole } from "@/utils/roles";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ConfigProvider, theme } from "antd";
+import { ConfigProvider } from "antd";
+import { getAntdTheme } from "@/config/antdTheme";
 
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
@@ -110,11 +110,7 @@ function CreateKeyPageContent() {
   const [showClaudeCodePrompt, setShowClaudeCodePrompt] = useState(false);
   const [showClaudeCodeModal, setShowClaudeCodeModal] = useState(false);
 
-  // Dark mode state
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode);
-  };
+  const { isDarkMode, toggleDarkMode } = useTheme();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -450,10 +446,7 @@ function CreateKeyPageContent() {
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <ConfigProvider theme={{
-          algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        }}>
-          <ThemeProvider accessToken={accessToken}>
+      <ConfigProvider theme={getAntdTheme(isDarkMode)}>
             {invitation_id ? (
               <UserDashboard
                 userID={userID}
@@ -681,7 +674,6 @@ function CreateKeyPageContent() {
                 />
               </div>
             )}
-          </ThemeProvider>
         </ConfigProvider>
     </Suspense>
   );
@@ -690,7 +682,9 @@ function CreateKeyPageContent() {
 export default function CreateKeyPage() {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <CreateKeyPageContent />
+      <ThemeProvider accessToken={""}>
+        <CreateKeyPageContent />
+      </ThemeProvider>
     </Suspense>
   );
 }

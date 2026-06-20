@@ -1,4 +1,5 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { useDarkMode } from "@/hooks/useDarkMode";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Button, Card, Text, Title } from "@tremor/react";
@@ -115,6 +116,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedAgentSkills, setSelectedAgentSkills] = useState<string[]>([]);
   const [selectedMcpTransports, setSelectedMcpTransports] = useState<string[]>([]);
   const [serviceStatus, setServiceStatus] = useState<string>("I'm alive! ✓");
+  const { isDarkMode, toggleDarkMode } = useDarkMode();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
@@ -991,8 +993,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
+            isDarkMode={isDarkMode}
+            toggleDarkMode={toggleDarkMode}
           />
         )}
 
