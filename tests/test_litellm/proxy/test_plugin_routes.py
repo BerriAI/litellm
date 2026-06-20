@@ -156,3 +156,24 @@ def test_db_persisted_plugins_load_on_startup() -> None:
     assert names == ["db-plugin"]
 
     register_plugins_from_config({})
+
+
+def test_safe_response_headers_sandbox_and_strips_wire_headers() -> None:
+    """Proxied plugin responses must be inert and shed wire/cookie headers."""
+    from litellm.proxy.plugin_routes import _safe_response_headers
+
+    out = _safe_response_headers(
+        {
+            "content-type": "text/html",
+            "content-encoding": "gzip",
+            "content-length": "123",
+            "set-cookie": "session=abc",
+            "content-security-policy": "default-src *",
+        }
+    )
+
+    assert out["content-security-policy"] == "sandbox"
+    assert out["x-content-type-options"] == "nosniff"
+    assert out["content-type"] == "text/html"
+    for stripped in ("content-encoding", "content-length", "set-cookie"):
+        assert stripped not in out

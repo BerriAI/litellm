@@ -26,6 +26,7 @@ import hmac as _hmac
 import json
 import os
 import time
+from collections.abc import Mapping
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -63,6 +64,24 @@ _RESPONSE_STRIP = {
     "content-length",
     "set-cookie",
 }
+
+
+def _safe_response_headers(raw: "Mapping[str, str]") -> dict[str, str]:
+    """Strip wire-encoding/cookie headers and force proxied responses inert.
+
+    Plugin-controlled bytes are served from the litellm dashboard origin, so a
+    compromised plugin could return an HTML/JS document that executes with the
+    admin's session against same-origin management APIs.  A sandbox CSP forces
+    the response into an opaque origin with scripts disabled, and nosniff stops
+    content-type confusion from re-enabling execution.  Both are set last so a
+    plugin cannot override them with its own headers.
+    """
+    return {
+        **{k: v for k, v in raw.items() if k.lower() not in _RESPONSE_STRIP},
+        "content-security-policy": "sandbox",
+        "x-content-type-options": "nosniff",
+    }
+
 
 # In-memory plugin registry — populated from general_settings at startup
 _plugin_registry: dict[str, PluginConfig] = {}
@@ -287,12 +306,8 @@ async def plugin_proxy(
             status_code=502,
         )
 
-    safe_headers = {
-        k: v for k, v in resp.headers.items() if k.lower() not in _RESPONSE_STRIP
-    }
-
     return Response(
         content=resp.content,
         status_code=resp.status_code,
-        headers=safe_headers,
+        headers=_safe_response_headers(resp.headers),
     )
