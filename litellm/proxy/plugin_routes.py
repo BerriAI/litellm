@@ -12,11 +12,12 @@ Config (in litellm config.yaml general_settings):
       plugin_key: "sk-..."   # optional: plugin's own auth key
 
 Plugin iframe auth:
-  The UI calls GET /api/plugins/auth-token to receive the caller's token
-  encrypted with the shared LITELLM_SALT_KEY.  The plugin decrypts it with
-  the same key — so the raw litellm credential never appears in plaintext
-  outside the proxy process, and a postMessage intercept yields only
-  useless ciphertext.
+  The UI calls GET /api/plugins/auth-token to receive a short-lived identity
+  claim ({user_id, user_role, plugin, exp}) encrypted with a per-plugin key
+  derived as HMAC-SHA256(LITELLM_SALT_KEY, plugin_name).  The claim carries no
+  litellm bearer token, so a compromised plugin learns only the caller's
+  identity, never their credential.  LITELLM_SALT_KEY itself is never shared
+  with plugins — each plugin holds only its own derived key.
 """
 
 import base64

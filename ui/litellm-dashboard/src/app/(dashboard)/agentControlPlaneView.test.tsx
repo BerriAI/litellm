@@ -54,4 +54,12 @@ describe("AgentControlPlaneView iframe", () => {
     const { container } = render(<AgentControlPlaneView />);
     expect(container.querySelector("iframe")!.getAttribute("src")).not.toContain("token");
   });
+
+  it("does not delegate clipboard-read to the untrusted plugin iframe", () => {
+    const { container } = render(<AgentControlPlaneView />);
+    const allow = container.querySelector("iframe")!.getAttribute("allow") ?? "";
+
+    expect(allow).not.toContain("clipboard-read");
+    expect(allow).toContain("clipboard-write");
+  });
 });

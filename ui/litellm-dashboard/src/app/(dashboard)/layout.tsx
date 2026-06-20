@@ -29,9 +29,9 @@ export function AgentControlPlaneView() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [encryptedToken, setEncryptedToken] = useState<string | null>(null);
 
-  // Fetch an encrypted copy of the token from the proxy.
-  // The proxy encrypts it with LITELLM_SALT_KEY; the plugin decrypts with the
-  // same key.  The raw litellm credential never leaves the proxy in plaintext.
+  // Fetch a short-lived encrypted identity claim from the proxy.
+  // It conveys only the caller's identity (no litellm token); the plugin
+  // decrypts it with its own per-plugin key.
   useEffect(() => {
     if (!accessToken) return;
     pluginApiClient
@@ -40,7 +40,7 @@ export function AgentControlPlaneView() {
       .catch(() => {});
   }, [accessToken]);
 
-  // Deliver the encrypted token to the iframe via postMessage.
+  // Deliver the encrypted identity claim to the iframe via postMessage.
   // targetOrigin is the configured plugin URL — no other origin receives it.
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -76,7 +76,7 @@ export function AgentControlPlaneView() {
         minHeight: "calc(100vh - 56px)",
       }}
       title={activePlugin?.display_name ?? "Plugin"}
-      allow="clipboard-read; clipboard-write"
+      allow="clipboard-write"
     />
   );
 }
