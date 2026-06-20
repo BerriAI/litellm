@@ -192,6 +192,7 @@ from litellm.types.utils import (
     ProviderField,
     ProviderSpecificModelInfo,
     RawRequestTypedDict,
+    SandboxProviders,
     SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
@@ -301,6 +302,7 @@ if TYPE_CHECKING:
         BaseGoogleGenAIGenerateContentConfig,
     )
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.sandbox.transformation import BaseSandboxConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.llms.base_llm.text_to_speech.transformation import (
         BaseTextToSpeechConfig,
@@ -9722,6 +9724,19 @@ class ProviderConfigManager:
         if config_class is None:
             return None
         return config_class()
+
+    @staticmethod
+    def get_provider_sandbox_config(
+        provider: "SandboxProviders",
+    ) -> Optional["BaseSandboxConfig"]:
+        """
+        Get sandbox (code execution) configuration for a given provider.
+        """
+        from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+
+        if provider == SandboxProviders.E2B:
+            return E2BSandboxConfig()
+        return None
 
     @staticmethod
     def get_provider_text_to_speech_config(
