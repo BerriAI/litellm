@@ -41,6 +41,14 @@ def _serve_echo():
     def echo(text: str) -> str:
         return f"echo: {text}"
 
+    @mcp.prompt()
+    def greeting(name: str) -> str:
+        return f"Hello, {name}"
+
+    @mcp.resource("echo://info")
+    def info() -> str:
+        return "echo server info"
+
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -88,3 +96,34 @@ async def test_v2_override_lists_tools_via_upstream_connection(echo_server_url):
     )
     tools = await manager._get_tools_from_server(server, add_prefix=True)
     assert any(t.name.endswith("echo") for t in tools)
+
+
+@pytest.mark.asyncio
+async def test_v2_override_lists_prompts_via_upstream_connection(echo_server_url):
+    # The none-mode prompts path goes through resolve() + UpstreamConnection.list_prompts (v2),
+    # namespaced via the inherited _create_prefixed_prompts.
+    manager = MCPServerManagerV2()
+    server = MCPServer(
+        server_id="echo1",
+        name="echo1",
+        transport=MCPTransport.http,
+        url=echo_server_url,
+        auth_type=MCPAuth.none,
+    )
+    prompts = await manager.get_prompts_from_server(server, add_prefix=True)
+    assert any("greeting" in p.name for p in prompts)
+
+
+@pytest.mark.asyncio
+async def test_v2_override_lists_resources_via_upstream_connection(echo_server_url):
+    # The none-mode resources path goes through resolve() + UpstreamConnection.list_resources (v2).
+    manager = MCPServerManagerV2()
+    server = MCPServer(
+        server_id="echo1",
+        name="echo1",
+        transport=MCPTransport.http,
+        url=echo_server_url,
+        auth_type=MCPAuth.none,
+    )
+    resources = await manager.get_resources_from_server(server, add_prefix=True)
+    assert len(resources) >= 1

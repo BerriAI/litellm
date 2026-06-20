@@ -3,8 +3,8 @@
 ``MCPServerManagerV2`` subclasses v1's ``MCPServerManager`` and overrides the per-server egress
 methods to route through the v2 ``UpstreamConnection`` + ``resolve()`` instead of
 ``_create_mcp_client``. Registry, RBAC, cross-server aggregation, namespacing
-(``_create_prefixed_tools``), and static-header resolution are inherited from v1 unchanged. It is
-the egress manager, constructed at the composition root (see
+(``_create_prefixed_*``), and static-header resolution are inherited from v1 unchanged. It is the
+egress manager, constructed at the composition root (see
 ``mcp_server_manager._make_global_mcp_server_manager``); there is no opt-in flag (v2 is the egress
 implementation).
 
@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerM
 from litellm.proxy._types import MCPTransport
 
 if TYPE_CHECKING:
+    from mcp.types import Prompt, Resource
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -146,20 +147,74 @@ class MCPServerManagerV2(MCPServerManager):
             extra_headers=extra_headers,
         )
         if isinstance(conn, Error):
-            return self._egress_list_failure(server, conn.error)
+            self._egress_list_failure(server, conn.error)
+            return []
         result = await conn.ok.list_tools()
         if isinstance(result, Error):
-            return self._egress_list_failure(server, result.error)
+            self._egress_list_failure(server, result.error)
+            return []
         return self._create_prefixed_tools(result.ok, server, add_prefix=add_prefix)
+
+    async def get_prompts_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Prompt]:
+        from litellm.proxy.gateway.mcp.result import Error
+
+        if self._should_defer(server, mcp_auth_header):
+            return await super().get_prompts_from_server(
+                server, mcp_auth_header, extra_headers, add_prefix, raw_headers
+            )
+        conn = await self._v2_connection(
+            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+        )
+        if isinstance(conn, Error):
+            self._egress_list_failure(server, conn.error)
+            return []
+        result = await conn.ok.list_prompts()
+        if isinstance(result, Error):
+            self._egress_list_failure(server, result.error)
+            return []
+        return self._create_prefixed_prompts(result.ok, server, add_prefix=add_prefix)
+
+    async def get_resources_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Resource]:
+        from litellm.proxy.gateway.mcp.result import Error
+
+        if self._should_defer(server, mcp_auth_header):
+            return await super().get_resources_from_server(
+                server, mcp_auth_header, extra_headers, add_prefix, raw_headers
+            )
+        conn = await self._v2_connection(
+            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+        )
+        if isinstance(conn, Error):
+            self._egress_list_failure(server, conn.error)
+            return []
+        result = await conn.ok.list_resources()
+        if isinstance(result, Error):
+            self._egress_list_failure(server, result.error)
+            return []
+        return self._create_prefixed_resources(result.ok, server, add_prefix=add_prefix)
 
     def _egress_list_failure(
         self, server: MCPServer, error: "CredError | ConnError"
-    ) -> List[MCPTool]:
-        # List path: an upstream 401/403 (or a per-user mode with no usable credential) surfaces as
-        # MCPUpstreamAuthError so the client gets a 401 + WWW-Authenticate and starts the OAuth flow
-        # (this is the LIT-3795 behavior for non-delegated interactive oauth2). Any other failure
-        # degrades to an empty tool list (logged), so one bad server never collapses the federated
-        # catalog. The typed partial-failure marker is a later, separate surface.
+    ) -> None:
+        # List path (tools/prompts/resources): an upstream 401/403 (or a per-user mode with no usable
+        # credential) surfaces as MCPUpstreamAuthError so the client gets a 401 + WWW-Authenticate and
+        # starts the OAuth flow (the LIT-3795 behavior for non-delegated interactive oauth2). Any
+        # other failure is logged and the caller degrades to an empty list, so one bad server never
+        # collapses the federated catalog. The typed partial-failure marker is a later surface.
         if error.tag == "unauthorized":
             from litellm.proxy._experimental.mcp_server.exceptions import (
                 MCPUpstreamAuthError,
@@ -169,9 +224,8 @@ class MCPServerManagerV2(MCPServerManager):
                 status_code=401, www_authenticate=None, server_name=server.name
             )
         verbose_logger.warning(
-            "v2 egress: tools unavailable for %s (%s): %s",
+            "v2 egress: items unavailable for %s (%s): %s",
             server.name,
             server.server_id,
             error.summary,
         )
-        return []
