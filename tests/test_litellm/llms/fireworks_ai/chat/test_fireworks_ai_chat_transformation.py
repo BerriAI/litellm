@@ -118,11 +118,13 @@ def test_get_supported_openai_params_reasoning_effort():
         "fireworks_ai/accounts/fireworks/models/glm-5p1"
     )
     assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
 
     unsupported_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
     )
     assert "reasoning_effort" not in unsupported_params
+    assert "thinking" not in unsupported_params
 
 
 def test_get_supported_openai_params_parallel_tool_calls():
@@ -704,6 +706,23 @@ def test_thinking_param_passthrough():
         drop_params=False,
     )
     assert result == {"thinking": thinking}
+
+
+def test_thinking_and_reasoning_effort_conflict_rejected():
+    config = FireworksAIConfig()
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="does not support specifying both `thinking` and `reasoning_effort`",
+    ):
+        config.map_openai_params(
+            {
+                "thinking": {"type": "enabled", "budget_tokens": 4096},
+                "reasoning_effort": "medium",
+            },
+            {},
+            _REASONING_MODEL,
+            drop_params=False,
+        )
 
 
 def test_minimax_m3_supports_vision_from_model_map():

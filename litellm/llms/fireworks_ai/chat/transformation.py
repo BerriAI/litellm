@@ -131,7 +131,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prediction",
             "stream_options",
             "sampling_mask",
-            "thinking",
         ]
 
         # Only add tools for models that support function calling
@@ -159,6 +158,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("reasoning_effort")
             supported_params.append("reasoning_history")
+            supported_params.append("thinking")
 
         return supported_params
 
@@ -174,6 +174,18 @@ class FireworksAIConfig(OpenAIGPTConfig):
             param == "tools" and value is not None
             for param, value in non_default_params.items()
         )
+        if (
+            non_default_params.get("thinking") is not None
+            and non_default_params.get("reasoning_effort") is not None
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    "Fireworks AI chat completions does not support specifying both "
+                    "`thinking` and `reasoning_effort` in the same request."
+                ),
+                model=model,
+                llm_provider="fireworks_ai",
+            )
 
         for param, value in non_default_params.items():
             if param == "tool_choice":
