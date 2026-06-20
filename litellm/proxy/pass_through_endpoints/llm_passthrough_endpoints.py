@@ -47,7 +47,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
-from litellm.proxy.utils import is_known_model
+from litellm.proxy.utils import is_known_model, ProxyLogging
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
@@ -60,8 +60,11 @@ from litellm.utils import ProviderConfigManager
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
 if TYPE_CHECKING:
-    from litellm.proxy.proxy_server import ProxyConfig
-    from litellm.proxy.utils import ProxyLogging
+    from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+
+    ProxyConfig = _ProxyConfig
+else:
+    ProxyConfig = Any
 
 
 vertex_llm_base = VertexBase()
