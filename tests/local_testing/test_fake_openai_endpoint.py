@@ -17,7 +17,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
+from tests.fake_openai_endpoint import (
+    _LOCAL_DEFAULT,
+    _resolve_base,
+    ensure_fake_openai_endpoint,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -72,6 +76,21 @@ def test_slow_model_blocks_past_client_timeout():
             },
             timeout=0.5,
         )
+
+
+def test_remote_env_base_resolves_to_local(monkeypatch):
+    monkeypatch.setenv(
+        "FAKE_OPENAI_API_BASE",
+        "https://exampleopenaiendpoint-production.up.railway.app",
+    )
+    assert _resolve_base() == _LOCAL_DEFAULT
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "0.0.0.0"])
+def test_loopback_env_base_is_honored(monkeypatch, host):
+    base = f"http://{host}:9191"
+    monkeypatch.setenv("FAKE_OPENAI_API_BASE", base)
+    assert _resolve_base() == base
 
 
 @pytest.mark.parametrize("relative_path", _MIGRATED_FILES)

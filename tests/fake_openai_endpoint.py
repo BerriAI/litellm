@@ -3,9 +3,15 @@
 Tests that need a fake OpenAI-shaped endpoint point ``api_base`` at
 ``FAKE_OPENAI_API_BASE`` instead of a hosted URL, so the suite never depends on
 an external service staying up. ``ensure_fake_openai_endpoint`` returns a base
-URL that is actually serving: it reuses a server a CI job already started (it
-answers ``/health``) and otherwise spawns ``_fake_openai_endpoint_server.py``
+URL that is actually serving: it reuses a server already listening on that base
+(it answers ``/health``) and otherwise spawns ``_fake_openai_endpoint_server.py``
 for the test session, tearing it down at interpreter exit.
+
+The resolved base honors a ``FAKE_OPENAI_API_BASE`` env var only when it points
+at a loopback host; a remote value (CI sets it to the old hosted mock) is ignored
+in favor of the local default. Otherwise this helper would try to bind a local
+server to a remote host and time out, which is the exact external dependency the
+local mock exists to remove.
 """
 
 from __future__ import annotations
@@ -22,9 +28,18 @@ from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
-FAKE_OPENAI_API_BASE: Final = os.environ.get(
-    "FAKE_OPENAI_API_BASE", "http://127.0.0.1:8190"
-)
+_LOCAL_DEFAULT: Final = "http://127.0.0.1:8190"
+_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "0.0.0.0", "::1"})
+
+
+def _resolve_base() -> str:
+    configured = os.environ.get("FAKE_OPENAI_API_BASE")
+    if configured and urlsplit(configured).hostname in _LOOPBACK_HOSTS:
+        return configured
+    return _LOCAL_DEFAULT
+
+
+FAKE_OPENAI_API_BASE: Final = _resolve_base()
 
 _SERVER_SCRIPT: Final = (
     Path(__file__).resolve().parent / "_fake_openai_endpoint_server.py"
