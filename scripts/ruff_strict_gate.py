@@ -5,6 +5,12 @@ Each rule has a hard ceiling (baseline + slack) in ruff-strict-budget.json. The
 gate counts each rule across the whole tree and fails when a rule is both over
 its ceiling and higher than the base it merges into, so a change is blamed for
 the violations it adds, never for drift that already exists in the base.
+
+By default the base is the merge-base of the current branch, which is fast but
+diverges from CI: CI runs against the synthetic merge ref, so its base is the
+*current* tip of the target branch plus whatever drift landed since you forked.
+Pass --ci-parity to reproduce CI exactly by counting against a throwaway merge
+of the base into HEAD.
 """
 
 import argparse
@@ -40,6 +46,12 @@ class Breach(NamedTuple):
     added: int
 
 
+class GateInputs(NamedTuple):
+    head: list
+    base: dict
+    changed: dict
+
+
 def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
@@ -56,14 +68,14 @@ def _ruff_json(cwd: Path, config: Path) -> list:
     return json.loads(raw or "[]")
 
 
-def head_violations() -> list:
+def collect_violations(root: Path, config: Path) -> list:
     out = []
-    for item in _ruff_json(REPO_ROOT, STRICT_CONFIG):
+    for item in _ruff_json(root, config):
         name = Path(item["filename"])
         rel = (
-            (name if name.is_absolute() else REPO_ROOT / name)
+            (name if name.is_absolute() else root / name)
             .resolve()
-            .relative_to(REPO_ROOT)
+            .relative_to(root)
             .as_posix()
         )
         out.append(Violation(rel, item["location"]["row"], item["code"]))
@@ -80,21 +92,12 @@ def base_counts(ref: str) -> dict:
     try:
         _run(["git", "worktree", "add", "--detach", str(worktree), ref])
         shutil.copy(STRICT_CONFIG, worktree / "ruff-strict.toml")
-        items = _ruff_json(worktree, worktree / "ruff-strict.toml")
-        return dict(Counter(item["code"] for item in items))
+        return count_by_rule(
+            collect_violations(worktree, worktree / "ruff-strict.toml")
+        )
     finally:
         _run(["git", "worktree", "remove", "--force", str(worktree)])
         shutil.rmtree(parent, ignore_errors=True)
-
-
-def evaluate(head: dict, base: dict, budget: dict) -> list:
-    breaches = []
-    for rule, spec in budget.items():
-        cap = spec["baseline"] + spec["slack"]
-        total = head.get(rule, 0)
-        if total > cap and total > base.get(rule, 0):
-            breaches.append(Breach(rule, total, cap, total - base.get(rule, 0)))
-    return sorted(breaches)
 
 
 def parse_changed_lines(diff_text: str) -> dict:
@@ -110,24 +113,59 @@ def parse_changed_lines(diff_text: str) -> dict:
     return changed
 
 
+def evaluate(head: dict, base: dict, budget: dict) -> list:
+    breaches = []
+    for rule, spec in budget.items():
+        cap = spec["baseline"] + spec["slack"]
+        total = head.get(rule, 0)
+        if total > cap and total > base.get(rule, 0):
+            breaches.append(Breach(rule, total, cap, total - base.get(rule, 0)))
+    return sorted(breaches)
+
+
 def introduced(violations: list, changed: dict) -> list:
     return [v for v in violations if v.line in changed.get(v.file, set())]
 
 
-def cmd_check(base: str) -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = head_violations()
+def gather_fast(base: str) -> GateInputs:
     base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
-    breaches = evaluate(count_by_rule(head), base_counts(base_point), budget)
-    if not breaches:
-        print(f"OK: every strict rule is within its codebase ceiling (base {base})")
-        return
-    new = introduced(
-        head,
-        parse_changed_lines(
-            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
-        ),
+    diff = _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
+    return GateInputs(
+        collect_violations(REPO_ROOT, STRICT_CONFIG),
+        base_counts(base_point),
+        parse_changed_lines(diff),
     )
+
+
+def gather_ci_parity(base: str) -> GateInputs:
+    parent = Path(tempfile.mkdtemp(prefix="ruff_merge_"))
+    worktree = parent / "wt"
+    try:
+        _run(["git", "worktree", "add", "--detach", str(worktree), "HEAD"])
+        merge = subprocess.run(
+            ["git", "merge", "--no-commit", "--no-ff", base],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        if merge.returncode != 0:
+            _run(["git", "merge", "--abort"], cwd=worktree)
+            raise SystemExit(
+                f"ci-parity: merging {base} into HEAD conflicts; rebase your branch first"
+            )
+        shutil.copy(STRICT_CONFIG, worktree / "ruff-strict.toml")
+        head = collect_violations(worktree, worktree / "ruff-strict.toml")
+        diff = _run(
+            ["git", "diff", base, "--unified=0", "--no-color", "--", TARGET],
+            cwd=worktree,
+        )
+        return GateInputs(head, base_counts(base), parse_changed_lines(diff))
+    finally:
+        _run(["git", "worktree", "remove", "--force", str(worktree)])
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def report(breaches: list, new: list, base: str) -> None:
     print(f"FAIL: strict-rule totals exceed their ceiling (base {base}):")
     for breach in breaches:
         print(
@@ -138,12 +176,24 @@ def cmd_check(base: str) -> None:
     print(
         "Reduce the new violations or remove an equal number elsewhere; the ceiling is baseline + slack in ruff-strict-budget.json."
     )
+    summary = "; ".join(f"{b.rule} {b.total}/{b.cap} (+{b.added})" for b in breaches)
+    print(f"BREACHED RULES: {summary}")
+
+
+def cmd_check(base: str, ci_parity: bool) -> None:
+    budget = json.loads(BUDGET_PATH.read_text())
+    inputs = gather_ci_parity(base) if ci_parity else gather_fast(base)
+    breaches = evaluate(count_by_rule(inputs.head), inputs.base, budget)
+    if not breaches:
+        print(f"OK: every strict rule is within its codebase ceiling (base {base})")
+        return
+    report(breaches, introduced(inputs.head, inputs.changed), base)
     raise SystemExit(1)
 
 
 def cmd_update() -> None:
     budget = json.loads(BUDGET_PATH.read_text())
-    head = count_by_rule(head_violations())
+    head = count_by_rule(collect_violations(REPO_ROOT, STRICT_CONFIG))
     for rule in budget:
         budget[rule]["baseline"] = head.get(rule, 0)
     BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
@@ -154,8 +204,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
+    parser.add_argument(
+        "--ci-parity",
+        action="store_true",
+        help="count against a throwaway merge of --base into HEAD, matching CI",
+    )
     args = parser.parse_args()
-    cmd_update() if args.update else cmd_check(args.base)
+    cmd_update() if args.update else cmd_check(args.base, args.ci_parity)
 
 
 if __name__ == "__main__":
