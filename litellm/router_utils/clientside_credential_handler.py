@@ -13,8 +13,6 @@ Ensures cooldowns are applied correctly.
 
 from typing import List
 
-import litellm
-
 clientside_credential_keys = ["api_key", "api_base", "base_url"]
 
 
@@ -98,14 +96,7 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     # admin's value in ``litellm_params`` and have it forwarded to the
     # redirected upstream.
     if "api_base" in request_kwargs or "base_url" in request_kwargs:
-        # the deployment's api_key is also cleared in proxy mode so a client
-        # base-url override does not reuse the proxy's pinned credential; in
-        # SDK mode the deployment is the caller's own config, so the key is
-        # left alone (mirrors the proxy_is_running gate on the kwarg strip)
-        fields_to_clear = _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE
-        if litellm.proxy_is_running:
-            fields_to_clear = (*fields_to_clear, "api_key")
-        for field in fields_to_clear:
+        for field in _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE:
             litellm_params.pop(field, None)
             if field in request_kwargs:
                 litellm_params[field] = request_kwargs[field]

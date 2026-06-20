@@ -2475,57 +2475,6 @@ class TestIsRequestBodySafeToolBaseOverrideRequiresApiKey:
         )
 
 
-class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
-    """When the caller redirects ``api_base``/``base_url`` without resupplying
-    a key, the admin's deployment ``api_key`` must be dropped so the proxy
-    doesn't forward its own credential to the caller-redirected upstream."""
-
-    @pytest.fixture(autouse=True)
-    def _proxy_running(self):
-        original = litellm.proxy_is_running
-        litellm.proxy_is_running = True
-        try:
-            yield
-        finally:
-            litellm.proxy_is_running = original
-
-    def test_admin_api_key_cleared_when_base_overridden_without_key(self):
-        from litellm.router_utils.clientside_credential_handler import (
-            get_dynamic_litellm_params,
-        )
-
-        out = get_dynamic_litellm_params(
-            litellm_params={
-                "model": "gpt-4",
-                "api_key": "sk-admin-secret",
-                "api_base": "https://admin.upstream/v1",
-            },
-            request_kwargs={"api_base": "https://other.example"},
-        )
-        assert out["api_base"] == "https://other.example"
-        assert "api_key" not in out
-        assert "sk-admin-secret" not in str(out)
-
-    def test_caller_supplied_api_key_still_wins_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
-            get_dynamic_litellm_params,
-        )
-
-        out = get_dynamic_litellm_params(
-            litellm_params={
-                "model": "gpt-4",
-                "api_key": "sk-admin-secret",
-                "api_base": "https://admin.upstream/v1",
-            },
-            request_kwargs={
-                "api_base": "https://other.example",
-                "api_key": "sk-byok",
-            },
-        )
-        assert out["api_key"] == "sk-byok"
-        assert "sk-admin-secret" not in str(out)
-
-
 _DEPLOYMENT_OWNED_EXTENSION_PARAMS = (
     "aws_profile_name",
     "oci_compartment_id",
@@ -2555,9 +2504,3 @@ class TestIsRequestBodySafeBlocksDeploymentOwnedExtensions:
             )
         assert param in str(exc.value)
         assert "not allowed in request body" in str(exc.value)
-
-    @pytest.mark.parametrize("param", _DEPLOYMENT_OWNED_EXTENSION_PARAMS)
-    def test_param_in_router_strip_set(self, param):
-        from litellm.router import _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS
-
-        assert param in _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS

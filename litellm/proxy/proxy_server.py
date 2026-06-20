@@ -550,7 +550,6 @@ try:
 except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
-litellm.proxy_is_running = True
 import json
 from typing import Union
 
