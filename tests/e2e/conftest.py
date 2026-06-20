@@ -32,14 +32,20 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Once the whole e2e session is done (all suites), truncate the spend logs so
     the DB doesn't accumulate test rows. Best-effort: a cleanup failure (no DB
-    reachable) must not fail the run."""
-    sys.path.insert(0, str(Path(__file__).parent / "spend_tracking"))
+    reachable) must not fail the run. The spend_tracking dir goes on sys.path only
+    for this import and is removed after, so a broader `pytest tests/` run is not
+    left with a mutated path."""
+    spend_dir = str(Path(__file__).parent / "spend_tracking")
+    sys.path.insert(0, spend_dir)
     try:
         from spend_e2e_client import reset_spend_logs  # pyright: ignore
 
         reset_spend_logs()
     except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
         print(f"spend-log cleanup skipped: {exc}")
+    finally:
+        if spend_dir in sys.path:
+            sys.path.remove(spend_dir)
 
 
 @pytest.fixture(scope="session", autouse=True)

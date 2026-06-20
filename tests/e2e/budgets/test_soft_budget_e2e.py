@@ -28,8 +28,8 @@ def test_soft_budget_does_not_block(
         result = client.chat(
             key, "claude-haiku-4-5", f"hi {unique_marker()}", max_tokens=16
         )
-        require_successful_call(result)  # skip if provider unavailable
         assert not is_budget_block(result), (
             "soft_budget blocked a request; it must alert only, not block "
             f"(body={result.body[:200]})"
         )
+        require_successful_call(result)  # any other non-2xx (e.g. provider down) is a hard fail
