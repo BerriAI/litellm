@@ -53,7 +53,7 @@ def test_tag_budget_blocks_tagged_requests(
     # A request with an unbudgeted tag on the same key is unaffected.
     free_tag = f"e2e-free-tag-{unique_marker()}"
     other = _tagged_call(client, scoped_key, free_tag)
-    require_successful_call(other)
     assert not is_budget_block(other), (
         f"unbudgeted tag {free_tag!r} was blocked by {budgeted_tag!r}'s budget"
     )
+    require_successful_call(other)
