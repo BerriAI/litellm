@@ -21,7 +21,7 @@ from typing import Iterator
 import pytest
 import requests
 
-from e2e_config import PROXY_BASE_URL
+from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
 
 
@@ -35,15 +35,27 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+def _liveness_reason(label: str, base_url: str) -> str | None:
+    """None if `base_url` answers its liveness probe, else a skip reason."""
+    try:
+        resp = requests.get(f"{base_url}/health/liveliness", timeout=5)
+    except requests.RequestException as exc:
+        return f"No live {label} at {base_url}: {exc}"
+    if resp.status_code >= 500:
+        return f"{label} at {base_url} returned {resp.status_code}"
+    return None
+
+
 @functools.lru_cache(maxsize=1)
 def _proxy_skip_reason() -> str | None:
-    """Probe the proxy once per session. None if it answers, else a skip reason."""
-    try:
-        resp = requests.get(f"{PROXY_BASE_URL}/health/liveliness", timeout=5)
-    except requests.RequestException as exc:
-        return f"No live proxy at {PROXY_BASE_URL}: {exc}"
-    if resp.status_code >= 500:
-        return f"Proxy at {PROXY_BASE_URL} returned {resp.status_code}"
+    """Probe the proxy once per session. None if it answers, else a skip reason. In
+    a split deployment the management/admin control plane is a separate service, so
+    require it too (when it differs) - else its tests would fail rather than skip."""
+    reason = _liveness_reason("proxy", PROXY_BASE_URL)
+    if reason is not None:
+        return reason
+    if CONTROL_PLANE_BASE_URL != PROXY_BASE_URL:
+        return _liveness_reason("control plane", CONTROL_PLANE_BASE_URL)
     return None
 
 

@@ -39,13 +39,14 @@ from models import (
     SpendLogsParams,
 )
 from e2e_config import (
+    CONTROL_PLANE_BASE_URL,
     MASTER_KEY,
     POLL_INTERVAL,
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
 )
-from transport import HttpTransport, Transport
+from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
@@ -188,13 +189,22 @@ class Gateway:
 
 
 def build_gateway() -> Gateway:
-    """The Gateway every suite's client is built from: an HttpTransport pointed at
-    the configured proxy, with the shared poll budget."""
+    """The Gateway every suite's client is built from: a SplitTransport that routes
+    LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
+    control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
+    base URLs are the same for a monolithic proxy, so routing is then a no-op."""
     return Gateway(
-        transport=HttpTransport(
-            base_url=PROXY_BASE_URL,
-            master_key=MASTER_KEY,
-            request_timeout=REQUEST_TIMEOUT,
+        transport=SplitTransport(
+            data=HttpTransport(
+                base_url=PROXY_BASE_URL,
+                master_key=MASTER_KEY,
+                request_timeout=REQUEST_TIMEOUT,
+            ),
+            control=HttpTransport(
+                base_url=CONTROL_PLANE_BASE_URL,
+                master_key=MASTER_KEY,
+                request_timeout=REQUEST_TIMEOUT,
+            ),
         ),
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,

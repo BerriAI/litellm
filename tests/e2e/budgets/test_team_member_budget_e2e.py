@@ -21,7 +21,6 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import Success, require_successful_call
-from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
 pytestmark = pytest.mark.e2e
@@ -42,23 +41,16 @@ class _Member:
 @pytest.fixture(scope="class")
 def member(client: BudgetClient) -> Iterator[_Member]:
     """A team with a large budget plus one member capped at a tiny per-team budget,
-    and that member's key. Shared across the class; torn down when it finishes.
-    Cleanups register progressively and run LIFO best-effort through ResourceManager,
-    so a partial-setup failure still releases what came before and one failed delete
-    never strands the rest on the shared proxy."""
-    resources = ResourceManager(client=client.gateway)
-    try:
-        marker = unique_marker()
-        team_id = client.create_team(alias=f"e2e-team-member-{marker}", max_budget=TEAM_BUDGET)
-        resources.defer(lambda: client.delete_team(team_id))
-        user_id = client.create_user(max_budget=TEAM_BUDGET)
-        resources.defer(lambda: client.delete_user(user_id))
-        client.add_team_member(team_id, user_id, max_budget_in_team=MEMBER_BUDGET)
-        key = client.generate_key(team_id=team_id, user_id=user_id)
-        resources.defer(lambda: client.delete_key(key))
-        yield _Member(team_id=team_id, user_id=user_id, key=key)
-    finally:
-        resources.teardown()
+    and that member's key. Shared across the class; torn down when it finishes."""
+    marker = unique_marker()
+    team_id = client.create_team(alias=f"e2e-team-member-{marker}", max_budget=TEAM_BUDGET)
+    user_id = client.create_user(max_budget=TEAM_BUDGET)
+    client.add_team_member(team_id, user_id, max_budget_in_team=MEMBER_BUDGET)
+    key = client.generate_key(team_id=team_id, user_id=user_id)
+    yield _Member(team_id=team_id, user_id=user_id, key=key)
+    client.delete_key(key)
+    client.delete_user(user_id)
+    client.delete_team(team_id)
 
 
 def _send(client: BudgetClient, key: str) -> str | None:

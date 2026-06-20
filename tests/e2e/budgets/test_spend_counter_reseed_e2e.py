@@ -20,7 +20,6 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -28,10 +27,6 @@ from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
-
-if TYPE_CHECKING:
-    import redis
-    from redis.cluster import RedisCluster
 
 pytestmark = pytest.mark.e2e
 
@@ -43,42 +38,24 @@ BURST = 6
 COLD_WAIT_SECONDS = 80
 
 
-def _redis() -> "redis.Redis[str] | RedisCluster[str]":
-    """The proxy's Redis. The deployed runner sets REDIS_HOST to the serverless
-    ElastiCache, which is always TLS + cluster-mode; without it, fall back to a
-    local standalone redis for docker-compose runs."""
+def _redis():
     import redis
 
-    host = os.getenv("REDIS_HOST")
-    if not host:
-        return redis.Redis(host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2)
-
-    from redis.cluster import RedisCluster
-
-    return RedisCluster(
-        host=host,
-        port=int(os.getenv("REDIS_PORT", "6379")),
-        ssl=True,
+    return redis.Redis(
+        host=os.getenv("E2E_REDIS_HOST", "localhost"),
+        port=int(os.getenv("E2E_REDIS_PORT", "6380")),
+        password=os.getenv("REDIS_PASSWORD") or None,
         decode_responses=True,
         socket_connect_timeout=2,
     )
 
 
-def _spend_counter(rds: "redis.Redis[str] | RedisCluster[str]", key: str) -> float | None:
-    """The shared spend counter for `key`, or None if it is cold. A cluster client
-    can't run a keyspace SCAN that spans shards, so read the key directly - the stage
-    gateway sets no cache namespace, so the key is the bare ``spend:key:{sha256(key)}``.
-    A standalone client matches by suffix, so the local cache namespace (litellm.caching)
-    need not be hard-coded here."""
-    from redis.cluster import RedisCluster
-
+def _spend_counter(rds, key: str) -> float | None:
+    """The shared spend counter for `key`, or None if it is cold. The counter key is
+    ``{cache namespace}:spend:key:{sha256(key)}``; matched by suffix so the configured
+    namespace need not be hard-coded."""
     digest = hashlib.sha256(key.encode()).hexdigest()
-    suffix = f"spend:key:{digest}"
-    if isinstance(rds, RedisCluster):
-        raw = rds.get(suffix)
-        return float(raw) if raw is not None else None
-
-    matches = list(rds.scan_iter(match=f"*{suffix}"))
+    matches = list(rds.scan_iter(match=f"*spend:key:{digest}"))
     if not matches:
         return None
     raw = rds.get(matches[0])
@@ -90,11 +67,8 @@ def _chat(client: BudgetClient, key: str) -> StreamingResponse:
 
 
 def _accumulate(client: BudgetClient, key: str, count: int) -> None:
-    def one(_: int) -> StreamingResponse:
-        return _chat(client, key)
-
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(one, range(count)))
+        list(pool.map(lambda _: _chat(client, key), range(count)))
 
 
 def _burst(client: BudgetClient, key: str, count: int) -> None:
@@ -117,7 +91,7 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
         rds = _redis()
         rds.ping()
     except Exception as exc:  # noqa: BLE001 - any connect failure means skip
-        pytest.skip(f"e2e redis not reachable (set REDIS_HOST/REDIS_PORT): {exc}")
+        pytest.skip(f"e2e redis not reachable (set E2E_REDIS_HOST/E2E_REDIS_PORT): {exc}")
 
     key = client.generate_key(max_budget=1.0, models=[MODEL])
     resources.defer(lambda: client.delete_key(key))
