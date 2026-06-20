@@ -61,14 +61,6 @@ litellm_settings:
   # service_callback: ["datadog"]
   callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel"]
   require_auth_for_metrics_endpoint: false
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: 6379
-    password: os.environ/REDIS_PASSWORD
-    namespace: litellm.caching
-    ttl: 16600
   #type: redis-semantic
   #similarity_threshold: 0.8   # similarity threshold for semantic cache
   #redis_semantic_cache_embedding_model: text-embedding-ada-002 # only works with text-embedding-ada-002 for now... https://github.com/BerriAI/litellm/issues/4001

@@ -38,6 +38,7 @@ def test_budget_crud_roundtrip(client: BudgetClient, resources: ResourceManager)
 
 def test_budget_delete_removes_it(client: BudgetClient, resources: ResourceManager) -> None:
     budget_id = client.create_budget(max_budget=1.0)
+    resources.defer(lambda: client.delete_budget(budget_id))
     client.delete_budget(budget_id)
     assert not client.budget_info(budget_id), "budget still present after delete"
 
