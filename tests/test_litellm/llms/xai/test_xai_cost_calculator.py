@@ -9,6 +9,7 @@ import sys
 import litellm
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
+    PromptTokensDetailsWrapper,
     Usage,
 )
 
@@ -20,6 +21,8 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.llms.xai.cost_calculator import (
+    _DEFAULT_WEB_SEARCH_COST_PER_CALL,
+    _web_search_cost_per_call_from_model_info,
     apply_server_side_tool_usage_details_to_usage,
     cost_per_token,
     cost_per_web_search_request,
@@ -484,3 +487,112 @@ class TestXAICostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+
+class TestXAIWebSearchCostHelpers:
+    """Focused coverage for web_search / tool-usage helpers in cost_calculator.py."""
+
+    def test_apply_details_noop_when_details_none(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        apply_server_side_tool_usage_details_to_usage(usage, None)
+        assert getattr(usage, "server_side_tool_usage_details", None) is None
+
+    def test_apply_details_sets_attr_but_skips_mirror_when_web_search_zero(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        details = {"web_search_calls": 0, "x_search_calls": 3}
+        apply_server_side_tool_usage_details_to_usage(usage, details)
+        assert getattr(usage, "server_side_tool_usage_details") == details
+        assert (
+            usage.prompt_tokens_details is None
+            or usage.prompt_tokens_details.web_search_requests is None
+        )
+
+    def test_apply_details_skips_mirror_when_web_search_calls_invalid(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        details = {"web_search_calls": "not-a-number"}
+        apply_server_side_tool_usage_details_to_usage(usage, details)
+        assert getattr(usage, "server_side_tool_usage_details") == details
+        assert usage.prompt_tokens_details is None
+
+    def test_apply_details_updates_existing_prompt_tokens_details(self):
+        usage = Usage(
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=7),
+        )
+        apply_server_side_tool_usage_details_to_usage(usage, {"web_search_calls": 4})
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 7
+        assert usage.prompt_tokens_details.web_search_requests == 4
+
+    def test_web_search_cost_per_call_default_when_model_info_empty(self):
+        assert (
+            _web_search_cost_per_call_from_model_info({})
+            == _DEFAULT_WEB_SEARCH_COST_PER_CALL
+        )
+
+    def test_web_search_cost_per_call_prefers_medium_over_low(self):
+        model_info = {
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.001,
+                "search_context_size_medium": 0.009,
+            }
+        }
+        assert _web_search_cost_per_call_from_model_info(model_info) == 0.009
+
+    def test_web_search_cost_per_call_falls_back_to_low_then_high(self):
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {"search_context_cost_per_query": {"search_context_size_low": 0.003}}
+            )
+            == 0.003
+        )
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {"search_context_cost_per_query": {"search_context_size_high": 0.007}}
+            )
+            == 0.007
+        )
+
+    def test_web_search_cost_per_call_ignores_zero_and_invalid_values(self):
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {
+                    "search_context_cost_per_query": {
+                        "search_context_size_medium": 0,
+                        "search_context_size_low": "bad",
+                    }
+                }
+            )
+            == _DEFAULT_WEB_SEARCH_COST_PER_CALL
+        )
+
+    def test_cost_per_web_search_request_zero_when_details_not_mapping(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", "invalid")
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_zero_when_web_search_calls_invalid(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {"web_search_calls": object()},
+        )
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_zero_when_web_search_calls_zero(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {"web_search_calls": 0, "x_search_calls": 5},
+        )
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_uses_default_rate_without_model_pricing(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 4})
+        cost = cost_per_web_search_request(usage=usage, model_info={})
+        assert math.isclose(cost, 4 * _DEFAULT_WEB_SEARCH_COST_PER_CALL, rel_tol=1e-10)
