@@ -51,7 +51,7 @@ def test_model_max_budget_isolates_per_model(
 
     # The other model shares the key but has its own (large) cap -> still works.
     other = _call(client, key, FREE_MODEL)
-    require_successful_call(other)  # its own large cap -> must succeed, never a budget block
     assert not is_budget_block(other), (
         f"{FREE_MODEL} was blocked by {CAPPED_MODEL}'s budget; per-model caps not isolated"
     )
+    require_successful_call(other)
