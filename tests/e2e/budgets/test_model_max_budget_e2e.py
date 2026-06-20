@@ -24,7 +24,7 @@ FREE_MODEL = "gemini-2.5-flash"
 def _call(client: BudgetClient, key: str, model: str):
     result = client.chat(key, model, f"hi {unique_marker()}", max_tokens=16)
     if not result.ok and not is_budget_block(result):
-        require_successful_call(result)  # non-budget error -> skip
+        require_successful_call(result)
     return result
 
 
