@@ -1206,7 +1206,7 @@ def run_server(
                     continue
                 _bad_scheme = unsupported_db_scheme(_candidate_url)
                 if _bad_scheme is not None:
-                    print(  # noqa
+                    print(
                         f"\033[1;31mLiteLLM Proxy: "
                         f"{unsupported_db_scheme_message(_db_env, _bad_scheme)}"
                         "\033[0m",

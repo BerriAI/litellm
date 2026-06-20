@@ -31,6 +31,7 @@ def _apply() -> bool:
 _MANAGED_DB_ENV_VARS = (
     "IAM_TOKEN_DB_AUTH",
     "DATABASE_URL",
+    "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
     "DATABASE_HOST",
     "DATABASE_PORT",
@@ -341,6 +342,16 @@ def test_apply_to_env_rejects_pinned_sqlite_writer(monkeypatch):
 
     # The bad URL must not have been propagated as a usable connection string.
     assert os.environ["DATABASE_URL"] == "sqlite:///data/litellm.db"
+
+
+def test_apply_to_env_rejects_pinned_sqlite_direct_url(monkeypatch):
+    """DIRECT_URL reaches Prisma the same way DATABASE_URL does; a non-postgres
+    direct URL must be rejected in apply_to_env, matching the CLI startup guard."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv("DIRECT_URL", "sqlite:///data/litellm.db")
+
+    with pytest.raises(RuntimeError, match="DIRECT_URL.*sqlite"):
+        _apply()
 
 
 def test_apply_to_env_rejects_pinned_non_postgres_reader(monkeypatch):

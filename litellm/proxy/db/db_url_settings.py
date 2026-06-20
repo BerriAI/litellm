@@ -94,6 +94,7 @@ class DatabaseURLSettings(BaseSettings):
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    direct_url: str | None = Field(default=None, validation_alias="DIRECT_URL")
     database_host: str | None = Field(default=None, validation_alias="DATABASE_HOST")
     database_port: str = Field(
         default=_DEFAULT_PG_PORT, validation_alias="DATABASE_PORT"
@@ -275,15 +276,17 @@ class DatabaseURLSettings(BaseSettings):
         return url
 
     def _raise_for_unsupported_scheme(self) -> None:
-        """Reject an operator-pinned non-PostgreSQL writer/reader URL.
+        """Reject an operator-pinned non-PostgreSQL writer / direct / reader URL.
 
         The componentized entrypoints (gateway / backend / migrations) call
         ``apply_to_env`` and then hand the URL straight to Prisma, bypassing
         the CLI's own guard. A pinned URL flows through untouched, so validate
-        it here too rather than letting Prisma stall on an unusable scheme.
+        the same three vars the CLI guard checks (DATABASE_URL, DIRECT_URL, and
+        the read replica) rather than letting Prisma stall on an unusable scheme.
         """
         for env_var, url in (
             ("DATABASE_URL", self.database_url),
+            ("DIRECT_URL", self.direct_url),
             ("DATABASE_URL_READ_REPLICA", self.database_url_read_replica),
         ):
             if not url:
