@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { AgentControlPlaneView } from "./layout";
+
+const { getMock } = vi.hoisted(() => ({ getMock: vi.fn(() => Promise.resolve({ session_claim: "claim" })) }));
 
 const pluginModeValue = {
   mode: "litellm-platform-plugin" as string,
@@ -16,9 +18,8 @@ const pluginModeValue = {
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: () => pluginModeValue }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ accessToken: "sk-test-token" }) }));
 
-// Stub the proxy client so the auth-token fetch is inert in tests.
 vi.mock("@/lib/http/client", () => ({
-  createApiClient: () => ({ get: vi.fn(() => Promise.resolve({ encrypted_token: "enc" })) }),
+  createApiClient: () => ({ get: getMock }),
 }));
 vi.mock("@/components/networking", () => ({ getProxyBaseUrl: () => "" }));
 
@@ -61,5 +62,22 @@ describe("AgentControlPlaneView iframe", () => {
 
     expect(allow).not.toContain("clipboard-read");
     expect(allow).toContain("clipboard-write");
+  });
+
+  it("requests the auth-token claim scoped to the active plugin, not a hardcoded default", async () => {
+    getMock.mockClear();
+    pluginModeValue.activePlugin = { name: "reports-plugin", display_name: "Reports", url: "http://localhost:3300" };
+    render(<AgentControlPlaneView />);
+
+    await waitFor(() => expect(getMock).toHaveBeenCalled());
+    const [path, opts] = getMock.mock.calls[0];
+    expect(path).toBe("/api/plugins/auth-token");
+    expect(opts.query).toEqual({ plugin_name: "reports-plugin" });
+
+    pluginModeValue.activePlugin = {
+      name: "litellm-platform-plugin",
+      display_name: "Chat UI",
+      url: "http://localhost:3300",
+    };
   });
 });

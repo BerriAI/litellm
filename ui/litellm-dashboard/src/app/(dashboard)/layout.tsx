@@ -24,36 +24,44 @@ function PluginModeProviderWithAuth({ children }: { children: React.ReactNode })
 
 export function AgentControlPlaneView() {
   const { activePlugin } = usePluginMode();
+  const activePluginName = activePlugin?.name;
   const agentPlatformUrl = activePlugin?.url ?? "";
   const { accessToken } = useAuth();
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [encryptedToken, setEncryptedToken] = useState<string | null>(null);
+  const [auth, setAuth] = useState<{ plugin: string; claim: string } | null>(null);
 
-  // Fetch a short-lived encrypted identity claim from the proxy.
-  // It conveys only the caller's identity (no litellm token); the plugin
-  // decrypts it with its own per-plugin key.
+  // Fetch a short-lived identity claim scoped to the *active* plugin. The claim
+  // is encrypted under that plugin's own per-plugin key, so it must be requested
+  // per plugin and re-fetched when the user switches plugins.
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || !activePluginName) return;
+    let cancelled = false;
     pluginApiClient
-      .get("/api/plugins/auth-token", { accessToken })
-      .then((data: { session_claim?: string }) => setEncryptedToken(data?.session_claim ?? null))
+      .get("/api/plugins/auth-token", { accessToken, query: { plugin_name: activePluginName } })
+      .then((data: { session_claim?: string }) => {
+        if (!cancelled && data?.session_claim) setAuth({ plugin: activePluginName, claim: data.session_claim });
+      })
       .catch(() => {});
-  }, [accessToken]);
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, activePluginName]);
 
-  // Deliver the encrypted identity claim to the iframe via postMessage.
+  // Deliver the claim to the iframe via postMessage, but only while it was issued
+  // for the plugin currently mounted — never replay one plugin's claim to another.
   // targetOrigin is the configured plugin URL — no other origin receives it.
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (!iframe || !encryptedToken || !agentPlatformUrl) return;
+    if (!iframe || !auth || auth.plugin !== activePluginName || !agentPlatformUrl) return;
     const send = () => {
-      iframe.contentWindow?.postMessage({ type: "litellm-auth", session_claim: encryptedToken }, agentPlatformUrl);
+      iframe.contentWindow?.postMessage({ type: "litellm-auth", session_claim: auth.claim }, agentPlatformUrl);
     };
     // Cover both orderings: the iframe may have already fired `load` before the
     // claim arrived (send now), or it may load/reload later (send on the event).
     send();
     iframe.addEventListener("load", send);
     return () => iframe.removeEventListener("load", send);
-  }, [encryptedToken, agentPlatformUrl]);
+  }, [auth, activePluginName, agentPlatformUrl]);
 
   if (!agentPlatformUrl) {
     return (
