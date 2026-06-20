@@ -223,3 +223,17 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 
     return _panw_callback
+
+
+def initialize_veto(litellm_params: LitellmParams, guardrail: Guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.veto.veto import VetoGuardrail
+
+    _veto_callback = VetoGuardrail(
+        guardrail_name=guardrail.get("guardrail_name", "veto"),
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+        event_hook=litellm_params.mode,
+        default_on=litellm_params.default_on,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_veto_callback)
+    return _veto_callback

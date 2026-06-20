@@ -408,6 +408,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Policy", "Grounding", "RAG"],
     providerKey: "Xecguard",
   },
+  {
+    id: "veto",
+    name: "Veto",
+    description:
+      "EU-hosted LLM guardrails. PII and secret redaction, prompt-injection detection, and content moderation behind one endpoint and one API key.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}veto.svg`,
+    tags: ["Security", "PII", "Secrets", "Injection"],
+    providerKey: "Veto",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
