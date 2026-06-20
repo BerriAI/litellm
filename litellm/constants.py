@@ -530,6 +530,13 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "high": 10,
 }
 
+# Tool types Anthropic rejects cache_control on.
+# Referenced by anthropic_cache_control_hook and transformation.py.
+ANTHROPIC_NON_CACHEABLE_TOOL_TYPES: tuple = (
+    "tool_search_tool_regex_20251119",
+    "tool_search_tool_bm25_20251119",
+)
+
 # LiteLLM standard web search tool name
 # Used for web search interception across providers
 LITELLM_WEB_SEARCH_TOOL_NAME = "litellm_web_search"
