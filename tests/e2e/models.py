@@ -215,14 +215,10 @@ class CustomPricing(BaseModel):
     def token_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """Spend for a fresh (uncached) call under these rates: the proxy's
         custom-pricing formula (prompt * input + completion * output)."""
-        assert (
-            self.input_cost_per_token is not None
-            and self.output_cost_per_token is not None
-        ), "custom pricing has no per-token rates"
-        return (
-            prompt_tokens * self.input_cost_per_token
-            + completion_tokens * self.output_cost_per_token
+        assert self.input_cost_per_token is not None and self.output_cost_per_token is not None, (
+            "custom pricing has no per-token rates"
         )
+        return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
 class ModelInfoEntry(BaseModel):
