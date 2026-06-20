@@ -31,27 +31,61 @@ from collections.abc import Mapping
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from litellm.proxy._types import PluginConfig, UserAPIKeyAuth
+from litellm.proxy._types import PluginConfig, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router = APIRouter()
 
-# Headers that must never be forwarded TO plugin backends
-_REQUEST_STRIP = {
-    "host",
-    "connection",
-    "transfer-encoding",
-    "te",
-    "trailers",
-    "upgrade",
-    # Strip litellm credentials — plugin auth uses plugin_key only
-    "authorization",
-    "x-api-key",
-    # Strip session cookies — plugins must not capture litellm JWT cookies
-    "cookie",
-}
+# Hop-by-hop headers (RFC 7230) and the litellm session cookie — never forwarded
+# to a plugin backend.  Credential headers are added on top per-request from the
+# canonical SpecialHeaders set so the plugin only ever authenticates via its own
+# injected plugin_key.
+_HOP_BY_HOP_STRIP = frozenset(
+    {
+        "host",
+        "connection",
+        "transfer-encoding",
+        "te",
+        "trailers",
+        "upgrade",
+        "cookie",
+    }
+)
+
+
+def _configured_key_header_names() -> frozenset[str]:
+    """The lowercased general_settings.litellm_key_header_name, if configured.
+
+    Read live from the proxy module (not import-time) so a custom key header set
+    via config is honoured without a restart.  Returns empty when unset.
+    """
+    try:
+        from litellm.proxy import proxy_server
+    except Exception:
+        return frozenset()
+    general_settings = getattr(proxy_server, "general_settings", None)
+    if not isinstance(general_settings, dict):
+        return frozenset()
+    name: object = general_settings.get("litellm_key_header_name")
+    return frozenset({name.lower()}) if isinstance(name, str) and name else frozenset()
+
+
+def _request_strip_headers() -> frozenset[str]:
+    """Headers to drop before forwarding a request to a plugin backend.
+
+    Every header user_api_key_auth accepts as a litellm credential is stripped —
+    Authorization, x-api-key, API-Key, x-goog-api-key, Ocp-Apim-Subscription-Key,
+    x-litellm-api-key, and any configured custom key header — so a plugin can
+    never be handed the caller's live litellm key (confused-deputy escalation).
+    """
+    return (
+        _HOP_BY_HOP_STRIP
+        | SpecialHeaders.litellm_credential_header_names()
+        | _configured_key_header_names()
+    )
+
 
 # Headers to strip from plugin RESPONSES before returning to the browser.
 # httpx already decompresses and de-chunks the body, so forwarding the wire
@@ -264,8 +298,9 @@ async def plugin_proxy(
     body = await request.body()
 
     # Strip caller credentials and hop-by-hop headers from forwarded request
+    strip = _request_strip_headers()
     forward_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in _REQUEST_STRIP
+        k: v for k, v in request.headers.items() if k.lower() not in strip
     }
 
     # Inject plugin's own credential as upstream auth (if configured)
