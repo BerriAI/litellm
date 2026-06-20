@@ -1907,6 +1907,13 @@ class ProxyBaseLLMRequestProcessing:
         except Exception:
             pass
 
+        if isinstance(e, ProxyException):
+            e.headers = {
+                **e.headers,
+                **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
+            }
+            raise e
+
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
             message, structured_fields = _serialize_http_exception_detail(raw_detail)
