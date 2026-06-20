@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple
+from typing import Any, Optional
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -29,12 +29,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+    ) -> tuple[dict, Optional[str]]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
 
@@ -44,9 +44,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         """
         # Always use the Copilot endpoint resolved from the authenticated
         # session, never the caller-supplied api_base.
-        dynamic_api_base = (
-            self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:

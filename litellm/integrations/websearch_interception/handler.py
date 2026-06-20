@@ -134,10 +134,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         try:
             provider_enum = LlmProviders(provider_str)
             if provider_enum != LlmProviders.GITHUB_COPILOT:
-                anthropic_config = (
-                    ProviderConfigManager.get_provider_anthropic_messages_config(
-                        model=model, provider=provider_enum
-                    )
+                anthropic_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+                    model=model, provider=provider_enum
                 )
                 if anthropic_config is not None:
                     verbose_logger.debug(
