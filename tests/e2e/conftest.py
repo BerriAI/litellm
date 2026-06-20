@@ -1,7 +1,9 @@
 """Shared fixtures for all live e2e suites under tests/e2e/.
 
-Design rule: skip on environment, fail on behavior. If the proxy is unreachable
-the whole session skips; once a request reaches the proxy, behavior is asserted.
+Design rule: skip on environment, fail on behavior. Live tests (marked `e2e`)
+skip when no proxy answers; once a request reaches the proxy, behavior is
+asserted. Pure unit coverage of the harness itself carries no `e2e` marker and
+runs regardless of whether a proxy is up.
 
 Lifecycle: the `resources` fixture maps the init -> run -> teardown contract
 (lifecycle.E2ECase) onto pytest - setup is init(), the test body is run(), and
@@ -11,6 +13,7 @@ Each suite provides its own `client` fixture (a lifecycle.ResourceClient); these
 shared fixtures build on it.
 """
 
+import functools
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -30,6 +33,29 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",
     )
+
+
+@functools.lru_cache(maxsize=1)
+def _proxy_skip_reason() -> str | None:
+    """Probe the proxy once per session. None if it answers, else a skip reason."""
+    try:
+        resp = requests.get(f"{PROXY_BASE_URL}/health/liveliness", timeout=5)
+    except requests.RequestException as exc:
+        return f"No live proxy at {PROXY_BASE_URL}: {exc}"
+    if resp.status_code >= 500:
+        return f"Proxy at {PROXY_BASE_URL} returned {resp.status_code}"
+    return None
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Skip `e2e`-marked tests unless a proxy answers its liveness probe. Unmarked
+    tests (unit coverage of the harness) don't touch the proxy, so they run even
+    when none is up."""
+    if item.get_closest_marker("e2e") is None:
+        return
+    reason = _proxy_skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
 
 
 def pytest_runtest_call(item: pytest.Item) -> None:
@@ -64,18 +90,6 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     finally:
         if spend_dir in sys.path:
             sys.path.remove(spend_dir)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def require_live_proxy() -> None:
-    """Skip the entire session unless a proxy answers its liveness probe."""
-    try:
-        resp = requests.get(f"{PROXY_BASE_URL}/health/liveliness", timeout=5)
-    except requests.RequestException as exc:
-        pytest.skip(f"No live proxy at {PROXY_BASE_URL}: {exc}")
-        return
-    if resp.status_code >= 500:
-        pytest.skip(f"Proxy at {PROXY_BASE_URL} returned {resp.status_code}")
 
 
 @pytest.fixture
