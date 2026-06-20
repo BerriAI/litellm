@@ -1018,3 +1018,83 @@ def test_transform_response_captures_token_ids():
     }
     result = _run_transform_response(body)
     assert result._hidden_params["fireworks_token_ids"] == [[4, 5, 6]]
+
+
+def test_streaming_surfaces_fireworks_response_fields():
+    """
+    The Fireworks-specific response fields captured into _hidden_params for
+    non-streaming calls must also reach streamed responses. They ride the
+    streamed chunks' provider_specific_fields (litellm rebuilds each streamed
+    chunk, so per-chunk _hidden_params does not survive): per-choice
+    token_ids/raw_output on the content chunk, response-level
+    perf_metrics/prompt_token_ids on the final usage chunk. Driving the real
+    litellm.completion(stream=True) path also covers the get_model_response_iterator
+    wiring; dropping the Fireworks iterator would leave these fields unset.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    model = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+    raw_output = {"completion": "Hi"}
+    sse_lines = [
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hi"},
+                        "token_ids": [123],
+                        "raw_output": raw_output,
+                    }
+                ],
+            }
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 1,
+                    "total_tokens": 6,
+                },
+                "perf_metrics": {"prompt-tokens": 5},
+                "prompt_token_ids": [1, 2, 3],
+            }
+        ),
+        "data: [DONE]",
+    ]
+
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.iter_lines = lambda: iter(sse_lines)
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=raw_response):
+        stream = litellm.completion(
+            model=f"fireworks_ai/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            api_key="fw-test-key",
+            client=client,
+        )
+        surfaced: dict = {}
+        for chunk in stream:
+            fields = getattr(chunk, "provider_specific_fields", None) or {}
+            surfaced.update(
+                {k: v for k, v in fields.items() if k.startswith("fireworks_")}
+            )
+
+    assert surfaced["fireworks_token_ids"] == [[123]]
+    assert surfaced["fireworks_raw_outputs"] == [raw_output]
+    assert surfaced["fireworks_perf_metrics"] == {"prompt-tokens": 5}
+    assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]

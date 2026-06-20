@@ -1,5 +1,15 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
@@ -24,6 +34,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
+    ModelResponseStream,
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
@@ -33,8 +44,32 @@ from litellm.utils import (
     supports_tool_choice,
 )
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from ..common_utils import FireworksAIException
+
+
+def _extract_fireworks_hidden_params(payload: dict) -> dict:
+    """
+    Collect Fireworks-specific response fields (perf_metrics, prompt_token_ids,
+    per-choice raw_output and token_ids) from a non-streaming completion payload
+    or a single streaming chunk, so the same data lands in ``_hidden_params`` on
+    both response paths.
+    """
+    choices = [c for c in (payload.get("choices") or []) if isinstance(c, dict)]
+    top_level = {
+        f"fireworks_{field}": payload[field]
+        for field in ("perf_metrics", "prompt_token_ids")
+        if field in payload
+    }
+    per_choice = {
+        f"fireworks_{dest}": [c[field] for c in choices if field in c]
+        for field, dest in (("raw_output", "raw_outputs"), ("token_ids", "token_ids"))
+        if any(field in c for c in choices)
+    }
+    return {**top_level, **per_choice}
 
 
 class FireworksAIConfig(OpenAIGPTConfig):
@@ -550,37 +585,24 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 )
             )
 
-        hidden_params: dict = {"additional_headers": additional_headers}
-
-        if "perf_metrics" in completion_response:
-            hidden_params["fireworks_perf_metrics"] = completion_response[
-                "perf_metrics"
-            ]
-        if "prompt_token_ids" in completion_response:
-            hidden_params["fireworks_prompt_token_ids"] = completion_response[
-                "prompt_token_ids"
-            ]
-
-        raw_choices = completion_response.get("choices") or []
-        fireworks_raw_outputs = [
-            choice["raw_output"]
-            for choice in raw_choices
-            if isinstance(choice, dict) and "raw_output" in choice
-        ]
-        if fireworks_raw_outputs:
-            hidden_params["fireworks_raw_outputs"] = fireworks_raw_outputs
-
-        fireworks_token_ids = [
-            choice["token_ids"]
-            for choice in raw_choices
-            if isinstance(choice, dict) and "token_ids" in choice
-        ]
-        if fireworks_token_ids:
-            hidden_params["fireworks_token_ids"] = fireworks_token_ids
-
-        response._hidden_params = hidden_params
+        response._hidden_params = {
+            "additional_headers": additional_headers,
+            **_extract_fireworks_hidden_params(completion_response),
+        }
 
         return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return FireworksAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
@@ -638,3 +660,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
             or get_secret_str("FIREWORKSAI_API_KEY")
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
+
+
+class FireworksAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        parsed = super().chunk_parser(chunk)
+        fireworks_fields = _extract_fireworks_hidden_params(chunk)
+        if fireworks_fields:
+            parsed.provider_specific_fields = {
+                **(getattr(parsed, "provider_specific_fields", None) or {}),
+                **fireworks_fields,
+            }
+        return parsed
