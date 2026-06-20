@@ -259,30 +259,6 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_web_identity_token",
     "aws_role_name",
     "vertex_credentials",
-    "vertex_ai_credentials",
-    "vertex_project",
-    "vertex_location",
-    "aws_access_key_id",
-    "aws_profile_name",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "base_model",
-    "oci_signer",
-    "oci_user",
-    "oci_fingerprint",
-    "oci_tenancy",
-    "oci_key",
-    "oci_key_file",
-    "oci_compartment_id",
-    "oci_region",
-    # SDK-only field; also rejected outright in is_request_body_safe
-    "model_list",
-    "litellm_credential_name",
-    # Resumes a Bedrock AgentCore runtime session by id. AWS does not enforce
-    # session-to-user mapping (the client backend must), so a caller-supplied
-    # value resumes another tenant's session.
-    # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html
-    "runtimeSessionId",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
     # ``extra_body``) and resolves it through ``get_secret`` before
@@ -309,6 +285,8 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # SDK-only field; also rejected outright in is_request_body_safe.
+    "model_list",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -361,34 +339,6 @@ def _check_banned_params(
         )
 
 
-_BASE_OVERRIDE_FIELDS: tuple[str, ...] = ("api_base", "base_url")
-
-
-def _check_base_override_has_api_key(body: dict) -> None:
-    """Reject a permitted base-URL override that omits a caller ``api_key``.
-
-    Once ``api_base``/``base_url`` clears the banned-param gate via an admin
-    opt-in, the request retargets the upstream URL. With no caller-supplied
-    ``api_key`` the provider re-resolves a server-side credential from the
-    environment (``api_key or get_secret("OPENAI_API_KEY")`` and ~30 sibling
-    chains in ``litellm/main.py``) and forwards it to that caller-controlled
-    URL. Requiring a non-empty ``api_key`` alongside the override closes the
-    fallback; popping the deployment key upstream only changes which server
-    credential leaks.
-    """
-    if not any(field in body for field in _BASE_OVERRIDE_FIELDS):
-        return
-    api_key = body.get("api_key")
-    if isinstance(api_key, str) and api_key.strip():
-        return
-    raise ValueError(
-        "Rejected Request: api_base/base_url override requires a "
-        "caller-supplied api_key. Sending only a base override would cause "
-        "the proxy to fall back to a server-side credential. Supply your own "
-        "api_key in the request body to override the upstream URL."
-    )
-
-
 def is_request_body_safe(
     request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
 ) -> bool:
@@ -417,47 +367,20 @@ def is_request_body_safe(
     ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
     recursion-depth DoS surface.
     """
-    # model_list is an SDK-only field with no proxy API meaning; reject it
-    # outright so caller-supplied deployments are not used by the proxy
     if "model_list" in request_body:
         raise ValueError(
             "Rejected Request: model_list is not allowed in the request body."
         )
-
     _check_banned_params(request_body, general_settings, llm_router, model)
-    _check_base_override_has_api_key(request_body)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model)
-            _check_base_override_has_api_key(nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
-    # tool entries can carry routing fields, so apply the same check to each
-    # tool dict and its nested function object
-    for tool in _iter_request_tools(request_body.get("tools")):
-        _check_banned_params(tool, general_settings, llm_router, model)
-        _check_base_override_has_api_key(tool)
-        function = tool.get("function")
-        if isinstance(function, dict):
-            _check_banned_params(function, general_settings, llm_router, model)
-            _check_base_override_has_api_key(function)
     return True
-
-
-def _iter_request_tools(tools: Any) -> tuple[dict[str, Any], ...]:
-    """Return the dict entries of a request ``tools`` array.
-
-    The OpenAI ``tools`` field is a list of objects; provider-specific tools
-    (advisor, web search, etc.) carry routing fields at the top level of each
-    entry. Non-dict entries are skipped rather than raising so a malformed
-    array still reaches the normal request validation downstream.
-    """
-    if not isinstance(tools, (list, tuple)):
-        return ()
-    return tuple(tool for tool in tools if isinstance(tool, dict))
 
 
 def _coerce_metadata_to_dict(value: Any) -> Optional[Dict[str, Any]]:

@@ -446,7 +446,7 @@ def test_is_request_body_safe_global_enabled(
     )
     try:
         is_request_body_safe(
-            request_body={"api_base": "hello-world", "api_key": "sk-caller-byok"},
+            request_body={"api_base": "hello-world"},
             general_settings={
                 "allow_client_side_credentials": allow_client_side_credentials
             },
@@ -486,7 +486,7 @@ def test_is_request_body_safe_model_enabled(
     )
     try:
         is_request_body_safe(
-            request_body={"api_base": "hello-world", "api_key": "sk-caller-byok"},
+            request_body={"api_base": "hello-world"},
             general_settings={},
             llm_router=llm_router,
             model="fireworks_ai/my-new-model",
