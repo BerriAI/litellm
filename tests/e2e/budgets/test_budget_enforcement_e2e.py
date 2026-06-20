@@ -127,6 +127,10 @@ class TeamMemberBudgetCase(_BudgetCase):
         self._undo.append(lambda: self.client.delete_key(self.key))
 
 
+def _case_id(case_cls: Type[_BudgetCase]) -> str:
+    return case_cls.__name__
+
+
 @pytest.mark.parametrize(
     "case_cls",
     [
@@ -136,7 +140,7 @@ class TeamMemberBudgetCase(_BudgetCase):
         OrganizationBudgetCase,
         TeamMemberBudgetCase,
     ],
-    ids=lambda c: c.__name__,
+    ids=_case_id,
 )
 def test_budget_enforcement(
     client: BudgetClient, case_cls: Type[_BudgetCase]
