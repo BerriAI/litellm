@@ -8,7 +8,7 @@ Talks to e2b's REST API directly over httpx (no e2b SDK dependency):
 """
 
 import json
-from typing import List, Optional, Union, cast
+from typing import Union, cast
 
 import httpx
 
@@ -33,12 +33,12 @@ MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 
 
 class E2BSandboxConfig(BaseSandboxConfig):
-    def _http(self, client: Optional[AsyncHTTPHandler]) -> AsyncHTTPHandler:
+    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
         if client is not None:
             return client
         return get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
 
-    def validate_environment(self, api_key: Optional[str] = None, **kwargs) -> str:
+    def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
         key = api_key or get_secret_str("E2B_API_KEY")
         if not key:
             raise ValueError("E2B API key not set. Set E2B_API_KEY or pass api_key=...")
@@ -47,12 +47,12 @@ class E2BSandboxConfig(BaseSandboxConfig):
     async def acreate_sandbox(
         self,
         *,
-        template: Optional[str] = None,
-        timeout: Optional[int] = None,
+        template: str | None = None,
+        timeout: int | None = None,
         allow_internet_access: bool = True,
-        api_key: Optional[str] = None,
-        metadata: Optional[dict] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        api_key: str | None = None,
+        metadata: dict | None = None,
+        client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> ContainerHandle:
         key = self.validate_environment(api_key=api_key)
@@ -92,9 +92,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
         *,
         container: Union[ContainerHandle, str],
         code: str,
-        api_key: Optional[str] = None,
-        env_vars: Optional[dict] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        api_key: str | None = None,
+        env_vars: dict | None = None,
+        client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> CodeExecutionResult:
         handle = self._as_handle(container)
@@ -129,8 +129,8 @@ class E2BSandboxConfig(BaseSandboxConfig):
         self,
         *,
         container: Union[ContainerHandle, str],
-        api_key: Optional[str] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        api_key: str | None = None,
+        client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> bool:
         handle = self._as_handle(container)
@@ -164,8 +164,8 @@ class E2BSandboxConfig(BaseSandboxConfig):
         return handle
 
     @staticmethod
-    async def _read_capped_lines(response: httpx.Response) -> List[str]:
-        lines: List[str] = []
+    async def _read_capped_lines(response: httpx.Response) -> list[str]:
+        lines: list[str] = []
         total = 0
         async for line in response.aiter_lines():
             total += len(line.encode("utf-8"))
@@ -178,7 +178,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         return lines
 
     @staticmethod
-    def _parse_lines(lines: List[str]) -> CodeExecutionResult:
+    def _parse_lines(lines: list[str]) -> CodeExecutionResult:
         def _try_parse(stripped: str):
             try:
                 return json.loads(stripped)

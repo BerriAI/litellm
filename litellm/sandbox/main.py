@@ -11,7 +11,7 @@ Each entrypoint is `@client`-decorated, so every operation is logged the same
 way `litellm.asearch` is.
 """
 
-from typing import Optional, Union
+from typing import Union
 
 import litellm
 from litellm.llms.base_llm.sandbox.transformation import (
@@ -21,6 +21,13 @@ from litellm.llms.base_llm.sandbox.transformation import (
 )
 from litellm.types.utils import SandboxProviders
 from litellm.utils import ProviderConfigManager, client
+
+__all__ = [
+    "acreate_sandbox",
+    "arun_code",
+    "adelete_sandbox",
+    "acode_interpreter_tool",
+]
 
 _LITELLM_INTERNAL_KWARGS = {
     "litellm_logging_obj",
@@ -59,10 +66,10 @@ def _update_logging(kwargs: dict, provider: str, operation: str) -> None:
 @client
 async def acreate_sandbox(
     provider: str,
-    template: Optional[str] = None,
-    timeout: Optional[int] = None,
+    template: str | None = None,
+    timeout: int | None = None,
     allow_internet_access: bool = True,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     **kwargs,
 ) -> ContainerHandle:
     _update_logging(kwargs, provider, "create_sandbox")
@@ -80,7 +87,7 @@ async def arun_code(
     provider: str,
     container: Union[ContainerHandle, str],
     code: str,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     **kwargs,
 ) -> CodeExecutionResult:
     _update_logging(kwargs, provider, "run_code")
@@ -96,7 +103,7 @@ async def arun_code(
 async def adelete_sandbox(
     provider: str,
     container: Union[ContainerHandle, str],
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     **kwargs,
 ) -> bool:
     _update_logging(kwargs, provider, "delete_sandbox")
@@ -111,9 +118,9 @@ async def adelete_sandbox(
 async def acode_interpreter_tool(
     provider: str,
     code: str,
-    template: Optional[str] = None,
-    timeout: Optional[int] = None,
-    api_key: Optional[str] = None,
+    template: str | None = None,
+    timeout: int | None = None,
+    api_key: str | None = None,
     **kwargs,
 ) -> CodeExecutionResult:
     _update_logging(kwargs, provider, "code_interpreter_tool")

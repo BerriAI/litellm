@@ -6,7 +6,7 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 
 from pydantic import Field, PrivateAttr
 
@@ -18,7 +18,7 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
 
     id: str
     provider: str
-    domain: Optional[str] = None
+    domain: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -30,9 +30,9 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 
     stdout: str = ""
     stderr: str = ""
-    results: List[Dict[str, Any]] = Field(default_factory=list)
-    error: Optional[Dict[str, Any]] = None
-    execution_count: Optional[int] = None
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    error: dict[str, Any] | None = None
+    execution_count: int | None = None
     object: str = "code_execution"
 
     model_config = {"extra": "allow"}
@@ -43,7 +43,7 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 class BaseSandboxConfig:
     """Provider-agnostic sandbox operations."""
 
-    def validate_environment(self, api_key: Optional[str] = None, **kwargs) -> str:
+    def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
         raise NotImplementedError(
             "validate_environment must be implemented by provider"
         )
@@ -51,10 +51,10 @@ class BaseSandboxConfig:
     async def acreate_sandbox(
         self,
         *,
-        template: Optional[str] = None,
-        timeout: Optional[int] = None,
+        template: str | None = None,
+        timeout: int | None = None,
         allow_internet_access: bool = True,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         **kwargs,
     ) -> ContainerHandle:
         raise NotImplementedError("acreate_sandbox must be implemented by provider")
@@ -64,7 +64,7 @@ class BaseSandboxConfig:
         *,
         container: Union[ContainerHandle, str],
         code: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         **kwargs,
     ) -> CodeExecutionResult:
         raise NotImplementedError("arun_code must be implemented by provider")
@@ -73,7 +73,7 @@ class BaseSandboxConfig:
         self,
         *,
         container: Union[ContainerHandle, str],
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         **kwargs,
     ) -> bool:
         raise NotImplementedError("adelete_sandbox must be implemented by provider")
