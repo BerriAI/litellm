@@ -285,7 +285,11 @@ class MCPServerManagerV2(MCPServerManager):
                 server, url, mcp_auth_header, extra_headers, raw_headers
             )
         conn = await self._v2_connection(
-            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+            server,
+            None,
+            raw_headers=raw_headers,
+            extra_headers=extra_headers,
+            raise_on_missing_env=True,
         )
         if isinstance(conn, Error):
             self._egress_item_failure(server, conn.error)
@@ -315,7 +319,11 @@ class MCPServerManagerV2(MCPServerManager):
                 raw_headers,
             )
         conn = await self._v2_connection(
-            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+            server,
+            None,
+            raw_headers=raw_headers,
+            extra_headers=extra_headers,
+            raise_on_missing_env=True,
         )
         if isinstance(conn, Error):
             self._egress_item_failure(server, conn.error)

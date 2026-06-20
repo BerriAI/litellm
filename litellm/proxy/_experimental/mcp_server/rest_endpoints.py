@@ -18,7 +18,10 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPUpstreamAuthError,
+    MCPUpstreamError,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
@@ -886,6 +889,10 @@ if MCP_AVAILABLE:
                     "setup_url": e.setup_url,
                 },
             )
+        except MCPUpstreamError as e:
+            # Non-auth upstream failure on the tool call; surface the semantic status
+            # (502 unreachable / 428 precondition / 500 misconfigured) instead of a blanket 500.
+            raise e.to_http_exception()
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(

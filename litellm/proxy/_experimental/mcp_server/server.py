@@ -40,7 +40,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPUpstreamAuthError,
+    MCPUpstreamError,
+)
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
@@ -4003,6 +4006,10 @@ if MCP_AVAILABLE:
                 base_url=get_request_base_url(StarletteRequest(scope)),
                 request_path=scope.get("_original_path") or scope.get("path"),
             )
+        except MCPUpstreamError as e:
+            # Non-auth upstream failure on a single-result op; surface the semantic status
+            # (502 unreachable / 428 precondition / 500 misconfigured) instead of a blanket 500.
+            raise e.to_http_exception()
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -4119,6 +4126,10 @@ if MCP_AVAILABLE:
                 base_url=get_request_base_url(StarletteRequest(scope)),
                 request_path=scope.get("_original_path") or scope.get("path"),
             )
+        except MCPUpstreamError as e:
+            # Non-auth upstream failure on a single-result op; surface the semantic status
+            # (502 unreachable / 428 precondition / 500 misconfigured) instead of a blanket 500.
+            raise e.to_http_exception()
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             # (e.g. 401 + WWW-Authenticate challenges from OAuth pass-through).
