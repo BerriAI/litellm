@@ -809,6 +809,21 @@ def test_transform_messages_helper_allows_vision_image_inputs():
     assert out == messages
 
 
+def test_transform_messages_helper_skips_non_dict_content():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": ["just a string", {"type": "text", "text": "hello"}],
+        }
+    ]
+
+    out = config._transform_messages_helper(
+        messages, model="accounts/fireworks/models/glm-5p2", litellm_params={}
+    )
+    assert out == messages
+
+
 def test_transform_messages_helper_no_transform_inline():
     config = FireworksAIConfig()
     url = "https://example.com/image.jpg"
