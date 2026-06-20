@@ -1001,13 +1001,8 @@ def run_server(
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        azure_postgresql_auth_enabled = (
-            azure_postgresql_auth
-            or get_secret_bool("AZURE_POSTGRESQL_AUTH")
-            or get_secret_bool("AZURE_POSTGRESQL_PASSWORDLESS_AUTH")
-        )
         if (
-            azure_postgresql_auth_enabled
+            azure_postgresql_auth
             or iam_token_db_auth
             or get_secret_bool("IAM_TOKEN_DB_AUTH")
         ):
@@ -1018,15 +1013,10 @@ def run_server(
 
             _db_url = build_database_token_auth_url(
                 get_database_auth_endpoint_from_env(),
-                azure_postgresql_auth=azure_postgresql_auth_enabled,
+                azure_postgresql_auth=azure_postgresql_auth,
             )
             os.environ["DATABASE_URL"] = _db_url
-            auth_env_var = (
-                "AZURE_POSTGRESQL_AUTH"
-                if azure_postgresql_auth_enabled
-                else "IAM_TOKEN_DB_AUTH"
-            )
-            os.environ[auth_env_var] = "True"
+            os.environ["IAM_TOKEN_DB_AUTH"] = "True"
 
         ### DECRYPT ENV VAR ###
 

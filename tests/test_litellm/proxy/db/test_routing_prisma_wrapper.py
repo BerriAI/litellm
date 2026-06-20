@@ -864,6 +864,27 @@ def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
     assert wrapper._parse_token_expiration(token) == datetime.utcfromtimestamp(exp)
 
 
+def test_azure_postgres_auth_url_detects_jwt_token():
+    import urllib.parse
+
+    from litellm.proxy.db.prisma_client import is_azure_postgresql_auth_url
+
+    token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE4OTM0NTYwMDB9.signature"
+    azure_url = (
+        "postgresql://managed-identity:"
+        f"{urllib.parse.quote(token, safe='')}@server.postgres.database.azure.com:5432/litellm"
+    )
+    rds_token = "mock-token?X-Amz-Date=20240101T120000Z&X-Amz-Expires=900"
+    rds_url = (
+        "postgresql://iam_user:"
+        f"{urllib.parse.quote(rds_token, safe='')}@rds.amazonaws.com:5432/litellm"
+    )
+
+    assert is_azure_postgresql_auth_url(azure_url) is True
+    assert is_azure_postgresql_auth_url(rds_url) is False
+    assert is_azure_postgresql_auth_url(None) is False
+
+
 @pytest.mark.asyncio
 async def test_reader_recreate_uses_datasource_override(monkeypatch):
     """Reader recreate must pass `datasource={"url": ...}` to Prisma() — Prisma
