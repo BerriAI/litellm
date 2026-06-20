@@ -9,14 +9,22 @@ Source: litellm/llms/xai/responses/transformation.py
 
 import os
 import sys
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-from litellm.types.utils import LlmProviders
+from litellm.types.llms.openai import (
+    ResponseAPIUsage,
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+)
+from litellm.types.utils import LlmProviders, Usage
 from litellm.utils import ProviderConfigManager
 
 
@@ -309,3 +317,148 @@ class TestXAIResponsesAPITransformation:
         # Verify function tool is unchanged
         assert result["tools"][3]["type"] == "function"
         assert result["tools"][3]["name"] == "get_weather"
+
+
+class TestXAIResponsesToolUsageAttach:
+    """Tests for server_side_tool_usage_details attach helpers (cost billing)."""
+
+    _TOOL_DETAILS = {
+        "web_search_calls": 2,
+        "x_search_calls": 0,
+        "code_interpreter_calls": 0,
+        "file_search_calls": 0,
+        "mcp_calls": 0,
+        "document_search_calls": 0,
+    }
+
+    def test_server_side_tool_usage_details_from_usage_dict(self):
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
+            {"server_side_tool_usage_details": self._TOOL_DETAILS}
+        )
+        assert details == self._TOOL_DETAILS
+
+    def test_server_side_tool_usage_details_from_usage_attr(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", self._TOOL_DETAILS)
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
+            usage
+        )
+        assert details == self._TOOL_DETAILS
+
+    def test_server_side_tool_usage_details_from_model_extra(self):
+        usage = ResponseAPIUsage(
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            server_side_tool_usage_details=self._TOOL_DETAILS,
+        )
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
+            usage
+        )
+        assert details == self._TOOL_DETAILS
+
+    def test_server_side_tool_usage_details_from_usage_none(self):
+        assert (
+            XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(None)
+            is None
+        )
+        assert (
+            XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
+                Usage(prompt_tokens=1, completion_tokens=0, total_tokens=1)
+            )
+            is None
+        )
+
+    def test_attach_noop_when_usage_missing(self):
+        response = ResponsesAPIResponse.model_construct(
+            id="resp_1", created_at=0, output=[], usage=None
+        )
+        XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
+        assert response.usage is None
+
+    def test_attach_noop_when_details_missing(self):
+        usage = ResponseAPIUsage(input_tokens=3, output_tokens=1, total_tokens=4)
+        response = ResponsesAPIResponse.model_construct(
+            id="resp_2", created_at=0, output=[], usage=usage
+        )
+        XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
+        assert isinstance(response.usage, ResponseAPIUsage)
+
+    def test_attach_converts_response_api_usage_to_chat_usage(self):
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            server_side_tool_usage_details=self._TOOL_DETAILS,
+        )
+        response = ResponsesAPIResponse.model_construct(
+            id="resp_3", created_at=0, output=[], usage=usage
+        )
+        XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
+
+        assert isinstance(response.usage, Usage)
+        assert response.usage.prompt_tokens == 100
+        assert response.usage.completion_tokens == 20
+        assert getattr(response.usage, "server_side_tool_usage_details") == (
+            self._TOOL_DETAILS
+        )
+        assert response.usage.prompt_tokens_details is not None
+        assert response.usage.prompt_tokens_details.web_search_requests == 2
+
+    def test_attach_updates_existing_chat_usage_in_place(self):
+        usage = Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+        setattr(usage, "server_side_tool_usage_details", self._TOOL_DETAILS)
+        response = ResponsesAPIResponse.model_construct(
+            id="resp_4", created_at=0, output=[], usage=usage
+        )
+        XAIResponsesAPIConfig._attach_server_side_tool_usage_details_to_usage(response)
+
+        assert response.usage is usage
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.web_search_requests == 2
+
+    def test_transform_streaming_response_completed_attaches_tool_usage(self):
+        config = XAIResponsesAPIConfig()
+        chunk = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_stream",
+                "created_at": 1,
+                "output": [],
+                "usage": {
+                    "input_tokens": 50,
+                    "output_tokens": 10,
+                    "total_tokens": 60,
+                    "server_side_tool_usage_details": self._TOOL_DETAILS,
+                },
+            },
+        }
+        event = config.transform_streaming_response(
+            model="grok-4.3", parsed_chunk=chunk, logging_obj=MagicMock()
+        )
+
+        assert isinstance(event, ResponseCompletedEvent)
+        assert isinstance(event.response.usage, Usage)
+        assert getattr(event.response.usage, "server_side_tool_usage_details") == (
+            self._TOOL_DETAILS
+        )
+        assert event.response.usage.prompt_tokens_details is not None
+        assert event.response.usage.prompt_tokens_details.web_search_requests == 2
+
+    def test_transform_streaming_response_non_terminal_event_unchanged(self):
+        config = XAIResponsesAPIConfig()
+        chunk = {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hi",
+        }
+        event = config.transform_streaming_response(
+            model="grok-4.3", parsed_chunk=chunk, logging_obj=MagicMock()
+        )
+        assert getattr(event, "type", None) is not None
+        assert not isinstance(
+            event,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        )
