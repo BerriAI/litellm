@@ -18,15 +18,18 @@ override/inbound-token path, and the JWT-signer guardrail.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, NoReturn, Optional, Union
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import MCPTransport
 
 if TYPE_CHECKING:
-    from mcp.types import Prompt, Resource
+    from mcp.types import GetPromptResult, Prompt, ReadResourceResult, Resource
     from mcp.types import Tool as MCPTool
+    from pydantic import AnyUrl
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.gateway.mcp.outbound_credentials.types import CredError
@@ -207,6 +210,62 @@ class MCPServerManagerV2(MCPServerManager):
             return []
         return self._create_prefixed_resources(result.ok, server, add_prefix=add_prefix)
 
+    async def read_resource_from_server(
+        self,
+        server: MCPServer,
+        url: AnyUrl,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> ReadResourceResult:
+        from litellm.proxy.gateway.mcp.result import Error
+
+        if self._should_defer(server, mcp_auth_header):
+            return await super().read_resource_from_server(
+                server, url, mcp_auth_header, extra_headers, raw_headers
+            )
+        conn = await self._v2_connection(
+            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+        )
+        if isinstance(conn, Error):
+            self._egress_item_failure(server, conn.error)
+        result = await conn.ok.read_resource(url)
+        if isinstance(result, Error):
+            self._egress_item_failure(server, result.error)
+        return result.ok
+
+    async def get_prompt_from_server(
+        self,
+        server: MCPServer,
+        prompt_name: str,
+        arguments: Optional[Dict[str, object]] = None,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> GetPromptResult:
+        from litellm.proxy.gateway.mcp.result import Error
+
+        if self._should_defer(server, mcp_auth_header):
+            return await super().get_prompt_from_server(
+                server,
+                prompt_name,
+                arguments,
+                mcp_auth_header,
+                extra_headers,
+                raw_headers,
+            )
+        conn = await self._v2_connection(
+            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+        )
+        if isinstance(conn, Error):
+            self._egress_item_failure(server, conn.error)
+        # MCP prompt arguments are strings on the wire; coerce the loose dict to match the op's type.
+        str_args = {k: str(v) for k, v in arguments.items()} if arguments else None
+        result = await conn.ok.get_prompt(prompt_name, str_args)
+        if isinstance(result, Error):
+            self._egress_item_failure(server, result.error)
+        return result.ok
+
     def _egress_list_failure(
         self, server: MCPServer, error: "CredError | ConnError"
     ) -> None:
@@ -229,3 +288,28 @@ class MCPServerManagerV2(MCPServerManager):
             server.server_id,
             error.summary,
         )
+
+    def _egress_item_failure(
+        self, server: MCPServer, error: "CredError | ConnError"
+    ) -> NoReturn:
+        # Single-result path (call_tool / read_resource / get_prompt): no list to degrade to, so
+        # every failure raises. unauthorized -> MCPUpstreamAuthError (401 + re-auth); the rest map to
+        # a semantically correct MCPUpstreamError. assert_never keeps the map total -- a new error
+        # variant fails the build here until it is given a mapping.
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+            MCPUpstreamError,
+        )
+
+        match error.tag:
+            case "unauthorized":
+                raise MCPUpstreamAuthError(
+                    status_code=401, www_authenticate=None, server_name=server.name
+                )
+            case "upstream_unavailable":
+                raise MCPUpstreamError(502, server.name, error.summary)
+            case "precondition_required":
+                raise MCPUpstreamError(428, server.name, error.summary)
+            case "misconfigured" | "unsupported_mode" | "not_implemented":
+                raise MCPUpstreamError(500, server.name, error.summary)
+        assert_never(error.tag)

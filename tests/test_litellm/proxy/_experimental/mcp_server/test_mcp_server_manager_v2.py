@@ -127,3 +127,35 @@ async def test_v2_override_lists_resources_via_upstream_connection(echo_server_u
     )
     resources = await manager.get_resources_from_server(server, add_prefix=True)
     assert len(resources) >= 1
+
+
+@pytest.mark.asyncio
+async def test_v2_override_reads_resource_via_upstream_connection(echo_server_url):
+    # Single-result read path: resolve() + UpstreamConnection.read_resource (v2), raises on failure.
+    from pydantic import AnyUrl
+
+    manager = MCPServerManagerV2()
+    server = MCPServer(
+        server_id="echo1",
+        name="echo1",
+        transport=MCPTransport.http,
+        url=echo_server_url,
+        auth_type=MCPAuth.none,
+    )
+    result = await manager.read_resource_from_server(server, AnyUrl("echo://info"))
+    assert result.contents
+
+
+@pytest.mark.asyncio
+async def test_v2_override_gets_prompt_via_upstream_connection(echo_server_url):
+    # Single-result prompt path: resolve() + UpstreamConnection.get_prompt (v2), raises on failure.
+    manager = MCPServerManagerV2()
+    server = MCPServer(
+        server_id="echo1",
+        name="echo1",
+        transport=MCPTransport.http,
+        url=echo_server_url,
+        auth_type=MCPAuth.none,
+    )
+    result = await manager.get_prompt_from_server(server, "greeting", {"name": "Tin"})
+    assert result.messages
