@@ -43,12 +43,15 @@ jobs:
 
       - name: Dismiss alerts
         if: inputs.mode == 'dismiss'
+        env:
+          DISMISSALS: ${{ inputs.dismissals }}
+          REPO: ${{ github.repository }}
         run: |
-          echo '${{ inputs.dismissals }}' | jq -c '.[]' | while read d; do
+          echo "$DISMISSALS" | jq -c '.[]' | while read d; do
             n=$(jq -r .number <<<"$d")
             r=$(jq -r .reason <<<"$d")
             c=$(jq -r .comment <<<"$d")
-            gh api -X PATCH "repos/${{ github.repository }}/code-scanning/alerts/$n" \
+            gh api -X PATCH "repos/$REPO/code-scanning/alerts/$n" \
               -f state=dismissed \
               -f dismissed_reason="$r" \
               -f dismissed_comment="$c" \

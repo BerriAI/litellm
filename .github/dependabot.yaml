@@ -22,6 +22,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     open-pull-requests-limit: 10
     ignore:
       # langchain fix for GHSA-gr75-jv2w-4656 requires >=1.3.9, which needs
@@ -34,22 +37,34 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     open-pull-requests-limit: 10
 
   - package-ecosystem: "npm"
     directory: "/ui/litellm-dashboard"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     open-pull-requests-limit: 10
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     open-pull-requests-limit: 5
 
   - package-ecosystem: "docker"
     directory: "/ui"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     open-pull-requests-limit: 5

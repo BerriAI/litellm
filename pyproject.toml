@@ -167,6 +167,8 @@ dev = [
     "types-setuptools==75.8.0.20250225",
     "types-redis==4.6.0.20241004",
     "types-PyYAML==6.0.12.20250915",
+    "botocore-stubs==1.43.14",
+    "types-boto3[bedrock,bedrock-agent,bedrock-runtime,kms,s3,sagemaker-runtime,sts]==1.43.30",
     "opentelemetry-api==1.28.0",
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",

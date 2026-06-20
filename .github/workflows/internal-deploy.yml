@@ -93,8 +93,6 @@ on:
 # contents: read    → required to checkout this repo (and the infras repo via PAT)
 permissions:
   contents: read
-  id-token: write
-  attestations: write
   actions: read
 
 env:
@@ -106,6 +104,10 @@ jobs:
     name: Build, scan, sign, attest
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     outputs:
       digest: ${{ steps.push.outputs.digest }}
@@ -115,6 +117,8 @@ jobs:
     steps:
       - name: Checkout litellm
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
@@ -201,7 +205,7 @@ jobs:
           # (See https://github.com/aquasecurity/trivy/discussions/7989)
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.10.1
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
 
       - name: Cosign keyless sign (Sigstore Fulcio + Rekor)
         env:
@@ -234,6 +238,8 @@ jobs:
           IMAGE_REF_BY_DIGEST: ${{ steps.push.outputs.image_ref_by_digest }}
           IMAGE_TAG_SHA:       ${{ steps.tags.outputs.image_tag_sha }}
           DIGEST:              ${{ steps.push.outputs.digest }}
+          WORKFLOW_NAME:       ${{ github.workflow }}
+          REF_NAME:            ${{ github.ref_name }}
         run: |
           {
             echo "## Image built, scanned, signed, attested"
@@ -244,7 +250,7 @@ jobs:
             echo "| Tag (latest)  | \`${ACR}/${IMAGE_NAME}:latest\` |"
             echo "| Digest        | \`${DIGEST}\` |"
             echo "| By-digest ref | \`${IMAGE_REF_BY_DIGEST}\` |"
-            echo "| Workflow      | \`${{ github.workflow }}\` on \`${{ github.ref_name }}\` |"
+            echo "| Workflow      | \`${WORKFLOW_NAME}\` on \`${REF_NAME}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
@@ -252,6 +258,9 @@ jobs:
     needs: build-and-sign
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
 
     env:
       DIGEST: ${{ needs.build-and-sign.outputs.digest }}
@@ -260,6 +269,7 @@ jobs:
       - name: Checkout infras repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
           repository: rayward-internal/llm-gateway-infra
           ref: feat/v1-internal-gateway
           token: ${{ secrets.INFRAS_REPO_TOKEN }}
@@ -282,7 +292,7 @@ jobs:
           terraform_version: 1.14.9
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.10.1
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
 
       # Deploy steps inlined from the previous deploy.sh — keeps /infras as
       # pure terraform-as-code. Order matters: migration runs BEFORE the
