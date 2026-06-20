@@ -18,7 +18,7 @@ from typing import Iterator
 import pytest
 import requests
 
-from e2e_config import PROXY_BASE_URL
+from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
 
 
@@ -42,16 +42,26 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         print(f"spend-log cleanup skipped: {exc}")
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _require_live_proxy() -> None:
-    """Skip the entire session unless a proxy answers its liveness probe."""
+def _probe_live(label: str, base_url: str) -> None:
+    """Skip the whole session (environment, not behavior) if `base_url` doesn't
+    answer its liveness probe."""
     try:
-        resp = requests.get(f"{PROXY_BASE_URL}/health/liveliness", timeout=5)
+        resp = requests.get(f"{base_url}/health/liveliness", timeout=5)
     except requests.RequestException as exc:
-        pytest.skip(f"No live proxy at {PROXY_BASE_URL}: {exc}")
+        pytest.skip(f"No live {label} at {base_url}: {exc}")
         return
     if resp.status_code >= 500:
-        pytest.skip(f"Proxy at {PROXY_BASE_URL} returned {resp.status_code}")
+        pytest.skip(f"{label} at {base_url} returned {resp.status_code}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _require_live_proxy() -> None:
+    """Skip the entire session unless the proxy answers its liveness probe. In a
+    split deployment the management/admin control plane is a separate service, so
+    require it too (when it differs) — else its tests would fail rather than skip."""
+    _probe_live("proxy", PROXY_BASE_URL)
+    if CONTROL_PLANE_BASE_URL != PROXY_BASE_URL:
+        _probe_live("control plane", CONTROL_PLANE_BASE_URL)
 
 
 @pytest.fixture

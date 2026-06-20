@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel, RootModel
+from pydantic import AliasPath, BaseModel, Field, RootModel
 
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import NoBody, StreamingResponse, Success, unwrap
@@ -65,6 +65,7 @@ class TeamNewBody(BaseModel):
     team_alias: str
     max_budget: float | None = None
     organization_id: str | None = None
+    budget_limits: list[BudgetWindow] | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -79,6 +80,29 @@ class TeamMemberAddBody(BaseModel):
     team_id: str
     member: TeamMember
     max_budget_in_team: float | None = None
+
+
+class TeamMemberUpdateBody(BaseModel):
+    team_id: str
+    user_id: str
+    max_budget_in_team: float | None = None
+    budget_duration: str | None = None
+
+
+class TeamMembershipRow(BaseModel):
+    user_id: str | None = None
+    budget_reset_at: str | None = Field(
+        default=None,
+        validation_alias=AliasPath("litellm_budget_table", "budget_reset_at"),
+    )
+
+
+class TeamInfoParams(BaseModel):
+    team_id: str
+
+
+class TeamInfoResponse(BaseModel):
+    team_memberships: list[TeamMembershipRow] = []
 
 
 class TagNewBody(BaseModel):
@@ -125,9 +149,7 @@ def is_budget_block(result: StreamingResponse) -> bool:
     return not result.ok and "budget_exceeded" in result.body
 
 
-def model_budget(
-    model: str, limit: float, period: str = "30d"
-) -> dict[str, ModelBudgetEntry]:
+def model_budget(model: str, limit: float, period: str = "30d") -> dict[str, ModelBudgetEntry]:
     """A model_max_budget entry: per-model cap with a reset window."""
     return {model: ModelBudgetEntry(budget_limit=limit, time_period=period)}
 
@@ -254,6 +276,7 @@ class BudgetClient:
         alias: str,
         max_budget: float | None = None,
         organization_id: str | None = None,
+        budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
         return unwrap(
             self.gateway.transport.post(
@@ -263,6 +286,7 @@ class BudgetClient:
                     team_alias=alias,
                     max_budget=max_budget,
                     organization_id=organization_id,
+                    budget_limits=budget_limits,
                 ),
                 response_type=TeamNewResponse,
             )
@@ -276,9 +300,7 @@ class BudgetClient:
             response_type=NoBody,
         )
 
-    def add_team_member(
-        self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None
-    ) -> None:
+    def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
         resp = self.gateway.transport.send(
             "/team/member_add",
             headers=self.gateway.transport.master,
@@ -289,6 +311,45 @@ class BudgetClient:
             ),
         )
         assert resp.ok, resp.body
+
+    def update_team_member(
+        self,
+        team_id: str,
+        user_id: str,
+        *,
+        max_budget_in_team: float | None = None,
+        budget_duration: str | None = None,
+    ) -> None:
+        resp = self.gateway.transport.send(
+            "/team/member_update",
+            headers=self.gateway.transport.master,
+            json=TeamMemberUpdateBody(
+                team_id=team_id,
+                user_id=user_id,
+                max_budget_in_team=max_budget_in_team,
+                budget_duration=budget_duration,
+            ),
+        )
+        assert resp.ok, resp.body
+
+    def member_budget_reset_at(self, team_id: str, user_id: str) -> str | None:
+        """The member's per-team budget_reset_at as /team/info reports it, or None if
+        no reset is scheduled. The reset job advances this each time the window
+        elapses; a job that skips the row leaves it pinned forever."""
+        result = self.gateway.transport.get(
+            "/team/info",
+            headers=self.gateway.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return next(
+                    (row.budget_reset_at for row in data.team_memberships if row.user_id == user_id),
+                    None,
+                )
+            case _:
+                return None
 
     # ---- tag ------------------------------------------------------------
 

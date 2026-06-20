@@ -32,6 +32,8 @@ class KeyGenerateBody(BaseModel):
     budget_id: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
     budget_limits: list[BudgetWindow] | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -134,6 +136,8 @@ class SpendLogRow(BaseModel):
     cache_hit: str | None = None
     call_type: str | None = None
     custom_llm_provider: str | None = None
+    team_id: str | None = None
+    user: str | None = None
     end_user: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -228,14 +232,10 @@ class CustomPricing(BaseModel):
     def token_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """Spend for a fresh (uncached) call under these rates: the proxy's
         custom-pricing formula (prompt * input + completion * output)."""
-        assert (
-            self.input_cost_per_token is not None
-            and self.output_cost_per_token is not None
-        ), "custom pricing has no per-token rates"
-        return (
-            prompt_tokens * self.input_cost_per_token
-            + completion_tokens * self.output_cost_per_token
+        assert self.input_cost_per_token is not None and self.output_cost_per_token is not None, (
+            "custom pricing has no per-token rates"
         )
+        return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
 class ModelInfoEntry(BaseModel):

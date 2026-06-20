@@ -142,3 +142,103 @@ class HttpTransport:
             params=params,
             timeout=self.request_timeout,
         )
+
+
+# Top-level management/admin route groups. In a split deployment these are served
+# by the control plane (a different service from the LLM data plane). LLM routes
+# (/chat, /embeddings, and native passthrough like /gemini, /anthropic) are NOT
+# here and fall through to the data plane. Matched as path prefixes.
+CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
+    "/key",
+    "/user",
+    "/team",
+    "/organization",
+    "/customer",
+    "/tag",
+    "/budget",
+    "/model/info",
+    "/spend",
+    "/global",
+    "/openapi.json",
+)
+
+
+def is_control_plane_path(path: str) -> bool:
+    """True if `path` is a management/admin route (served by the control plane in a
+    split deployment), false for LLM data-plane routes."""
+    return path.startswith(CONTROL_PLANE_PREFIXES)
+
+
+@dataclass(frozen=True, slots=True)
+class SplitTransport:
+    """A Transport that dispatches each call by path to one of two backends: the
+    management/admin control plane or the LLM data plane.
+
+    Litellm can run as a split control-plane/data-plane deployment where the two
+    surfaces live on different services. Clients here stay plane-agnostic — they
+    keep calling ``transport.post("/budget/new", ...)`` or
+    ``transport.send("/chat/completions", ...)`` — and routing happens in one place
+    by path (see ``CONTROL_PLANE_PREFIXES``). When ``control`` and ``data`` share a
+    base URL (the monolithic default), routing is a no-op. ``bearer``/``master``
+    are plane-agnostic (same master key both planes), so they come from ``data``.
+    """
+
+    data: HttpTransport
+    control: HttpTransport
+
+    def _route(self, path: str) -> HttpTransport:
+        return self.control if is_control_plane_path(path) else self.data
+
+    def bearer(self, key: str) -> AuthHeaders:
+        return self.data.bearer(key)
+
+    @property
+    def master(self) -> AuthHeaders:
+        return self.data.master
+
+    def post[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).post(
+            path, headers=headers, json=json, response_type=response_type
+        )
+
+    def get[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        params: BaseModel,
+        response_type: type[R],
+    ) -> Result[R]:
+        return self._route(path).get(
+            path, headers=headers, params=params, response_type=response_type
+        )
+
+    def delete[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).delete(
+            path, headers=headers, json=json, response_type=response_type
+        )
+
+    def stream(
+        self, path: str, *, headers: BaseModel, json: BaseModel
+    ) -> StreamingResponse:
+        return self._route(path).stream(path, headers=headers, json=json)
+
+    def send(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        params: BaseModel | None = None,
+        stream: bool = False,
+    ) -> StreamingResponse:
+        return self._route(path).send(
+            path, headers=headers, json=json, params=params, stream=stream
+        )
+
+    def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
+        return self._route(path).probe(path, params=params)
