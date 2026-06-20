@@ -1095,7 +1095,9 @@ class ResponseAPILoggingUtils:
             if usage_input.get("server_side_tool_usage_details") is not None:
                 usage_kwargs["server_side_tool_usage_details"] = usage_input["server_side_tool_usage_details"]
         else:
-            details = getattr(response_api_usage, "server_side_tool_usage_details", None)
+            details = getattr(
+                response_api_usage, "server_side_tool_usage_details", None
+            )
             if details is not None:
                 usage_kwargs["server_side_tool_usage_details"] = details
 
