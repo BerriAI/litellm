@@ -248,6 +248,68 @@ def test_config_field_info_field_not_in_db(client, auth_as, mock_prisma, monkeyp
     assert "not in DB" in response.json().get("detail", {}).get("error", "")
 
 
+def test_config_field_info_redacts_nested_secret_for_view_only_admin(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """A view-only admin reading a structured field must not receive nested
+    credentials. database_args carries aws_web_identity_token (a DynamoDB
+    role-assumption credential); it must come back redacted while non-secret
+    siblings like region_name stay visible."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {
+        "database_args": {
+            "region_name": "us-east-1",
+            "user_table_name": "LiteLLM_UserTable",
+            "aws_web_identity_token": "sk-super-secret-token",
+        }
+    }
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        response = client.get(
+            "/config/field/info", params={"field_name": "database_args"}
+        )
+    assert response.status_code == 200
+    value = response.json()["field_value"]
+    assert value["aws_web_identity_token"] == "REDACTED"
+    assert value["region_name"] == "us-east-1"
+    assert value["user_table_name"] == "LiteLLM_UserTable"
+
+
+def test_config_field_info_full_admin_sees_nested_secret(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """The redaction must not over-redact for a full PROXY_ADMIN, who needs
+    the real nested value to populate the edit form."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {
+        "database_args": {
+            "region_name": "us-east-1",
+            "aws_web_identity_token": "sk-super-secret-token",
+        }
+    }
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get(
+            "/config/field/info", params={"field_name": "database_args"}
+        )
+    assert response.status_code == 200
+    value = response.json()["field_value"]
+    assert value["aws_web_identity_token"] == "sk-super-secret-token"
+    assert value["region_name"] == "us-east-1"
+
+
 # ---------------------------------------------------------------------------
 # GET /config/list
 # ---------------------------------------------------------------------------

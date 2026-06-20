@@ -38,7 +38,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json
+from pydantic import BaseModel, Json, JsonValue
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -15032,6 +15032,24 @@ def _is_secret_general_setting_field(field_name: str) -> bool:
     )
 
 
+def _redact_secret_values_in_obj(value: JsonValue) -> JsonValue:
+    """Recursively redact secret leaves inside a structured field so a nested
+    credential (e.g. aws_web_identity_token under database_args) is never
+    returned to a non-admin, while non-secret siblings stay visible"""
+    if isinstance(value, dict):
+        return {
+            key: (
+                "REDACTED"
+                if _is_secret_general_setting_field(key)
+                else _redact_secret_values_in_obj(sub)
+            )
+            for key, sub in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secret_values_in_obj(item) for item in value]
+    return value
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -15087,11 +15105,11 @@ async def get_config_general_settings(
             # only a full PROXY_ADMIN sees raw secret-bearing fields; others
             # get them redacted
             field_value = general_settings[field_name]
-            if (
-                user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-                and _is_secret_general_setting_field(field_name)
-            ):
-                field_value = "REDACTED"
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                if _is_secret_general_setting_field(field_name):
+                    field_value = "REDACTED"
+                elif isinstance(field_value, (dict, list)):
+                    field_value = _redact_secret_values_in_obj(field_value)
             return ConfigFieldInfo(field_name=field_name, field_value=field_value)
         else:
             raise HTTPException(
