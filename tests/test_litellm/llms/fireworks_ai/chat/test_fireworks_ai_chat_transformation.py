@@ -11,7 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm import get_model_info, supports_reasoning
+from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -627,11 +627,11 @@ def test_get_supported_openai_params_includes_all_fireworks_params():
         "prediction",
         "stream_options",
         "sampling_mask",
+        "thinking",
         "reasoning_history",
     ]
     missing = [p for p in required if p not in params]
     assert missing == [], f"Missing params: {missing}"
-    assert "thinking" not in params
 
 
 def test_prompt_truncate_len_correct_name():
@@ -694,27 +694,100 @@ def test_reasoning_history_in_supported_params():
     assert "reasoning_history" not in non_reasoning_params
 
 
-def test_transform_messages_helper_no_file_migration():
+def test_thinking_param_passthrough():
+    config = FireworksAIConfig()
+    thinking = {"type": "disabled"}
+    result = config.map_openai_params(
+        {"thinking": thinking},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result == {"thinking": thinking}
+
+
+def test_minimax_m3_supports_vision_from_model_map():
+    config = FireworksAIConfig()
+
+    for model in [
+        "fireworks_ai/accounts/fireworks/models/minimax-m3",
+        "fireworks_ai/minimax-m3",
+    ]:
+        assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
+        assert config.get_provider_info(model)["supports_vision"] is True
+
+
+def test_transform_messages_helper_rejects_file_blocks():
     config = FireworksAIConfig()
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "file", "file_url": "https://example.com/doc.pdf"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQKJSVFT0YK",
+                        "filename": "tiny.pdf",
+                    },
+                },
                 {"type": "text", "text": "Describe this"},
             ],
         }
     ]
+
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="Fireworks AI chat completions does not support file content blocks",
+    ):
+        config._transform_messages_helper(
+            messages, model="accounts/fireworks/models/kimi-k2p6", litellm_params={}
+        )
+
+
+def test_transform_messages_helper_rejects_non_vision_image_inputs():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
+                    },
+                },
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError, match="does not support image inputs"):
+        config._transform_messages_helper(
+            messages, model="accounts/fireworks/models/glm-5p2", litellm_params={}
+        )
+
+
+def test_transform_messages_helper_allows_vision_image_inputs():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
+                    },
+                },
+            ],
+        }
+    ]
+
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
+        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
     )
-    content = out[0]["content"]
-    assert any(
-        isinstance(b, dict) and b.get("type") == "file" for b in content
-    ), "file block must remain as type=file"
-    assert not any(
-        isinstance(b, dict) and b.get("type") == "image_url" for b in content
-    ), "file block must not be migrated to image_url"
+    assert out == messages
 
 
 def test_transform_messages_helper_no_transform_inline():
@@ -727,7 +800,7 @@ def test_transform_messages_helper_no_transform_inline():
         }
     ]
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
+        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
     )
     block = out[0]["content"][0]
     assert block["image_url"] == url

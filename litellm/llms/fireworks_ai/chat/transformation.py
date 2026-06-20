@@ -131,6 +131,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prediction",
             "stream_options",
             "sampling_mask",
+            "thinking",
         ]
 
         # Only add tools for models that support function calling
@@ -232,7 +233,43 @@ class FireworksAIConfig(OpenAIGPTConfig):
             filter_value_from_dict,
         )
 
+        supports_vision_value = self._get_model_cost_capability(
+            model=model, capability="supports_vision"
+        )
         for message in messages:
+            if message["role"] == "user":
+                _message_content = message.get("content")
+                if _message_content is not None and isinstance(
+                    _message_content, list
+                ):
+                    for content in _message_content:
+                        if not isinstance(content, dict):
+                            continue
+                        if content.get("type") == "file":
+                            raise litellm.BadRequestError(
+                                message=(
+                                    "Fireworks AI chat completions does not support "
+                                    "file content blocks. For PDFs, convert pages to "
+                                    "images and send image_url blocks to a Fireworks "
+                                    "vision model, or extract text before calling a "
+                                    "text-only model."
+                                ),
+                                model=model,
+                                llm_provider="fireworks_ai",
+                            )
+                        if (
+                            content.get("type") == "image_url"
+                            and supports_vision_value is False
+                        ):
+                            raise litellm.BadRequestError(
+                                message=(
+                                    f"Fireworks AI model {model} does not support "
+                                    "image inputs. Use a Fireworks vision model or "
+                                    "remove image_url content blocks."
+                                ),
+                                model=model,
+                                llm_provider="fireworks_ai",
+                            )
             filter_value_from_dict(cast(dict, message), "cache_control")
             # Remove fields not permitted by FireworksAI (additionalProperties: false
             # on their ChatMessage schema) that may cause:
