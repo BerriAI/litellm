@@ -27,6 +27,8 @@ from litellm.llms.xai.cost_calculator import (
     cost_per_token,
     cost_per_web_search_request,
 )
+
+
 class TestXAICostCalculator:
     """Test suite for XAI cost calculation functionality."""
 
