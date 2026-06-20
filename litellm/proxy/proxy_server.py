@@ -491,6 +491,19 @@ from litellm.proxy.utils import (
     prefetch_config_params,
     update_spend,
 )
+from litellm.proxy.scheduled_tasks.endpoints import (
+    router as scheduled_tasks_router,
+)
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    router as vector_store_management_router,
+)
+from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    router as vector_store_files_router,
+)
+from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
+    router as langfuse_router,
+)
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router import (
@@ -16387,6 +16400,7 @@ app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
+app.include_router(scheduled_tasks_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
