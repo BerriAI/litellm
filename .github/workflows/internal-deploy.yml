@@ -93,8 +93,6 @@ on:
 # contents: read    → required to checkout this repo (and the infras repo via PAT)
 permissions:
   contents: read
-  id-token: write
-  attestations: write
   actions: read
 
 env:
@@ -106,6 +104,10 @@ jobs:
     name: Build, scan, sign, attest
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     outputs:
       digest: ${{ steps.push.outputs.digest }}
@@ -234,6 +236,8 @@ jobs:
           IMAGE_REF_BY_DIGEST: ${{ steps.push.outputs.image_ref_by_digest }}
           IMAGE_TAG_SHA:       ${{ steps.tags.outputs.image_tag_sha }}
           DIGEST:              ${{ steps.push.outputs.digest }}
+          WORKFLOW_NAME:       ${{ github.workflow }}
+          REF_NAME:            ${{ github.ref_name }}
         run: |
           {
             echo "## Image built, scanned, signed, attested"
@@ -244,7 +248,7 @@ jobs:
             echo "| Tag (latest)  | \`${ACR}/${IMAGE_NAME}:latest\` |"
             echo "| Digest        | \`${DIGEST}\` |"
             echo "| By-digest ref | \`${IMAGE_REF_BY_DIGEST}\` |"
-            echo "| Workflow      | \`${{ github.workflow }}\` on \`${{ github.ref_name }}\` |"
+            echo "| Workflow      | \`${WORKFLOW_NAME}\` on \`${REF_NAME}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
@@ -252,6 +256,9 @@ jobs:
     needs: build-and-sign
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
 
     env:
       DIGEST: ${{ needs.build-and-sign.outputs.digest }}
