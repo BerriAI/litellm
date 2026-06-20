@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union, cast
 
 import aiohttp
 import httpx  # type: ignore
@@ -201,12 +201,25 @@ class BaseLLMAIOHTTPHandler:
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
-                response = await async_client_session.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    data=form_data,
-                )
+                # When a caller passes an external ``ClientSession`` (e.g. via
+                # the ``client`` argument on ``async_completion``), the lazily
+                # created transport's connector-level ssl setting is bypassed
+                # entirely — the session was built without it. Forward
+                # ``ssl_verify`` as a per-request kwarg so the caller's SSL
+                # setting is honored on every request, including retries. Only
+                # pass ``ssl`` when explicitly configured; passing ``ssl=None``
+                # would override the session/connector default with a sentinel
+                # aiohttp treats as "use default" but we still want to avoid
+                # the case where a user explicitly disabled verification.
+                post_kwargs: Dict[str, Any] = {
+                    "url": api_base,
+                    "headers": headers,
+                    "json": data,
+                    "data": form_data,
+                }
+                if self.ssl_verify is not None:
+                    post_kwargs["ssl"] = self.ssl_verify
+                response = await async_client_session.post(**post_kwargs)
                 if not response.ok:
                     response.raise_for_status()
             except aiohttp.ClientResponseError as e:

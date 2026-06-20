@@ -653,7 +653,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks,
+                timeout=timeout,
+                event_hooks=self.event_hooks,
                 ssl_verify=self._ssl_verify,
             )
             try:
@@ -717,7 +718,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks,
+                timeout=timeout,
+                event_hooks=self.event_hooks,
                 ssl_verify=self._ssl_verify,
             )
             try:
@@ -779,7 +781,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks,
+                timeout=timeout,
+                event_hooks=self.event_hooks,
                 ssl_verify=self._ssl_verify,
             )
             try:
@@ -841,7 +844,8 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, event_hooks=self.event_hooks,
+                timeout=timeout,
+                event_hooks=self.event_hooks,
                 ssl_verify=self._ssl_verify,
             )
             try:
@@ -958,7 +962,7 @@ class AsyncHTTPHandler:
 
     @staticmethod
     def _get_ssl_connector_kwargs(
-        ssl_verify: Optional[bool] = None,
+        ssl_verify: Optional[Union[bool, str]] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
     ) -> Dict[str, Any]:
         """
@@ -967,6 +971,9 @@ class AsyncHTTPHandler:
         SSL Configuration Priority:
         1. If ssl_context is provided -> use the custom SSL context
         2. If ssl_verify is False -> disable SSL verification (ssl=False)
+        3. If ssl_verify is a string path to an existing file -> build an
+           SSLContext that trusts it (aiohttp's TCPConnector requires an
+           SSLContext, bool, or ``Fingerprint`` — not a bare path string).
 
         Returns:
             Dict with appropriate SSL configuration for TCPConnector
@@ -981,12 +988,25 @@ class AsyncHTTPHandler:
         elif ssl_verify is False:
             # Priority 2: Explicitly disable SSL verification
             connector_kwargs["ssl"] = False
+        elif isinstance(ssl_verify, str):
+            # Priority 3: Resolve a CA bundle path into an SSLContext that
+            # trusts it. ``ssl.create_default_context(cafile=...)`` is the
+            # documented path. ``aiohttp.TCPConnector`` accepts ``SSLContext``,
+            # ``bool``, or ``Fingerprint`` — a bare path string is rejected
+            # by ``aiohttp.client_reqrep.ClientRequest._ssl_is_absolute_url``.
+            try:
+                connector_kwargs["ssl"] = ssl.create_default_context(cafile=ssl_verify)
+            except (FileNotFoundError, OSError):
+                # If the path doesn't resolve, fall back to letting aiohttp
+                # use its default trust store. We do NOT silently disable
+                # verification — that would change the security posture.
+                pass
 
         return connector_kwargs
 
     @staticmethod
     def _create_aiohttp_transport(
-        ssl_verify: Optional[bool] = None,
+        ssl_verify: Optional[Union[bool, str]] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> LiteLLMAiohttpTransport:
@@ -996,6 +1016,7 @@ class AsyncHTTPHandler:
         Note: aiohttp TCPConnector ssl parameter accepts:
         - SSLContext: custom SSL context
         - False: disable SSL verification
+        - str: path to a CA bundle file (used as ``cafile`` by aiohttp)
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
         from litellm.secret_managers.main import str_to_bool
@@ -1013,13 +1034,19 @@ class AsyncHTTPHandler:
 
         #########################################################
         # Determine SSL config to pass to transport for per-request override
-        # This ensures ssl_verify works even with shared sessions
+        # This ensures ssl_verify works even with shared sessions.
+        # ``ssl_for_transport`` is the value stashed on the transport for
+        # ``LiteLLMAiohttpTransport._make_aiohttp_request`` to forward as the
+        # ``ssl=`` kwarg on each request. We accept SSLContext, bool, and
+        # CA-bundle path strings here.
         #########################################################
-        ssl_for_transport: Optional[Union[bool, ssl.SSLContext]] = None
+        ssl_for_transport: Optional[Union[bool, str, ssl.SSLContext]] = None
         if ssl_context is not None:
             ssl_for_transport = ssl_context
         elif ssl_verify is False:
             ssl_for_transport = False
+        elif isinstance(ssl_verify, str):
+            ssl_for_transport = ssl_verify
 
         verbose_logger.debug("Creating AiohttpTransport...")
 

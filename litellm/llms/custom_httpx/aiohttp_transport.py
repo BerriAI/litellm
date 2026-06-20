@@ -152,7 +152,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     def __init__(
         self,
         client: Union[ClientSession, Callable[[], ClientSession]],
-        ssl_verify: Optional[Union[bool, ssl.SSLContext]] = None,
+        ssl_verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
         owns_session: bool = True,
     ):
         self.client = client
@@ -236,7 +236,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         timeout: dict,
         proxy: Optional[str],
         sni_hostname: Optional[str],
-        ssl_verify: Optional[Union[bool, ssl.SSLContext]] = None,
+        ssl_verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
     ) -> ClientResponse:
         """
         Helper function to make an aiohttp request with the given parameters.
