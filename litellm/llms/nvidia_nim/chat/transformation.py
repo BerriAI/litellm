@@ -1,7 +1,7 @@
 """
-Nvidia NIM endpoint: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer 
+Nvidia NIM endpoint: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-This is OpenAI compatible 
+This is OpenAI compatible
 
 This file only contains param mapping logic
 

@@ -404,6 +404,7 @@ def _turn_on_debug():
 
 
 def _disable_debugging():
+    """Disable the package, router, and proxy verbose loggers."""
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
@@ -418,7 +419,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa
+            print(redact_secrets(str(print_statement)))  # noqa: T201
     except Exception:
         pass
 

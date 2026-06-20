@@ -3,6 +3,7 @@ Common utility functions used for translating messages across providers
 """
 
 import io
+import json
 import mimetypes
 import re
 from os import PathLike
@@ -20,6 +21,7 @@ from typing import (
     cast,
 )
 
+import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
@@ -131,6 +133,39 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
+def extract_search_results_text(search_results: object) -> str:
+    """
+    Extract model-visible text from OpenAI tool-message ``search_results``.
+
+    Used by token estimators and TPM limiters so large search result payloads
+    cannot bypass preflight checks via a small ``content`` field.
+
+    Counts every string field forwarded on Bedrock ``SearchResultBlock``:
+    ``source``, ``title``, ``content[].text``, and ``citations``.
+    """
+    if not isinstance(search_results, list):
+        return ""
+    texts = ""
+    for result in search_results:
+        if not isinstance(result, dict):
+            continue
+        for key in ("source", "title"):
+            value = result.get(key)
+            if isinstance(value, str):
+                texts += value
+        content = result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        texts += text
+        citations = result.get("citations")
+        if citations is not None:
+            texts += json.dumps(citations, separators=(",", ":"))
+    return texts
+
+
 def convert_content_list_to_str(
     message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
@@ -151,6 +186,7 @@ def convert_content_list_to_str(
         elif message_content is not None and isinstance(message_content, str):
             texts = message_content
 
+    texts += extract_search_results_text(message.get("search_results"))
     return texts
 
 
@@ -755,14 +791,25 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     else:
         file_content = file_data
     # Convert content to bytes
-    if isinstance(file_content, (str, PathLike)):
-        # If it's a path, open and read the file
-        # Extract filename from path if not already set
+    if isinstance(file_content, str):
+        # Bare string inputs are rejected: when this helper runs in a proxy
+        # request handler the string came from an attacker-controlled form
+        # field, and opening it as a path is an arbitrary file read on the
+        # proxy host. SDK callers who want to upload from a path should
+        # either pass a pathlib.Path (a PathLike instance — see the branch
+        # below) or open the file themselves and pass the handle / bytes.
+        raise ValueError(
+            "extract_file_data does not accept bare str inputs. Pass bytes, "
+            "an open file handle, a (filename, content) tuple, or a "
+            "pathlib.Path. To upload a local file from a path, call "
+            "open(path, 'rb') yourself."
+        )
+    if isinstance(file_content, PathLike):
+        # PathLike (pathlib.Path) is a Python-level type that HTTP form
+        # values can't fabricate. Treat as a local file path for SDK
+        # convenience.
         if filename is None:
-            if isinstance(file_content, PathLike):
-                filename = Path(file_content).name
-            else:
-                filename = Path(str(file_content)).name
+            filename = Path(file_content).name
         with open(file_content, "rb") as f:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
@@ -803,7 +850,47 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def unpack_defs(schema: dict, defs: dict) -> None:
+def _estimate_json_bytes(obj: Any) -> int:
+    """Estimate the JSON-serialised byte size of ``obj`` without materialising
+    JSON. Walks iteratively (no recursion stack risk).
+
+    String length is read via ``len()`` (O(1) on Python ``str``) so a target
+    containing a 100MB description costs ~one walk step, not a 100MB
+    serialisation. Escape sequences are not counted exactly, so this is an
+    approximation -- but always within a small constant factor of the real
+    serialised size, which is what a schema-bomb budget needs.
+    """
+    total = 0
+    stack: list = [obj]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            total += 2  # `{}`
+            for k, v in x.items():
+                total += len(str(k)) + 4  # `"k":,`
+                stack.append(v)
+        elif isinstance(x, list):
+            total += 2  # `[]`
+            total += max(0, len(x) - 1)  # commas between items
+            stack.extend(x)
+        elif isinstance(x, str):
+            total += len(x) + 2
+        elif isinstance(x, bool):  # bool subclasses int -- check first
+            total += 4 if x else 5
+        elif x is None:
+            total += 4
+        elif isinstance(x, (int, float)):
+            total += 24  # generous upper bound for stringified numbers
+        else:
+            total += 24
+    return total
+
+
+def unpack_defs(
+    schema: dict,
+    defs: dict,
+    max_inlined_bytes: Optional[int] = None,
+) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
@@ -813,6 +900,15 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     It mutates *schema* in-place and does **not** return anything.  The helper
     keeps memory overhead low by resolving nodes as it encounters them rather
     than materialising a fully dereferenced copy first.
+
+    ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
+    that has been inlined and is checked *before* each ``copy.deepcopy``, so
+    an oversized expansion is rejected without first materialising it. A byte
+    bound is the universal measure of expansion -- it simultaneously caps
+    ref-count fan-out, node-count amplification, and scalar-byte amplification
+    (a target containing a large string, ``const``, or ``enum`` entry).
+    Defaults to ``None`` (unbounded) so existing callers are unaffected;
+    raises ``ValueError`` on overflow.
     """
 
     import copy
@@ -832,6 +928,7 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     queue: deque[
         tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
     ] = deque([(schema, None, None, root_defs, set())])
+    inlined_bytes = 0
 
     while queue:
         node, parent, key, active_defs, ref_chain = queue.popleft()
@@ -851,6 +948,16 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
+
+                if max_inlined_bytes is not None:
+                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    if inlined_bytes > max_inlined_bytes:
+                        raise ValueError(
+                            f"unpack_defs: inlined schema exceeded the "
+                            f"{max_inlined_bytes:,}-byte budget. Refusing to "
+                            f"deep-copy further to prevent schema-bomb "
+                            f"resource exhaustion."
+                        )
 
                 # Merge defs from the target to capture nested definitions
                 child_defs = {
@@ -897,6 +1004,61 @@ def unpack_defs(schema: dict, defs: dict) -> None:
             # Add all list items to queue
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
+
+
+def _has_legacy_defs(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    components = schema.get("components")
+    return "definitions" in schema or (
+        isinstance(components, dict) and isinstance(components.get("schemas"), dict)
+    )
+
+
+# Schema-bomb budget for ``unpack_legacy_defs``: cap the cumulative JSON-byte
+# size of every inlined target. A byte cap is the universal measure of
+# expansion -- it simultaneously bounds ref-count fan-out, node-count
+# amplification, and scalar-byte amplification (large ``description`` /
+# ``const`` / ``enum`` values). Real-world MCP / OpenAPI-derived tool schemas
+# inline well under 1MB; 10MB sits two orders of magnitude above that, well
+# below memory-pressure territory, and rejects request-supplied bombs before
+# the proxy materialises them.
+_LEGACY_DEFS_MAX_INLINED_BYTES = 10_000_000
+
+
+def unpack_legacy_defs(
+    schema: dict,
+    *,
+    copy: bool = False,
+    max_inlined_bytes: int = _LEGACY_DEFS_MAX_INLINED_BYTES,
+) -> dict:
+    """Inline ``$ref``s backed by draft-04 ``definitions`` / OpenAPI
+    ``components.schemas``. ``$defs`` is left untouched.
+
+    Anthropic and Fireworks tool-schema resolvers only recognise ``$defs``;
+    legacy / OpenAPI def blocks are otherwise silently dropped and leave
+    dangling pointers. See https://github.com/BerriAI/litellm/issues/26692.
+
+    Mutates ``schema`` in place and returns it. Pass ``copy=True`` to deep-copy
+    first (only when there is actually work to do). ``max_inlined_bytes``
+    bounds the cumulative JSON-byte size of inlined targets so request-supplied
+    schemas cannot expand into a schema-bomb before reaching the upstream
+    provider -- raises ``ValueError`` on overflow.
+    """
+    if not _has_legacy_defs(schema):
+        return schema
+    if copy:
+        import copy as _copy
+
+        schema = _copy.deepcopy(schema)
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    defs = schema.pop("components", {}).get("schemas") or {}
+    defs.update(schema.pop("definitions", None) or {})
+    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    return schema
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
@@ -1159,9 +1321,16 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_id = message["file"].get("file_id")
-    file_data = message["file"].get("file_data")
-    format = message["file"].get("format")
+    file_sub = message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider=None,
+        )
+    file_id = file_sub.get("file_id")
+    file_data = file_sub.get("file_data")
+    format = file_sub.get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
     image_url_object = ChatCompletionImageObject(
@@ -1185,12 +1354,8 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
         {"role": "assistant", "content": "I'm good, thank you!"},
         {"role": "user", "content": "What is the weather in Tokyo?"},
     ]
-    get_user_prompt(messages) -> "What is the weather in Tokyo?"
+    get_last_user_message(messages) -> "What is the weather in Tokyo?"
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        convert_content_list_to_str,
-    )
-
     if not messages:
         return None
 

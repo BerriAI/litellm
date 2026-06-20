@@ -32,7 +32,7 @@ def make_sync_call(
     logging_obj: LiteLLMLoggingObject,
     json_mode: Optional[bool] = False,
     fake_stream: bool = False,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
@@ -108,7 +108,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
         api_key: Optional[str] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> CustomStreamWrapper:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
@@ -248,7 +248,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,
@@ -268,7 +268,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", None)
         unencoded_model_id = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode = optional_params.get("json_mode", False)

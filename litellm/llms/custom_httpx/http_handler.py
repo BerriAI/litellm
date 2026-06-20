@@ -485,11 +485,16 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             if k.lower() not in ("content-encoding", "content-length")
         }
 
+        try:
+            request_content = original_error.request.content
+        except httpx.RequestNotRead:
+            request_content = b""
+
         masked_request = httpx.Request(
             method=original_error.request.method,
             url=masked_url,
             headers=original_error.request.headers,
-            content=original_error.request.content,
+            content=request_content,
         )
 
         super().__init__(
@@ -584,6 +589,7 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -594,7 +600,11 @@ class AsyncHTTPHandler:
         params.update(HTTPHandler.extract_query_params(url))
 
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            url,
+            params=params,
+            headers=headers,  # type: ignore
+            follow_redirects=_follow_redirects,  # type: ignore
+            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
 
@@ -1110,6 +1120,7 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -1123,6 +1134,7 @@ class HTTPHandler:
             params=params,
             headers=headers,
             follow_redirects=_follow_redirects,
+            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
 
         return response

@@ -1,0 +1,14 @@
+[[IgnoredVulns]]
+id = "GHSA-w8v5-vhqr-4h9v"
+ignoreUntil = 2026-09-09
+reason = "diskcache has no fixed release published; remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-hg6j-4rv6-33pg"
+ignoreUntil = 2026-08-15
+reason = "aiohttp held at 3.13.5: vcrpy releases <= 8.1.1 cannot import aiohttp >= 3.14 and the merged upstream fix (vcrpy PR 996) is unreleased; bump aiohttp and drop this entry when a newer vcrpy ships"
+
+[[IgnoredVulns]]
+id = "GHSA-jg22-mg44-37j8"
+ignoreUntil = 2026-08-15
+reason = "aiohttp held at 3.13.5: vcrpy releases <= 8.1.1 cannot import aiohttp >= 3.14 and the merged upstream fix (vcrpy PR 996) is unreleased; bump aiohttp and drop this entry when a newer vcrpy ships"

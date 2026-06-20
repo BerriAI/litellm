@@ -10,11 +10,13 @@ export const detectAgentType = (agent: Agent): string => {
   const customProvider = agent.litellm_params?.custom_llm_provider;
 
   // Check by custom_llm_provider first
+  if (customProvider === "langflow") return "langflow";
   if (customProvider === "langgraph") return "langgraph";
   if (customProvider === "azure_ai") return "azure_ai_foundry";
   if (customProvider === "bedrock") return "bedrock_agentcore";
 
   // Check by model prefix
+  if (model.startsWith("langflow/")) return "langflow";
   if (model.startsWith("langgraph/")) return "langgraph";
   if (model.startsWith("azure_ai/agents/")) return "azure_ai_foundry";
   if (model.startsWith("bedrock/agentcore/")) return "bedrock_agentcore";
@@ -27,10 +29,7 @@ export const detectAgentType = (agent: Agent): string => {
  * Parses agent data for dynamic form fields (non-A2A agents).
  * Extracts values from litellm_params based on the agent type metadata.
  */
-export const parseDynamicAgentForForm = (
-  agent: Agent,
-  agentTypeInfo: AgentCreateInfo
-): Record<string, any> => {
+export const parseDynamicAgentForForm = (agent: Agent, agentTypeInfo: AgentCreateInfo): Record<string, any> => {
   const values: Record<string, any> = {
     agent_name: agent.agent_name,
     description: agent.agent_card_params?.description || "",
@@ -46,7 +45,7 @@ export const parseDynamicAgentForForm = (
         const model = agent.litellm_params.model;
         const templateParts = agentTypeInfo.model_template.split("/");
         const modelParts = model.split("/");
-        
+
         // Find the placeholder position and extract the value
         templateParts.forEach((part, index) => {
           if (part === `{${field.key}}` && modelParts[index]) {
@@ -64,4 +63,3 @@ export const parseDynamicAgentForForm = (
 
   return values;
 };
-

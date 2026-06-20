@@ -13,7 +13,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from litellm._logging import verbose_logger
 
-
 # ---------------------------------------------------------------------------
 # SSE parsing helpers (module-level to keep the class lean)
 # ---------------------------------------------------------------------------

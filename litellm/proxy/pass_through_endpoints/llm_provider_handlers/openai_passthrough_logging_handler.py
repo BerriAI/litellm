@@ -5,7 +5,7 @@ Handles cost tracking and logging for OpenAI passthrough endpoints, specifically
 """
 
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
@@ -29,8 +30,74 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ImageResponse, LlmProviders, PassthroughCallTypes
 from litellm.utils import ModelResponse, TextCompletionResponse
+
+# Hostnames that route to OpenAI-compatible APIs.
+#
+# `api.openai.com` is OpenAI proper. The two Azure domains below are *shared by
+# every Azure Cognitive Service* (Speech, Vision, Language, ...), not just Azure
+# OpenAI: `openai.azure.com` is the classic Azure OpenAI domain, while
+# `cognitiveservices.azure.com` is used by newer "Azure AI Foundry" /
+# Cognitive Services-hosted Azure OpenAI deployments. Because the hostname alone
+# cannot tell Azure OpenAI apart from the other Cognitive Services on those
+# domains, requests there must additionally carry an OpenAI-style path segment.
+_OPENAI_HOSTNAMES = ("api.openai.com",)
+_AZURE_OPENAI_HOSTNAMES = ("openai.azure.com", "cognitiveservices.azure.com")
+# Path markers that identify an Azure request as Azure OpenAI rather than Speech
+# / Vision / Language / ... `/openai/` is the native Azure OpenAI path prefix;
+# `/v1/` is the OpenAI-v1 surface used by LiteLLM's pass-through routing. Other
+# Cognitive Services use service-named prefixes and versions like `/v3.1/`,
+# `/v1.0/`, so they do not collide with these markers.
+_AZURE_OPENAI_PATH_MARKERS = ("/openai/", "/v1/")
+
+
+def _hostname_matches(hostname: str, suffixes: tuple) -> bool:
+    """True if hostname equals one of `suffixes` or is a subdomain of it.
+
+    Uses suffix matching (not a bare substring test) so look-alikes such as
+    `cognitiveservices.azure.com.attacker.example` are not accepted.
+    """
+    return any(
+        hostname == suffix or hostname.endswith("." + suffix) for suffix in suffixes
+    )
+
+
+def _is_openai_compatible_host(hostname: Optional[str]) -> bool:
+    """True if the hostname is OpenAI proper or one of the Azure OpenAI domains.
+
+    Hostname-only check, kept for the route-level helpers that additionally
+    require a specific OpenAI path (e.g. `/v1/chat/completions`). When only the
+    hostname would otherwise gate dispatch, use `_is_openai_compatible_url` so
+    non-OpenAI Azure Cognitive Services on the shared domains are excluded.
+    """
+    if not hostname:
+        return False
+    return _hostname_matches(hostname, _OPENAI_HOSTNAMES) or _hostname_matches(
+        hostname, _AZURE_OPENAI_HOSTNAMES
+    )
+
+
+def _is_openai_compatible_url(url_route: Optional[str]) -> bool:
+    """True if the URL targets an OpenAI-compatible API surface.
+
+    For the shared Azure Cognitive Services domains we additionally require an
+    OpenAI-style path segment (`/openai/` or `/v1/`) so non-OpenAI Azure services
+    (Speech, Vision, Language, ...) on the same domain are not misclassified as
+    OpenAI routes.
+    """
+    if not url_route:
+        return False
+    parsed_url = urlparse(url_route)
+    hostname = parsed_url.hostname
+    if not hostname:
+        return False
+    if _hostname_matches(hostname, _OPENAI_HOSTNAMES):
+        return True
+    if _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES):
+        return any(marker in parsed_url.path for marker in _AZURE_OPENAI_PATH_MARKERS)
+    return False
 
 
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
@@ -52,12 +119,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
+        return (
+            _is_openai_compatible_host(parsed_url.hostname)
             and "/v1/chat/completions" in parsed_url.path
         )
 
@@ -67,12 +130,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
+        return (
+            _is_openai_compatible_host(parsed_url.hostname)
             and "/v1/images/generations" in parsed_url.path
         )
 
@@ -82,12 +141,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
+        return (
+            _is_openai_compatible_host(parsed_url.hostname)
             and "/v1/images/edits" in parsed_url.path
         )
 
@@ -97,13 +152,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
-            and ("/v1/responses" in parsed_url.path or "/responses" in parsed_url.path)
+        return _is_openai_compatible_host(parsed_url.hostname) and (
+            "/v1/responses" in parsed_url.path or "/responses" in parsed_url.path
         )
 
     def _get_user_from_metadata(
@@ -189,7 +239,43 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return 0.0
 
     @staticmethod
-    def openai_passthrough_handler(  # noqa: PLR0915
+    def _build_responses_api_response_and_cost(
+        model: str,
+        httpx_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
+    ) -> Tuple[ResponsesAPIResponse, float]:
+        """Transform a Responses API raw response into a ResponsesAPIResponse
+        and compute its cost.
+
+        The Responses API has a different on-the-wire shape from chat
+        completions (`output: [...]` instead of `choices: [...]`), so the
+        chat-completions `transform_response` raises KeyError 'choices' on
+        a Responses payload. Use the dedicated Responses-API transformer
+        (`OpenAIResponsesAPIConfig.transform_response_api_response`) here.
+
+        Returns (litellm_model_response, response_cost) — symmetric with the
+        chat-completions branch which produces the same two values inline,
+        and analogous to the image branches' `_calculate_image_*_cost` helpers
+        (which return cost only because the image-response object is trivial
+        to build inline; the Responses payload needs a real transformer).
+        """
+        responses_config = OpenAIResponsesAPIConfig()
+        litellm_model_response = responses_config.transform_response_api_response(
+            model=model,
+            raw_response=httpx_response,
+            logging_obj=logging_obj,
+        )
+        response_cost = litellm.completion_cost(
+            completion_response=litellm_model_response,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            call_type="responses",
+        )
+        return litellm_model_response, response_cost
+
+    @staticmethod
+    def openai_passthrough_handler(
         httpx_response: httpx.Response,
         response_body: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -253,7 +339,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         try:
             response_cost = 0.0
             litellm_model_response: Optional[
-                Union[ModelResponse, TextCompletionResponse, ImageResponse]
+                Union[
+                    ModelResponse,
+                    TextCompletionResponse,
+                    ImageResponse,
+                    ResponsesAPIResponse,
+                ]
             ] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
@@ -336,29 +427,18 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     litellm_model_response._hidden_params = {}
                 litellm_model_response._hidden_params["response_cost"] = response_cost
             elif is_responses:
-                # Handle responses API cost calculation
-                provider_config = handler_instance.get_provider_config(model=model)
-                existing_litellm_params = kwargs.get("litellm_params", {}) or {}
-                litellm_model_response = provider_config.transform_response(
-                    raw_response=httpx_response,
-                    model_response=litellm.ModelResponse(),
+                # Responses-API cost tracking — see
+                # `_build_responses_api_response_and_cost` for why this needs
+                # a dedicated transformer (the chat-completions transform
+                # crashes on the Responses payload shape).
+                (
+                    litellm_model_response,
+                    response_cost,
+                ) = OpenAIPassthroughLoggingHandler._build_responses_api_response_and_cost(
                     model=model,
-                    messages=request_body.get("messages", []),
+                    httpx_response=httpx_response,
                     logging_obj=logging_obj,
-                    optional_params=request_body.get("optional_params", {}),
-                    api_key="",
-                    request_data=request_body,
-                    encoding=litellm.encoding,
-                    json_mode=False,
-                    litellm_params=existing_litellm_params,
-                )
-
-                # Calculate cost using LiteLLM's cost calculator with responses call type
-                response_cost = litellm.completion_cost(
-                    completion_response=litellm_model_response,
-                    model=model,
                     custom_llm_provider=custom_llm_provider,
-                    call_type="responses",
                 )
 
             # Update kwargs with cost information

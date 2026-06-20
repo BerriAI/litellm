@@ -105,6 +105,9 @@ async def google_stream_generate_content(
     if "model" not in data:
         data["model"] = model_name
     data["stream"] = True
+    # google-genai SDK (?alt=sse) must not receive OpenAI's data: [DONE] terminator.
+    data["_litellm_skip_openai_stream_done"] = True
+    data["_litellm_raw_sse_stream"] = True
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -285,7 +288,7 @@ async def create_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model") or data.get("agent"),
+            model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

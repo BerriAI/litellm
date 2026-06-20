@@ -32,21 +32,13 @@ export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
         <Text type="secondary" style={{ fontSize: 12 }}>
           Description
         </Text>
-        <Radio.Group
-          size="small"
-          value={viewMode}
-          onChange={(e) => setViewMode(e.target.value)}
-        >
+        <Radio.Group size="small" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
           <Radio.Button value="formatted">Formatted</Radio.Button>
           <Radio.Button value="json">JSON</Radio.Button>
         </Radio.Group>
       </div>
 
-      {viewMode === "formatted" ? (
-        <FormattedToolView tool={tool} />
-      ) : (
-        <JsonToolView tool={tool} />
-      )}
+      {viewMode === "formatted" ? <FormattedToolView tool={tool} /> : <JsonToolView tool={tool} />}
     </div>
   );
 }

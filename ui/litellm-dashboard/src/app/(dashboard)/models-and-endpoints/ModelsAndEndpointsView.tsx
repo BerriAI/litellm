@@ -30,10 +30,6 @@ import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
 interface ModelDashboardProps {
-  token: string | null;
-  modelData: any;
-  keys: any[] | null;
-  setModelData: any;
   premiumUser: boolean;
   teams: Team[] | null;
 }
@@ -518,7 +514,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 );
               }
               return (
-                <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex} className="gap-2 h-[75vh] w-full ">
+                <TabGroup
+                  index={selectedTabIndex}
+                  onIndexChange={setSelectedTabIndex}
+                  className="gap-2 h-[75vh] w-full "
+                >
                   <TabList className="flex justify-between mt-2 w-full items-center">
                     <div className="flex">{visibleTabs.map((t) => t.tab)}</div>
 

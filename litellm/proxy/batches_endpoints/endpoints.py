@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
+from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
@@ -25,6 +26,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
+    get_batch_id_from_unified_batch_id,
     get_batch_from_database,
     get_credentials_for_model,
     get_model_id_from_unified_batch_id,
@@ -56,7 +58,7 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def create_batch(  # noqa: PLR0915
+async def create_batch(
     request: Request,
     fastapi_response: Response,
     provider: Optional[str] = None,
@@ -106,6 +108,7 @@ async def create_batch(  # noqa: PLR0915
             proxy_config=proxy_config,
             route_type="acreate_batch",
         )
+        data["metadata"] = sanitize_openai_provider_metadata(data.get("metadata"))
 
         ## check if model is a loadbalanced model
         router_model: Optional[str] = None
@@ -340,7 +343,7 @@ async def create_batch(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def retrieve_batch(  # noqa: PLR0915
+async def retrieve_batch(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -891,11 +894,19 @@ async def cancel_batch(
                     },
                 )
 
-            # Hook has already extracted model and unwrapped batch_id into data dict
+            model_id_from_batch = get_model_id_from_unified_batch_id(unified_batch_id)
+            if model_id_from_batch is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid LiteLLM managed batch ID. Missing model_id."
+                    },
+                )
+            data["model"] = model_id_from_batch
+            data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
             response = await llm_router.acancel_batch(**data)  # type: ignore
             response._hidden_params["unified_batch_id"] = unified_batch_id
 
-            # Ensure model_id is set for the post_call_success_hook to re-encode IDs
             if not response._hidden_params.get("model_id") and data.get("model"):
                 response._hidden_params["model_id"] = data["model"]
 

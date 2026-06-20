@@ -29,6 +29,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -80,7 +81,6 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
-    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -338,50 +338,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
-        """Check ``supports_{level}_reasoning_effort`` in the model map.
-
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
-        """
-        key = f"supports_{level}_reasoning_effort"
-        try:
-            if _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=key,
-            ):
-                return True
-        except Exception:
-            pass
-        candidates = [model]
-        for prefix in (
-            "bedrock/converse/",
-            "bedrock/invoke/",
-            "bedrock/",
-            "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
-        try:
-            from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-            base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
-        except Exception:
-            pass
-        try:
-            import litellm
-
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
-        except Exception:
-            pass
-        return False
+        """Check ``supports_{level}_reasoning_effort`` in the model map."""
+        return AnthropicConfig._supports_model_capability(
+            model, f"supports_{level}_reasoning_effort"
+        )
 
     @staticmethod
     def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
@@ -400,7 +360,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _model_supports_effort_param(model: str) -> bool:
-        """Whether the model accepts ``output_config.effort`` at all."""
+        """Whether the model accepts ``output_config.effort`` at all.
+
+        A model qualifies if its map entry advertises ``supports_output_config``
+        or any ``supports_*_reasoning_effort`` flag. The two are independent
+        signals: e.g. Claude Opus 4.5 supports ``output_config`` without
+        advertising a non-default (max/xhigh) effort level.
+        """
+        if AnthropicConfig._supports_model_capability(model, "supports_output_config"):
+            return True
         return any(
             AnthropicConfig._supports_effort_level(model, level)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
@@ -637,7 +605,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(  # noqa: PLR0915
+    def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
@@ -667,6 +635,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _input_schema["type"] = "object"
                 if "properties" not in _input_schema:
                     _input_schema["properties"] = {}
+
+            # Inline legacy / OpenAPI $refs before the allow-list filter strips
+            # their backing def blocks (https://github.com/BerriAI/litellm/issues/26692).
+            _input_schema = unpack_legacy_defs(_input_schema, copy=True)
 
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
@@ -901,7 +873,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         anthropic_tools = []
         mcp_servers = []
         for tool in tools:
-            if "input_schema" in tool:  # assume in anthropic format
+            if tool.get("type") == "namespace":
+                # Namespace is a grouping container (e.g. codex's multi_agent_v1).
+                # Extract its nested tools and map them individually.
+                for nested in tool.get("tools") or []:
+                    if "input_schema" in nested:
+                        # Already in Anthropic format.
+                        anthropic_tools.append(nested)
+                    elif "function" not in nested and "name" in nested:
+                        # Flat format: {type, name, description, parameters, ...}.
+                        # Normalize to OpenAI-wrapped format before mapping.
+                        wrapped = cast(
+                            ChatCompletionToolParam,
+                            {
+                                "type": nested.get("type", "function"),
+                                "function": {
+                                    k: v for k, v in nested.items() if k != "type"
+                                },
+                            },
+                        )
+                        nested_tool, nested_mcp = self._map_tool_helper(wrapped)
+                        if nested_tool is not None:
+                            anthropic_tools.append(nested_tool)
+                        if nested_mcp is not None:
+                            mcp_servers.append(nested_mcp)
+                    elif "function" in nested:
+                        nested_tool, nested_mcp = self._map_tool_helper(
+                            cast(ChatCompletionToolParam, nested)
+                        )
+                        if nested_tool is not None:
+                            anthropic_tools.append(nested_tool)
+                        if nested_mcp is not None:
+                            mcp_servers.append(nested_mcp)
+            elif "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
@@ -1395,7 +1399,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return None
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
@@ -1451,10 +1455,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _value = self._map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
-            elif param == "temperature":
-                optional_params["temperature"] = value
-            elif param == "top_p":
-                optional_params["top_p"] = value
+            elif param == "temperature" or param == "top_p":
+                AnthropicConfig._apply_sampling_param(
+                    optional_params=optional_params,
+                    model=model,
+                    param=param,
+                    value=value,
+                    drop_params=drop_params,
+                    output_key=param,
+                )
             elif param == "response_format" and isinstance(value, dict):
                 if any(
                     substring in model
@@ -1506,9 +1515,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             elif param == "thinking":
                 optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
+            elif param == "reasoning_effort":
+                # Accept both string ("low") and dict ({"effort": "low",
+                # "summary": "concise"}). The Responses->Chat parser keeps the
+                # full dict when `summary` is set (see #25359), so a dict here
+                # is the standard shape Otto/OpenAI-Responses-Bridge callers
+                # send. Coerce to the effort string before mapping — same
+                # shape-tolerance the GPT-5 path already implements in
+                # `_normalize_reasoning_effort_for_chat_completion`.
+                effort_value = value
+                if isinstance(effort_value, dict):
+                    effort_value = effort_value.get("effort")
+                if not isinstance(effort_value, str):
+                    continue
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value,
+                    reasoning_effort=effort_value,
                     model=model,
                     llm_provider=self.custom_llm_provider or "anthropic",
                 )
@@ -1519,12 +1540,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params["thinking"] = mapped_thinking
                     if AnthropicConfig._is_adaptive_thinking_model(model):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                            value
+                            effort_value
                         )
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
                                 model=model,
-                                value=value,
+                                value=effort_value,
                                 llm_provider=self.custom_llm_provider or "anthropic",
                             )
                         optional_params["output_config"] = {"effort": mapped_effort}
@@ -1591,6 +1612,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return _tool
 
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them (e.g. Bedrock) override this to True.
+        """
+        return False
+
     def translate_system_message(
         self, messages: List[AllMessageValues]
     ) -> List[AnthropicSystemMessageContent]:
@@ -1598,7 +1628,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
-        Filters out system messages containing x-anthropic-billing-header metadata.
+        When should_strip_billing_metadata() is True, x-anthropic-billing-header system blocks are dropped.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -1610,10 +1640,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
                         continue
-                    # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
-                    ):
+                    if self.should_strip_billing_metadata() and system_message_block[
+                        "content"
+                    ].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -1632,9 +1661,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
                             continue
-                        # Skip system messages containing x-anthropic-billing-header metadata
                         if (
-                            _content.get("type") == "text"
+                            self.should_strip_billing_metadata()
+                            and _content.get("type") == "text"
                             and text_value
                             and text_value.startswith("x-anthropic-billing-header:")
                         ):
@@ -1781,7 +1810,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_context_management_beta_header(
                 headers, optional_params["context_management"]
             )
-        if optional_params.get("output_format") is not None:
+        output_config = optional_params.get("output_config")
+        if optional_params.get("output_format") is not None or (
+            isinstance(output_config, dict) and output_config.get("format") is not None
+        ):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
             )
@@ -1809,9 +1841,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate messages to anthropic format.
         """
         ## VALIDATE REQUEST
-        """
-        Anthropic doesn't support tool calling without `tools=` param specified.
-        """
+        """Anthropic requires ``tools`` when messages include tool blocks; LiteLLM injects a dummy tool if omitted (no ``modify_params`` needed)."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
@@ -1821,16 +1851,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and messages is not None
             and has_tool_call_blocks(messages)
         ):
-            if litellm.modify_params:
-                optional_params["tools"], _ = self._map_tools(
-                    add_dummy_tool(custom_llm_provider="anthropic")
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="anthropic",
-                )
+            optional_params["tools"], _ = self._map_tools(
+                add_dummy_tool(custom_llm_provider="anthropic")
+            )
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
@@ -1955,6 +1978,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
+        optional_params.pop("client_metadata", None)
+
+        # ``top_k`` is a provider-specific kwarg that bypasses
+        # ``map_openai_params``; gate it here, the single boundary shared by
+        # the direct Anthropic, Bedrock invoke, Vertex, and Azure paths.
+        top_k = optional_params.pop("top_k", None)
+        if top_k is not None:
+            AnthropicConfig._apply_sampling_param(
+                optional_params=optional_params,
+                model=model,
+                param="top_k",
+                value=top_k,
+                drop_params=litellm_params.get("drop_params") is True,
+                output_key="top_k",
+            )
 
         data = {
             "model": model,
@@ -2175,19 +2213,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         inference_geo: Optional[str] = None
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
+        service_tier = cast(
+            str | None,
+            _usage.get("service_tier"),
+        )
 
-        if (
-            "cache_creation_input_tokens" in _usage
-            and _usage["cache_creation_input_tokens"] is not None
-        ):
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if (
-            "cache_read_input_tokens" in _usage
-            and _usage["cache_read_input_tokens"] is not None
-        ):
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
+        iterations: Optional[List[Any]] = _usage.get("iterations")
+        if iterations:
+            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
+            completion_tokens = sum(
+                it.get("output_tokens", 0) or 0 for it in iterations
+            )
+            cache_creation_input_tokens = sum(
+                it.get("cache_creation_input_tokens", 0) or 0 for it in iterations
+            )
+            cache_read_input_tokens = sum(
+                it.get("cache_read_input_tokens", 0) or 0 for it in iterations
+            )
+            prompt_tokens += cache_creation_input_tokens + cache_read_input_tokens
+
+        if not iterations:
+            if (
+                "cache_creation_input_tokens" in _usage
+                and _usage["cache_creation_input_tokens"] is not None
+            ):
+                cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+                prompt_tokens += cache_creation_input_tokens
+            if (
+                "cache_read_input_tokens" in _usage
+                and _usage["cache_read_input_tokens"] is not None
+            ):
+                cache_read_input_tokens = _usage["cache_read_input_tokens"]
+                prompt_tokens += cache_read_input_tokens
         if "server_tool_use" in _usage and _usage["server_tool_use"] is not None:
             if (
                 "web_search_requests" in _usage["server_tool_use"]
@@ -2226,7 +2283,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
-        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
+        raw_input_tokens = (
+            prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
@@ -2258,6 +2317,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
+            iterations=iterations,
             server_tool_use=(
                 ServerToolUse(
                     web_search_requests=web_search_requests,
@@ -2268,6 +2328,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            service_tier=service_tier,
         )
         return usage
 

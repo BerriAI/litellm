@@ -2,6 +2,8 @@
 #    Unit tests for JWT-Auth
 
 import asyncio
+import base64
+import logging
 import os
 import random
 import sys
@@ -21,6 +23,9 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Request, HTTPException
 from fastapi.routing import APIRoute
 from fastapi.responses import Response
@@ -35,7 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
-from typing import Literal
+from typing import Literal, Optional
 
 public_key = {
     "kty": "RSA",
@@ -742,7 +747,6 @@ async def test_allowed_routes_admin(
     from litellm.proxy.proxy_server import user_api_key_auth
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    await litellm.proxy.proxy_server.prisma_client.connect()
 
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 
@@ -1584,3 +1588,524 @@ async def test_auth_jwt_mismatched_key_fails(monkeypatch):
         with pytest.raises(Exception) as exc:
             await h.auth_jwt(token)
         assert "Validation fails" in str(exc.value)
+
+
+def _base64url_encode_bytes(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+
+
+def _base64url_encode_int(value: int) -> str:
+    value_bytes = value.to_bytes((value.bit_length() + 7) // 8, "big")
+    return _base64url_encode_bytes(value=value_bytes)
+
+
+def _get_rsa_key_and_jwk(kid: str):
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    jwk = {
+        "kty": "RSA",
+        "n": _base64url_encode_int(value=public_numbers.n),
+        "e": _base64url_encode_int(value=public_numbers.e),
+        "kid": kid,
+        "alg": "RS256",
+        "use": "sig",
+    }
+    return private_key, jwk
+
+
+def _encode_rsa_jwt(
+    private_key,
+    issuer: str,
+    audience: str,
+    kid: str,
+    extra_claims: Optional[dict] = None,
+) -> str:
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    current_time = int(time.time())
+    claims = {
+        "sub": "test-subject",
+        "iss": issuer,
+        "aud": audience,
+        "iat": current_time,
+        "exp": current_time + 300,
+    }
+    if extra_claims:
+        claims.update(extra_claims)
+
+    return jwt.encode(
+        claims,
+        private_key_pem,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+
+def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHandler:
+    cache = DualCache()
+    for jwks_url, keys in keys_by_url.items():
+        cache.set_cache(
+            key=f"litellm_jwt_auth_keys_{jwks_url}",
+            value=keys,
+        )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(issuers=issuers),
+    )
+    return jwt_handler
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
+    monkeypatch,
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer_one = "https://issuer-one.example.com"
+    issuer_two = "https://issuer-two.example.com"
+    issuer_one_jwks_url = f"{issuer_one}/keys"
+    issuer_two_jwks_url = f"{issuer_two}/keys"
+    shared_kid = "shared-kid"
+
+    _, issuer_one_jwk = _get_rsa_key_and_jwk(kid=shared_kid)
+    issuer_two_private_key, issuer_two_jwk = _get_rsa_key_and_jwk(kid=shared_kid)
+
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer_one,
+                "jwks_url": issuer_one_jwks_url,
+                "audience": "audience-one",
+                "user_id_jwt_field": "email",
+                "user_email_jwt_field": "email",
+            },
+            {
+                "issuer": issuer_two,
+                "jwks_url": issuer_two_jwks_url,
+                "audience": "audience-two",
+                "user_id_jwt_field": "repository_owner",
+                "team_id_jwt_field": "repository",
+            },
+        ],
+        keys_by_url={
+            issuer_one_jwks_url: [issuer_one_jwk],
+            issuer_two_jwks_url: [issuer_two_jwk],
+        },
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=issuer_two_private_key,
+        issuer=issuer_two,
+        audience="audience-two",
+        kid=shared_kid,
+        extra_claims={
+            "repository_owner": "example-org",
+            "repository": "example-org/litellm-fork",
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims[JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == issuer_two
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == ("example-org")
+    assert jwt_handler.get_team_id(token=claims, default_value=None) == (
+        "example-org/litellm-fork"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://oidc.eks.eu-west-1.amazonaws.com/id/test-cluster"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="k8s-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": None,
+                "disable_audience_validation": True,
+                "user_id_jwt_field": "kubernetes\\.io.namespace",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="kubernetes.default.svc",
+        kid="k8s-key",
+        extra_claims={"kubernetes.io": {"namespace": "example-namespace"}},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert (
+        jwt_handler.get_user_id(token=claims, default_value=None) == "example-namespace"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_falls_back_to_global_jwks_for_unknown_issuer(
+    monkeypatch,
+):
+    """Unknown ``iss`` claims fall through to the global ``JWT_PUBLIC_KEY_URL``
+    path so adding the new ``issuers`` config to a live deployment doesn't
+    break tokens minted by issuers that still rely on the legacy global JWKS.
+    """
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    configured_issuer = "https://issuer.example.com"
+    unknown_issuer = "https://unknown-issuer.example.com"
+    global_jwks_url = "https://global.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", global_jwks_url)
+
+    configured_private_key, configured_jwk = _get_rsa_key_and_jwk(kid="configured-key")
+    unknown_private_key, unknown_jwk = _get_rsa_key_and_jwk(kid="global-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": configured_issuer,
+                "jwks_url": f"{configured_issuer}/keys",
+                "audience": "expected-audience",
+            }
+        ],
+        keys_by_url={
+            f"{configured_issuer}/keys": [configured_jwk],
+            global_jwks_url: [unknown_jwk],
+        },
+    )
+    token = _encode_rsa_jwt(
+        private_key=unknown_private_key,
+        issuer=unknown_issuer,
+        audience="expected-audience",
+        kid="global-key",
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims["iss"] == unknown_issuer
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_unknown_issuer_without_global_jwks_rejected(
+    monkeypatch,
+):
+    """When there is no ``JWT_PUBLIC_KEY_URL`` to fall back to, an unknown
+    ``iss`` claim still fails — the fallback path raises ``Missing JWT
+    Public Key URL`` rather than the legacy ``Unsupported JWT issuer``.
+    """
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    configured_issuer = "https://issuer.example.com"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": configured_issuer,
+                "jwks_url": f"{configured_issuer}/keys",
+                "audience": "expected-audience",
+            }
+        ],
+        keys_by_url={f"{configured_issuer}/keys": [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://unknown-issuer.example.com",
+        audience="expected-audience",
+        kid="issuer-key",
+    )
+
+    with pytest.raises(Exception) as exc:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert "Missing JWT Public Key URL" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_rejects_wrong_audience(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="wrong-audience",
+        kid="issuer-key",
+    )
+
+    with pytest.raises(Exception) as exc:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert "Validation fails" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer_one = "https://issuer-one.example.com"
+    issuer_two = "https://issuer-two.example.com"
+    issuer_one_jwks_url = f"{issuer_one}/keys"
+    issuer_two_jwks_url = f"{issuer_two}/keys"
+    shared_kid = "shared-kid"
+    issuer_one_private_key, issuer_one_jwk = _get_rsa_key_and_jwk(kid=shared_kid)
+    _, issuer_two_jwk = _get_rsa_key_and_jwk(kid=shared_kid)
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer_one,
+                "jwks_url": issuer_one_jwks_url,
+                "audience": "audience-one",
+            },
+            {
+                "issuer": issuer_two,
+                "jwks_url": issuer_two_jwks_url,
+                "audience": "audience-two",
+            },
+        ],
+        keys_by_url={
+            issuer_one_jwks_url: [issuer_one_jwk],
+            issuer_two_jwks_url: [issuer_two_jwk],
+        },
+    )
+    token = _encode_rsa_jwt(
+        private_key=issuer_one_private_key,
+        issuer=issuer_two,
+        audience="audience-two",
+        kid=shared_kid,
+    )
+
+    with pytest.raises(Exception) as exc:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert "Validation fails" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_missing_mapped_claim_is_optional(monkeypatch):
+    """Configured issuer claim mappings are advisory, not mandatory.
+
+    When the token simply omits a mapped field (e.g. a service-to-service token
+    with no ``email`` claim), JWT auth still succeeds and the normalized claim
+    is just absent — matching the global ``litellm_jwtauth`` behaviour.
+    """
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_id_jwt_field": "email",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims[JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == issuer
+    assert JWTHandler.LITELLM_USER_ID_CLAIM not in claims
+
+
+def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
+    monkeypatch,
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+
+    with pytest.raises(Exception) as exc:
+        LiteLLM_JWTAuth(
+            issuers=[
+                {
+                    "issuer": issuer,
+                    "jwks_url": jwks_url,
+                }
+            ]
+        )
+
+    assert "must configure audience" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    jwks_url = "https://global-issuer.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid="global-key")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="email",
+            user_email_jwt_field="email",
+            team_id_jwt_field="team.id",
+            team_ids_jwt_field="teams",
+            org_id_jwt_field="org.id",
+            end_user_id_jwt_field="end_user.id",
+        ),
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://global-issuer.example.com",
+        audience="some-other-client",
+        kid="global-key",
+        extra_claims={
+            "email": "real-user@example.com",
+            "team": {"id": "real-team"},
+            "teams": ["real-team", "secondary-team"],
+            "org": {"id": "real-org"},
+            "end_user": {"id": "real-end-user"},
+            JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://issuer.example.com",
+            JWTHandler.LITELLM_USER_ID_CLAIM: "victim-user",
+            JWTHandler.LITELLM_USER_EMAIL_CLAIM: "victim@example.com",
+            JWTHandler.LITELLM_TEAM_ID_CLAIM: "victim-team",
+            JWTHandler.LITELLM_TEAM_IDS_CLAIM: ["victim-team"],
+            JWTHandler.LITELLM_ORG_ID_CLAIM: "victim-org",
+            JWTHandler.LITELLM_END_USER_ID_CLAIM: "victim-end-user",
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+    assert jwt_handler.get_team_id(token=claims, default_value=None) == "real-team"
+    assert jwt_handler.get_team_ids_from_jwt(token=claims) == [
+        "real-team",
+        "secondary-team",
+    ]
+    assert jwt_handler.get_org_id(token=claims, default_value=None) == "real-org"
+    assert jwt_handler.get_end_user_id(token=claims, default_value=None) == (
+        "real-end-user"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_strips_unmapped_internal_claims(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_email_jwt_field": "email",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={
+            "email": "real-user@example.com",
+            JWTHandler.LITELLM_USER_ID_CLAIM: "victim-user",
+            JWTHandler.LITELLM_TEAM_ID_CLAIM: "victim-team",
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert JWTHandler.LITELLM_USER_ID_CLAIM not in claims
+    assert JWTHandler.LITELLM_TEAM_ID_CLAIM not in claims
+    assert jwt_handler.get_user_id(token=claims, default_value=None) is None
+    assert jwt_handler.get_team_id(token=claims, default_value=None) is None
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_does_not_emit_unscoped_global_warning(
+    monkeypatch, caplog
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+    JWTHandler._unscoped_jwt_warning_emitted = False
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await jwt_handler.auth_jwt(token=token)
+
+    assert "Tokens minted by any application" not in caplog.text
+    assert JWTHandler._unscoped_jwt_warning_emitted is False

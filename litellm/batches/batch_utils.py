@@ -113,8 +113,11 @@ def _batch_cost_calculator(
     """
     Calculate the cost of a batch based on the output file id
     """
-    # Handle Vertex AI with specialized method
-    if custom_llm_provider == "vertex_ai" and model_name:
+    if (
+        custom_llm_provider == "vertex_ai"
+        and model_name
+        and getattr(litellm, "disable_vertex_batch_output_transformation", False)
+    ):
         batch_cost, _ = calculate_vertex_ai_batch_cost_and_usage(
             file_content_dictionary, model_name
         )
@@ -136,10 +139,13 @@ def calculate_vertex_ai_batch_cost_and_usage(
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage]:
     """
-    Calculate both cost and usage from Vertex AI batch responses.
+    Calculate both cost and usage from raw Vertex AI batch responses.
 
-    Vertex AI batch output lines have format:
-      {"request": ..., "status": "", "response": {"candidates": [...], "usageMetadata": {...}}}
+    Used only when ``litellm.disable_vertex_batch_output_transformation = True``.
+    In that case the GCS predictions.jsonl is returned as-is, with each line in
+    the native Vertex format:
+
+      {"request": ..., "response": {"candidates": [...], "usageMetadata": {...}}}
 
     usageMetadata contains promptTokenCount, candidatesTokenCount, totalTokenCount.
     """
@@ -362,8 +368,11 @@ def _get_batch_job_total_usage_from_file_content(
     """
     Get the tokens of a batch job from the file content
     """
-    # Handle Vertex AI with specialized method
-    if custom_llm_provider == "vertex_ai" and model_name:
+    if (
+        custom_llm_provider == "vertex_ai"
+        and model_name
+        and getattr(litellm, "disable_vertex_batch_output_transformation", False)
+    ):
         _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(
             file_content_dictionary, model_name
         )

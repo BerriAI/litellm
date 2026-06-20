@@ -23,8 +23,14 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
     spend_log_error,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _sanitize_error_information_for_spend_logs,
+)
 from litellm.proxy.utils import ProxyUpdateSpend
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -89,6 +95,13 @@ class _ProxyDBLogger(CustomLogger):
             # ``.get("traceback")`` / truthy checks, and the TypedDict marks
             # the field as optional, so omitting is type-safe.
             _error_information.pop("traceback", None)
+        # Strip echoed request input + apply DB-size cap before storing in
+        # the spend-log metadata column (LIT-2992). Result is never None
+        # here because the input above is constructed non-None.
+        _error_information = cast(
+            StandardLoggingPayloadErrorInformation,
+            _sanitize_error_information_for_spend_logs(_error_information),
+        )
         _metadata["error_information"] = _error_information
 
         _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
@@ -149,9 +162,20 @@ class _ProxyDBLogger(CustomLogger):
             if obj_start is not None:
                 actual_start_time = obj_start
 
+        # A stream that broke mid-flight still billed the provider for the
+        # chunks already delivered. ``post_call_failure_hook`` lifts that
+        # recovered cost onto request_data (the usage rides along in
+        # ``combined_usage_object`` for the token columns), so attribute the
+        # real partial spend to this failure row instead of zero.
+        recovered_response_cost = 0.0
+        if isinstance(request_data.get("combined_usage_object"), litellm.Usage):
+            recovered_response_cost = max(
+                float(request_data.get("response_cost") or 0.0), 0.0
+            )
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
-            response_cost=0.0,
+            response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
             end_user_id=user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,
@@ -272,9 +296,15 @@ class _ProxyDBLogger(CustomLogger):
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
-                if sl_object is None and not kwargs.get("model"):
+                # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
+                # result=None; their per-turn costs are tracked on the inner aresponses/realtime calls.
+                if sl_object is None and (
+                    not kwargs.get("model")
+                    or kwargs.get("call_type")
+                    in ("_aresponses_websocket", "_arealtime")
+                ):
                     verbose_proxy_logger.warning(
-                        "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",
+                        "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),
                     )
                     return

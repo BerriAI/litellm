@@ -31,23 +31,23 @@ import asyncio
 def model_list():
     return [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "gpt-4o",
+            "model_name": "gpt-5.5",
             "litellm_params": {
-                "model": "gpt-4o",
+                "model": "gpt-5.5",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "dall-e-3",
+            "model_name": "gpt-image-1",
             "litellm_params": {
-                "model": "dall-e-3",
+                "model": "gpt-image-1",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -59,9 +59,9 @@ def model_list():
             },
         },
         {
-            "model_name": "claude-3-5-sonnet-20240620",
+            "model_name": "claude-sonnet-4-5-20250929",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "mock_response": "hi this is macintosh.",
             },
         },
@@ -198,6 +198,96 @@ async def test_audio_speech_router(mode):
     assert test_logger.standard_logging_object["model_group"] == "tts"
 
 
+@pytest.mark.asyncio
+async def test_aspeech_fallbacks_on_deployment_failure():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts-main",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+            {
+                "model_name": "tts-backup",
+                "litellm_params": {"model": "openai/tts-1-hd", "api_key": "fake-key"},
+            },
+        ],
+        fallbacks=[{"tts-main": ["tts-backup"]}],
+        num_retries=0,
+    )
+
+    called_models = []
+
+    async def mock_aspeech(*args, **kwargs):
+        called_models.append(kwargs["model"])
+        if kwargs["model"] == "openai/tts-1":
+            raise litellm.InternalServerError(
+                message="deployment down",
+                llm_provider="openai",
+                model="tts-1",
+            )
+        return MagicMock()
+
+    with patch("litellm.aspeech", side_effect=mock_aspeech):
+        response = await router.aspeech(
+            model="tts-main",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is not None
+    assert called_models == ["openai/tts-1", "openai/tts-1-hd"]
+
+
+@pytest.mark.asyncio
+async def test_aspeech_success_returns_response():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+        ]
+    )
+
+    mock_response = MagicMock()
+    with patch("litellm.aspeech", return_value=mock_response) as mock_aspeech:
+        response = await router.aspeech(
+            model="tts",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is mock_response
+    mock_aspeech.assert_called_once()
+    assert mock_aspeech.call_args.kwargs["model"] == "openai/tts-1"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_sets_deployment_metadata():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+        ]
+    )
+
+    mock_response = MagicMock()
+    with patch("litellm.aspeech", return_value=mock_response) as mock_aspeech:
+        response = await router._aspeech(
+            model="tts",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is mock_response
+    metadata = mock_aspeech.call_args.kwargs["metadata"]
+    assert metadata["deployment"] == "openai/tts-1"
+    assert metadata["deployment_model_name"] == "tts"
+    assert metadata["model_info"]["id"] is not None
+
+
 @pytest.mark.asyncio()
 async def test_rerank_endpoint(model_list):
     from litellm.types.utils import RerankResponse
@@ -323,21 +413,21 @@ async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
 
     if sync_mode:
         response = router.text_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
     else:
         ## Test 1: user facing function
         response = await router.atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
 
         ## Test 2: underlying function
         response_2 = await router._atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
@@ -359,12 +449,12 @@ async def test_router_with_empty_choices(model_list):
             completion_tokens=10,
             total_tokens=20,
         ),
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         object="chat.completion",
         created=1723081200,
     ).model_dump()
     response = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response=mock_response,
     )
@@ -1142,7 +1232,7 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
             {
                 "model_name": "azure-router-model",
                 "litellm_params": {
-                    "model": "azure/gpt-4",
+                    "model": "azure/gpt-5.5",
                     "api_key": "fake-key",
                     "api_base": "https://westus.api.cognitive.microsoft.com",
                 },
@@ -1236,3 +1326,60 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_applies
     assert call_kw["container_id"] == "cfile_upstream_abc"
     assert call_kw["file_id"] == "cfile_xyz"
     assert call_kw["custom_llm_provider"] == "azure"
+
+
+def test_router_model_group_encrypted_content_affinity_callback_registration():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    model_group_affinity_config = {
+        model_group: ["encrypted_content_affinity"],
+    }
+    router = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_key": "mock-api-key",
+                },
+            }
+        ],
+        model_group_affinity_config=model_group_affinity_config,
+        num_retries=0,
+    )
+
+    try:
+        callbacks = router.optional_callbacks or []
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        deployment_callback = next(
+            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
+        )
+        assert len(encrypted_content_callbacks) == 1
+        assert encrypted_content_callbacks[0].enable_global_affinity is False
+        assert (
+            encrypted_content_callbacks[0].model_group_affinity_config
+            == model_group_affinity_config
+        )
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
+            deployment_callback
+        )
+
+        router._add_encrypted_content_affinity_check(enable_global_affinity=True)
+
+        callbacks = router.optional_callbacks or []
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        assert len(encrypted_content_callbacks) == 1
+        assert encrypted_content_callbacks[0].enable_global_affinity is True
+        assert encrypted_content_callbacks[0].router is router
+    finally:
+        router.discard()

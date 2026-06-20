@@ -50,13 +50,15 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
         # Databricks personal access tokens
         r"dapi[0-9a-f]{32}",
+        # Module-level provider keys logged as litellm.<provider>_key=<value>
+        r"litellm\.[A-Za-z0-9_]*_key['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
         # ── Key-name-based redaction ──
         # Catches secrets inside dicts/config dumps by matching on the KEY name
         # regardless of what the value looks like.
         # e.g. 'master_key': 'any-value-here', "database_url": "postgres://..."
         # private_key with PEM-aware value capture
         r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
-        r"(?:master_key|database_url|db_url|connection_string|"
+        r"(?:master_key|xai_key|database_url|db_url|connection_string|"
         r"signing_key|encryption_key|"
         r"auth_token|access_token|refresh_token|"
         r"slack_webhook_url|webhook_url|"

@@ -388,7 +388,7 @@ class BedrockEmbedding(BaseAWSLLM):
             batch_data=batch_data,
         )
 
-    def embeddings(  # noqa: PLR0915
+    def embeddings(
         self,
         model: str,
         input: List[str],
