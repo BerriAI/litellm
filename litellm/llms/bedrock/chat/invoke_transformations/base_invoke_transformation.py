@@ -141,6 +141,14 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if k not in inference_params:
                 inference_params[k] = v
 
+    def filter_invoke_request_params(self, optional_params: dict) -> dict:
+        return {
+            k: v
+            for k, v in optional_params.items()
+            if k not in self.aws_authentication_params
+            and k not in LITELLM_CONTROL_PARAM_KEYS
+        }
+
     def transform_request(
         self,
         model: str,
@@ -162,13 +170,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = copy.deepcopy(optional_params)
-        inference_params = {
-            k: v
-            for k, v in inference_params.items()
-            if k not in self.aws_authentication_params
-            and k not in LITELLM_CONTROL_PARAM_KEYS
-        }
+        inference_params = self.filter_invoke_request_params(
+            copy.deepcopy(optional_params)
+        )
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):

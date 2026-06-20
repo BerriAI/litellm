@@ -24,7 +24,6 @@ from litellm.llms.bedrock.common_utils import (
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
-from litellm.types.llms.bedrock import LITELLM_CONTROL_PARAM_KEYS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import _supports_factory
@@ -191,12 +190,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in self.aws_authentication_params
-            and k not in LITELLM_CONTROL_PARAM_KEYS
-        }
+        filtered_params = self.filter_invoke_request_params(optional_params)
         output_config = filtered_params.get("output_config")
         if isinstance(output_config, dict):
             filtered_params["output_config"] = dict(output_config)
