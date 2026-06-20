@@ -12,8 +12,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo
 
-# https://docs.x.ai/developers/pricing#tools-pricing
-_WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
+# https://docs.x.ai/developers/pricing#tools-pricing — default when unset in model map
+_DEFAULT_WEB_SEARCH_COST_PER_CALL = 5.0 / 1000.0
 
 
 def apply_server_side_tool_usage_details_to_usage(
@@ -84,14 +84,40 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     return prompt_cost, completion_cost
 
 
+def _web_search_cost_per_call_from_model_info(model_info: "ModelInfo") -> float:
+    """
+    Per-invocation web_search price from model_info when configured.
+
+    Prefer ``search_context_cost_per_query`` (same shape as Gemini/Anthropic web
+    search pricing in the model cost map). Fall back to current xAI list pricing.
+    """
+    search_costs = model_info.get("search_context_cost_per_query") or {}
+    if isinstance(search_costs, Mapping):
+        for key in (
+            "search_context_size_medium",
+            "search_context_size_low",
+            "search_context_size_high",
+        ):
+            value = search_costs.get(key)
+            if value is None:
+                continue
+            try:
+                cost = float(value)
+            except (TypeError, ValueError):
+                continue
+            if cost > 0:
+                return cost
+    return _DEFAULT_WEB_SEARCH_COST_PER_CALL
+
+
 def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> float:
     """
     Calculate the cost of web search requests for X.AI models.
 
-    Uses usage.server_side_tool_usage_details.web_search_calls at $5 / 1k calls
-    (xAI tools pricing), not legacy num_sources_used / web_search_requests.
+    Counts invocations from usage.server_side_tool_usage_details.web_search_calls.
+    Per-call rate comes from model_info.search_context_cost_per_query when set,
+    otherwise the default xAI tools rate ($5 / 1k calls).
     """
-    _ = model_info
     details = getattr(usage, "server_side_tool_usage_details", None)
     if not isinstance(details, Mapping):
         return 0.0
@@ -101,4 +127,4 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         return 0.0
     if web_search_calls <= 0:
         return 0.0
-    return _WEB_SEARCH_COST_PER_CALL * web_search_calls
+    return _web_search_cost_per_call_from_model_info(model_info) * web_search_calls
