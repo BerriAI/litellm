@@ -362,7 +362,7 @@ class TestXAICostCalculator:
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_web_search_cost_via_server_side_tool_usage_details(self):
-        """usage.server_side_tool_usage_details.web_search_calls at $5/1k."""
+        """usage.server_side_tool_usage_details.web_search_calls at default $5/1k."""
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
         setattr(
             usage,
@@ -379,6 +379,19 @@ class TestXAICostCalculator:
 
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
         assert math.isclose(web_search_cost, 3 * (5.0 / 1000.0), rel_tol=1e-10)
+
+    def test_web_search_cost_uses_model_info_search_context_pricing(self):
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 2})
+        model_info = {
+            "search_context_cost_per_query": {
+                "search_context_size_medium": 0.01,
+            }
+        }
+        web_search_cost = cost_per_web_search_request(
+            usage=usage, model_info=model_info
+        )
+        assert math.isclose(web_search_cost, 0.02, rel_tol=1e-10)
 
     def test_web_search_cost_zero_without_details(self):
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
