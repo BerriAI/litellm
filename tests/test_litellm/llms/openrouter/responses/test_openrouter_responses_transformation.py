@@ -13,6 +13,7 @@ import litellm
 from litellm.llms.openrouter.responses.transformation import (
     OpenRouterResponsesAPIConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -63,7 +64,6 @@ class TestOpenRouterResponsesAPIConfig:
     def test_validate_environment_raises_without_key(self, monkeypatch):
         """validate_environment should raise when no API key is available."""
         config = OpenRouterResponsesAPIConfig()
-        from litellm.types.router import GenericLiteLLMParams
 
         # Clear any globally set API keys so the validation correctly raises
         monkeypatch.setattr(litellm, "api_key", None)
@@ -79,6 +79,36 @@ class TestOpenRouterResponsesAPIConfig:
             assert False, "Should have raised ValueError"
         except ValueError as e:
             assert "OpenRouter API key is required" in str(e)
+
+    def test_transform_responses_api_request_forces_store_false_when_true(self):
+        """OpenRouter only accepts store=false for Responses API requests."""
+        config = OpenRouterResponsesAPIConfig()
+        request_params = {"store": True, "temperature": 0.2}
+
+        transformed = config.transform_responses_api_request(
+            model="openai/o4-mini",
+            input="hello",
+            response_api_optional_request_params=request_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert transformed["store"] is False
+        assert transformed["temperature"] == 0.2
+
+    def test_transform_responses_api_request_forces_store_false_when_omitted(self):
+        """Omitted store should be sent as false instead of null/true."""
+        config = OpenRouterResponsesAPIConfig()
+
+        transformed = config.transform_responses_api_request(
+            model="openai/o4-mini",
+            input="hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert transformed["store"] is False
 
 
 class TestOpenRouterResponsesAPIRegistration:
