@@ -63,9 +63,12 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
       .get("/api/plugins", { accessToken })
       .then((data: Plugin[]) => {
         setPlugins(Array.isArray(data) ? data : []);
-        setLoaded(true);
       })
-      .catch(() => {});
+      .catch(() => {})
+      // Mark loaded even on failure so a stored plugin mode still falls back to
+      // ai-gateway; otherwise a failed fetch would strand the user on a blank
+      // plugin view with no switcher to escape.
+      .finally(() => setLoaded(true));
   }, [accessToken]);
 
   // Once plugins have loaded, fall back to ai-gateway if the persisted mode is

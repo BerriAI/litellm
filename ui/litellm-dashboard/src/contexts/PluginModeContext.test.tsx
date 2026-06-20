@@ -49,4 +49,16 @@ describe("PluginModeProvider effectiveMode fallback", () => {
     await waitFor(() => expect(screen.getByTestId("active").textContent).toBe("my-plugin"));
     expect(screen.getByTestId("mode").textContent).toBe("my-plugin");
   });
+
+  it("falls back to ai-gateway when the plugins fetch fails, never stranding the user", async () => {
+    getMock.mockRejectedValueOnce(new Error("network down"));
+    render(
+      <PluginModeProvider accessToken="sk-test">
+        <ModeProbe />
+      </PluginModeProvider>,
+    );
+
+    await waitFor(() => expect(getMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("mode").textContent).toBe("ai-gateway"));
+  });
 });
