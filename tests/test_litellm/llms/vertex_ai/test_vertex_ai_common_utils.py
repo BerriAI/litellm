@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_project_id_from_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
+    supports_response_json_schema,
     vertex_request_labels_from_litellm_params,
 )
 
@@ -148,6 +149,23 @@ async def test_get_supports_system_message():
         model="random-model-name", custom_llm_provider="vertex_ai"
     )
     assert result == False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("gemini-2.0-flash", True),
+        ("gemini-1.5-pro", False),
+        ("random-model-name", False),
+        ("gemini-3-flash-preview", True),
+        ("gemini-123-pro", True),
+        ("vertex_ai/gemini-3.1-pro-preview", True),
+    ],
+)
+def test_supports_response_json_schema(model: str, expected: bool):
+    """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
+
+    assert supports_response_json_schema(model) == expected
 
 
 def test_set_schema_property_ordering_with_excessive_nesting():

@@ -5935,26 +5935,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/in_product_nudges": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get In Product Nudges
-         * @description Get in-product nudges configuration.
-         */
-        get: operations["get_in_product_nudges_in_product_nudges_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/interactions": {
         parameters: {
             query?: never;
@@ -23830,15 +23810,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** InProductNudgeResponse */
-        InProductNudgeResponse: {
-            /**
-             * Is Claude Code Enabled
-             * @description Whether the Claude Code nudge should be shown.
-             * @default false
-             */
-            is_claude_code_enabled: boolean;
-        };
         /** IndexCreateLiteLLMParams */
         IndexCreateLiteLLMParams: {
             /** Vector Store Index */
@@ -40763,26 +40734,6 @@ export interface operations {
             };
         };
     };
-    get_in_product_nudges_in_product_nudges_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InProductNudgeResponse"];
-                };
-            };
-        };
-    };
     create_interaction_interactions_post: {
         parameters: {
             query?: never;
@@ -41433,7 +41384,7 @@ export interface operations {
                 page?: number;
                 /** @description Page size */
                 size?: number;
-                /** @description Filter keys by user ID. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 user_id?: string | null;
                 /** @description Filter keys by team ID */
                 team_id?: string | null;
@@ -41441,7 +41392,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
@@ -41461,6 +41412,8 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                substring_matching?: boolean;
             };
             header?: never;
             path?: never;

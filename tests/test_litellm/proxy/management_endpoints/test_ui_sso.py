@@ -6928,3 +6928,78 @@ async def test_debug_sso_callback_handles_missing_raw_response():
     assert '"raw_claims": {}' in body
     assert '"access_token_claims": {}' in body
     assert "user@example.com" in body
+
+
+async def _render_legacy_login_page(env_overrides, general_settings):
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+
+    with (
+        # snapshot os.environ so the mutations below are reverted on exit
+        patch.dict(os.environ, {}, clear=False),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+    ):
+        # No SSO provider configured, so /sso/key/generate renders the legacy
+        # username/password form rather than redirecting to an IdP.
+        for var in (
+            "MICROSOFT_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT",
+        ):
+            os.environ.pop(var, None)
+        os.environ.update(env_overrides)
+        return await google_login(request=mock_request)
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_shows_credentials_hint_by_default():
+    """Control: without the flag, the legacy page still discloses the hint."""
+    response = await _render_legacy_login_page(env_overrides={}, general_settings={})
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" in body
+    assert "MASTER_KEY" in body
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_hides_credentials_hint_via_env_flag():
+    """
+    Regression: an anonymous GET /sso/key/generate must not disclose the
+    'admin / MASTER_KEY' default-credentials hint when
+    LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT is set. The legacy server-rendered
+    page previously ignored this flag while the new UI honored it.
+    """
+    response = await _render_legacy_login_page(
+        env_overrides={"LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT": "true"},
+        general_settings={},
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" not in body
+    assert "MASTER_KEY" not in body
+    # the login form itself must still render
+    assert 'name="username"' in body
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
+    """The flag is also honored from general_settings, matching the discovery endpoint."""
+    response = await _render_legacy_login_page(
+        env_overrides={},
+        general_settings={"hide_default_credentials_hint": True},
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" not in body
+    assert "MASTER_KEY" not in body

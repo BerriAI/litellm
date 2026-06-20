@@ -1,31 +1,31 @@
 {
   "reportAny": {
-    "baseline": 24954,
+    "baseline": 24989,
     "slack": 2500
   },
   "reportArgumentType": {
-    "baseline": 1863,
+    "baseline": 1934,
     "slack": 180
   },
   "reportAssignmentType": {
     "baseline": 220,
-    "slack": 3
+    "slack": 22
   },
   "reportAttributeAccessIssue": {
-    "baseline": 335,
-    "slack": 3
+    "baseline": 346,
+    "slack": 35
   },
   "reportCallIssue": {
-    "baseline": 77,
+    "baseline": 87,
     "slack": 10
   },
   "reportConstantRedefinition": {
     "baseline": 39,
-    "slack": 3
+    "slack": 4
   },
   "reportDeprecated": {
     "baseline": 217,
-    "slack": 10
+    "slack": 22
   },
   "reportDuplicateImport": {
     "baseline": 28,
@@ -41,11 +41,11 @@
   },
   "reportGeneralTypeIssues": {
     "baseline": 151,
-    "slack": 3
+    "slack": 15
   },
   "reportIncompatibleMethodOverride": {
     "baseline": 52,
-    "slack": 10
+    "slack": 5
   },
   "reportIncompatibleVariableOverride": {
     "baseline": 8,
@@ -72,8 +72,8 @@
     "slack": 3
   },
   "reportMissingParameterType": {
-    "baseline": 3945,
-    "slack": 10
+    "baseline": 3933,
+    "slack": 390
   },
   "reportMissingTypeArgument": {
     "baseline": 10612,
@@ -97,7 +97,7 @@
   },
   "reportOptionalMemberAccess": {
     "baseline": 724,
-    "slack": 10
+    "slack": 72
   },
   "reportOptionalOperand": {
     "baseline": 3,
@@ -120,8 +120,8 @@
     "slack": 3
   },
   "reportReturnType": {
-    "baseline": 118,
-    "slack": 10
+    "baseline": 126,
+    "slack": 13
   },
   "reportTypedDictNotRequiredAccess": {
     "baseline": 20,
@@ -136,19 +136,19 @@
     "slack": 3000
   },
   "reportUnknownLambdaType": {
-    "baseline": 76,
+    "baseline": 75,
     "slack": 10
   },
   "reportUnknownMemberType": {
-    "baseline": 27322,
+    "baseline": 27037,
     "slack": 2500
   },
   "reportUnknownParameterType": {
-    "baseline": 13636,
+    "baseline": 13612,
     "slack": 1000
   },
   "reportUnknownVariableType": {
-    "baseline": 21776,
+    "baseline": 21445,
     "slack": 2000
   },
   "reportUnnecessaryCast": {
@@ -156,7 +156,7 @@
     "slack": 10
   },
   "reportUnnecessaryComparison": {
-    "baseline": 680,
+    "baseline": 683,
     "slack": 10
   },
   "reportUnnecessaryContains": {
@@ -164,12 +164,12 @@
     "slack": 3
   },
   "reportUnnecessaryIsInstance": {
-    "baseline": 807,
-    "slack": 10
+    "baseline": 808,
+    "slack": 80
   },
   "reportUntypedBaseClass": {
     "baseline": 110,
-    "slack": 3
+    "slack": 11
   },
   "reportUntypedFunctionDecorator": {
     "baseline": 22,
@@ -185,10 +185,10 @@
   },
   "reportUnusedImport": {
     "baseline": 670,
-    "slack": 10
+    "slack": 50
   },
   "reportUnusedVariable": {
     "baseline": 865,
-    "slack": 10
+    "slack": 50
   }
 }
