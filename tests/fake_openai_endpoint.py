@@ -1,0 +1,74 @@
+"""Shared access to the canned OpenAI mock used across the test suite.
+
+Tests that need a fake OpenAI-shaped endpoint point ``api_base`` at
+``FAKE_OPENAI_API_BASE`` instead of a hosted URL, so the suite never depends on
+an external service staying up. ``ensure_fake_openai_endpoint`` returns a base
+URL that is actually serving: it reuses a server a CI job already started (it
+answers ``/health``) and otherwise spawns ``_fake_openai_endpoint_server.py``
+for the test session, tearing it down at interpreter exit.
+"""
+
+from __future__ import annotations
+
+import atexit
+import os
+import subprocess
+import sys
+import time
+from functools import lru_cache
+from pathlib import Path
+from typing import Final
+from urllib.error import URLError
+from urllib.parse import urlsplit
+from urllib.request import urlopen
+
+FAKE_OPENAI_API_BASE: Final = os.environ.get(
+    "FAKE_OPENAI_API_BASE", "http://127.0.0.1:8190"
+)
+
+_SERVER_SCRIPT: Final = (
+    Path(__file__).resolve().parent / "_fake_openai_endpoint_server.py"
+)
+_HEALTH_TIMEOUT_SECONDS: Final = 30.0
+
+
+def _is_healthy(base: str) -> bool:
+    try:
+        with urlopen(f"{base.rstrip('/')}/health", timeout=1) as response:
+            return response.status == 200
+    except (URLError, OSError):
+        return False
+
+
+def _wait_until_healthy(base: str) -> None:
+    deadline = time.monotonic() + _HEALTH_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if _is_healthy(base):
+            return
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"fake OpenAI endpoint at {base} did not become healthy within {_HEALTH_TIMEOUT_SECONDS}s"
+    )
+
+
+@lru_cache(maxsize=1)
+def ensure_fake_openai_endpoint() -> str:
+    base = FAKE_OPENAI_API_BASE
+    if _is_healthy(base):
+        return base
+    parts = urlsplit(base)
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(_SERVER_SCRIPT),
+            "--host",
+            parts.hostname or "127.0.0.1",
+            "--port",
+            str(parts.port or 8190),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    atexit.register(proc.terminate)
+    _wait_until_healthy(base)
+    return base
