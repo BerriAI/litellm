@@ -979,7 +979,7 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     request.state.parent_otel_span = parent_otel_span
 
 
-async def _user_api_key_auth_builder(  # noqa: PLR0915
+async def _user_api_key_auth_builder(
     request: Request,
     api_key: str,
     azure_api_key_header: str,
@@ -1837,6 +1837,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 team_member_spend = await get_current_spend(
                                     counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
                                     fallback_spend=team_member_spend,
+                                    max_budget=team_member_budget,
                                 )
                             if team_member_spend > team_member_budget:
                                 raise litellm.BudgetExceededError(
@@ -2126,7 +2127,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 
 @tracer.wrap()
-async def _run_centralized_common_checks(  # noqa: PLR0915
+async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
     request_data: dict,

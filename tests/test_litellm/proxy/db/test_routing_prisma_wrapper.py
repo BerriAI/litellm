@@ -296,7 +296,7 @@ async def test_recreate_prisma_client_recreates_both_writer_and_reader():
         await routing.recreate_prisma_client("writer-url", http_client=None)
 
     writer.recreate_prisma_client.assert_awaited_once_with(
-        "writer-url", http_client=None
+        "writer-url", http_client=None, expected_generation=None
     )
     reader.recreate_prisma_client.assert_awaited_once_with(
         "reader-url", http_client=None

@@ -2087,6 +2087,48 @@ async def test_gemini_pass_through_endpoint():
 
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
+async def test_model_info_alias_without_prisma(hidden):
+    from litellm.proxy.proxy_server import model_info_v1
+
+    _model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        }
+    ]
+
+    model_alias = "gpt-4"
+
+    router = litellm.Router(
+        model_list=_model_list,
+        model_group_alias={
+            model_alias: {
+                "model": "gpt-3.5-turbo",
+                "hidden": hidden,
+            }
+        },
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", router)
+    setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+
+    resp = await model_info_v1(
+        user_api_key_dict=UserAPIKeyAuth(models=[]),
+    )
+
+    models = resp["data"]
+
+    alias_found = any(
+        m["model_name"] == model_alias
+        for m in models
+    )
+
+    assert alias_found is (not hidden)
+
+    
+@pytest.mark.parametrize("hidden", [True, False])
+@pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     """

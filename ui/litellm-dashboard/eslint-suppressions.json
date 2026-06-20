@@ -678,14 +678,6 @@
       "count": 1
     }
   },
-  "src/components/WebRTCTester.jsx": {
-    "no-restricted-syntax": {
-      "count": 2
-    },
-    "react/no-unescaped-entities": {
-      "count": 2
-    }
-  },
   "src/components/activity_metrics.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1853,16 +1845,6 @@
   },
   "src/components/skill_hub_table_columns.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/survey/NudgePrompt.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/survey/SurveyModal.tsx": {
-    "no-restricted-syntax": {
       "count": 1
     }
   },

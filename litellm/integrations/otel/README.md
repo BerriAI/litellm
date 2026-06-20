@@ -216,7 +216,13 @@ lives in [`plumbing/`](./plumbing):
   `TracerProvider` so one logger serves many tenants. The cache is a bounded LRU
   that flushes + shuts down evicted providers, since the key derives from
   request-supplied credentials and must not grow (or leak threads) without limit.
-- [`metrics.py`](./plumbing/metrics.py) — GenAI client metric instruments.
+- [`metrics.py`](./plumbing/metrics.py) — GenAI client metric instruments. The
+  six `gen_ai.client.*` histograms are recorded through the meter resolved by
+  `providers.resolve_meter_provider`: an injected provider wins (tests/DI),
+  otherwise the operator's globally configured `MeterProvider` is reused so its
+  readers/exporters receive them alongside the server metrics, and one is built
+  and registered as the global only when none is set (mirroring how V2 owns trace
+  export).
 
 ### Adapter
 

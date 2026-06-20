@@ -5246,10 +5246,10 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
 
 
 @pytest.mark.asyncio
-async def test_async_data_generator_passes_through_google_native_sse_bytes():
+async def test_async_data_generator_preserves_non_raw_sse_like_bytes():
     """
-    Google-native streamGenerateContent yields raw SSE bytes; they must not be
-    re-wrapped as data: b'data: {...}'.
+    Already formatted SSE bytes from non-raw streams keep the legacy passthrough
+    behavior, including appending a missing event terminator.
     """
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
@@ -5306,6 +5306,241 @@ async def test_async_data_generator_passes_through_google_native_sse_bytes():
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_buffers_split_google_native_sse_json_frame():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-3.5-flash",
+        "_litellm_skip_openai_stream_done": True,
+        "_litellm_raw_sse_stream": True,
+    }
+    payload = (
+        'data: {"candidates": [{"content": {"role": "model", "parts": '
+        '[{"text": "", "thoughtSignature": "abc123def456"}]}}]}\n\n'
+    )
+    raw_chunks = [
+        payload[:2].encode("utf-8"),
+        payload[
+            2 : payload.index("thoughtSignature") + len('thoughtSignature": "abc')
+        ].encode("utf-8"),
+        payload[
+            payload.index("thoughtSignature") + len('thoughtSignature": "abc') :
+        ].encode("utf-8"),
+    ]
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in raw_chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+
+    assert yielded_text == [payload]
+    for chunk in yielded_text:
+        assert chunk.endswith("\n\n")
+        assert json.loads(chunk.removeprefix("data: ").strip())
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_flushes_raw_sse_stream_without_trailing_delimiter():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-3.5-flash",
+        "_litellm_skip_openai_stream_done": True,
+        "_litellm_raw_sse_stream": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield b'data: {"candidates": [{"content": "unterminated"}]'
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
+        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+    ):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert len(yielded_text) == 1
+    assert yielded_text[0] == 'data: {"candidates": [{"content": "unterminated"}]\n\n'
+    assert "[DONE]" not in yielded_text[0]
+    mock_proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_limit():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-3.5-flash",
+        "_litellm_skip_openai_stream_done": True,
+        "_litellm_raw_sse_stream": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield b"data: "
+            yield b'{"candidates": [{"content": "unterminated"}]'
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
+        patch("litellm.proxy.proxy_server._MAX_RAW_SSE_BUFFER_CHARS", 8),
+        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+    ):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert len(yielded_text) == 1
+    assert "maximum buffered size" in yielded_text[0]
+    assert "[DONE]" not in yielded_text[0]
+    mock_proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_bytes", [True, False])
+async def test_async_data_generator_checks_raw_sse_buffer_limit_after_complete_frames(
+    as_bytes,
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    complete_frame = 'data: {"candidates": [{"content": "ok"}]}\n\n'
+    partial_frame = "data: "
+    raw_chunk = complete_frame + partial_frame
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-3.5-flash",
+        "_litellm_skip_openai_stream_done": True,
+        "_litellm_raw_sse_stream": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield raw_chunk.encode("utf-8") if as_bytes else raw_chunk
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
+        patch("litellm.proxy.proxy_server._MAX_RAW_SSE_BUFFER_CHARS", 8),
+        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+    ):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text[0] == complete_frame
+    assert yielded_text[1] == partial_frame + "\n\n"
+    assert "[DONE]" not in "".join(yielded_text)
+    mock_proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_google_genai_stream_omits_openai_done():
     """
     google-genai SDK streamGenerateContent?alt=sse must not receive data: [DONE].
@@ -5357,6 +5592,53 @@ async def test_async_data_generator_google_genai_stream_omits_openai_done():
     ]
     assert yielded_text == [gemini_event.decode("utf-8")]
     assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_does_not_mark_completed_stream_as_disconnect():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {"model": "gpt-4o", "metadata": {}}
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield {"choices": [{"delta": {"content": "done"}}]}
+
+        async def aclose(self):
+            pass
+
+    mock_request = MagicMock()
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response,
+                mock_user_api_key_dict,
+                mock_request_data,
+                request=mock_request,
+            ):
+                yielded_data.append(data)
+
+    assert yielded_data[-1] == "data: [DONE]\n\n"
+    mock_request.is_disconnected.assert_not_awaited()
+    assert "client_disconnected" not in mock_request_data["metadata"]
 
 
 @pytest.mark.asyncio
@@ -6614,14 +6896,15 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
-    """When the reservation reconcile fails, the reserved counters are
-    invalidated and the actual response cost must still be written via the
-    direct increment fallback. Leaving the counter at ``None`` lets the next
-    request reseed a stale value from the DB and silently stops budget gating,
-    which is the bug this fix addresses."""
+async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter():
+    """When the reservation reconcile finds the counter in an inconsistent state
+    (here: missing), it must NOT delete the counter and fail open (the old
+    behavior, which left the counter unenforced after a Redis reload). It reseeds
+    from the authoritative DB so the counter reflects the recorded total and
+    budget gating continues."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     counter_cache = DualCache()
     budget_reservation = {
@@ -6641,11 +6924,11 @@ async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_re
     import litellm.proxy.proxy_server as ps
 
     orig_counter = ps.spend_counter_cache
+    orig_prisma = ps.prisma_client
     ps.spend_counter_cache = counter_cache
+    ps.prisma_client = MagicMock()  # truthy so reseed reaches from_db
     try:
-        with patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger.warning"
-        ) as mock_warning:
+        with patch.object(SpendCounterReseed, "from_db", AsyncMock(return_value=0.6)):
             await increment_spend_counters(
                 token="key-bad-reserved-counter",
                 team_id=None,
@@ -6654,16 +6937,15 @@ async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_re
                 budget_reservation=budget_reservation,
             )
 
-        mock_warning.assert_called_once()
         assert budget_reservation["finalized"] is True
-        assert (
-            counter_cache.in_memory_cache.get_cache(
-                key="spend:key:key-bad-reserved-counter"
-            )
-            == 0.25
-        )
+        # counter reseeded to the authoritative DB value, not deleted/left None
+        # and not double-counted via a direct increment
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-bad-reserved-counter"
+        ) == pytest.approx(0.6)
     finally:
         ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
 
 
 @pytest.mark.asyncio

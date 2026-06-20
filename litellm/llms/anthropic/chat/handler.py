@@ -772,7 +772,7 @@ class ModelResponseIterator:
             )
         return results
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
 

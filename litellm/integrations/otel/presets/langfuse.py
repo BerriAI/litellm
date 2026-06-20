@@ -3,7 +3,11 @@
 from litellm.integrations.langfuse.langfuse_otel import (
     LangfuseOtelLogger as _V1Langfuse,
 )
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -23,6 +27,7 @@ def langfuse_preset(
                     kind=kind,
                     endpoint=cfg.endpoint,
                     headers=cfg.headers,
+                    owner=ExporterOwner.LANGFUSE_OTEL,
                 ),
             ],
             "mapper_names": ensure_mappers(base.mapper_names, "langfuse"),

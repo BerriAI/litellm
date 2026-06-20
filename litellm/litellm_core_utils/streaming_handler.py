@@ -92,7 +92,7 @@ def is_async_iterable(obj: Any) -> bool:
 def print_verbose(print_statement):
     try:
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -293,6 +293,12 @@ class CustomStreamWrapper:
         Raises - InternalServerError, if LLM enters infinite loop while streaming
         """
         if len(self.chunks) < 2:
+            return
+
+        # Providers like Vertex Gemini (Flash / Flash Lite with web search) emit
+        # metadata-only / usage-only chunks with no choices. These get stored in
+        # self.chunks but carry no comparable content, so skip repetition detection.
+        if not self.chunks[-1].choices or not self.chunks[-2].choices:
             return
 
         last_content = self.chunks[-1].choices[0].delta.content
@@ -961,7 +967,7 @@ class CustomStreamWrapper:
                     delta, model_response.choices[0].delta, attribute
                 )
 
-    def return_processed_chunk_logic(  # noqa
+    def return_processed_chunk_logic(  # noqa: C901
         self,
         completion_obj: Dict[str, Any],
         model_response: ModelResponseStream,
@@ -1139,7 +1145,7 @@ class CustomStreamWrapper:
                 del model_response.choices[0].delta.reasoning_content
         return
 
-    def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
+    def chunk_creator(self, chunk: Any):  # type: ignore
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
@@ -1881,7 +1887,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
+    def __next__(self) -> "ModelResponseStream":
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -2071,7 +2077,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self) -> "ModelResponseStream":  # noqa: PLR0915
+    async def __anext__(self) -> "ModelResponseStream":
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -2284,6 +2290,7 @@ class CustomStreamWrapper:
                 litellm.request_timeout
             )
             if self.logging_obj is not None:
+                self._record_partial_usage_for_failure()
                 ## LOGGING
                 threading.Thread(
                     target=self.logging_obj.failure_handler,
@@ -2297,6 +2304,7 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback_exception = traceback.format_exc()
             if self.logging_obj is not None:
+                self._record_partial_usage_for_failure()
                 ## LOGGING
                 threading.Thread(
                     target=self.logging_obj.failure_handler,
@@ -2307,6 +2315,33 @@ class CustomStreamWrapper:
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
             self._handle_stream_fallback_error(e)
+
+    def _record_partial_usage_for_failure(self) -> None:
+        """
+        A stream that breaks mid-flight still billed the provider for the chunks
+        already delivered. Recover that partial usage from the chunks seen so
+        far and stash it, with its cost, on the logging object so the failure
+        handler records the real partial spend instead of zero. A request that
+        later recovers via a router fallback overwrites this with the combined
+        success log on the same request id, so this never double counts.
+        """
+        if self.logging_obj is None or not self.chunks:
+            return
+        try:
+            partial_response = litellm.stream_chunk_builder(chunks=self.chunks)
+            usage = cast(Optional[Usage], getattr(partial_response, "usage", None))
+            if usage is None:
+                return
+            self.logging_obj.model_call_details["combined_usage_object"] = usage
+            self.logging_obj.model_call_details["response_cost"] = (
+                self.logging_obj._response_cost_calculator(result=partial_response)
+                or 0.0
+            )
+        except Exception as recover_error:
+            verbose_logger.debug(
+                "could not recover partial usage for interrupted stream: %s",
+                recover_error,
+            )
 
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """
