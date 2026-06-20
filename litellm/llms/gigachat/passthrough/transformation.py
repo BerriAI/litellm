@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from typing import TYPE_CHECKING, cast
 
@@ -30,7 +32,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         endpoint: str,
         request_query_params: dict | None,
         litellm_params: dict,
-    ) -> tuple["URL", str]:
+    ) -> tuple[URL, str]:
         """Get complete API URL for chat completions."""
         base_target_url = self.get_api_base(api_base)
 
@@ -72,11 +74,11 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         self,
         model: str,
         custom_llm_provider: str,
-        httpx_response: "Response",
+        httpx_response: Response,
         request_data: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: LiteLLMLoggingObj,
         endpoint: str,
-    ) -> "CostResponseTypes" | None:
+    ) -> CostResponseTypes | None:
         from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
@@ -141,11 +143,11 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
     def handle_logging_collected_chunks(
         self,
         all_chunks: list[str],
-        litellm_logging_obj: "LiteLLMLoggingObj",
+        litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         custom_llm_provider: str,
         endpoint: str,
-    ) -> "CostResponseTypes" | None:
+    ) -> CostResponseTypes | None:
         """
         1. Convert all_chunks to a ModelResponseStream
         2. combine model_response_stream to model_response
