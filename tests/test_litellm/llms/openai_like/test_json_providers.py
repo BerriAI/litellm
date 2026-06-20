@@ -244,6 +244,105 @@ class TestPinstripes:
         assert result["temperature"] == 0.7
 
 
+class TestDarkbloom:
+    def test_darkbloom_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        darkbloom = JSONProviderRegistry.get("darkbloom")
+        assert darkbloom is not None
+        assert darkbloom.base_url == "https://api.darkbloom.dev/v1"
+        assert darkbloom.api_key_env == "DARKBLOOM_API_KEY"
+        assert darkbloom.api_base_env == "DARKBLOOM_API_BASE"
+        assert darkbloom.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_darkbloom_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="darkbloom/gemma-4-26b",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "gemma-4-26b"
+        assert provider == "darkbloom"
+        assert api_key is None
+        assert api_base == "https://api.darkbloom.dev/v1"
+
+    def test_darkbloom_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("darkbloom")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.darkbloom.dev/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.darkbloom.dev/v1", "test-key"
+        )
+        assert api_base == "https://custom.darkbloom.dev/v1"
+        assert api_key == "test-key"
+
+    def test_darkbloom_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("darkbloom")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://api.darkbloom.dev/v1",
+            api_key="test-key",
+            model="darkbloom/gemma-4-26b",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.darkbloom.dev/v1/chat/completions"
+
+    def test_darkbloom_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="gemma-4-26b", provider=LlmProviders.DARKBLOOM
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "darkbloom"
+
+    def test_darkbloom_model_cost_map(self):
+        import litellm
+
+        original_model_cost = litellm.model_cost
+        original_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+        try:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
+
+            expected_models = {
+                "darkbloom/gemma-4-26b": (3e-08, 1.65e-07),
+                "darkbloom/gpt-oss-20b": (1.5e-08, 7e-08),
+            }
+            for model, (input_cost, output_cost) in expected_models.items():
+                assert model in litellm.model_cost
+                assert litellm.model_cost[model]["litellm_provider"] == "darkbloom"
+                assert litellm.model_cost[model]["input_cost_per_token"] == input_cost
+                assert litellm.model_cost[model]["output_cost_per_token"] == output_cost
+        finally:
+            litellm.model_cost = original_model_cost
+            if original_env is None:
+                os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+            else:
+                os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 
