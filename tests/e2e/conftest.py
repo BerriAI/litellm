@@ -35,7 +35,11 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_runtest_call(item: pytest.Item) -> None:
     """Mark that an e2e test body actually ran (not skipped at setup). Skipped
     sessions never reach this hook, so the session-finish cleanup can use it as a
-    guard before truncating the spend-log DB."""
+    guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
+    `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
+    so they must not arm the destructive DB truncate."""
+    if item.get_closest_marker("e2e") is None:
+        return
     item.session.stash[_E2E_TEST_RAN] = True
 
 
