@@ -126,7 +126,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "return_token_ids",
             "safe_tokenization",
             "service_tier",
-            "metadata",
             "speculation",
             "prediction",
             "stream_options",

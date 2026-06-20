@@ -624,7 +624,6 @@ def test_get_supported_openai_params_includes_all_fireworks_params():
         "return_token_ids",
         "safe_tokenization",
         "service_tier",
-        "metadata",
         "speculation",
         "prediction",
         "stream_options",
