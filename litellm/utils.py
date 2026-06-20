@@ -9728,7 +9728,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_sandbox_config(
         provider: SandboxProviders,
-    ) -> "BaseSandboxConfig | None":
+    ) -> BaseSandboxConfig | None:
         """
         Get sandbox (code execution) configuration for a given provider.
         """
