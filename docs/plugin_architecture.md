@@ -112,11 +112,22 @@ yields ciphertext that is useless without the plugin's scoped key.
 
 ---
 
-## Proxy routes (admin only)
+## Proxy routes
 
-- `GET /api/plugins` — list registered plugins (returns `plugin_key` to `proxy_admin` only)
-- `GET /api/plugins/auth-token` — short-lived encrypted identity claim for iframe auth
-- `ANY /plugin-proxy/{name}/{path}` — authenticated reverse proxy; strips caller credentials, injects `plugin_key`
+- `GET /api/plugins` — list registered plugins (`name`, `display_name`, `url`). `plugin_key` is **never** returned; it stays server-side. Requires an authenticated caller.
+- `GET /api/plugins/auth-token?plugin_name=<name>` — short-lived encrypted identity claim for the named plugin. Requires `LITELLM_SALT_KEY` to be set (503 otherwise) and the plugin to be registered (404 otherwise).
+- `ANY /plugin-proxy/{name}/{path}` — authenticated reverse proxy to the plugin backend. Restricted to `proxy_admin`.
+
+---
+
+## Reverse proxy behaviour
+
+When an admin (or server-to-server caller) hits `/plugin-proxy/<name>/<path>`, the proxy authenticates the caller locally, then rewrites the request before forwarding it to the plugin's `url`:
+
+- **Every litellm credential header is stripped** — `Authorization`, `x-api-key`, `API-Key`, `x-goog-api-key`, `Ocp-Apim-Subscription-Key`, `x-litellm-api-key`, any configured `litellm_key_header_name`, plus `Cookie`. The plugin can never be handed the caller's live litellm key.
+- **`plugin_key` is injected** as `Authorization: Bearer <plugin_key>` — the only credential the plugin receives.
+- **Caller identity is forwarded** as `x-litellm-user-id` and `x-litellm-user-role` so the plugin can run its own authorization. These are informational, not credentials.
+- **Responses are sandboxed** — `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff` are set so plugin-controlled bytes served from the litellm origin cannot execute against the dashboard.
 
 ---
 
@@ -126,4 +137,5 @@ yields ciphertext that is useless without the plugin's scoped key.
 - [ ] The plugin holds only its derived `HMAC(LITELLM_SALT_KEY, plugin_name)` key, provisioned as a dedicated secret
 - [ ] `plugin_key` is a dedicated credential scoped to the plugin (not your litellm master key)
 - [ ] Plugin's `POST /api/plugin-auth` enforces the claim's `plugin` audience and `exp` (30s TTL)
+- [ ] Plugin treats `x-litellm-user-id` / `x-litellm-user-role` as identity hints, not as proof of authentication
 - [ ] Plugin service URL uses HTTPS in production
