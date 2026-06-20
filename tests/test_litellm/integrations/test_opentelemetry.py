@@ -5779,9 +5779,7 @@ def test_set_attributes_does_not_crash_on_non_dict_response_obj():
     def _set_attr_error_count(response_obj):
         with patch("litellm.integrations.opentelemetry.verbose_logger") as vl:
             otel.set_attributes(span, kwargs, response_obj)
-        return sum(
-            1 for c in vl.exception.call_args_list if "set_attributes" in str(c)
-        )
+        return sum(1 for c in vl.exception.call_args_list if "set_attributes" in str(c))
 
     # A dict response is the known-good baseline; a Pydantic (non-dict) response
     # used to raise "'CallToolResult' object has no attribute 'get'" on top of it.
