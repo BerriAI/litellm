@@ -22,7 +22,8 @@ class E2ECase(Protocol):
     """A stateful e2e check run against a long-lived proxy.
 
     init() acquires resources, run() exercises behaviour and asserts, teardown()
-    releases everything init() created. teardown() must run even if run() raises.
+    releases everything init() created. teardown() must run even if init() fails
+    partway or run() raises.
     """
 
     def init(self) -> None: ...
@@ -35,11 +36,14 @@ class E2ECase(Protocol):
 def run_case(case: E2ECase) -> None:
     """Drive a case through its lifecycle: init -> run -> teardown.
 
-    teardown always runs, even if run() raises (or skips), so resources the case
-    created on the long-lived proxy are released.
+    teardown always runs - even when init() fails partway or run() raises (or
+    skips) - so resources the case already registered on the long-lived proxy are
+    released. init() is inside the try because cases register cleanups
+    progressively (e.g. create team, then user, then key), and a failure after
+    the first creation must still release what came before.
     """
-    case.init()
     try:
+        case.init()
         case.run()
     finally:
         case.teardown()
