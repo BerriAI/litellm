@@ -29,7 +29,7 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
         max_tokens=16,
     )
     if not result.ok and not is_budget_block(result):
-        require_successful_call(result)  # non-budget error -> skip
+        require_successful_call(result)
     return result
 
 
