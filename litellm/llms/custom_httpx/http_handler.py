@@ -649,9 +649,7 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(
-                
-            )
+            new_client = self.            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -712,9 +710,7 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(
-                
-            )
+            new_client = self.            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -773,9 +769,7 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(
-                
-            )
+            new_client = self.            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -834,9 +828,7 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(
-                
-            )
+            new_client = self.            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
