@@ -32,7 +32,7 @@ password when their ``*_READ_REPLICA`` counterpart is unset.
 
 import os
 import urllib.parse
-from typing import Final, Optional, cast
+from typing import Final, cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,7 +50,7 @@ SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres
 _MISSING_SCHEME = "<missing scheme>"
 
 
-def unsupported_db_scheme(database_url: str) -> Optional[str]:
+def unsupported_db_scheme(database_url: str) -> str | None:
     """Return the connection URL scheme when it is not PostgreSQL, else None.
 
     A `sqlite://` / `mysql://` URL can never connect against the
@@ -93,46 +93,46 @@ class DatabaseURLSettings(BaseSettings):
     iam_token_db_auth: bool = Field(default=False, validation_alias=_IAM_ENV_KEY)
 
     # Writer
-    database_url: Optional[str] = Field(default=None, validation_alias="DATABASE_URL")
-    database_host: Optional[str] = Field(default=None, validation_alias="DATABASE_HOST")
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    database_host: str | None = Field(default=None, validation_alias="DATABASE_HOST")
     database_port: str = Field(
         default=_DEFAULT_PG_PORT, validation_alias="DATABASE_PORT"
     )
-    database_user: Optional[str] = Field(
+    database_user: str | None = Field(
         default=None,
         validation_alias=AliasChoices("DATABASE_USER", "DATABASE_USERNAME"),
     )
-    database_name: Optional[str] = Field(default=None, validation_alias="DATABASE_NAME")
-    database_schema: Optional[str] = Field(
+    database_name: str | None = Field(default=None, validation_alias="DATABASE_NAME")
+    database_schema: str | None = Field(
         default=None, validation_alias="DATABASE_SCHEMA"
     )
-    database_password: Optional[str] = Field(
+    database_password: str | None = Field(
         default=None, validation_alias="DATABASE_PASSWORD"
     )
 
     # Read replica
-    database_url_read_replica: Optional[str] = Field(
+    database_url_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_URL_READ_REPLICA"
     )
-    database_host_read_replica: Optional[str] = Field(
+    database_host_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_HOST_READ_REPLICA"
     )
-    database_port_read_replica: Optional[str] = Field(
+    database_port_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_PORT_READ_REPLICA"
     )
-    database_user_read_replica: Optional[str] = Field(
+    database_user_read_replica: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
             "DATABASE_USER_READ_REPLICA", "DATABASE_USERNAME_READ_REPLICA"
         ),
     )
-    database_name_read_replica: Optional[str] = Field(
+    database_name_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_NAME_READ_REPLICA"
     )
-    database_schema_read_replica: Optional[str] = Field(
+    database_schema_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_SCHEMA_READ_REPLICA"
     )
-    database_password_read_replica: Optional[str] = Field(
+    database_password_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_PASSWORD_READ_REPLICA"
     )
 
@@ -141,7 +141,7 @@ class DatabaseURLSettings(BaseSettings):
         """Load the settings from ``os.environ`` (read at call time)."""
         return cls()
 
-    def build_writer_url(self) -> Optional[str]:
+    def build_writer_url(self) -> str | None:
         """Return the writer URL to set, or ``None`` to leave it as-is.
 
         Raises ``RuntimeError`` (naming the offending vars) when IAM auth is
@@ -191,7 +191,7 @@ class DatabaseURLSettings(BaseSettings):
             )
         return None
 
-    def build_reader_url(self) -> Optional[str]:
+    def build_reader_url(self) -> str | None:
         """Return the read-replica URL to set, or ``None`` to leave it as-is.
 
         Opt-in via ``DATABASE_HOST_READ_REPLICA``; never clobbers a
@@ -252,11 +252,11 @@ class DatabaseURLSettings(BaseSettings):
     def _password_url(
         *,
         user: str,
-        password: Optional[str],
+        password: str | None,
         host: str,
         port: str,
         name: str,
-        schema: Optional[str],
+        schema: str | None,
     ) -> str:
         """Percent-encode credentials into a ``postgresql://`` URL.
 
