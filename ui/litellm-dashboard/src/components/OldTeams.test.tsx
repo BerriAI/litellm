@@ -1046,17 +1046,14 @@ describe("OldTeams - delete team warning copy", () => {
   });
 
   const openDeleteModal = async (team: any) => {
-    renderWithQueryClient(
-      <OldTeams
-        teams={[team]}
-        searchParams={{}}
-        accessToken="test-token"
-        setTeams={vi.fn()}
-        userID="user-123"
-        userRole="Admin"
-        organizations={[]}
-      />,
-    );
+    vi.mocked(teamListCall).mockResolvedValue({
+      teams: [team],
+      total: 1,
+      page: 1,
+      page_size: 100,
+      total_pages: 1,
+    });
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
     await waitFor(() => {
       expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
     });
@@ -1081,9 +1078,9 @@ describe("OldTeams - delete team warning copy", () => {
   };
 
   it("warns that the team's models are deleted when the team has keys", async () => {
-    await openDeleteModal({ ...baseTeam, keys: [], keys_count: 2 });
+    await openDeleteModal({ ...baseTeam, keys: [], keys_count: 5 });
 
-    expect(screen.getByText(/Warning: This team has 2 keys associated with it/i)).toHaveTextContent(
+    expect(screen.getByText(/Warning: This team has 5 keys associated with it/i)).toHaveTextContent(
       /along with any models created for this team/i,
     );
     expect(screen.getByText(/Are you sure you want to delete this team/i)).toHaveTextContent(
