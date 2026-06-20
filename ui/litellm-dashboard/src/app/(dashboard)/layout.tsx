@@ -48,6 +48,9 @@ export function AgentControlPlaneView() {
     const send = () => {
       iframe.contentWindow?.postMessage({ type: "litellm-auth", session_claim: encryptedToken }, agentPlatformUrl);
     };
+    // Cover both orderings: the iframe may have already fired `load` before the
+    // claim arrived (send now), or it may load/reload later (send on the event).
+    send();
     iframe.addEventListener("load", send);
     return () => iframe.removeEventListener("load", send);
   }, [encryptedToken, agentPlatformUrl]);

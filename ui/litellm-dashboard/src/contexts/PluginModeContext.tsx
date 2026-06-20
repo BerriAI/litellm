@@ -54,6 +54,7 @@ interface PluginModeProviderProps {
 export function PluginModeProvider({ children, accessToken }: PluginModeProviderProps) {
   const [mode, setModeState] = useState<PluginMode>(readStoredMode);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     // Re-fetch whenever the auth token changes (handles login/logout cycles)
@@ -62,14 +63,15 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
       .get("/api/plugins", { accessToken })
       .then((data: Plugin[]) => {
         setPlugins(Array.isArray(data) ? data : []);
+        setLoaded(true);
       })
       .catch(() => {});
   }, [accessToken]);
 
-  // If the persisted mode is no longer registered, fall back to ai-gateway.
-  // Use a derived value rather than setState-in-effect to avoid cascading renders.
-  const effectiveMode =
-    mode !== "ai-gateway" && plugins.length > 0 && !plugins.some((p) => p.name === mode) ? "ai-gateway" : mode;
+  // Once plugins have loaded, fall back to ai-gateway if the persisted mode is
+  // no longer registered — including when the list came back empty (all plugins
+  // removed).  Derived rather than setState-in-effect to avoid cascading renders.
+  const effectiveMode = mode !== "ai-gateway" && loaded && !plugins.some((p) => p.name === mode) ? "ai-gateway" : mode;
 
   const setMode = (m: PluginMode) => {
     setModeState(m);
