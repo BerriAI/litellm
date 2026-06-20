@@ -333,6 +333,7 @@ class TestDarkbloom:
             for model, (input_cost, output_cost) in expected_models.items():
                 assert model in litellm.model_cost
                 assert litellm.model_cost[model]["litellm_provider"] == "darkbloom"
+                assert litellm.model_cost[model]["max_output_tokens"] == 8192
                 assert litellm.model_cost[model]["input_cost_per_token"] == input_cost
                 assert litellm.model_cost[model]["output_cost_per_token"] == output_cost
         finally:
