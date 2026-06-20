@@ -13,7 +13,7 @@ class LiteLLMControlParams(BaseModel):
     govern client-side behavior (e.g. how the HTTP response stream is
     re-chunked), so Bedrock rejects them as unknown fields."""
 
-    stream_chunk_size: Optional[int] = None
+    stream_chunk_size: int | None = None
 
 
 LITELLM_CONTROL_PARAM_KEYS = frozenset(LiteLLMControlParams.model_fields)
