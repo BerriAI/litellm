@@ -40,9 +40,7 @@ class TestNormalizeSystemRole:
         new_messages, new_system = normalize_system_role_in_anthropic_messages(
             messages, system=None
         )
-        assert new_system == [
-            {"type": "text", "text": "you are a helpful assistant"}
-        ]
+        assert new_system == [{"type": "text", "text": "you are a helpful assistant"}]
         assert new_messages == [{"role": "user", "content": "hi"}]
 
     def test_promotes_content_block_system_message(self):
@@ -221,6 +219,7 @@ class TestSyncPathNormalization:
             from litellm.llms.anthropic.common_utils import (
                 normalize_system_role_in_anthropic_messages as real_normalize,
             )
+
             return real_normalize(messages, system)
 
         # Patch the symbol the handler imported.
@@ -242,9 +241,9 @@ class TestSyncPathNormalization:
         finally:
             handler_module.normalize_system_role_in_anthropic_messages = original
 
-        assert len(calls) >= 1, (
-            "sync handler did not invoke normalize_system_role_in_anthropic_messages"
-        )
+        assert (
+            len(calls) >= 1
+        ), "sync handler did not invoke normalize_system_role_in_anthropic_messages"
 
     def test_sync_handler_skips_normalizer_when_presanitized_flag_set(self):
         """
@@ -260,11 +259,14 @@ class TestSyncPathNormalization:
 
         calls = []
 
-        def spy_normalize(messages, system=None):  # pragma: no cover - patched at runtime
+        def spy_normalize(
+            messages, system=None
+        ):  # pragma: no cover - patched at runtime
             calls.append((list(messages), system))
             from litellm.llms.anthropic.common_utils import (
                 normalize_system_role_in_anthropic_messages as real_normalize,
             )
+
             return real_normalize(messages, system)
 
         original = handler_module.normalize_system_role_in_anthropic_messages

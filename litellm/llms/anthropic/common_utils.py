@@ -1033,9 +1033,7 @@ def normalize_system_role_in_anthropic_messages(
             elif content is not None and not isinstance(content, str):
                 # Best-effort: stringify unknown content shapes so callers
                 # don't silently lose information.
-                promoted_blocks.append(
-                    {"type": "text", "text": str(content)}
-                )
+                promoted_blocks.append({"type": "text", "text": str(content)})
         else:
             kept.append(m)
 

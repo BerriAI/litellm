@@ -411,9 +411,7 @@ def anthropic_messages_handler(
         # role."  OpenAI-style clients routinely send the system prompt as
         # messages[0]; lift those up to the top-level `system` parameter so
         # sync callers (litellm.messages.create) stay valid too. See #30705.
-        messages, system = normalize_system_role_in_anthropic_messages(
-            messages, system
-        )
+        messages, system = normalize_system_role_in_anthropic_messages(messages, system)
 
     metadata = validate_anthropic_api_metadata(metadata)
 
