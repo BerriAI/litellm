@@ -1588,15 +1588,15 @@ def test_token_counter_with_image_url_with_detail_high():
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
 
 
-def test_fireworks_ai_vision_capability_from_cost_map():
+def test_fireworks_ai_vision_capability_from_cost_map(monkeypatch):
     """
     Fireworks deprecated document inlining on 2025-06-30, so vision/PDF support is
     no longer hardcoded to True for every Fireworks model. Capabilities are read
     from the model cost map: unmapped models no longer advertise vision or PDF
     support, while mapped VLMs still do.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     from litellm.utils import supports_pdf_input, supports_vision
 
     assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is False

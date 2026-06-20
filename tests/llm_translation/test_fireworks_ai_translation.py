@@ -159,7 +159,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+                model="fireworks_ai/accounts/fireworks/models/minimax-m3",
                 messages=[
                     {
                         "role": "user",
@@ -266,7 +266,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+                model="fireworks_ai/accounts/fireworks/models/minimax-m3",
                 messages=[
                     {
                         "role": "user",
