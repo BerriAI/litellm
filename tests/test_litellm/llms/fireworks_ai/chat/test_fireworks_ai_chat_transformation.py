@@ -837,6 +837,41 @@ def test_transform_messages_helper_allows_vision_image_inputs():
     assert out == messages
 
 
+def test_image_inputs_not_rejected_for_fuzzy_non_vision_match():
+    """
+    A custom/fine-tuned model id that hyphen-matches a known non-vision model
+    (glm-5p2 has supports_vision=False) must not inherit that False via the
+    substring fallback and hard-reject valid image_url blocks. The capability
+    gate for rejection uses an exact cost-map match; the fuzzy fallback stays a
+    soft signal only, so an unmapped vision-capable deployment is not blocked.
+    """
+    config = FireworksAIConfig()
+    custom_model = "accounts/myorg/models/custom-glm-5p2"
+
+    assert config._get_model_cost_capability(custom_model, "supports_vision") is False
+    assert (
+        config._get_model_cost_capability_exact(custom_model, "supports_vision") is None
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
+                    },
+                },
+            ],
+        }
+    ]
+    out = config._transform_messages_helper(
+        messages, model=custom_model, litellm_params={}
+    )
+    assert out == messages
+
+
 def test_transform_messages_helper_skips_non_dict_content():
     config = FireworksAIConfig()
     messages = [

@@ -244,7 +244,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             filter_value_from_dict,
         )
 
-        supports_vision_value = self._get_model_cost_capability(
+        supports_vision_value = self._get_model_cost_capability_exact(
             model=model, capability="supports_vision"
         )
         for message in messages:
@@ -340,43 +340,55 @@ class FireworksAIConfig(OpenAIGPTConfig):
             return True
         return ("-" + key_short + "-") in short_name
 
-    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
+    @staticmethod
+    def _short_model_name(model: str) -> str:
         short_name = model
         if short_name.startswith("fireworks_ai/"):
             short_name = short_name[len("fireworks_ai/") :]
         if short_name.startswith("accounts/fireworks/models/"):
             short_name = short_name[len("accounts/fireworks/models/") :]
+        return short_name
 
-        candidate_keys = [
+    def _get_model_cost_capability_exact(
+        self, model: str, capability: str
+    ) -> Optional[bool]:
+        short_name = self._short_model_name(model)
+        candidate_keys = (
             model,
             f"fireworks_ai/{short_name}",
             f"fireworks_ai/accounts/fireworks/models/{short_name}",
-        ]
-
+        )
         for candidate_key in candidate_keys:
             model_info = litellm.model_cost.get(candidate_key)
             if model_info is not None and model_info.get(capability) is not None:
                 return cast(Optional[bool], model_info.get(capability))
+        return None
 
-        # Fallback: preserve historical substring matching for model name
-        # variants (e.g. fine-tuned or regionally-suffixed versions of a
-        # known model). Pick the *longest* matching entry so a more specific
-        # known model (e.g. "qwen3-8b-instruct") wins over a less specific
-        # one (e.g. "qwen3-8b") when the query model is more specific still.
-        # Use hyphen-aligned matching to avoid false positives where a short
-        # known model name is an unrelated substring of a longer one.
-        best_match_short: Optional[str] = None
-        best_match_value: Optional[bool] = None
-        for key_short, model_info in self._get_fireworks_index():
-            if model_info.get(capability) is None:
-                continue
-            if not self._matches_on_hyphen_boundary(short_name, key_short):
-                continue
-            if best_match_short is None or len(key_short) > len(best_match_short):
-                best_match_short = key_short
-                best_match_value = cast(Optional[bool], model_info.get(capability))
+    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
+        exact = self._get_model_cost_capability_exact(
+            model=model, capability=capability
+        )
+        if exact is not None:
+            return exact
 
-        return best_match_value
+        # Fallback: substring matching for model name variants (e.g. fine-tuned
+        # or regionally-suffixed versions of a known model). Pick the *longest*
+        # matching entry so a more specific known model (e.g. "qwen3-8b-instruct")
+        # wins over a less specific one (e.g. "qwen3-8b"). Hyphen-aligned matching
+        # avoids false positives where a short known name is an unrelated
+        # substring of a longer one. This stays a soft signal: capability-gated
+        # hard rejections use the exact lookup so a fuzzy match never blocks a
+        # custom deployment.
+        short_name = self._short_model_name(model)
+        matches = [
+            (key_short, cast(Optional[bool], model_info.get(capability)))
+            for key_short, model_info in self._get_fireworks_index()
+            if model_info.get(capability) is not None
+            and self._matches_on_hyphen_boundary(short_name, key_short)
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda match: len(match[0]))[1]
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
         supports_function_calling_value = self._get_model_cost_capability(
