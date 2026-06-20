@@ -14,13 +14,11 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
-    DailyTagSpendRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
-    InProductNudgeResponse,
     SSOConfig,
 )
 
@@ -178,11 +176,6 @@ class UISettings(BaseModel):
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
 
-    disable_ui_nudges: bool = Field(
-        default=False,
-        description="If true, suppresses in-product UI nudges (survey and Claude Code feedback popups) for all users.",
-    )
-
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -206,7 +199,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
-    "disable_ui_nudges",
 }
 
 # Flags that must be synced from the persisted UISettings into
@@ -1115,34 +1107,6 @@ async def update_mcp_semantic_filter_settings(
         )
 
     return result
-
-
-@router.get(
-    "/in_product_nudges",
-    tags=["UI Settings"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=InProductNudgeResponse,
-)
-async def get_in_product_nudges():
-    """
-    Get in-product nudges configuration.
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Database not connected. Please connect a database."},
-        )
-
-    db_record = await DailyTagSpendRepository(prisma_client).table.find_first(
-        where={"tag": "User-Agent: claude-cli"}
-    )
-
-    if db_record:
-        return InProductNudgeResponse(is_claude_code_enabled=True)
-
-    return InProductNudgeResponse(is_claude_code_enabled=False)
 
 
 UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
