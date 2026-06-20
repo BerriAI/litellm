@@ -40,7 +40,7 @@
     "slack": 3
   },
   "reportGeneralTypeIssues": {
-    "baseline": 151,
+    "baseline": 152,
     "slack": 3
   },
   "reportIncompatibleMethodOverride": {
@@ -120,7 +120,7 @@
     "slack": 3
   },
   "reportReturnType": {
-    "baseline": 118,
+    "baseline": 120,
     "slack": 10
   },
   "reportTypedDictNotRequiredAccess": {
