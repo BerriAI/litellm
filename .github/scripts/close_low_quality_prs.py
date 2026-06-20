@@ -53,8 +53,6 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
-    GREPTILE_BOT_LOGINS,
-    SCORE_PATTERN,
     extract_greptile_score,
     gh,
     list_open_items,

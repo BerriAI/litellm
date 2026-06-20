@@ -201,12 +201,12 @@ def test_cache_ping_no_cache_does_not_expose_internals():
 
         raw_body = response.text
         # No Python traceback or source-file paths must appear in the response
-        assert "traceback" not in raw_body.lower(), (
-            "CWE-209: Python traceback exposed in /cache/ping no-cache response"
-        )
-        assert 'File "' not in raw_body, (
-            "CWE-209: Python stack frame paths exposed in /cache/ping no-cache response"
-        )
+        assert (
+            "traceback" not in raw_body.lower()
+        ), "CWE-209: Python traceback exposed in /cache/ping no-cache response"
+        assert (
+            'File "' not in raw_body
+        ), "CWE-209: Python stack frame paths exposed in /cache/ping no-cache response"
 
         data = response.json()
         # Response must use the ProxyException envelope

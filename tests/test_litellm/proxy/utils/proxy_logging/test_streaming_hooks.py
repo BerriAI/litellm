@@ -140,7 +140,9 @@ async def test_init_response_taking_too_long_task_runs_when_alerting(proxy_loggi
 
 
 @pytest.mark.asyncio
-async def test_init_response_taking_too_long_task_no_op_when_alerting_off(proxy_logging):
+async def test_init_response_taking_too_long_task_no_op_when_alerting_off(
+    proxy_logging,
+):
     proxy_logging.slack_alerting_instance = MagicMock()
     proxy_logging.slack_alerting_instance.alerting = None
     proxy_logging.slack_alerting_instance.response_taking_too_long = AsyncMock()
@@ -149,7 +151,9 @@ async def test_init_response_taking_too_long_task_no_op_when_alerting_off(proxy_
     proxy_logging.slack_alerting_instance.response_taking_too_long.assert_not_called()
 
 
-def test_init_response_taking_too_long_task_no_slack_instance_no_error_raises(proxy_logging):
+def test_init_response_taking_too_long_task_no_slack_instance_no_error_raises(
+    proxy_logging,
+):
     proxy_logging.slack_alerting_instance = None
     proxy_logging._init_response_taking_too_long_task(data=None)
 
@@ -160,13 +164,17 @@ def test_init_response_taking_too_long_task_no_slack_instance_no_error_raises(pr
 
 
 @pytest.mark.asyncio
-async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(proxy_logging):
+async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(
+    proxy_logging,
+):
     async def gen():
         for ch in ("a", "b", "c"):
             yield ch
 
     cb = MagicMock(guardrail_name="g", event_hook="pre_call")
-    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=gen())
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=cb, gen=gen()
+    )
     out = [ch async for ch in wrapped]
     snapshot = {
         "chunks": out,
@@ -183,7 +191,9 @@ async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(pro
 
 
 @pytest.mark.asyncio
-async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_raises(proxy_logging):
+async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_raises(
+    proxy_logging,
+):
     detail = {"error": "blocked"}
 
     async def boom_gen():
@@ -192,7 +202,9 @@ async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_r
         raise HTTPException(status_code=400, detail=detail)
 
     cb = MagicMock(guardrail_name="presidio", event_hook="post_call")
-    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=boom_gen())
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=cb, gen=boom_gen()
+    )
     with pytest.raises(HTTPException):
         async for _ in wrapped:
             pass
@@ -206,7 +218,9 @@ async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_r
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_hook_fast_path_returns_response(proxy_logging, mock_callbacks_disabled, make_user_api_key_auth):
+async def test_async_post_call_streaming_hook_fast_path_returns_response(
+    proxy_logging, mock_callbacks_disabled, make_user_api_key_auth
+):
     resp = "chunk-1"
     out = await proxy_logging.async_post_call_streaming_hook(
         data={}, response=resp, user_api_key_dict=make_user_api_key_auth()
@@ -226,7 +240,9 @@ async def test_async_post_call_streaming_hook_fast_path_returns_response(proxy_l
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _Per(CustomLogger):
         async def async_post_call_streaming_hook(self, **kwargs):  # type: ignore[override]
             return "modified-" + str(kwargs.get("response", ""))
@@ -238,7 +254,13 @@ async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(proxy_l
 
     fake_resp = ModelResponse(
         id="rid",
-        choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        choices=[
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": "hi"},
+                "finish_reason": None,
+            }
+        ],
         created=0,
         model="gpt-4o-mini",
         object="chat.completion.chunk",
@@ -253,7 +275,9 @@ async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(proxy_l
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_hook_callback_error_raises(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_async_post_call_streaming_hook_callback_error_raises(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _Per(CustomLogger):
         async def async_post_call_streaming_hook(self, **kwargs):  # type: ignore[override]
             raise RuntimeError("hook-fail")
@@ -264,7 +288,13 @@ async def test_async_post_call_streaming_hook_callback_error_raises(proxy_loggin
 
     fake_resp = ModelResponse(
         id="rid",
-        choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        choices=[
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": "hi"},
+                "finish_reason": None,
+            }
+        ],
         created=0,
         model="gpt-4o-mini",
         object="chat.completion.chunk",
@@ -283,7 +313,9 @@ async def test_async_post_call_streaming_hook_callback_error_raises(proxy_loggin
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_iterator_hook_no_overrides_passes_through(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_async_post_call_streaming_iterator_hook_no_overrides_passes_through(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     async def gen():
         for ch in ("a", "b"):
             yield ch
@@ -308,7 +340,9 @@ async def test_async_post_call_streaming_iterator_hook_no_overrides_passes_throu
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_iterator_hook_with_override_chains_callback(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_async_post_call_streaming_iterator_hook_with_override_chains_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _IterOverride(CustomLogger):
         async def async_post_call_streaming_iterator_hook(self, **kwargs):  # type: ignore[override]
             async for ch in kwargs["response"]:
@@ -331,7 +365,9 @@ async def test_async_post_call_streaming_iterator_hook_with_override_chains_call
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_iterator_hook_upstream_error_raises(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_async_post_call_streaming_iterator_hook_upstream_error_raises(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     async def gen():
         if False:
             yield  # pragma: no cover
@@ -362,14 +398,20 @@ async def test_fire_deferred_stream_logging_fires_callback():
     logging_obj._on_deferred_stream_complete = deferred
     logging_obj._deferred_stream_complete_args = ("payload",)
 
-    ProxyLogging._fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
+    ProxyLogging._fire_deferred_stream_logging(
+        request_data={"litellm_logging_obj": logging_obj}
+    )
     await asyncio.sleep(0)
     snapshot = {
         "arg": captured["arg"],
         "callback_cleared": logging_obj._on_deferred_stream_complete is None,
         "args_cleared": logging_obj._deferred_stream_complete_args is None,
     }
-    assert snapshot == {"arg": "payload", "callback_cleared": True, "args_cleared": True}
+    assert snapshot == {
+        "arg": "payload",
+        "callback_cleared": True,
+        "args_cleared": True,
+    }
 
 
 def test_fire_deferred_stream_logging_no_logging_obj_no_error():
@@ -391,13 +433,17 @@ async def test_post_call_response_headers_hook_returns_empty_when_no_callbacks(
     proxy_logging, mock_callbacks_disabled, make_user_api_key_auth
 ):
     out = await proxy_logging.post_call_response_headers_hook(
-        data={}, user_api_key_dict=make_user_api_key_auth(), response=MagicMock(_hidden_params={})
+        data={},
+        user_api_key_dict=make_user_api_key_auth(),
+        response=MagicMock(_hidden_params={}),
     )
     assert out == {}
 
 
 @pytest.mark.asyncio
-async def test_post_call_response_headers_hook_merges_callback_headers(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_post_call_response_headers_hook_merges_callback_headers(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _Cb(CustomLogger):
         async def async_post_call_response_headers_hook(self, **kwargs):  # type: ignore[override]
             return {"X-One": "1", "X-Two": "2", "X-Common": "first"}
@@ -416,7 +462,9 @@ async def test_post_call_response_headers_hook_merges_callback_headers(proxy_log
 
 
 @pytest.mark.asyncio
-async def test_post_call_response_headers_hook_swallows_callback_error(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_post_call_response_headers_hook_swallows_callback_error(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     """Errors inside the hook are caught — function returns merged so-far."""
 
     class _Cb(CustomLogger):

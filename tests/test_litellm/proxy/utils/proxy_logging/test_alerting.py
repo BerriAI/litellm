@@ -16,7 +16,6 @@ from fastapi import HTTPException
 import litellm
 from litellm.proxy._types import AlertType, CallInfo
 
-
 # ---------------------------------------------------------------------------
 # failed_tracking_alert
 # ---------------------------------------------------------------------------
@@ -39,7 +38,9 @@ async def test_failed_tracking_alert_forwards_to_slack(proxy_logging):
         captured.update(kwargs)
 
     proxy_logging.slack_alerting_instance = MagicMock(failed_tracking_alert=fake_alert)
-    await proxy_logging.failed_tracking_alert(error_message="db down", failing_model="gpt-4")
+    await proxy_logging.failed_tracking_alert(
+        error_message="db down", failing_model="gpt-4"
+    )
     snapshot = {
         "error_message": captured["error_message"],
         "failing_model": captured["failing_model"],
@@ -112,11 +113,17 @@ async def test_budget_alerts_slack_when_slack_alerting(proxy_logging):
         "user_info_is_callinfo": isinstance(captured["user_info"], CallInfo),
         "user_id": captured["user_info"].user_id,
     }
-    assert snapshot == {"type": "user_budget", "user_info_is_callinfo": True, "user_id": "u1"}
+    assert snapshot == {
+        "type": "user_budget",
+        "user_info_is_callinfo": True,
+        "user_id": "u1",
+    }
 
 
 @pytest.mark.asyncio
-async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_global(proxy_logging):
+async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_global(
+    proxy_logging,
+):
     proxy_logging.alerting = None
     proxy_logging.slack_alerting_instance = MagicMock(budget_alerts=AsyncMock())
     proxy_logging.email_logging_instance = MagicMock(budget_alerts=AsyncMock())
@@ -146,7 +153,9 @@ async def test_budget_alerts_slack_failure_raises(proxy_logging):
 async def test_alerting_handler_no_op_when_alerting_is_none(proxy_logging):
     proxy_logging.alerting = None
     proxy_logging.slack_alerting_instance = MagicMock(send_alert=AsyncMock())
-    await proxy_logging.alerting_handler(message="x", level="High", alert_type=AlertType.db_exceptions)
+    await proxy_logging.alerting_handler(
+        message="x", level="High", alert_type=AlertType.db_exceptions
+    )
     proxy_logging.slack_alerting_instance.send_alert.assert_not_called()
 
 
@@ -160,7 +169,10 @@ async def test_alerting_handler_sends_to_slack(proxy_logging):
 
     proxy_logging.slack_alerting_instance = MagicMock(send_alert=fake_send)
     await proxy_logging.alerting_handler(
-        message="hi", level="High", alert_type=AlertType.db_exceptions, request_data={"metadata": {}}
+        message="hi",
+        level="High",
+        alert_type=AlertType.db_exceptions,
+        request_data={"metadata": {}},
     )
     snapshot = {
         "message": captured["message"],
@@ -177,11 +189,15 @@ async def test_alerting_handler_sends_to_slack(proxy_logging):
 
 
 @pytest.mark.asyncio
-async def test_alerting_handler_sentry_without_sdk_error_raises(proxy_logging, monkeypatch):
+async def test_alerting_handler_sentry_without_sdk_error_raises(
+    proxy_logging, monkeypatch
+):
     proxy_logging.alerting = ["sentry"]
     monkeypatch.setattr(litellm.utils, "sentry_sdk_instance", None)
     with pytest.raises(Exception, match="SENTRY_DSN"):
-        await proxy_logging.alerting_handler(message="x", level="Low", alert_type=AlertType.db_exceptions)
+        await proxy_logging.alerting_handler(
+            message="x", level="Low", alert_type=AlertType.db_exceptions
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -190,29 +206,45 @@ async def test_alerting_handler_sentry_without_sdk_error_raises(proxy_logging, m
 
 
 @pytest.mark.asyncio
-async def test_failure_handler_skips_when_db_exceptions_not_in_alert_types(proxy_logging):
+async def test_failure_handler_skips_when_db_exceptions_not_in_alert_types(
+    proxy_logging,
+):
     proxy_logging.alert_types = ["llm_too_slow"]  # type: ignore[list-item]
     proxy_logging.alerting_handler = AsyncMock()
-    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
-    await proxy_logging.failure_handler(original_exception=Exception("x"), duration=1.0, call_type="db_read")
+    proxy_logging.service_logging_obj = MagicMock(
+        async_service_failure_hook=AsyncMock()
+    )
+    await proxy_logging.failure_handler(
+        original_exception=Exception("x"), duration=1.0, call_type="db_read"
+    )
     proxy_logging.alerting_handler.assert_not_called()
     proxy_logging.service_logging_obj.async_service_failure_hook.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_failure_handler_logs_db_error_and_calls_service_logging(proxy_logging, monkeypatch):
+async def test_failure_handler_logs_db_error_and_calls_service_logging(
+    proxy_logging, monkeypatch
+):
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
-    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
+    proxy_logging.service_logging_obj = MagicMock(
+        async_service_failure_hook=AsyncMock()
+    )
     monkeypatch.setattr(litellm.utils, "capture_exception", None)
     await proxy_logging.failure_handler(
         original_exception=HTTPException(status_code=500, detail="boom"),
         duration=1.5,
         call_type="db_write",
     )
-    call_kwargs = proxy_logging.service_logging_obj.async_service_failure_hook.call_args.kwargs
+    call_kwargs = (
+        proxy_logging.service_logging_obj.async_service_failure_hook.call_args.kwargs
+    )
     snapshot = {
-        "service": call_kwargs["service"].value if hasattr(call_kwargs["service"], "value") else call_kwargs["service"],
+        "service": (
+            call_kwargs["service"].value
+            if hasattr(call_kwargs["service"], "value")
+            else call_kwargs["service"]
+        ),
         "duration": call_kwargs["duration"],
         "call_type": call_kwargs["call_type"],
     }
@@ -224,10 +256,14 @@ async def test_failure_handler_logs_db_error_and_calls_service_logging(proxy_log
 
 
 @pytest.mark.asyncio
-async def test_failure_handler_with_capture_exception_invoked(proxy_logging, monkeypatch):
+async def test_failure_handler_with_capture_exception_invoked(
+    proxy_logging, monkeypatch
+):
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
-    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
+    proxy_logging.service_logging_obj = MagicMock(
+        async_service_failure_hook=AsyncMock()
+    )
     captured: Dict[str, Any] = {}
 
     def fake_capture(error):
@@ -235,7 +271,9 @@ async def test_failure_handler_with_capture_exception_invoked(proxy_logging, mon
 
     monkeypatch.setattr(litellm.utils, "capture_exception", fake_capture)
     err = RuntimeError("real")
-    await proxy_logging.failure_handler(original_exception=err, duration=1.0, call_type="db_read")
+    await proxy_logging.failure_handler(
+        original_exception=err, duration=1.0, call_type="db_read"
+    )
     snapshot = {
         "captured_is_input": captured["error"] is err,
         "service_failure_called": proxy_logging.service_logging_obj.async_service_failure_hook.called,
@@ -249,7 +287,9 @@ async def test_failure_handler_with_capture_exception_invoked(proxy_logging, mon
 
 
 @pytest.mark.asyncio
-async def test_failure_handler_propagates_service_logging_error_raises(proxy_logging, monkeypatch):
+async def test_failure_handler_propagates_service_logging_error_raises(
+    proxy_logging, monkeypatch
+):
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
     proxy_logging.service_logging_obj = MagicMock(

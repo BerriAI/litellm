@@ -21,7 +21,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterCategoryConfig,
 )
 
-
 # Test cases: (sentence, expected_result, reason)
 TEST_CASES = [
     # ALWAYS BLOCK - Explicit prohibited practices (1-10)

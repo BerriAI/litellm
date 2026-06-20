@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 HASHED_TOKEN = "165efe575c98fe7e65d98cb2de71b68842049e286afd33a92d3491c340216880"

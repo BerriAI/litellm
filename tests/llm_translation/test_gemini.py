@@ -16,7 +16,6 @@ import litellm
 from litellm import completion
 import json
 
-
 GEMINI_3_IMAGE_SIZE_MAPPINGS = [
     ("512x512", "1:1", "512"),
     ("1024x1024", "1:1", "1K"),
@@ -557,9 +556,10 @@ def test_gemini_image_generation_openai_size_auto_uses_google_defaults(size: str
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) is None
+    assert (
+        map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview")
+        is None
+    )
 
 
 def test_gemini_imagen_models_use_predict_endpoint():

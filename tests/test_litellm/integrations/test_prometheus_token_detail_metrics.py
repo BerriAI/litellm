@@ -21,7 +21,6 @@ from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
 )
 
-
 TOKEN_DETAIL_METRICS = [
     "litellm_input_cached_tokens_metric",
     "litellm_input_cache_creation_tokens_metric",

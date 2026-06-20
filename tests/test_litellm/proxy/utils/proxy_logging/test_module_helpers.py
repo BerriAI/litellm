@@ -25,7 +25,6 @@ from litellm.proxy.utils import (
     print_verbose,
 )
 
-
 # ---------------------------------------------------------------------------
 # print_verbose
 # ---------------------------------------------------------------------------
@@ -40,7 +39,11 @@ def test_print_verbose_when_set_verbose_true_prints_redacted(monkeypatch, capsys
         "out_has_payload": "hello world" in captured.out,
         "no_stderr": captured.err == "",
     }
-    assert snapshot == {"out_has_prefix": True, "out_has_payload": True, "no_stderr": True}
+    assert snapshot == {
+        "out_has_prefix": True,
+        "out_has_payload": True,
+        "no_stderr": True,
+    }
 
 
 def test_print_verbose_when_set_verbose_false_no_stdout(monkeypatch, capsys):
@@ -193,13 +196,21 @@ def test_enrich_http_exception_adds_guardrail_name_and_mode():
 
 
 def test_enrich_http_exception_does_not_overwrite_existing_keys():
-    detail = {"error": "blocked", "guardrail_name": "explicit", "guardrail_mode": "during_call"}
+    detail = {
+        "error": "blocked",
+        "guardrail_name": "explicit",
+        "guardrail_mode": "during_call",
+    }
     exc = HTTPException(status_code=400, detail=detail)
     cb = MagicMock()
     cb.guardrail_name = "should-not-overwrite"
     cb.event_hook = "should-not-overwrite"
     _enrich_http_exception_with_guardrail_context(exc, cb)
-    assert detail == {"error": "blocked", "guardrail_name": "explicit", "guardrail_mode": "during_call"}
+    assert detail == {
+        "error": "blocked",
+        "guardrail_name": "explicit",
+        "guardrail_mode": "during_call",
+    }
 
 
 def test_enrich_http_exception_no_op_for_non_http_exception():
@@ -245,7 +256,11 @@ def test_on_backoff_invokes_print_verbose(monkeypatch):
     captured = []
     monkeypatch.setattr(utils_mod, "print_verbose", lambda s: captured.append(s))
     on_backoff({"tries": 3})
-    snapshot = {"len": len(captured), "first_has_attempt": "attempt" in captured[0], "first_has_3": "3" in captured[0]}
+    snapshot = {
+        "len": len(captured),
+        "first_has_attempt": "attempt" in captured[0],
+        "first_has_3": "3" in captured[0],
+    }
     assert snapshot == {"len": 1, "first_has_attempt": True, "first_has_3": True}
 
 
@@ -300,7 +315,9 @@ async def test_lookup_deprecated_key_returns_active_token_id_and_caches(monkeypa
     deprecated_row.revoke_at = future
 
     db = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=deprecated_row)
+    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
+        return_value=deprecated_row
+    )
 
     result = await _lookup_deprecated_key(db=db, hashed_token="hash-abc")
     cached_value = fresh.get("hash-abc")
@@ -320,7 +337,9 @@ async def test_lookup_deprecated_key_returns_active_token_id_and_caches(monkeypa
 async def test_lookup_deprecated_key_returns_none_when_not_found(monkeypatch):
     from litellm.caching.dual_cache import LimitedSizeOrderedDict
 
-    monkeypatch.setattr(utils_mod, "_deprecated_key_cache", LimitedSizeOrderedDict(max_size=10))
+    monkeypatch.setattr(
+        utils_mod, "_deprecated_key_cache", LimitedSizeOrderedDict(max_size=10)
+    )
     db = MagicMock()
     db.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=None)
     assert await _lookup_deprecated_key(db=db, hashed_token="missing") is None
@@ -330,9 +349,13 @@ async def test_lookup_deprecated_key_returns_none_when_not_found(monkeypatch):
 async def test_lookup_deprecated_key_db_error_returns_none(monkeypatch):
     from litellm.caching.dual_cache import LimitedSizeOrderedDict
 
-    monkeypatch.setattr(utils_mod, "_deprecated_key_cache", LimitedSizeOrderedDict(max_size=10))
+    monkeypatch.setattr(
+        utils_mod, "_deprecated_key_cache", LimitedSizeOrderedDict(max_size=10)
+    )
     db = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(side_effect=RuntimeError("db down"))
+    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
+        side_effect=RuntimeError("db down")
+    )
     result = await _lookup_deprecated_key(db=db, hashed_token="x")
     assert result is None
 

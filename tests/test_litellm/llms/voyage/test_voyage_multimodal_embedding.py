@@ -90,9 +90,7 @@ class TestVoyageMultimodalEmbeddings:
         request = config.transform_embedding_request(
             "voyage-multimodal-3.5", "hello", {}, {}
         )
-        assert request["inputs"] == [
-            {"content": [{"type": "text", "text": "hello"}]}
-        ]
+        assert request["inputs"] == [{"content": [{"type": "text", "text": "hello"}]}]
 
     def test_multimodal_embedding_response_transformation(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
@@ -103,9 +101,7 @@ class TestVoyageMultimodalEmbeddings:
         config = VoyageMultimodalEmbeddingConfig()
         response_payload = {
             "object": "list",
-            "data": [
-                {"object": "embedding", "embedding": [0.1, 0.2], "index": 0}
-            ],
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
             "model": "voyage-multimodal-3.5",
             "usage": {
                 "text_tokens": 2,
@@ -156,9 +152,7 @@ class TestVoyageMultimodalEmbeddings:
             {"dimensions": 512}, {}, "voyage-multimodal-3.5", False
         )
         assert optional_params == {"output_dimension": 512}
-        assert (
-            config.map_openai_params({}, {}, "voyage-multimodal-3.5", False) == {}
-        )
+        assert config.map_openai_params({}, {}, "voyage-multimodal-3.5", False) == {}
 
     def test_validate_environment_uses_api_key(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (

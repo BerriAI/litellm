@@ -107,7 +107,7 @@ def main() -> None:
     csv_basename = os.path.basename(args.csv)
     lines.append(f"// Auto-generated from {csv_basename} — do not edit manually.")
     lines.append(
-        f"// Regenerate: python scripts/generate_compliance_prompts.py --csv ... --output ..."
+        "// Regenerate: python scripts/generate_compliance_prompts.py --csv ... --output ..."
     )
     lines.append("")
     lines.append(

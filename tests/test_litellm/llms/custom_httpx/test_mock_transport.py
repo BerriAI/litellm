@@ -10,7 +10,6 @@ import pytest
 
 from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
 
-
 # ---------------------------------------------------------------------------
 # Non-streaming
 # ---------------------------------------------------------------------------

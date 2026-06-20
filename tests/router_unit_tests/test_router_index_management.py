@@ -142,7 +142,10 @@ class TestRouterIndexManagement:
         router._update_team_model_index(model, 0)
         assert router.team_model_to_deployment_indices[("team-abc", "gpt-5.5")] == [0]
         router._update_team_model_index(model, 2)
-        assert router.team_model_to_deployment_indices[("team-abc", "gpt-5.5")] == [0, 2]
+        assert router.team_model_to_deployment_indices[("team-abc", "gpt-5.5")] == [
+            0,
+            2,
+        ]
 
         router._update_team_model_index(
             {"model_name": "x", "model_info": {"id": "dep-2"}}, 5

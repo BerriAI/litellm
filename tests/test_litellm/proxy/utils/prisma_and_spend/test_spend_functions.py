@@ -31,7 +31,9 @@ async def test_update_spend_invokes_writer_and_skips_empty_queue(
 ) -> None:
     proxy_logging = MagicMock()
     proxy_logging.db_spend_update_writer = MagicMock()
-    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = (
+        AsyncMock()
+    )
     mock_prisma_client.spend_log_transactions = []
 
     await update_spend(
@@ -62,7 +64,9 @@ async def test_update_spend_processes_logs_when_queue_nonempty(
 ) -> None:
     proxy_logging = MagicMock()
     proxy_logging.db_spend_update_writer = MagicMock()
-    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = (
+        AsyncMock()
+    )
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
 
     import litellm.proxy.utils as utils_mod
@@ -84,8 +88,8 @@ async def test_update_spend_handler_failure_propagates(
 ) -> None:
     proxy_logging = MagicMock()
     proxy_logging.db_spend_update_writer = MagicMock()
-    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock(
-        side_effect=RuntimeError("handler down")
+    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = (
+        AsyncMock(side_effect=RuntimeError("handler down"))
     )
     with pytest.raises(RuntimeError, match="handler down"):
         await update_spend(
@@ -221,7 +225,11 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
         "queue_after": mock_prisma_client.spend_log_transactions,
         "first_data_request_id": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs[
             "data"
-        ][0]["request_id"],
+        ][
+            0
+        ][
+            "request_id"
+        ],
         "skip_duplicates_set": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs[
             "skip_duplicates"
         ],
@@ -243,8 +251,12 @@ async def test_monitor_spend_logs_queue_invokes_job_when_queue_nonempty(
     import litellm.proxy.utils as utils_mod
     import litellm.constants as constants_mod
 
-    monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 0.0, raising=False)
-    monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_SIZE_THRESHOLD", 1, raising=False)
+    monkeypatch.setattr(
+        constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 0.0, raising=False
+    )
+    monkeypatch.setattr(
+        constants_mod, "SPEND_LOG_QUEUE_SIZE_THRESHOLD", 1, raising=False
+    )
     proxy_logging = MagicMock()
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
 
@@ -277,7 +289,9 @@ async def test_monitor_spend_logs_queue_swallows_errors_and_backs_off(
     import litellm.proxy.utils as utils_mod
     import litellm.constants as constants_mod
 
-    monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 0.0, raising=False)
+    monkeypatch.setattr(
+        constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 0.0, raising=False
+    )
 
     sleep_count = {"n": 0}
 

@@ -6,7 +6,6 @@ This example shows how to use the CLI authentication token
 in your Python scripts after running `litellm-proxy login`.
 """
 
-from textwrap import indent
 import litellm
 
 LITELLM_BASE_URL = "http://localhost:4000/"

@@ -84,7 +84,8 @@ async def test_post_call_failure_hook_no_callbacks_returns_none(
         "out_is_none": out is None,
         "litellm_logging_obj_popped": "litellm_logging_obj" not in request_data,
         "call_id_preserved": request_data["litellm_call_id"] == "abc",
-        "first_api_call_start_time_present": "first_api_call_start_time" in request_data,
+        "first_api_call_start_time_present": "first_api_call_start_time"
+        in request_data,
     }
     assert snapshot == {
         "out_is_none": True,

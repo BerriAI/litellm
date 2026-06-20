@@ -21,10 +21,15 @@ from litellm.proxy.utils import PrismaClient
 
 
 @pytest.mark.asyncio
-async def test_insert_data_hashes_token_and_upserts(prisma_client: PrismaClient) -> None:
+async def test_insert_data_hashes_token_and_upserts(
+    prisma_client: PrismaClient,
+) -> None:
     token = "sk-secret-1"
-    response = SimpleNamespace(token=hashlib.sha256(token.encode()).hexdigest(),
-                               key_alias="alias", user_id="u1")
+    response = SimpleNamespace(
+        token=hashlib.sha256(token.encode()).hexdigest(),
+        key_alias="alias",
+        user_id="u1",
+    )
     prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(return_value=response)
     data = {
         "token": token,
@@ -56,14 +61,18 @@ async def test_insert_data_hashes_token_and_upserts(prisma_client: PrismaClient)
 
 
 @pytest.mark.asyncio
-async def test_insert_data_strips_null_budget_limits(prisma_client: PrismaClient) -> None:
+async def test_insert_data_strips_null_budget_limits(
+    prisma_client: PrismaClient,
+) -> None:
     prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(return_value=None)
     await prisma_client.insert_data(
         data={"token": "sk-1", "budget_limits": None}, table_name="key"
     )
-    create_payload = prisma_client.db.litellm_verificationtoken.upsert.await_args.kwargs[
-        "data"
-    ]["create"]
+    create_payload = (
+        prisma_client.db.litellm_verificationtoken.upsert.await_args.kwargs["data"][
+            "create"
+        ]
+    )
     assert "budget_limits" not in create_payload
 
 
@@ -78,11 +87,13 @@ async def test_insert_data_team_serializes_members(prisma_client: PrismaClient) 
         "members_with_roles": [{"role": "admin", "user_id": "u1"}],
     }
     result = await prisma_client.insert_data(data=data, table_name="team")
-    create_payload = prisma_client.db.litellm_teamtable.upsert.await_args.kwargs["data"][
-        "create"
-    ]
+    create_payload = prisma_client.db.litellm_teamtable.upsert.await_args.kwargs[
+        "data"
+    ]["create"]
     assert result.team_id == "t1"
-    assert create_payload["members_with_roles"] == json.dumps(data["members_with_roles"])
+    assert create_payload["members_with_roles"] == json.dumps(
+        data["members_with_roles"]
+    )
     assert create_payload["team_id"] == "t1"
 
 

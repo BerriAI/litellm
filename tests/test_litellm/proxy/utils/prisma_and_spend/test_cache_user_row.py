@@ -19,9 +19,7 @@ from litellm.proxy.utils import _cache_user_row
 async def test_cache_user_row_caches_on_miss(
     mock_dual_cache: Any,
 ) -> None:
-    user_row = SimpleNamespace(
-        user_id="u1", spend=2.5, max_budget=10.0, name="Alice"
-    )
+    user_row = SimpleNamespace(user_id="u1", spend=2.5, max_budget=10.0, name="Alice")
     user_row.model_dump_json = MagicMock(
         return_value='{"user_id":"u1","spend":2.5,"max_budget":10.0,"name":"Alice"}'
     )

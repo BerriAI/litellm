@@ -2306,7 +2306,9 @@ def test_chunk_creator_tool_calls_not_dropped_on_finish(
                     tool_calls=[
                         ChatCompletionDeltaToolCall(
                             id="call_abc",
-                            function=Function(name="get_weather", arguments='{"city":"NYC"}'),
+                            function=Function(
+                                name="get_weather", arguments='{"city":"NYC"}'
+                            ),
                             type="function",
                             index=0,
                         )

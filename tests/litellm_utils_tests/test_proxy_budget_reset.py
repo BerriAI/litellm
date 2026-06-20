@@ -30,6 +30,7 @@ def _attrify(d: dict):
     None)` (et al), which returns None for plain dicts — that would silently
     skip the row.
     """
+
     class _AttrDict(dict):
         def __getattr__(self, k):
             try:
@@ -120,7 +121,9 @@ async def test_reset_budget_keys_partial_failure():
     key1, key2, key3, key4, key5, key6 = (
         _attrify(k) for k in [key1, key2, key3, key4, key5, key6]
     )
-    prisma_client.get_data = AsyncMock(return_value=[key1, key2, key3, key4, key5, key6])
+    prisma_client.get_data = AsyncMock(
+        return_value=[key1, key2, key3, key4, key5, key6]
+    )
 
     async def fake_reset_key(key, current_time):
         if key["id"] == "key1":
@@ -207,7 +210,9 @@ async def test_reset_budget_users_partial_failure():
     user1, user2, user3, user4, user5, user6 = (
         _attrify(u) for u in [user1, user2, user3, user4, user5, user6]
     )
-    prisma_client.get_data = AsyncMock(return_value=[user1, user2, user3, user4, user5, user6])
+    prisma_client.get_data = AsyncMock(
+        return_value=[user1, user2, user3, user4, user5, user6]
+    )
 
     async def fake_reset_user(user, current_time):
         if user["id"] == "user1":

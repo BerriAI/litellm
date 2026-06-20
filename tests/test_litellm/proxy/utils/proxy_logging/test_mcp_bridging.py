@@ -21,13 +21,14 @@ from litellm.types.mcp import (
     MCPPreCallResponseObject,
 )
 
-
 # ---------------------------------------------------------------------------
 # _convert_mcp_to_llm_format
 # ---------------------------------------------------------------------------
 
 
-def test_convert_mcp_to_llm_format_returns_synthetic_data(proxy_logging, make_mcp_request_obj):
+def test_convert_mcp_to_llm_format_returns_synthetic_data(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="search", arguments={"q": "hello"})
     out = proxy_logging._convert_mcp_to_llm_format(
         request_obj=req,
@@ -86,7 +87,9 @@ def test_convert_mcp_to_llm_format_missing_request_obj_raises(proxy_logging):
 # ---------------------------------------------------------------------------
 
 
-def test_convert_llm_result_to_mcp_response_exception_blocks(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_response_exception_blocks(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj()
     result = proxy_logging._convert_llm_result_to_mcp_response(
         llm_result=ValueError("boom"),
@@ -98,44 +101,72 @@ def test_convert_llm_result_to_mcp_response_exception_blocks(proxy_logging, make
         "error_message": result.error_message,
         "modified_arguments": result.modified_arguments,
     }
-    assert snapshot == {"should_proceed": False, "error_message": "boom", "modified_arguments": None}
+    assert snapshot == {
+        "should_proceed": False,
+        "error_message": "boom",
+        "modified_arguments": None,
+    }
 
 
-def test_convert_llm_result_to_mcp_response_blocked_content(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_response_blocked_content(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="t", arguments={"a": 1})
     llm_result = {"messages": [{"content": "this is blocked"}]}
-    result = proxy_logging._convert_llm_result_to_mcp_response(llm_result=llm_result, request_obj=req)
+    result = proxy_logging._convert_llm_result_to_mcp_response(
+        llm_result=llm_result, request_obj=req
+    )
     assert isinstance(result, MCPPreCallResponseObject)
     assert result.should_proceed is False
     assert "blocked" in (result.error_message or "").lower()
 
 
-def test_convert_llm_result_to_mcp_response_modified_content_redacted(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_response_modified_content_redacted(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="search", arguments={"q": "ssn 123"})
-    llm_result = {"messages": [{"content": "Tool: search\nArguments: {\"q\": \"[REDACTED]\"}"}]}
-    result = proxy_logging._convert_llm_result_to_mcp_response(llm_result=llm_result, request_obj=req)
+    llm_result = {
+        "messages": [{"content": 'Tool: search\nArguments: {"q": "[REDACTED]"}'}]
+    }
+    result = proxy_logging._convert_llm_result_to_mcp_response(
+        llm_result=llm_result, request_obj=req
+    )
     assert isinstance(result, MCPPreCallResponseObject)
     snapshot = {
         "should_proceed": result.should_proceed,
         "modified_q": (result.modified_arguments or {}).get("q"),
         "error": result.error_message,
     }
-    assert snapshot == {"should_proceed": True, "modified_q": "[REDACTED]", "error": None}
+    assert snapshot == {
+        "should_proceed": True,
+        "modified_q": "[REDACTED]",
+        "error": None,
+    }
 
 
-def test_convert_llm_result_to_mcp_response_string_blocks(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_response_string_blocks(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj()
-    result = proxy_logging._convert_llm_result_to_mcp_response(llm_result="bad input", request_obj=req)
+    result = proxy_logging._convert_llm_result_to_mcp_response(
+        llm_result="bad input", request_obj=req
+    )
     assert isinstance(result, MCPPreCallResponseObject)
     snapshot = {
         "should_proceed": result.should_proceed,
         "error_message": result.error_message,
         "modified_arguments": result.modified_arguments,
     }
-    assert snapshot == {"should_proceed": False, "error_message": "bad input", "modified_arguments": None}
+    assert snapshot == {
+        "should_proceed": False,
+        "error_message": "bad input",
+        "modified_arguments": None,
+    }
 
 
-def test_convert_llm_result_to_mcp_response_unmodified_returns_none(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_response_unmodified_returns_none(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="x", arguments={"a": 1})
     same_content = "Tool: x\nArguments: {'a': 1}"
     result = proxy_logging._convert_llm_result_to_mcp_response(
@@ -147,7 +178,9 @@ def test_convert_llm_result_to_mcp_response_unmodified_returns_none(proxy_loggin
 
 def test_convert_llm_result_to_mcp_response_no_request_obj_raises(proxy_logging):
     with pytest.raises(AttributeError):
-        proxy_logging._convert_llm_result_to_mcp_response(llm_result={"messages": [{"content": "x"}]}, request_obj=None)
+        proxy_logging._convert_llm_result_to_mcp_response(
+            llm_result={"messages": [{"content": "x"}]}, request_obj=None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -155,16 +188,20 @@ def test_convert_llm_result_to_mcp_response_no_request_obj_raises(proxy_logging)
 # ---------------------------------------------------------------------------
 
 
-def test_extract_modified_arguments_from_content_parses_json(proxy_logging, make_mcp_request_obj):
+def test_extract_modified_arguments_from_content_parses_json(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj()
     out = proxy_logging._extract_modified_arguments_from_content(
-        masked_content="Tool: x\nArguments: {\"a\": 1, \"b\": 2, \"c\": 3}",
+        masked_content='Tool: x\nArguments: {"a": 1, "b": 2, "c": 3}',
         request_obj=req,
     )
     assert out == {"a": 1, "b": 2, "c": 3}
 
 
-def test_extract_modified_arguments_from_content_no_arguments_line_returns_none(proxy_logging, make_mcp_request_obj):
+def test_extract_modified_arguments_from_content_no_arguments_line_returns_none(
+    proxy_logging, make_mcp_request_obj
+):
     out = proxy_logging._extract_modified_arguments_from_content(
         masked_content="random content with no arguments",
         request_obj=make_mcp_request_obj(),
@@ -172,7 +209,9 @@ def test_extract_modified_arguments_from_content_no_arguments_line_returns_none(
     assert out is None
 
 
-def test_extract_modified_arguments_from_content_empty_string_returns_none(proxy_logging, make_mcp_request_obj):
+def test_extract_modified_arguments_from_content_empty_string_returns_none(
+    proxy_logging, make_mcp_request_obj
+):
     out = proxy_logging._extract_modified_arguments_from_content(
         masked_content="",
         request_obj=make_mcp_request_obj(),
@@ -180,7 +219,9 @@ def test_extract_modified_arguments_from_content_empty_string_returns_none(proxy
     assert out is None
 
 
-def test_extract_modified_arguments_from_content_invalid_json_falls_back(proxy_logging, make_mcp_request_obj):
+def test_extract_modified_arguments_from_content_invalid_json_falls_back(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(arguments={"name": "alice"})
     out = proxy_logging._extract_modified_arguments_from_content(
         masked_content="Tool: x\nArguments: {name: REDACTED}",
@@ -190,9 +231,13 @@ def test_extract_modified_arguments_from_content_invalid_json_falls_back(proxy_l
     assert "name" in out
 
 
-def test_extract_modified_arguments_from_content_error_swallowed_returns_none(proxy_logging):
+def test_extract_modified_arguments_from_content_error_swallowed_returns_none(
+    proxy_logging,
+):
     """Internal try/except swallows any unexpected error and returns None."""
-    out = proxy_logging._extract_modified_arguments_from_content(masked_content=None, request_obj=None)
+    out = proxy_logging._extract_modified_arguments_from_content(
+        masked_content=None, request_obj=None
+    )
     assert out is None
 
 
@@ -207,13 +252,23 @@ def test_parse_arguments_manually_applies_overrides(proxy_logging):
         args_text='"name": "[REDACTED]", "ssn": "[REDACTED]"',
         original_args=original,
     )
-    snapshot = {"name": out["name"], "ssn": out["ssn"], "original_unchanged": original["name"]}
-    assert snapshot == {"name": "[REDACTED]", "ssn": "[REDACTED]", "original_unchanged": "alice"}
+    snapshot = {
+        "name": out["name"],
+        "ssn": out["ssn"],
+        "original_unchanged": original["name"],
+    }
+    assert snapshot == {
+        "name": "[REDACTED]",
+        "ssn": "[REDACTED]",
+        "original_unchanged": "alice",
+    }
 
 
 def test_parse_arguments_manually_returns_original_if_no_match(proxy_logging):
     original = {"foo": "bar"}
-    out = proxy_logging._parse_arguments_manually(args_text="nothing here", original_args=original)
+    out = proxy_logging._parse_arguments_manually(
+        args_text="nothing here", original_args=original
+    )
     assert out == {"foo": "bar"}
 
 
@@ -227,7 +282,9 @@ def test_parse_arguments_manually_error_swallowed_returns_none(proxy_logging):
 # ---------------------------------------------------------------------------
 
 
-def test_convert_llm_result_to_mcp_during_response_exception(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_during_response_exception(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj()
     result = proxy_logging._convert_llm_result_to_mcp_during_response(
         llm_result=ValueError("during boom"), request_obj=req
@@ -245,7 +302,9 @@ def test_convert_llm_result_to_mcp_during_response_exception(proxy_logging, make
     }
 
 
-def test_convert_llm_result_to_mcp_during_response_blocked_content(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_during_response_blocked_content(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="t", arguments={"a": 1})
     result = proxy_logging._convert_llm_result_to_mcp_during_response(
         llm_result={"messages": [{"content": "blocked content"}]},
@@ -256,10 +315,14 @@ def test_convert_llm_result_to_mcp_during_response_blocked_content(proxy_logging
     assert "blocked" in (result.error_message or "").lower()
 
 
-def test_convert_llm_result_to_mcp_during_response_modified_stops(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_during_response_modified_stops(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="t", arguments={"a": 1})
     result = proxy_logging._convert_llm_result_to_mcp_during_response(
-        llm_result={"messages": [{"content": "Tool: t\nArguments: {\"a\": \"[REDACTED]\"}"}]},
+        llm_result={
+            "messages": [{"content": 'Tool: t\nArguments: {"a": "[REDACTED]"}'}]
+        },
         request_obj=req,
     )
     assert isinstance(result, MCPDuringCallResponseObject)
@@ -267,17 +330,24 @@ def test_convert_llm_result_to_mcp_during_response_modified_stops(proxy_logging,
     assert "modified" in (result.error_message or "").lower()
 
 
-def test_convert_llm_result_to_mcp_during_response_string_blocks(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_during_response_string_blocks(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj()
     result = proxy_logging._convert_llm_result_to_mcp_during_response(
         llm_result="kill switch", request_obj=req
     )
     assert isinstance(result, MCPDuringCallResponseObject)
-    snapshot = {"should_continue": result.should_continue, "error_message": result.error_message}
+    snapshot = {
+        "should_continue": result.should_continue,
+        "error_message": result.error_message,
+    }
     assert snapshot == {"should_continue": False, "error_message": "kill switch"}
 
 
-def test_convert_llm_result_to_mcp_during_response_unmodified_returns_none(proxy_logging, make_mcp_request_obj):
+def test_convert_llm_result_to_mcp_during_response_unmodified_returns_none(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(tool_name="t", arguments={"a": 1})
     same = "Tool: t\nArguments: {'a': 1}"
     assert (
@@ -301,14 +371,18 @@ def test_convert_llm_result_to_mcp_during_response_no_request_obj_raises(proxy_l
 # ---------------------------------------------------------------------------
 
 
-def test_parse_pre_mcp_call_hook_response_with_modified_args(proxy_logging, make_mcp_request_obj):
+def test_parse_pre_mcp_call_hook_response_with_modified_args(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(arguments={"a": 1})
     resp = MCPPreCallResponseObject(
         should_proceed=True,
         modified_arguments={"a": "x", "b": "y"},
         error_message=None,
     )
-    out = proxy_logging._parse_pre_mcp_call_hook_response(response=resp, original_request=req)
+    out = proxy_logging._parse_pre_mcp_call_hook_response(
+        response=resp, original_request=req
+    )
     snapshot = {
         "should_proceed": out["should_proceed"],
         "modified_arguments": out["modified_arguments"],
@@ -323,16 +397,22 @@ def test_parse_pre_mcp_call_hook_response_with_modified_args(proxy_logging, make
     }
 
 
-def test_parse_pre_mcp_call_hook_response_no_modifications_uses_original(proxy_logging, make_mcp_request_obj):
+def test_parse_pre_mcp_call_hook_response_no_modifications_uses_original(
+    proxy_logging, make_mcp_request_obj
+):
     req = make_mcp_request_obj(arguments={"original": True})
     resp = MCPPreCallResponseObject(
         should_proceed=True, modified_arguments=None, error_message=None
     )
-    out = proxy_logging._parse_pre_mcp_call_hook_response(response=resp, original_request=req)
+    out = proxy_logging._parse_pre_mcp_call_hook_response(
+        response=resp, original_request=req
+    )
     assert out["modified_arguments"] == {"original": True}
 
 
-def test_parse_pre_mcp_call_hook_response_invalid_response_raises(proxy_logging, make_mcp_request_obj):
+def test_parse_pre_mcp_call_hook_response_invalid_response_raises(
+    proxy_logging, make_mcp_request_obj
+):
     with pytest.raises(AttributeError):
         proxy_logging._parse_pre_mcp_call_hook_response(
             response=None, original_request=make_mcp_request_obj()
@@ -344,7 +424,9 @@ def test_parse_pre_mcp_call_hook_response_invalid_response_raises(proxy_logging,
 # ---------------------------------------------------------------------------
 
 
-def test_create_mcp_request_object_from_kwargs_full(proxy_logging, make_user_api_key_auth):
+def test_create_mcp_request_object_from_kwargs_full(
+    proxy_logging, make_user_api_key_auth
+):
     auth = make_user_api_key_auth(user_id="u-1")
     obj = proxy_logging._create_mcp_request_object_from_kwargs(
         kwargs={
@@ -361,7 +443,12 @@ def test_create_mcp_request_object_from_kwargs_full(proxy_logging, make_user_api
         "server_name": obj.server_name,
         "auth_user_id": obj.user_api_key_auth.get("user_id"),
     }
-    assert snapshot == {"tool_name": "calc", "arguments": {"x": 1}, "server_name": "math", "auth_user_id": "u-1"}
+    assert snapshot == {
+        "tool_name": "calc",
+        "arguments": {"x": 1},
+        "server_name": "math",
+        "auth_user_id": "u-1",
+    }
 
 
 def test_create_mcp_request_object_from_kwargs_empty(proxy_logging):
@@ -413,9 +500,13 @@ def test_convert_mcp_hook_response_to_kwargs_merges_headers(proxy_logging):
     assert out["extra_headers"] == {"keep": "yes", "overwrite": "new", "added": "1"}
 
 
-def test_convert_mcp_hook_response_to_kwargs_no_response_data_returns_original(proxy_logging):
+def test_convert_mcp_hook_response_to_kwargs_no_response_data_returns_original(
+    proxy_logging,
+):
     original = {"a": 1}
-    out = proxy_logging._convert_mcp_hook_response_to_kwargs(response_data=None, original_kwargs=original)
+    out = proxy_logging._convert_mcp_hook_response_to_kwargs(
+        response_data=None, original_kwargs=original
+    )
     assert out is original
 
 

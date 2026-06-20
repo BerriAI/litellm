@@ -16,7 +16,6 @@ import litellm
 from litellm import Router
 from litellm.caching import RedisCache, RedisClusterCache
 
-
 ## Scenarios
 ## 1. 2 models - openai + azure - 1 model group "gpt-3.5-turbo",
 ## 2. 2 models - openai, azure - 2 diff model groups, 1 caching group

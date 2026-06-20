@@ -14,7 +14,6 @@ import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-
 # ---------------------------------------------------------------------------
 # /team/daily/activity — per-team admin/permission requirement
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """
 Integration tests for Perplexity cost calculation and transformation.
 
-Tests the end-to-end functionality of Perplexity cost calculation 
+Tests the end-to-end functionality of Perplexity cost calculation
 including integration with the main LiteLLM cost calculator.
 """
 
@@ -105,9 +105,7 @@ class TestPerplexityIntegration:
         citation_tokens = citation_chars // 4
 
         expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
-        expected_completion_cost = (
-            ((50 - 10) * 8e-6) + (10 * 3e-6) + (2 / 1000 * 0.005)
-        )
+        expected_completion_cost = ((50 - 10) * 8e-6) + (10 * 3e-6) + (2 / 1000 * 0.005)
         expected_total = expected_prompt_cost + expected_completion_cost
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)

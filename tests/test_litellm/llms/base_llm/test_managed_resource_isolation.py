@@ -10,7 +10,6 @@ from litellm.llms.base_llm.managed_resources.isolation import (
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-
 # ---------------------------------------------------------------------------
 # build_owner_filter
 # ---------------------------------------------------------------------------

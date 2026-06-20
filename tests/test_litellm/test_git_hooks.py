@@ -64,7 +64,9 @@ def _run_pre_push(stdin: str) -> subprocess.CompletedProcess:
     )
 
 
-def _ref_line(branch: str, local_oid: str = _NONZERO_OID, remote_oid: str = _ZERO_OID) -> str:
+def _ref_line(
+    branch: str, local_oid: str = _NONZERO_OID, remote_oid: str = _ZERO_OID
+) -> str:
     ref = f"refs/heads/{branch}"
     return f"{ref} {local_oid} {ref} {remote_oid}\n"
 
@@ -97,13 +99,13 @@ def test_commit_msg_accepts_conventional_subjects(tmp_path, subject):
 @pytest.mark.parametrize(
     "subject",
     [
-        "add stuff",                          # no type
-        "feat add router strategy",           # missing colon
-        "feat:add router strategy",           # missing space after colon
-        "feat():",                            # empty description
-        "ux: thing",                          # unknown type
-        "Feat(router): capital type",         # types are lowercase
-        "feat(router):",                      # empty description
+        "add stuff",  # no type
+        "feat add router strategy",  # missing colon
+        "feat:add router strategy",  # missing space after colon
+        "feat():",  # empty description
+        "ux: thing",  # unknown type
+        "Feat(router): capital type",  # types are lowercase
+        "feat(router):",  # empty description
         # Description must start with a lowercase letter — kept in sync with
         # the CI workflow's subjectPattern so the local hook never accepts a
         # subject that CI will later reject.
@@ -168,7 +170,9 @@ def test_commit_msg_rejects_empty_message(tmp_path):
 def test_commit_msg_skips_comment_only_lines(tmp_path):
     # An all-comments file has no subject — should be rejected.
     msg_file = tmp_path / "COMMIT_EDITMSG"
-    msg_file.write_text("# please enter a commit message\n# above this line\n", encoding="utf-8")
+    msg_file.write_text(
+        "# please enter a commit message\n# above this line\n", encoding="utf-8"
+    )
     result = subprocess.run(
         ["bash", str(_COMMIT_MSG_HOOK), str(msg_file)],
         capture_output=True,
@@ -227,10 +231,10 @@ def test_pre_push_accepts_conventional_branches(branch):
     [
         "random-branch-name",
         "litellm_fix/optimize-streaming",  # legacy pattern is now rejected
-        "ui/navbar-notifications",         # not in the allow list
-        "feature/",                        # empty description
-        "Feature/foo",                     # type is case-sensitive
-        "feat/foo",                        # angular commit type, not branch type
+        "ui/navbar-notifications",  # not in the allow list
+        "feature/",  # empty description
+        "Feature/foo",  # type is case-sensitive
+        "feat/foo",  # angular commit type, not branch type
     ],
 )
 def test_pre_push_rejects_non_conventional_branches(branch):

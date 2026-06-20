@@ -157,7 +157,7 @@ class VeoVideoGenerator:
         Returns:
             True if download successful, False otherwise
         """
-        print(f"⬇️  Downloading video...")
+        print("⬇️  Downloading video...")
         print(f"Original URI: {video_uri}")
 
         # Convert Google URI to LiteLLM proxy URI
@@ -198,7 +198,7 @@ class VeoVideoGenerator:
             if os.path.exists(output_filename):
                 file_size = os.path.getsize(output_filename)
                 if file_size > 0:
-                    print(f"✅ Video downloaded successfully!")
+                    print("✅ Video downloaded successfully!")
                     print(f"📁 Saved as: {output_filename}")
                     print(f"📏 File size: {file_size / (1024*1024):.2f} MB")
                     return True

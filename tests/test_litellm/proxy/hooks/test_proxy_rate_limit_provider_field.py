@@ -69,7 +69,6 @@ from litellm.proxy.hooks.rate_limiter_utils import (
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
 
-
 # ---------------------------------------------------------------------------
 # Helper class itself
 # ---------------------------------------------------------------------------

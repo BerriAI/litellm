@@ -880,7 +880,11 @@ def test_different_roles_without_session_names_should_not_share_cache():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=[
+        "no_region_or_endpoint",
+        "bedrock_region_ignored_for_sts",
+        "explicit_sts_endpoint",
+    ],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -1272,7 +1276,11 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=[
+        "no_region_or_endpoint",
+        "bedrock_region_ignored_for_sts",
+        "explicit_sts_endpoint",
+    ],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """

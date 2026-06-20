@@ -2,6 +2,7 @@
 """
 Test to verify the Google GenAI generate_content handler functionality
 """
+
 import json
 import os
 import sys

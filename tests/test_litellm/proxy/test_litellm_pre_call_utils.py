@@ -4150,7 +4150,9 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:paid":
                 return 0.50
             return fallback_spend
@@ -4207,7 +4209,9 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:tenant:acme":
                 return 0.50
             return fallback_spend
@@ -4362,7 +4366,9 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:engineering":
                 return 0.50
             return fallback_spend
@@ -4413,7 +4419,9 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:engineering":
                 return 0.05
             return fallback_spend

@@ -367,7 +367,6 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         assert "responseModalities" in generation_config
         assert "AUDIO" in generation_config["responseModalities"]
 
-
     @pytest.mark.parametrize(
         "model,custom_llm_provider",
         [

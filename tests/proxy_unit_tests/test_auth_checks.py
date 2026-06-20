@@ -39,9 +39,9 @@ from litellm.proxy.utils import CallInfo
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal - get_end_user_object returns the cached user
-    Scenario 2: user over budget - NOTE: budget enforcement now happens in 
+    Scenario 2: user over budget - NOTE: budget enforcement now happens in
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
-    
+
     This test verifies that get_end_user_object correctly retrieves the end user
     from cache. Budget enforcement is tested separately in test_check_end_user_budget().
     """
@@ -81,12 +81,12 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     Test _check_end_user_budget enforcement:
     - Scenario 1: customer_spend=0, customer_budget=10 - should pass (under budget)
     - Scenario 2: customer_spend=10, customer_budget=0 - should fail (over budget)
-    
-    Note: Budget enforcement for end users happens in common_checks() via 
+
+    Note: Budget enforcement for end users happens in common_checks() via
     _check_end_user_budget(), not in get_end_user_object().
     """
     from litellm.proxy.auth.auth_checks import _check_end_user_budget
-    
+
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
     end_user_obj = LiteLLM_EndUserTable(
         user_id="my-test-customer",
@@ -94,9 +94,9 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
         litellm_budget_table=_budget,
         blocked=False,
     )
-    
+
     should_exceed = customer_spend > customer_budget
-    
+
     try:
         await _check_end_user_budget(
             end_user_obj=end_user_obj,

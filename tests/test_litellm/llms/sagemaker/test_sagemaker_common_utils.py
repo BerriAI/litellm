@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
-
 # --------------------------------------------------------------------------- #
 # get_sagemaker_response_stream_shape lazy-load tests                         #
 # --------------------------------------------------------------------------- #

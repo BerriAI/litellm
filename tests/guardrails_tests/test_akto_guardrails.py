@@ -14,7 +14,6 @@ from litellm.proxy.guardrails.guardrail_registry import (
 )
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
-
 # ---------------------------------------------------------------------------
 #  Registry tests
 # ---------------------------------------------------------------------------

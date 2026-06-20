@@ -16,7 +16,6 @@ import pytest
 from litellm import Router
 from litellm.utils import _get_excluded_filtered_deployments
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for _get_excluded_filtered_deployments
 # ---------------------------------------------------------------------------

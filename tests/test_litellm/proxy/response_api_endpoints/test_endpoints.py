@@ -209,7 +209,9 @@ class TestManagedResponsesWSFirstMessage:
         entering its receive loop. Regression for clients that connect without
         ?model= (e.g. Codex) and send model inside the first response.create event.
         """
-        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
 
         first = json.dumps(
             {
@@ -250,7 +252,9 @@ class TestManagedResponsesWSFirstMessage:
     @pytest.mark.asyncio
     async def test_no_first_message_falls_through_to_loop(self):
         """When first_message is None, run() goes straight to receive_text()."""
-        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
 
         subsequent = json.dumps({"type": "response.create", "model": "gpt-4o-mini"})
 
@@ -285,7 +289,9 @@ class TestResponsesWSStreamingFirstMessage:
         """
         from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
 
-        first = json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        first = json.dumps(
+            {"type": "response.create", "model": "gpt-4o-mini", "input": []}
+        )
 
         ws = MagicMock()
         ws.receive_text = AsyncMock(side_effect=Exception("disconnect"))
@@ -355,6 +361,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -362,13 +369,18 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
-        event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
+
+        event = {
+            "type": "response.create",
+            "response": {"model": "gpt-4o", "input": "hello"},
+        }
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
     def test_nested_format_takes_precedence_over_flat(self):
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {
             "type": "response.create",
             "model": "flat-model",
@@ -380,6 +392,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) is None
 
@@ -696,18 +709,14 @@ class TestManagedResponsesSameProvider:
         assert "custom_llm_provider" not in call_kwargs
 
     def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         assert handler._same_provider("gpt-4o-mini") is True
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
         assert call_kwargs["custom_llm_provider"] == "openai"
 
     def test_unresolvable_connection_model_still_drops_cross_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs

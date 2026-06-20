@@ -533,12 +533,41 @@ async def test_apply_guardrail_no_metadata_skips_user_fields(
 @pytest.mark.parametrize(
     "litellm_metadata, metadata",
     [
-        (None, {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
-        ({"trace_id": "t1"}, {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
-        (["unexpected"], {"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}),
-        ({"user_api_key_user_id": "uid-abc", "user_api_key_user_email": "alice@example.com"}, {"trace_id": "t1"}),
+        (
+            None,
+            {
+                "user_api_key_user_id": "uid-abc",
+                "user_api_key_user_email": "alice@example.com",
+            },
+        ),
+        (
+            {"trace_id": "t1"},
+            {
+                "user_api_key_user_id": "uid-abc",
+                "user_api_key_user_email": "alice@example.com",
+            },
+        ),
+        (
+            ["unexpected"],
+            {
+                "user_api_key_user_id": "uid-abc",
+                "user_api_key_user_email": "alice@example.com",
+            },
+        ),
+        (
+            {
+                "user_api_key_user_id": "uid-abc",
+                "user_api_key_user_email": "alice@example.com",
+            },
+            {"trace_id": "t1"},
+        ),
     ],
-    ids=["identity_in_metadata_llm_none", "identity_in_metadata_llm_user_dict", "identity_in_metadata_llm_non_mapping", "identity_in_litellm_metadata"],
+    ids=[
+        "identity_in_metadata_llm_none",
+        "identity_in_metadata_llm_user_dict",
+        "identity_in_metadata_llm_non_mapping",
+        "identity_in_litellm_metadata",
+    ],
 )
 async def test_apply_guardrail_reads_identity_from_either_metadata_bag(
     crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,

@@ -75,7 +75,9 @@ class TestExtractConverseTexts:
             "system": [{"text": "sys text"}],
             "messages": [{"role": "user", "content": [{"text": "user text"}]}],
         }
-        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        texts, holders = _extract_converse_texts(
+            body, skip_system=False, skip_tool=False
+        )
         assert texts == ["sys text", "user text"]
         assert holders[0] == (body["system"][0], "text")
         assert holders[1] == (body["messages"][0]["content"][0], "text")
@@ -85,7 +87,9 @@ class TestExtractConverseTexts:
             "system": [{"text": "sys text"}],
             "messages": [{"role": "user", "content": [{"text": "user text"}]}],
         }
-        texts, holders = _extract_converse_texts(body, skip_system=True, skip_tool=False)
+        texts, holders = _extract_converse_texts(
+            body, skip_system=True, skip_tool=False
+        )
         assert texts == ["user text"]
         assert holders == [(body["messages"][0]["content"][0], "text")]
 
@@ -130,7 +134,9 @@ class TestExtractConverseTexts:
                 }
             ]
         }
-        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        texts, holders = _extract_converse_texts(
+            body, skip_system=False, skip_tool=False
+        )
         assert texts == ["hello", "blocked tool text", "blocked json value"]
         tool_content = body["messages"][0]["content"][1]["toolResult"]["content"]
         assert holders[1] == (tool_content[0], "text")
@@ -153,7 +159,9 @@ class TestExtractConverseTexts:
                 }
             ]
         }
-        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        texts, holders = _extract_converse_texts(
+            body, skip_system=False, skip_tool=False
+        )
         assert texts == ["blocked input value"]
         tool_use_input = body["messages"][0]["content"][0]["toolUse"]["input"]
         assert holders[0] == (tool_use_input, "query")
@@ -253,7 +261,10 @@ class TestWriteBackTexts:
         }
         _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         _write_back_texts(["masked"], holders)
-        assert body["messages"][0]["content"][0]["toolResult"]["content"][0]["text"] == "masked"
+        assert (
+            body["messages"][0]["content"][0]["toolResult"]["content"][0]["text"]
+            == "masked"
+        )
 
     def test_extra_non_text_fields_untouched(self):
         body = {
@@ -278,14 +289,14 @@ class TestWriteBackTexts:
         _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         _write_back_texts(["replaced"], holders)
         assert body["messages"][0]["content"][0]["text"] == "replaced"
-        assert body["messages"][0]["content"][1] == original["messages"][0]["content"][1]
+        assert (
+            body["messages"][0]["content"][1] == original["messages"][0]["content"][1]
+        )
         assert body["inferenceConfig"] == original["inferenceConfig"]
 
     def test_fewer_guardrailed_texts_logs_warning(self, monkeypatch):
         body = {
-            "messages": [
-                {"role": "user", "content": [{"text": "a"}, {"text": "b"}]}
-            ]
+            "messages": [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]
         }
         _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert len(holders) == 2
@@ -298,7 +309,9 @@ class TestWriteBackTexts:
 
         _write_back_texts(["masked"], holders)
 
-        assert warnings, "mismatched guardrail output count must not be silently dropped"
+        assert (
+            warnings
+        ), "mismatched guardrail output count must not be silently dropped"
         assert body["messages"][0]["content"][0]["text"] == "masked"
         assert body["messages"][0]["content"][1]["text"] == "b"
 
@@ -326,7 +339,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         data = _converse_data()
         guardrail = _make_guardrail({"texts": ["[REDACTED]", "[REDACTED]"]})
 
-        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
         body = result["data"]
         assert body["system"][0]["text"] == "[REDACTED]"
@@ -347,7 +362,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
         with pytest.raises(GuardrailBlocked):
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
 
     @pytest.mark.asyncio
     async def test_tool_result_text_scanned_and_masked(self):
@@ -365,7 +382,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
             {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
         )
 
-        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "My SSN is 123-45-6789" in sent_texts
@@ -390,7 +409,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
             {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
         )
 
-        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "SSN 123-45-6789" in sent_texts
@@ -409,7 +430,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
             {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
         )
 
-        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "email john@example.com" in sent_texts
@@ -431,7 +454,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
         with pytest.raises(GuardrailBlocked):
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "blocked content" in sent_texts
@@ -454,10 +479,20 @@ class TestBedrockPassthroughGuardrailHandlerInput:
             ]
         }
         guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "lookup", "[REDACTED]", "object"]}
+            {
+                "texts": [
+                    "You are helpful.",
+                    "Hello world",
+                    "lookup",
+                    "[REDACTED]",
+                    "object",
+                ]
+            }
         )
 
-        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "email john@example.com" in sent_texts
@@ -479,7 +514,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
         with pytest.raises(GuardrailBlocked):
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "blocked content" in sent_texts
@@ -495,7 +532,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
             {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
         )
 
-        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "ssn 123-45-6789" in sent_texts
@@ -533,7 +572,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
         with pytest.raises(GuardrailBlocked):
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
 
     @pytest.mark.asyncio
     async def test_missing_messages_field_skips(self):
@@ -580,7 +621,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         response = self._converse_response("Model reply")
         guardrail = _make_guardrail({"texts": ["Model reply"]})
 
-        await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+        await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
 
         call_args = guardrail.apply_guardrail.call_args
         assert call_args.kwargs["input_type"] == "response"
@@ -592,13 +635,17 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         response = self._converse_response("Bad content")
         guardrail = _make_guardrail({"texts": ["[MASKED]"]})
 
-        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
 
         assert result["output"]["message"]["content"][0]["text"] == "[MASKED]"
         assert result["stopReason"] == "end_turn"
 
     @pytest.mark.asyncio
-    async def test_response_guardrail_returning_no_texts_preserves_output(self, monkeypatch):
+    async def test_response_guardrail_returning_no_texts_preserves_output(
+        self, monkeypatch
+    ):
         """A guardrail that returns no texts must leave the response untouched and
         not warn, mirroring the request path's empty-result guard."""
         handler = BedrockPassthroughGuardrailHandler()
@@ -611,7 +658,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
             lambda *args, **kwargs: warnings.append(args),
         )
 
-        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
 
         assert not warnings
         assert result["output"]["message"]["content"][0]["text"] == "Model reply"
@@ -648,9 +697,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
             },
             "stopReason": "end_turn",
         }
-        guardrail = _make_guardrail(
-            {"texts": ["[V]", "[REASON]", "[INPUT]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["[V]", "[REASON]", "[INPUT]"]})
 
         result = await handler.process_output_response(
             response=response, guardrail_to_apply=guardrail
@@ -680,7 +727,10 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
                             "citationsContent": {
                                 "content": [{"text": "Contact john@example.com"}],
                                 "citations": [
-                                    {"source": "https://example.com", "title": "Example"}
+                                    {
+                                        "source": "https://example.com",
+                                        "title": "Example",
+                                    }
                                 ],
                             }
                         }
@@ -707,7 +757,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         handler = BedrockPassthroughGuardrailHandler()
         guardrail = _make_guardrail({"texts": []})
 
-        result = await handler.process_output_response(response="raw string", guardrail_to_apply=guardrail)
+        result = await handler.process_output_response(
+            response="raw string", guardrail_to_apply=guardrail
+        )
 
         assert result == "raw string"
         guardrail.apply_guardrail.assert_not_called()
@@ -718,7 +770,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         response = {"stopReason": "end_turn"}
         guardrail = _make_guardrail({"texts": []})
 
-        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
 
         assert result == {"stopReason": "end_turn"}
         guardrail.apply_guardrail.assert_not_called()
@@ -753,7 +807,11 @@ def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
         name_b = name.encode()
         value_b = value.encode()
         return (
-            struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+            struct.pack("!B", len(name_b))
+            + name_b
+            + struct.pack("!B", 7)
+            + struct.pack("!H", len(value_b))
+            + value_b
         )
 
     headers_bytes = (
@@ -788,7 +846,10 @@ class TestDeAnonymizeConverseStream:
             _build_event_stream_frame("messageStart", {"role": "assistant"})
             + _build_event_stream_frame(
                 "contentBlockDelta",
-                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1> works at <ORG_2>"}},
+                {
+                    "contentBlockIndex": 0,
+                    "delta": {"text": "<PERSON_1> works at <ORG_2>"},
+                },
             )
             + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
             + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
@@ -847,7 +908,10 @@ class TestDeAnonymizeConverseStream:
         }
 
         async def mock_hook(data, user_api_key_dict, response):
-            assert response["output"]["message"]["content"][0]["text"] == "<PERSON_1> called."
+            assert (
+                response["output"]["message"]["content"][0]["text"]
+                == "<PERSON_1> called."
+            )
             return de_anon_response
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
@@ -1061,7 +1125,10 @@ class TestDeAnonymizeConverseStream:
         """toolUse.input deltas carry model-generated tool arguments and must be guardrailed instead of being forwarded raw."""
         stream_bytes = _build_event_stream_frame(
             "contentBlockDelta",
-            {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"q":"<PERSON_1>"}'}}},
+            {
+                "contentBlockIndex": 0,
+                "delta": {"toolUse": {"input": '{"q":"<PERSON_1>"}'}},
+            },
         )
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
@@ -1086,7 +1153,9 @@ class TestDeAnonymizeConverseStream:
                 "delta": {
                     "citationsContent": {
                         "content": [{"text": "Contact <PERSON_1>"}],
-                        "citations": [{"source": "https://example.com", "title": "Example"}],
+                        "citations": [
+                            {"source": "https://example.com", "title": "Example"}
+                        ],
                     }
                 },
             },
@@ -1127,7 +1196,10 @@ class TestDeAnonymizeConverseStream:
             {"contentBlockIndex": 0, "delta": {"text": "Hi <PERSON_1>"}},
         ) + _build_event_stream_frame(
             "contentBlockDelta",
-            {"contentBlockIndex": 1, "delta": {"reasoningContent": {"text": "works at <ORG_2>"}}},
+            {
+                "contentBlockIndex": 1,
+                "delta": {"reasoningContent": {"text": "works at <ORG_2>"}},
+            },
         )
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
@@ -1148,7 +1220,10 @@ class TestDeAnonymizeConverseStream:
         """A reasoning delta carrying only a signature has no guardrailable text; it must be forwarded untouched and the guardrail must not run."""
         stream_bytes = _build_event_stream_frame(
             "contentBlockDelta",
-            {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "sig"}}},
+            {
+                "contentBlockIndex": 0,
+                "delta": {"reasoningContent": {"signature": "sig"}},
+            },
         )
         hook_spy = AsyncMock()
 

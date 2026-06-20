@@ -11,7 +11,6 @@ import pytest
 
 from litellm import get_model_info
 
-
 MODEL_NAME = "nvidia.nemotron-super-3-120b"
 
 

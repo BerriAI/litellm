@@ -146,9 +146,7 @@ class TestOllamaModelInfo:
         assert models == []
         assert call_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
-    def test_get_models_empty_key_does_not_leak_to_provided_api_base(
-        self, monkeypatch
-    ):
+    def test_get_models_empty_key_does_not_leak_to_provided_api_base(self, monkeypatch):
         """An empty explicit key must not fall back to server-side creds for a custom base."""
         call_headers = []
 

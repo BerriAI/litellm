@@ -22,7 +22,6 @@ from litellm.llms.snowflake.chat.transformation import (
 )
 from litellm.types.utils import ModelResponse
 
-
 # ─── Fixtures ──────────────────────────────────────────────────────────────
 
 ACCOUNT_ID = "myaccount"
@@ -69,6 +68,7 @@ def _make_anthropic_response(content: str = "Hello!") -> httpx.Response:
 
 # ─── SnowflakeConfig (OpenAI-compatible) ───────────────────────────────────
 
+
 class TestSnowflakeConfigURL:
     def setup_method(self):
         self.cfg = SnowflakeConfig()
@@ -82,7 +82,10 @@ class TestSnowflakeConfigURL:
             optional_params=optional_params,
             litellm_params={},
         )
-        assert url == f"https://{ACCOUNT_ID}.snowflakecomputing.com/api/v2/cortex/v1/chat/completions"
+        assert (
+            url
+            == f"https://{ACCOUNT_ID}.snowflakecomputing.com/api/v2/cortex/v1/chat/completions"
+        )
 
     def test_url_with_explicit_api_base(self):
         url = self.cfg.get_complete_url(
@@ -140,7 +143,10 @@ class TestSnowflakeConfigAuth:
             litellm_params={},
             api_key=PAT_TOKEN,
         )
-        assert headers["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
+        assert (
+            headers["X-Snowflake-Authorization-Token-Type"]
+            == "PROGRAMMATIC_ACCESS_TOKEN"
+        )
         assert headers["Authorization"] == "Bearer my-secret-pat-token"
 
     def test_jwt_auth_sets_keypair_header(self):
@@ -179,7 +185,10 @@ class TestSnowflakeConfigRequest:
                 "function": {
                     "name": "get_weather",
                     "description": "Get weather",
-                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
                 },
             }
         ]
@@ -266,6 +275,7 @@ class TestSnowflakeConfigResponse:
 
 # ─── SnowflakeConfig ────────────────────────────────────────
 
+
 class TestAnthropicConfigURL:
     def setup_method(self):
         self.cfg = SnowflakeConfig()
@@ -290,7 +300,10 @@ class TestAnthropicConfigURL:
             optional_params={"account_id": ACCOUNT_ID},
             litellm_params={},
         )
-        assert f"https://{ACCOUNT_ID}.snowflakecomputing.com/api/v2/cortex/v1/messages" == url
+        assert (
+            f"https://{ACCOUNT_ID}.snowflakecomputing.com/api/v2/cortex/v1/messages"
+            == url
+        )
 
 
 class TestAnthropicConfigAuth:
@@ -317,7 +330,10 @@ class TestAnthropicConfigAuth:
             litellm_params={},
             api_key=PAT_TOKEN,
         )
-        assert headers["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
+        assert (
+            headers["X-Snowflake-Authorization-Token-Type"]
+            == "PROGRAMMATIC_ACCESS_TOKEN"
+        )
         assert headers["anthropic-version"] == "2023-06-01"
         assert "Bearer" in headers["Authorization"]
 
@@ -475,6 +491,7 @@ class TestAnthropicConfigResponse:
 
 # ─── Model detection helper ────────────────────────────────────────────────
 
+
 class TestIsClaudeModel:
     def test_claude_model_detected(self):
         assert _is_claude_model("snowflake/claude-sonnet-4-5") is True
@@ -489,6 +506,7 @@ class TestIsClaudeModel:
 
 
 # ─── Anthropic Tool Transformation Tests ──────────────────────────────────
+
 
 class TestAnthropicToolTransformation:
     def setup_method(self):
@@ -528,7 +546,9 @@ class TestAnthropicToolTransformation:
 
     def test_tools_already_in_anthropic_format_pass_through(self):
         messages = [{"role": "user", "content": "hi"}]
-        tools = [{"name": "my_tool", "input_schema": {"type": "object", "properties": {}}}]
+        tools = [
+            {"name": "my_tool", "input_schema": {"type": "object", "properties": {}}}
+        ]
         body = self.cfg.transform_request(
             model="snowflake/claude-sonnet-4-5",
             messages=messages,
@@ -619,7 +639,10 @@ class TestAnthropicMultiTurnToolMessages:
             headers={},
         )
         assistant_msg = body["messages"][1]
-        assert assistant_msg["content"][0] == {"type": "text", "text": "Let me check that for you."}
+        assert assistant_msg["content"][0] == {
+            "type": "text",
+            "text": "Let me check that for you.",
+        }
         assert assistant_msg["content"][1]["type"] == "tool_use"
         assert assistant_msg["content"][1]["name"] == "get_weather"
 
@@ -629,7 +652,13 @@ class TestAnthropicMultiTurnToolMessages:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
             },
             {"role": "tool", "tool_call_id": "c1", "content": "result"},
         ]
@@ -653,7 +682,10 @@ class TestAnthropicMultiTurnToolMessages:
                     {
                         "id": "call_bad",
                         "type": "function",
-                        "function": {"name": "broken_tool", "arguments": "not valid json{{{"},
+                        "function": {
+                            "name": "broken_tool",
+                            "arguments": "not valid json{{{",
+                        },
                     }
                 ],
             },
@@ -681,7 +713,10 @@ class TestAnthropicMultiTurnToolMessages:
                     {
                         "id": "call_dict",
                         "type": "function",
-                        "function": {"name": "dict_tool", "arguments": {"already": "parsed"}},
+                        "function": {
+                            "name": "dict_tool",
+                            "arguments": {"already": "parsed"},
+                        },
                     }
                 ],
             },
@@ -702,9 +737,19 @@ class TestAnthropicMultiTurnToolMessages:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
             },
-            {"role": "tool", "tool_call_id": "c1", "content": {"result_key": "result_value"}},
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": {"result_key": "result_value"},
+            },
         ]
         body = self.cfg.transform_request(
             model="snowflake/claude-sonnet-4-5",

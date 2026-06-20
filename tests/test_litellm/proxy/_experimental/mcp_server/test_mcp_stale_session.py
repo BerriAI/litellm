@@ -722,9 +722,7 @@ async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_cha
     delegated_server.needs_user_oauth_token = True
     delegated_server.server_id = "delegated-oauth-server"
 
-    upstream_challenge = (
-        'Bearer resource_metadata="https://upstream.example.com/.well-known/oauth-protected-resource"'
-    )
+    upstream_challenge = 'Bearer resource_metadata="https://upstream.example.com/.well-known/oauth-protected-resource"'
 
     with (
         patch(

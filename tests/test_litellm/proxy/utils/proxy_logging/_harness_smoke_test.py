@@ -10,7 +10,11 @@ import pytest
 
 def test_normalize_replaces_volatile_keys(normalize_fn):
     raw = {"id": 7, "name": "x", "nested": {"created_at": 1, "value": 2}}
-    expected = {"id": "<VOLATILE>", "name": "x", "nested": {"created_at": "<VOLATILE>", "value": 2}}
+    expected = {
+        "id": "<VOLATILE>",
+        "name": "x",
+        "nested": {"created_at": "<VOLATILE>", "value": 2},
+    }
     assert normalize_fn(raw) == expected
 
 

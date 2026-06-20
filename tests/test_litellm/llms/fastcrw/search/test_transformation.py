@@ -79,7 +79,9 @@ def test_validate_environment_missing_key_raises():
 
 def test_get_complete_url_default_base():
     with patch.dict(os.environ, {}, clear=True):
-        assert _config().get_complete_url(None, {}) == "https://fastcrw.com/api/v1/search"
+        assert (
+            _config().get_complete_url(None, {}) == "https://fastcrw.com/api/v1/search"
+        )
 
 
 def test_get_complete_url_appends_search():
@@ -100,7 +102,9 @@ def test_get_complete_url_reads_env_base():
     with patch.dict(
         os.environ, {"CRW_API_BASE": "https://env-base.local/v1"}, clear=True
     ):
-        assert _config().get_complete_url(None, {}) == "https://env-base.local/v1/search"
+        assert (
+            _config().get_complete_url(None, {}) == "https://env-base.local/v1/search"
+        )
 
 
 def test_transform_search_request_basic():

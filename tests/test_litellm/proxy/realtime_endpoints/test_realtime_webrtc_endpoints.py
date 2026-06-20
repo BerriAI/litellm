@@ -267,9 +267,7 @@ async def test_client_secrets_transcription_rejects_disallowed_nested_model(
                         "model": "gpt-4o-realtime-preview",
                         "audio": {
                             "input": {
-                                "transcription": {
-                                    "model": "gpt-realtime-whisper"
-                                }
+                                "transcription": {"model": "gpt-realtime-whisper"}
                             }
                         },
                     },
@@ -343,9 +341,7 @@ async def test_client_secrets_transcription_routes_on_nested_model(
                         "model": "gpt-4o-realtime-preview",
                         "audio": {
                             "input": {
-                                "transcription": {
-                                    "model": "gpt-realtime-whisper"
-                                }
+                                "transcription": {"model": "gpt-realtime-whisper"}
                             }
                         },
                     },
@@ -595,9 +591,7 @@ async def test_transcription_sessions_rejects_disallowed_resolved_model(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -641,9 +635,7 @@ async def test_transcription_sessions_rejects_disallowed_team_model_scope(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -686,9 +678,7 @@ async def test_transcription_sessions_rejects_disallowed_project_model_scope(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -741,9 +731,7 @@ async def test_transcription_sessions_rejects_disallowed_team_member_model_scope
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403

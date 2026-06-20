@@ -17,7 +17,6 @@ import pytest
 
 from .conftest import VOLATILE_KEYS, normalize
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -309,9 +308,7 @@ def test_invitation_delete_admin_happy(client, auth_as, monkeypatch, mock_prisma
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post(
-            "/invitation/delete", json={"invitation_id": "inv-del"}
-        )
+        response = client.post("/invitation/delete", json={"invitation_id": "inv-del"})
 
     assert response.status_code == 200
     assert normalize(response.json()) == {
@@ -342,9 +339,7 @@ def test_invitation_delete_non_admin_forbidden(
     monkeypatch.setattr(ps, "_user_has_admin_privileges", _no_privileges)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
-        response = client.post(
-            "/invitation/delete", json={"invitation_id": "inv-del"}
-        )
+        response = client.post("/invitation/delete", json={"invitation_id": "inv-del"})
 
     assert response.status_code == 400
     err_text = str(response.json())
@@ -360,9 +355,7 @@ def test_invitation_delete_unknown_id_400(client, auth_as, monkeypatch, mock_pri
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post(
-            "/invitation/delete", json={"invitation_id": "ghost"}
-        )
+        response = client.post("/invitation/delete", json={"invitation_id": "ghost"})
 
     assert response.status_code == 400
     assert response.json() == {
@@ -378,9 +371,7 @@ def test_invitation_delete_db_not_connected_400(client, auth_as, monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", None)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post(
-            "/invitation/delete", json={"invitation_id": "inv-del"}
-        )
+        response = client.post("/invitation/delete", json={"invitation_id": "inv-del"})
 
     assert response.status_code == 400
     err_text = str(response.json())

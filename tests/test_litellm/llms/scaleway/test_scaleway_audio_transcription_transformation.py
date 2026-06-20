@@ -10,7 +10,6 @@ from litellm.llms.scaleway.audio_transcription.transformation import (
 )
 from litellm.types.utils import TranscriptionResponse
 
-
 # ---------------------------------------------------------------------------
 # get_complete_url
 # ---------------------------------------------------------------------------

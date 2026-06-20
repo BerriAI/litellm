@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     stream_usage_ai_chat,
 )
 
-
 SAMPLE_AGGREGATED_RESPONSE = {
     "results": [
         {

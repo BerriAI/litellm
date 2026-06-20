@@ -7,7 +7,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
-from typing import Literal, Optional
+from typing import Optional
 
 import aiohttp
 from fastapi import HTTPException

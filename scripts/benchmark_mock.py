@@ -8,7 +8,6 @@ import statistics
 
 import aiohttp
 
-
 REQUEST_BODY = {
     "model": "db-openai-endpoint",
     "messages": [{"role": "user", "content": "hi"}],
@@ -150,7 +149,7 @@ def print_aggregate(results):
         cov_throughput = (
             statistics.stdev(run_throughputs) / statistics.mean(run_throughputs) * 100
         )
-        print(f"\n  Run-to-run variance:")
+        print("\n  Run-to-run variance:")
         print(f"    Latency CoV:    {cov_latency:.1f}%")
         print(f"    Throughput CoV: {cov_throughput:.1f}%")
 

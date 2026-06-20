@@ -14,12 +14,9 @@ Test the endpoint:
     curl "http://localhost:8080/beta/litellm_prompt_management?prompt_id=hello-world-prompt"
 """
 
-import os
-import json
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Header, Query, status
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # ============================================================================
@@ -364,7 +361,7 @@ if __name__ == "__main__":
     print("=" * 70)
     print("Mock Prompt Management API Server")
     print("=" * 70)
-    print(f"\nStarting server on http://localhost:8080")
+    print("\nStarting server on http://localhost:8080")
     print(f"\nAvailable prompts: {len(PROMPTS_DB)}")
     for prompt_id in PROMPTS_DB.keys():
         print(f"  - {prompt_id}")

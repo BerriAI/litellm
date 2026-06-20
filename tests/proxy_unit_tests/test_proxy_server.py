@@ -2119,14 +2119,11 @@ async def test_model_info_alias_without_prisma(hidden):
 
     models = resp["data"]
 
-    alias_found = any(
-        m["model_name"] == model_alias
-        for m in models
-    )
+    alias_found = any(m["model_name"] == model_alias for m in models)
 
     assert alias_found is (not hidden)
 
-    
+
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")

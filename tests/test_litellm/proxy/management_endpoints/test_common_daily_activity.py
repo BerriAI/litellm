@@ -758,6 +758,8 @@ class TestBuildAggregatedSqlQuery:
         ]
         assert "model = $4" in sql
         assert "api_key = $5" in sql
+
+
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_empty_result_set():
     """Regression test for the empty-range 500.

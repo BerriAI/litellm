@@ -38,7 +38,6 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
-
 litellm.num_retries = 3
 litellm.cache = None
 user_message = "Write a short poem about the sky"
@@ -1104,9 +1103,7 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
             {
                 "content": {
                     "role": "model",
-                    "parts": [
-                        {
-                            "text": """{
+                    "parts": [{"text": """{
                             "recipes": [
                                 {"recipe_name": "Chocolate Chip Cookies"},
                                 {"recipe_name": "Oatmeal Raisin Cookies"},
@@ -1114,9 +1111,7 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
                                 {"recipe_name": "Sugar Cookies"},
                                 {"recipe_name": "Snickerdoodles"}
                             ]
-                            }"""
-                        }
-                    ],
+                            }"""}],
                 },
                 "finishReason": "STOP",
                 "safetyRatings": [

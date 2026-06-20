@@ -25,7 +25,12 @@ from typing import AsyncIterator, Final
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.responses import (
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.routing import Route
 
 _CANNED_CONTENT: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
@@ -159,7 +164,14 @@ async def _text_completion_stream(model: str, with_usage: bool) -> AsyncIterator
             "object": "text_completion",
             "created": created,
             "model": model,
-            "choices": [{"text": text, "index": 0, "logprobs": None, "finish_reason": finish_reason}],
+            "choices": [
+                {
+                    "text": text,
+                    "index": 0,
+                    "logprobs": None,
+                    "finish_reason": finish_reason,
+                }
+            ],
         }
 
     yield f"data: {json.dumps(chunk(_CANNED_CONTENT, None))}\n\n"
@@ -190,7 +202,10 @@ async def embeddings(request: Request) -> Response:
     return JSONResponse(
         {
             "object": "list",
-            "data": [{"object": "embedding", "index": i, "embedding": [0.0] * 1536} for i in range(max(count, 1))],
+            "data": [
+                {"object": "embedding", "index": i, "embedding": [0.0] * 1536}
+                for i in range(max(count, 1))
+            ],
             "model": _requested_model(body),
             "usage": {"prompt_tokens": 5, "total_tokens": 5},
         }

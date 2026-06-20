@@ -604,6 +604,8 @@ def test_create_model_info_response_no_router_keeps_base_fields():
         "created": response["created"],
         "owned_by": "openai",
     }
+
+
 class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized

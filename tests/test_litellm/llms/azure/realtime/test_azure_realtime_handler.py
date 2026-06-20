@@ -189,8 +189,7 @@ async def test_construct_url_forwards_transcription_intent_ga_without_model_quer
     )
 
     assert url == (
-        "wss://my-endpoint.openai.azure.com/openai/v1/realtime"
-        "?intent=transcription"
+        "wss://my-endpoint.openai.azure.com/openai/v1/realtime" "?intent=transcription"
     )
 
 

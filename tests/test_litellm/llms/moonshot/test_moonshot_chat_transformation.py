@@ -9,7 +9,9 @@ import os
 import sys
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
 
 import pytest
 
@@ -265,7 +267,10 @@ class TestMoonshotConfig:
         assert result["messages"][0]["role"] == "user"
         assert result["messages"][0]["content"] == "What's the weather like?"
         assert result["messages"][1]["role"] == "user"
-        assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
+        assert (
+            result["messages"][1]["content"]
+            == "Please select a tool to handle the current issue."
+        )
 
         # Check that tool_choice was removed but tools are preserved
         assert "tool_choice" not in result
@@ -303,7 +308,10 @@ class TestMoonshotConfig:
 
         # Check that the message was added
         assert len(result["messages"]) == 2
-        assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
+        assert (
+            result["messages"][1]["content"]
+            == "Please select a tool to handle the current issue."
+        )
 
     def test_tool_choice_non_required_preserved(self):
         """Test that non-'required' tool_choice values are preserved"""
@@ -528,7 +536,9 @@ class TestMoonshotConfig:
         assert result[0].get("reasoning_content") == "stored thinking"
         # The promoted key must be removed from provider_specific_fields to
         # avoid sending the value twice in the serialised request body
-        assert "reasoning_content" not in (result[0].get("provider_specific_fields") or {})
+        assert "reasoning_content" not in (
+            result[0].get("provider_specific_fields") or {}
+        )
 
     def test_reasoning_model_fill_called_from_transform_request(self):
         """transform_request injects reasoning_content end-to-end for reasoning models."""
@@ -628,7 +638,10 @@ class TestMoonshotConfig:
         result = config.fill_reasoning_content(messages)
 
         # reasoning_content should be preserved, not replaced with placeholder
-        assert result[0].get("reasoning_content") == "<thinking>User wants weather</thinking>"
+        assert (
+            result[0].get("reasoning_content")
+            == "<thinking>User wants weather</thinking>"
+        )
 
     def test_reasoning_content_preserved_in_multi_turn_flow(self):
         """reasoning_content is preserved through multi-turn conversation flow.
@@ -672,7 +685,10 @@ class TestMoonshotConfig:
         result = config.fill_reasoning_content(messages)
 
         # reasoning_content should be preserved in the assistant message
-        assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
+        assert (
+            result[1].get("reasoning_content")
+            == "<thinking>Planning to call weather tool</thinking>"
+        )
 
 
 class TestKimiK26ModelRegistry:
@@ -685,7 +701,9 @@ class TestKimiK26ModelRegistry:
 
     def test_kimi_k26_in_model_cost_map(self, model_cost_map):
         """kimi-k2.6 should be present in the model cost map."""
-        assert "moonshot/kimi-k2.6" in model_cost_map, "moonshot/kimi-k2.6 not found in model_cost"
+        assert (
+            "moonshot/kimi-k2.6" in model_cost_map
+        ), "moonshot/kimi-k2.6 not found in model_cost"
 
     def test_kimi_k26_pricing(self, model_cost_map):
         """kimi-k2.6 pricing should match official Kimi API rates."""
@@ -741,6 +759,10 @@ class TestMoonshotResponseSchemaSupport:
     def test_live_model_supports_response_schema(self, model, model_cost_map):
         assert model_cost_map[model].get("supports_response_schema") is True
 
-    def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
+    def test_supports_response_schema_utility_reports_true(
+        self, model_cost_map, monkeypatch
+    ):
         monkeypatch.setattr(litellm, "model_cost", model_cost_map)
-        assert litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True
+        assert (
+            litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True
+        )

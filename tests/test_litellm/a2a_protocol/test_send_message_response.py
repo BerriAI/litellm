@@ -9,9 +9,7 @@ def test_from_dict_backfills_id_on_agent_error_response():
         "error": {"code": -32054, "message": "Session not found"},
     }
 
-    response = LiteLLMSendMessageResponse.from_dict(
-        agent_error, request_id="r1"
-    )
+    response = LiteLLMSendMessageResponse.from_dict(agent_error, request_id="r1")
 
     assert response.id == "r1"
     assert response.error == {"code": -32054, "message": "Session not found"}
@@ -25,9 +23,7 @@ def test_from_dict_preserves_existing_id():
         "error": {"code": -32001, "message": "Task not found"},
     }
 
-    response = LiteLLMSendMessageResponse.from_dict(
-        payload, request_id="r1"
-    )
+    response = LiteLLMSendMessageResponse.from_dict(payload, request_id="r1")
 
     assert response.id == "upstream-id"
 

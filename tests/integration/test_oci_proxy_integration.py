@@ -278,6 +278,7 @@ def test_embedding_via_proxy(proxy_url: str) -> None:
     assert len(embedding) >= 64
     assert all(isinstance(x, (int, float)) for x in embedding)
 
+
 def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     """The /v1/models registry advertises every OCI alias from the config."""
     r = httpx.get(
@@ -288,7 +289,9 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     assert r.status_code == 200, r.text
     advertised = {row["id"] for row in r.json()["data"]}
     for expected in CHAT_MODELS + ["oci-embed"]:
-        assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
+        assert (
+            expected in advertised
+        ), f"{expected} missing from /v1/models: {advertised}"
 
 
 def test_chat_completion_no_drop_params(proxy_url_no_drop_params: str) -> None:

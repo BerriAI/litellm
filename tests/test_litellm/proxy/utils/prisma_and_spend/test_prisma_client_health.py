@@ -48,7 +48,9 @@ async def test_health_check_returns_query_raw_result(
 async def test_health_check_raises_when_query_raw_fails(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.query_raw = AsyncMock(side_effect=RuntimeError("connection refused"))
+    prisma_client.db.query_raw = AsyncMock(
+        side_effect=RuntimeError("connection refused")
+    )
     with pytest.raises(RuntimeError, match="connection refused"):
         await prisma_client.health_check()
 
@@ -115,7 +117,9 @@ async def test_set_spend_logs_row_count_error_raises_through_backoff(
         await prisma_client._set_spend_logs_row_count_in_proxy_state()
 
 
-def test_validate_response_time_passes_finite_value(prisma_client: PrismaClient) -> None:
+def test_validate_response_time_passes_finite_value(
+    prisma_client: PrismaClient,
+) -> None:
     inputs = {
         "ok": prisma_client._validate_response_time(123.45),
         "none": prisma_client._validate_response_time(None),

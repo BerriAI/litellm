@@ -266,6 +266,9 @@ class MistralConfig(OpenAIGPTConfig):
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
+
+            m.pop("metadata", None)
+
             if MistralConfig._is_empty_assistant_message(m):
                 continue
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error

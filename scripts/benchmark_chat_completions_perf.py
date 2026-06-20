@@ -24,7 +24,6 @@ import shlex
 import signal
 import statistics
 import subprocess
-import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -33,7 +32,6 @@ from typing import Any, Optional
 
 import aiohttp
 from aiohttp import web
-
 
 DEFAULT_MODEL = "perf-test-model"
 DEFAULT_API_KEY = "sk-1234"
