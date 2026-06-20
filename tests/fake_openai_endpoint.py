@@ -5,7 +5,14 @@ Tests that need a fake OpenAI-shaped endpoint point ``api_base`` at
 an external service staying up. ``ensure_fake_openai_endpoint`` returns a base
 URL that is actually serving: it reuses a server already listening on that base
 (it answers ``/health``) and otherwise spawns ``_fake_openai_endpoint_server.py``
-for the test session, tearing it down at interpreter exit.
+detached from the spawning process so it survives until the host goes away.
+
+We deliberately do not register an interpreter-exit teardown. Under
+``pytest-xdist`` the spawn happens inside whichever worker wins the race, and
+workers exit independently as their queues drain; a per-worker ``atexit`` would
+terminate the shared mock mid-session for the workers still running. In CI the
+container is ephemeral, and locally the next run reuses the still-healthy server
+via ``/health`` (or a developer can free the port manually).
 
 The resolved base honors a ``FAKE_OPENAI_API_BASE`` env var only when it points
 at a loopback host; a remote value (CI sets it to the old hosted mock) is ignored
@@ -16,7 +23,6 @@ local mock exists to remove.
 
 from __future__ import annotations
 
-import atexit
 import os
 import subprocess
 import sys
@@ -72,7 +78,7 @@ def ensure_fake_openai_endpoint() -> str:
     if _is_healthy(base):
         return base
     parts = urlsplit(base)
-    proc = subprocess.Popen(
+    subprocess.Popen(
         [
             sys.executable,
             str(_SERVER_SCRIPT),
@@ -83,7 +89,7 @@ def ensure_fake_openai_endpoint() -> str:
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
-    atexit.register(proc.terminate)
     _wait_until_healthy(base)
     return base
