@@ -2,18 +2,21 @@
 Tests for the e2b code execution sandbox primitive.
 
 Unit tests inject a fake async HTTP client (dependency injection, no
-monkeypatching) and assert request shapes and result mapping. The integration
-test hits the real e2b API and is skipped unless E2B_API_KEY is set.
+monkeypatching) and assert request shapes and result mapping. Real-network
+integration tests live in tests/integration/sandbox/test_e2b_sandbox.py.
 """
 
 import json
-import os
 
+import httpx
 import pytest
 
 import litellm
 from litellm.llms.base_llm.sandbox.transformation import ContainerHandle
-from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+from litellm.llms.e2b.sandbox.transformation import (
+    MAX_OUTPUT_BYTES,
+    E2BSandboxConfig,
+)
 
 
 class FakeResponse:
@@ -63,6 +66,12 @@ class FakeHTTPClient:
 
     async def delete(self, url, headers=None, **kwargs):
         self.calls.append(("DELETE", url, headers, None))
+        if not (200 <= self.delete_status < 300):
+            raise httpx.HTTPStatusError(
+                f"status {self.delete_status}",
+                request=httpx.Request("DELETE", url),
+                response=httpx.Response(self.delete_status),
+            )
         return FakeResponse(status_code=self.delete_status)
 
 
@@ -196,27 +205,93 @@ async def test_code_interpreter_tool_deletes_even_when_run_raises():
     assert urls[2].endswith("/sandboxes/sbx_123")
 
 
-# ---------- integration (real e2b) ----------
+# ---------- correctness guards ----------
 
 
-@pytest.mark.skipif("E2B_API_KEY" not in os.environ, reason="needs a real E2B_API_KEY")
 @pytest.mark.asyncio
-async def test_integration_ephemeral_real_e2b():
-    result = await litellm.acode_interpreter_tool(
-        provider="e2b", code="print(sum(range(10)))"
+async def test_delete_reraises_non_404_http_error():
+    client = FakeHTTPClient(delete_status=500)
+    handle = ContainerHandle(id="sbx_err", provider="e2b", domain="e2b.app")
+    handle._hidden_params = {"api_key": "e2b_key"}
+    with pytest.raises(httpx.HTTPStatusError):
+        await E2BSandboxConfig().adelete_sandbox(container=handle, client=client)
+
+
+@pytest.mark.asyncio
+async def test_create_preserves_explicit_zero_timeout():
+    client = FakeHTTPClient()
+    await E2BSandboxConfig().acreate_sandbox(
+        timeout=0, api_key="e2b_key", client=client
     )
-    assert result.stdout.strip() == "45"
+    _, _, _, body = client.calls[0]
+    assert body["timeout"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_code_rejects_bare_id_without_access_token():
+    client = FakeHTTPClient()
+    with pytest.raises(ValueError, match="access token"):
+        await E2BSandboxConfig().arun_code(
+            container="sbx_no_token", code="print(1)", client=client
+        )
+    assert client.calls == []  # never reached the network
+
+
+def test_parse_lines_skips_non_json_lines():
+    lines = [
+        "not-json-heartbeat",
+        json.dumps({"type": "stdout", "text": "ok\n"}),
+        "",
+        "{partial",
+    ]
+    result = E2BSandboxConfig._parse_lines(lines)
+    assert result.stdout == "ok\n"
     assert result.error is None
 
 
-@pytest.mark.skipif("E2B_API_KEY" not in os.environ, reason="needs a real E2B_API_KEY")
 @pytest.mark.asyncio
-async def test_integration_lifecycle_roundtrip_real_e2b():
-    container = await litellm.acreate_sandbox(provider="e2b")
-    try:
-        result = await litellm.arun_code(
-            provider="e2b", container=container, code="print(6*7)"
+async def test_run_code_aborts_on_output_over_cap():
+    big_line = "x" * (MAX_OUTPUT_BYTES + 1)
+    client = FakeHTTPClient(execute_lines=[big_line])
+    handle = ContainerHandle(id="sbx_big", provider="e2b", domain="e2b.app")
+    handle._hidden_params = {"envd_access_token": "tok"}
+    with pytest.raises(ValueError, match="exceeded"):
+        await E2BSandboxConfig().arun_code(
+            container=handle, code="print('x'*999)", client=client
         )
-        assert result.stdout.strip() == "42"
-    finally:
-        assert await litellm.adelete_sandbox(provider="e2b", container=container)
+
+
+# ---------- public entrypoints ----------
+
+
+@pytest.mark.asyncio
+async def test_public_lifecycle_create_run_delete():
+    client = FakeHTTPClient(
+        execute_lines=[json.dumps({"type": "stdout", "text": "42\n"})]
+    )
+    container = await litellm.acreate_sandbox(
+        provider="e2b", api_key="e2b_key", client=client
+    )
+    assert container.id == "sbx_123"
+
+    result = await litellm.arun_code(
+        provider="e2b",
+        container=container,
+        api_key="e2b_key",
+        code="print(6*7)",
+        client=client,
+    )
+    assert result.stdout.strip() == "42"
+
+    assert (
+        await litellm.adelete_sandbox(
+            provider="e2b", container=container, api_key="e2b_key", client=client
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_unsupported_provider_raises():
+    with pytest.raises(ValueError):
+        await litellm.acreate_sandbox(provider="not-a-provider")

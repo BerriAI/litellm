@@ -28,6 +28,8 @@ E2B_API_BASE = "https://api.e2b.app"
 E2B_DEFAULT_TEMPLATE = "code-interpreter-v1"
 E2B_DEFAULT_DOMAIN = "e2b.app"
 JUPYTER_PORT = 49999
+DEFAULT_SANDBOX_TIMEOUT = 300
+MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 
 
 class E2BSandboxConfig(BaseSandboxConfig):
@@ -56,7 +58,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         key = self.validate_environment(api_key=api_key)
         body = {
             "templateID": template or E2B_DEFAULT_TEMPLATE,
-            "timeout": timeout or 300,
+            "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
             "secure": True,
             "allow_internet_access": allow_internet_access,
         }
@@ -97,10 +99,15 @@ class E2BSandboxConfig(BaseSandboxConfig):
     ) -> CodeExecutionResult:
         handle = self._as_handle(container)
 
-        headers = {"Content-Type": "application/json"}
         token = handle._hidden_params.get("envd_access_token")
-        if token:
-            headers["X-Access-Token"] = token
+        if not token:
+            raise ValueError(
+                "Cannot run code from a sandbox id alone. e2b secure sandboxes "
+                "require the access token returned by acreate_sandbox; pass the "
+                "ContainerHandle it returned instead of a bare sandbox id."
+            )
+
+        headers = {"Content-Type": "application/json", "X-Access-Token": token}
         traffic_token = handle._hidden_params.get("traffic_access_token")
         if traffic_token:
             headers["E2B-Traffic-Access-Token"] = traffic_token
@@ -115,7 +122,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
                 stream=True,
             ),
         )
-        lines = [line async for line in response.aiter_lines()]
+        lines = await self._read_capped_lines(response)
         return self._parse_lines(lines)
 
     async def adelete_sandbox(
@@ -132,13 +139,18 @@ class E2BSandboxConfig(BaseSandboxConfig):
             or handle._hidden_params.get("api_key")
             or self.validate_environment()
         )
-        response = cast(
-            httpx.Response,
-            await self._http(client).delete(
-                url=f"{E2B_API_BASE}/sandboxes/{handle.id}",
-                headers={"X-API-Key": key},
-            ),
-        )
+        try:
+            response = cast(
+                httpx.Response,
+                await self._http(client).delete(
+                    url=f"{E2B_API_BASE}/sandboxes/{handle.id}",
+                    headers={"X-API-Key": key},
+                ),
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return False
+            raise
         return 200 <= response.status_code < 300
 
     @staticmethod
@@ -152,11 +164,33 @@ class E2BSandboxConfig(BaseSandboxConfig):
         return handle
 
     @staticmethod
+    async def _read_capped_lines(response: httpx.Response) -> List[str]:
+        lines: List[str] = []
+        total = 0
+        async for line in response.aiter_lines():
+            total += len(line.encode("utf-8"))
+            if total > MAX_OUTPUT_BYTES:
+                raise ValueError(
+                    f"Sandbox output exceeded {MAX_OUTPUT_BYTES} bytes; aborting to "
+                    "avoid unbounded memory use."
+                )
+            lines.append(line)
+        return lines
+
+    @staticmethod
     def _parse_lines(lines: List[str]) -> CodeExecutionResult:
+        def _try_parse(stripped: str):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                return None
+
         messages = tuple(
-            json.loads(stripped)
+            parsed
             for stripped in (line.strip() for line in lines)
             if stripped
+            for parsed in (_try_parse(stripped),)
+            if parsed is not None
         )
 
         def of_type(message_type: str):
@@ -178,8 +212,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             stdout="".join(m.get("text", "") for m in of_type("stdout")),
             stderr="".join(m.get("text", "") for m in of_type("stderr")),
             results=[
-                {k: v for k, v in m.items() if k != "type"}
-                for m in of_type("result")
+                {k: v for k, v in m.items() if k != "type"} for m in of_type("result")
             ],
             error=error,
             execution_count=execution_count,
