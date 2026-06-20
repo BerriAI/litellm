@@ -12,6 +12,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_messages,
 )
 from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.cost_calculator import (
+    apply_server_side_tool_usage_details_to_usage,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -362,7 +365,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             return
         details = response_usage.get("server_side_tool_usage_details")
         if details is not None:
-            setattr(usage, "server_side_tool_usage_details", details)
+            apply_server_side_tool_usage_details_to_usage(usage, details)
             verbose_logger.debug("X.AI server_side_tool_usage_details: %s", details)
 
     @staticmethod
