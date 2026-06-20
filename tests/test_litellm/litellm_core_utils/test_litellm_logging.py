@@ -3406,3 +3406,46 @@ def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_resp
     assert isinstance(result, ModelResponse)
     assert result.model == "openai/my-local"
     assert result.usage.prompt_tokens == 4  # type: ignore[attr-defined]
+
+
+def test_failure_handler_records_recovered_partial_spend(logging_obj):
+    """A stream interrupted mid-flight still billed the provider for the chunks
+    already delivered. When the router stashes that recovered usage as
+    ``combined_usage_object`` and pre-computes ``response_cost``, the failure
+    handler must preserve them so the failure row carries the real partial
+    spend instead of zero.
+    """
+    from litellm.types.utils import Usage
+
+    logging_obj.model_call_details["combined_usage_object"] = Usage(
+        prompt_tokens=17, completion_tokens=9, total_tokens=26
+    )
+    logging_obj.model_call_details["response_cost"] = 0.00012
+
+    logging_obj._failure_handler_helper_fn(
+        exception=Exception("Connection lost"),
+        traceback_exception="Traceback ...",
+    )
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert payload["response_cost"] == 0.00012
+    assert payload["prompt_tokens"] == 17
+    assert payload["completion_tokens"] == 9
+    assert payload["total_tokens"] == 26
+
+
+def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
+    """A failure with no recovered partial usage keeps the existing behavior of
+    recording zero spend, so the partial-spend preservation does not leak into
+    ordinary failures.
+    """
+    logging_obj._failure_handler_helper_fn(
+        exception=Exception("boom"),
+        traceback_exception="Traceback ...",
+    )
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert payload["response_cost"] == 0
+    assert payload["total_tokens"] == 0

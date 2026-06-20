@@ -6,7 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from litellm.integrations.arize.arize_phoenix import (
     ArizePhoenixLogger as _V1Phoenix,
 )
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 from litellm.integrations.otel.presets.utils import ensure_mappers
 
 
@@ -37,6 +41,7 @@ def phoenix_preset(
                     kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
                     endpoint=cfg.endpoint,
                     headers=headers,
+                    owner=ExporterOwner.ARIZE_PHOENIX,
                 ),
             ],
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),

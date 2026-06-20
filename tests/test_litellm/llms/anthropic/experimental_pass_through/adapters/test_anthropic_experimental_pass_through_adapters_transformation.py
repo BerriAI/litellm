@@ -2747,3 +2747,23 @@ def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_an
     cm = result.get("context_management")
     assert cm is not None
     assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
+    """Regression for #30557: the Anthropic tool `type` ("custom") must not be
+    merged into the OpenAI function `parameters`, overwriting parameters.type."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    params = new_tools[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert new_tools[0]["type"] == "function"

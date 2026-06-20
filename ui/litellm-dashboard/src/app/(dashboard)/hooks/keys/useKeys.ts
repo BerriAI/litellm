@@ -62,6 +62,9 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // Opt into substring matching so the admin key-list search box keeps
+        // matching partial user_id/key_alias. /key/list is exact by default.
+        substring_matching: "true",
       })
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => [key, String(value)]),

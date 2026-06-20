@@ -432,6 +432,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Policy", "Grounding", "RAG"],
     providerKey: "Xecguard",
   },
+  {
+    id: "repelloai",
+    name: "RepelloAI Argus",
+    description:
+      "RepelloAI Argus scans prompts and responses against policies configured per asset in the Repello dashboard.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}repelloai.png`,
+    tags: ["Security", "Policy", "Prompt Injection"],
+    providerKey: "Repelloai",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];

@@ -1058,6 +1058,97 @@ def test_proxy_global_first_registered_wins(monkeypatch):
     assert second is not first
 
 
+def test_select_global_otel_v2_logger_reuses_existing_preset_logger():
+    """The global-provider selection must reuse the logger the callback factory
+    already built (e.g. an arize preset logger that folds the OTEL_* base exporter
+    and its own exporter into one logger), not mint a second generic one.
+
+    Regression for the orphan span: the startup publish used to search
+    ``service_callback`` (which a preset logger does not always reach), miss the
+    existing logger, and build a second generic ``OpenTelemetryV2`` whose provider
+    became the OTel global. The server span then exported through that generic
+    provider while the preset logger's gen-ai spans exported to the preset backend,
+    so on that backend the LLM span had no parent. Selecting from the loggers the
+    factory registered keeps one logger, one provider, one connected trace.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    chosen = select_global_otel_v2_logger([object(), preset_logger, object()])
+    assert chosen is preset_logger
+
+
+def test_select_global_otel_v2_logger_prefers_registered_owner_over_list_scan():
+    """Selection reuses the canonical owner the factory registered, not whatever
+    the ``in_memory_loggers`` scan happens to reach first.
+
+    The factory designates one logger as ``proxy_server.open_telemetry_logger`` the
+    moment it builds the first one, and every other v2 path (guardrail, seed,
+    phase spans) routes through that owner. With two presets configured, the list
+    scan's "first ``OpenTelemetryV2``" is order-dependent and could disagree with
+    that owner, publishing one backend's provider as the global while the rest of
+    the v2 code emits through another. Passing the registered owner pins the global
+    provider to the same logger the rest of the code already uses.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    owner = OpenTelemetryV2(
+        config=cfg,
+        callback_name="arize",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+    other = OpenTelemetryV2(
+        config=cfg,
+        callback_name="langfuse_otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+
+    chosen = select_global_otel_v2_logger([other, owner], registered=owner)
+    assert chosen is owner
+
+
+def test_select_global_otel_v2_logger_builds_one_when_none_registered():
+    """With no logger registered, selection builds exactly one generic logger so
+    the proxy still publishes a provider; it must not return ``None``."""
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    chosen = select_global_otel_v2_logger([])
+    assert isinstance(chosen, OpenTelemetryV2)
+
+
+def test_publish_global_otel_v2_provider_sets_selected_logger_provider():
+    """The startup publish must set the OTel global provider to the *selected*
+    logger's provider (the preset logger that owns every exporter), so the FastAPI
+    server span and the gen-ai spans share one provider and one trace.
+
+    Drives the publish step the proxy runs at startup, with the global-setter
+    injected so no real global OTel state is mutated. Guards the wiring that a unit
+    test would otherwise miss: that the published provider is the selected logger's,
+    not some other.
+    """
+    from litellm.integrations.otel.logger import publish_global_otel_v2_provider
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    published = []
+    chosen = publish_global_otel_v2_provider(
+        [object(), preset_logger], published.append
+    )
+
+    assert chosen is preset_logger
+    assert published == [preset_logger._tracer_provider]
+
+
 def test_registers_into_litellm_service_callback(monkeypatch):
     """The logger must mutate ``litellm.service_callback`` in place. An empty
     list is falsy, so a ``getattr(..) or []`` would append to a throwaway local

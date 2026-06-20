@@ -4,7 +4,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm.integrations.arize.arize import ArizeLogger as _V1ArizeLogger
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -34,6 +38,7 @@ def arize_preset(
                     kind=arize_cfg.protocol or "otlp_grpc",
                     endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
                     headers=headers,
+                    owner=ExporterOwner.ARIZE_AX,
                 ),
             ],
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),

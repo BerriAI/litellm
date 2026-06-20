@@ -74,6 +74,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in Vertex AI RAG corpus.
@@ -88,6 +89,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             content_type: MIME type
             chunks: Ignored - Vertex AI handles chunking
             embeddings: Ignored - Vertex AI handles embedding
+            existing_file_id: Existing provider file ID, unsupported for Vertex AI
 
         Returns:
             Tuple of (rag_corpus_id, file_id)

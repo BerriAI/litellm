@@ -3439,6 +3439,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    PINSTRIPES = "pinstripes"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3482,6 +3483,7 @@ class SearchProviders(str, Enum):
     SERPER = "serper"
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
+    TINYFISH = "tinyfish"
 
 
 # Create a set of all search provider values for quick lookup

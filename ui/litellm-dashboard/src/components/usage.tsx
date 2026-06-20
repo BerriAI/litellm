@@ -547,7 +547,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
             Please follow our guide to view usage when SpendLogs has more than 1M rows.
           </Text>
           <Button className="mt-4">
-            <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
+            <a href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">
               View Usage Guide
             </a>
           </Button>
