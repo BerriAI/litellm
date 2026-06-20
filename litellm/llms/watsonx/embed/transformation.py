@@ -43,10 +43,14 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
             api_params=watsonx_api_params,
         )
 
-        if isinstance(input, list) and (len(input) > 0 and (isinstance(input[0], list) or isinstance(input[0], int))):
+        if isinstance(input, list) and (
+            len(input) > 0 and (isinstance(input[0], list) or isinstance(input[0], int))
+        ):
             raise ValueError("WatsonX embeddings require a string or list of strings")
 
-        inputs: List[str] = cast(List[str], input) if isinstance(input, list) else [input]
+        inputs: List[str] = (
+            cast(List[str], input) if isinstance(input, list) else [input]
+        )
 
         return {
             "inputs": inputs,
@@ -71,7 +75,9 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         url = url.rstrip("/") + endpoint
 
         ## add api version
-        url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))
+        url = self._add_api_version_to_url(
+            url=url, api_version=optional_params.pop("api_version", None)
+        )
         return url
 
     def transform_embedding_response(
