@@ -308,6 +308,13 @@ def _get_credential_provider_from_connect_func(
     if redis_connect_func is None:
         return None
     connect_func_attrs = getattr(redis_connect_func, "__dict__", {})
+    if (
+        "_gcp_service_account" in connect_func_attrs
+        and "_azure_credential" in connect_func_attrs
+    ):
+        raise ValueError(
+            "redis_connect_func cannot define both GCP and Azure credentials"
+        )
     if "_gcp_service_account" in connect_func_attrs:
         return GCPIAMCredentialProvider(redis_connect_func._gcp_service_account)
     if "_azure_credential" in connect_func_attrs:

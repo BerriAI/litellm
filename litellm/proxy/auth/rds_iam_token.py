@@ -1,15 +1,18 @@
 import os
+import importlib
 from typing import Any, Optional, Union
 
 import httpx
 
 
-def _get_env_secret(
-    secret_name: str, default_value: Optional[str] = None
-) -> Optional[str]:
-    if secret_name.startswith("os.environ/"):
-        secret_name = secret_name.replace("os.environ/", "", 1)
-    return os.getenv(secret_name, default_value)
+def _get_secret(secret_name: str, default_value: Optional[str] = None) -> Optional[str]:
+    env_key = secret_name.replace("os.environ/", "", 1)
+    env_value = os.getenv(env_key)
+    if env_value is not None:
+        return env_value
+
+    litellm_module = importlib.import_module("litellm")
+    return litellm_module.get_secret(secret_name, default_value=default_value)
 
 
 def init_rds_client(
@@ -23,8 +26,8 @@ def init_rds_client(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
-    litellm_aws_region_name = _get_env_secret("AWS_REGION_NAME", None)
-    standard_aws_region_name = _get_env_secret("AWS_REGION", None)
+    litellm_aws_region_name = _get_secret("AWS_REGION_NAME", None)
+    standard_aws_region_name = _get_secret("AWS_REGION", None)
     ## CHECK IS  'os.environ/' passed in
     # Define the list of parameters to check
     params_to_check = [
@@ -40,7 +43,7 @@ def init_rds_client(
     # Iterate over parameters and update if needed
     for i, param in enumerate(params_to_check):
         if param and param.startswith("os.environ/"):
-            params_to_check[i] = _get_env_secret(param)
+            params_to_check[i] = _get_secret(param)
     # Assign updated values back to parameters
     (
         aws_access_key_id,
@@ -81,7 +84,7 @@ def init_rds_client(
         try:
             oidc_token = open(aws_web_identity_token).read()  # check if filepath
         except Exception:
-            oidc_token = _get_env_secret(aws_web_identity_token)
+            oidc_token = _get_secret(aws_web_identity_token)
 
         if oidc_token is None:
             raise Exception(

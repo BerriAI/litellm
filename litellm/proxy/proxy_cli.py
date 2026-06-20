@@ -1007,6 +1007,7 @@ def run_server(
             or get_secret_bool("IAM_TOKEN_DB_AUTH")
         ):
             from litellm.proxy.db.prisma_client import (
+                AZURE_POSTGRESQL_AUTH_MARKER_ENV,
                 build_database_token_auth_url,
                 get_database_auth_endpoint_from_env,
             )
@@ -1017,6 +1018,8 @@ def run_server(
             )
             os.environ["DATABASE_URL"] = _db_url
             os.environ["IAM_TOKEN_DB_AUTH"] = "True"
+            if azure_postgresql_auth:
+                os.environ[AZURE_POSTGRESQL_AUTH_MARKER_ENV] = "True"
 
         ### DECRYPT ENV VAR ###
 

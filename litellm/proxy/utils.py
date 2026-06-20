@@ -129,9 +129,9 @@ from litellm.proxy.db.exception_handler import (
 )
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import (
+    AZURE_POSTGRESQL_AUTH_MARKER_ENV,
     PrismaWrapper,
     build_database_token_auth_url,
-    is_azure_postgresql_auth_url,
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
@@ -2792,8 +2792,8 @@ class PrismaClient:
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
-        azure_postgresql_auth = is_azure_postgresql_auth_url(
-            os.getenv("DATABASE_URL") or database_url
+        azure_postgresql_auth = (
+            str_to_bool(os.getenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV)) is True
         )
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:

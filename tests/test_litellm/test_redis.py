@@ -6,6 +6,7 @@ import redis
 import redis.asyncio as async_redis
 
 from litellm._redis import (
+    _get_credential_provider_from_connect_func,
     _get_redis_cluster_kwargs,
     get_redis_async_client,
     get_redis_client,
@@ -419,6 +420,15 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     assert (
         "password" not in cluster_call_kwargs
     ), "async GCP cluster must not use a static password (expires after 1h)"
+
+
+def test_redis_connect_func_rejects_mixed_credential_markers():
+    mock_connect_func = MagicMock()
+    mock_connect_func._gcp_service_account = "service-account"
+    mock_connect_func._azure_credential = MagicMock()
+
+    with pytest.raises(ValueError, match="both GCP and Azure"):
+        _get_credential_provider_from_connect_func(mock_connect_func, {})
 
 
 def test_sync_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):

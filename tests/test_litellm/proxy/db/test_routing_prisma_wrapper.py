@@ -864,25 +864,43 @@ def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
     assert wrapper._parse_token_expiration(token) == datetime.utcfromtimestamp(exp)
 
 
-def test_azure_postgres_auth_url_detects_jwt_token():
+def test_prisma_client_uses_azure_marker_not_jwt_shape(monkeypatch):
     import urllib.parse
 
-    from litellm.proxy.db.prisma_client import is_azure_postgresql_auth_url
+    from litellm.proxy.db.prisma_client import (
+        AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+        PrismaWrapper,
+    )
 
     token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE4OTM0NTYwMDB9.signature"
-    azure_url = (
+    jwt_url = (
         "postgresql://managed-identity:"
         f"{urllib.parse.quote(token, safe='')}@server.postgres.database.azure.com:5432/litellm"
     )
-    rds_token = "mock-token?X-Amz-Date=20240101T120000Z&X-Amz-Expires=900"
-    rds_url = (
-        "postgresql://iam_user:"
-        f"{urllib.parse.quote(rds_token, safe='')}@rds.amazonaws.com:5432/litellm"
-    )
 
-    assert is_azure_postgresql_auth_url(azure_url) is True
-    assert is_azure_postgresql_auth_url(rds_url) is False
-    assert is_azure_postgresql_auth_url(None) is False
+    class FakePrisma:
+        async def connect(self):
+            return None
+
+    fake_module = MagicMock()
+    fake_module.Prisma = FakePrisma
+    monkeypatch.setitem(sys.modules, "prisma", fake_module)
+    monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+    monkeypatch.delenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV, raising=False)
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient(database_url=jwt_url, proxy_logging_obj=MagicMock())
+    assert isinstance(client.db, PrismaWrapper)
+    assert client.db.iam_token_db_auth is False
+    assert client.db._azure_postgresql_auth is False
+
+    monkeypatch.setenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV, "True")
+    client = PrismaClient(database_url=jwt_url, proxy_logging_obj=MagicMock())
+    assert isinstance(client.db, PrismaWrapper)
+    assert client.db.iam_token_db_auth is True
+    assert client.db._azure_postgresql_auth is True
 
 
 @pytest.mark.asyncio
