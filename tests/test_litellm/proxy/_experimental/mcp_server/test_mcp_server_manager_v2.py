@@ -159,3 +159,30 @@ async def test_v2_override_gets_prompt_via_upstream_connection(echo_server_url):
     )
     result = await manager.get_prompt_from_server(server, "greeting", {"name": "Tin"})
     assert result.messages
+
+
+@pytest.mark.asyncio
+async def test_v2_override_calls_tool_via_upstream_connection(echo_server_url):
+    # Tool-call path: the factored _open_and_call_tool seam routes through resolve() +
+    # UpstreamConnection.call_tool (v2) for the none mode, returning the upstream CallToolResult.
+    manager = MCPServerManagerV2()
+    server = MCPServer(
+        server_id="echo1",
+        name="echo1",
+        transport=MCPTransport.http,
+        url=echo_server_url,
+        auth_type=MCPAuth.none,
+    )
+    result = await manager._open_and_call_tool(
+        server,
+        "echo",
+        {"text": "hi"},
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        hook_extra_headers=None,
+        host_progress_callback=None,
+        user_api_key_auth=None,
+    )
+    assert any("echo: hi" in getattr(c, "text", "") for c in result.content)

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     )
     from mcp import ReadResourceResult, Resource
     from mcp.shared.message import SessionMessage
+    from mcp.shared.session import ProgressFnT
     from mcp.types import CallToolResult, GetPromptResult, Prompt
     from mcp.types import Tool as MCPTool
     from pydantic import AnyUrl
@@ -193,10 +194,15 @@ class UpstreamConnection:
         return await self._run(op)
 
     async def call_tool(
-        self, name: str, arguments: Dict[str, object]
+        self,
+        name: str,
+        arguments: Dict[str, object],
+        progress_callback: Optional[ProgressFnT] = None,
     ) -> Result[CallToolResult, ConnError]:
         async def op(session: ClientSession) -> CallToolResult:
-            return await session.call_tool(name, arguments)
+            return await session.call_tool(
+                name, arguments, progress_callback=progress_callback
+            )
 
         return await self._run(op)
 

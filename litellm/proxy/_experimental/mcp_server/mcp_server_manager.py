@@ -3426,6 +3426,77 @@ class MCPServerManager:
             GuardrailRaisedException: If guardrails block the call
             HTTPException: If an HTTP error occurs
         """
+        tasks.append(
+            asyncio.create_task(
+                self._open_and_call_tool(
+                    mcp_server,
+                    original_tool_name,
+                    arguments,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    hook_extra_headers=hook_extra_headers,
+                    host_progress_callback=host_progress_callback,
+                    user_api_key_auth=user_api_key_auth,
+                )
+            )
+        )
+
+        _timeout = (
+            mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
+        )
+        try:
+            mcp_responses = await asyncio.wait_for(
+                asyncio.gather(*tasks), timeout=_timeout
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "error": "timeout",
+                    "message": f"MCP tool call timed out after {_timeout}s",
+                },
+            )
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            verbose_logger.error(
+                f"Guardrail blocked MCP tool call during result check: {str(e)}"
+            )
+            raise e
+
+        # If proxy_logging_obj is None, the tool call result is at index 0
+        # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+        result_index = 1 if proxy_logging_obj else 0
+        result = mcp_responses[result_index]
+
+        return cast(CallToolResult, result)
+
+    async def _open_and_call_tool(
+        self,
+        mcp_server: MCPServer,
+        original_tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        hook_extra_headers: Optional[Dict[str, str]],
+        host_progress_callback: Optional["ProgressFnT"],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> CallToolResult:
+        """Open the upstream connection and invoke one tool, returning its result.
+
+        The transport seam factored out of _call_regular_mcp_tool so v2 can override only the
+        connect-and-call step (resolve() + UpstreamConnection) while inheriting the
+        guardrail/hook, gather, timeout, and result-extraction tail. This v1 implementation
+        builds the outbound headers, creates the MCPClient, calls the tool, and caches the
+        upstream's initialize instructions.
+        """
         # Get server-specific auth header if available (case-insensitive)
         # FIX: Added case-insensitive matching to handle auth header keys that may not match
         # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
@@ -3538,44 +3609,9 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        async def _call_tool_via_client(client, params):
-            return await client.call_tool(
-                params, host_progress_callback=host_progress_callback
-            )
-
-        tasks.append(
-            asyncio.create_task(_call_tool_via_client(client, call_tool_params))
+        result = await client.call_tool(
+            call_tool_params, host_progress_callback=host_progress_callback
         )
-
-        _timeout = (
-            mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
-        )
-        try:
-            mcp_responses = await asyncio.wait_for(
-                asyncio.gather(*tasks), timeout=_timeout
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=504,
-                detail={
-                    "error": "timeout",
-                    "message": f"MCP tool call timed out after {_timeout}s",
-                },
-            )
-        except (
-            BlockedPiiEntityError,
-            GuardrailRaisedException,
-            HTTPException,
-        ) as e:
-            verbose_logger.error(
-                f"Guardrail blocked MCP tool call during result check: {str(e)}"
-            )
-            raise e
-
-        # If proxy_logging_obj is None, the tool call result is at index 0
-        # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
-        result_index = 1 if proxy_logging_obj else 0
-        result = mcp_responses[result_index]
         self._remember_upstream_initialize_instructions(mcp_server, client)
 
         return cast(CallToolResult, result)
@@ -4538,6 +4574,8 @@ def _make_global_mcp_server_manager() -> MCPServerManager:
 _global_mcp_server_manager: Optional[MCPServerManager] = None
 
 if TYPE_CHECKING:
+    from mcp.shared.session import ProgressFnT
+
     global_mcp_server_manager: MCPServerManager
 
 

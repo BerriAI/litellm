@@ -27,7 +27,14 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerM
 from litellm.proxy._types import MCPTransport
 
 if TYPE_CHECKING:
-    from mcp.types import GetPromptResult, Prompt, ReadResourceResult, Resource
+    from mcp.shared.session import ProgressFnT
+    from mcp.types import (
+        CallToolResult,
+        GetPromptResult,
+        Prompt,
+        ReadResourceResult,
+        Resource,
+    )
     from mcp.types import Tool as MCPTool
     from pydantic import AnyUrl
 
@@ -82,6 +89,8 @@ class MCPServerManagerV2(MCPServerManager):
         raw_headers: Optional[Dict[str, str]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         subject_token: Optional[str] = None,
+        forward_caller_headers: bool = False,
+        raise_on_missing_env: bool = False,
     ) -> Result[UpstreamConnection, CredError]:
         """The shared egress seam: resolve auth via resolve() and build the UpstreamConnection.
 
@@ -106,10 +115,14 @@ class MCPServerManagerV2(MCPServerManager):
         )
         if isinstance(auth, Error):
             return Error(auth.error)
-        resolved_static = await self._resolve_static_headers_with_env_vars(
-            server, user_api_key_auth, raise_on_missing=False
+        egress = await self._build_egress_headers(
+            server,
+            user_api_key_auth,
+            raw_headers,
+            forward_caller_headers=forward_caller_headers,
+            raise_on_missing_env=raise_on_missing_env,
         )
-        headers = {**(extra_headers or {}), **(resolved_static or {})} or None
+        headers = {**(extra_headers or {}), **egress} or None
         is_stdio = server.transport == MCPTransport.stdio
         return Ok(
             UpstreamConnection(
@@ -122,6 +135,53 @@ class MCPServerManagerV2(MCPServerManager):
                 env=self._build_stdio_env(server, raw_headers) if is_stdio else None,
             )
         )
+
+    async def _build_egress_headers(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        raw_headers: Optional[Dict[str, str]],
+        *,
+        forward_caller_headers: bool,
+        raise_on_missing_env: bool,
+    ) -> Dict[str, str]:
+        """The non-credential egress headers: configured static headers (with per-user env-var
+        interpolation) plus, on the call path, the caller headers the server forwards upstream.
+
+        The credential (Authorization) is resolve()'s, never this dict. raise_on_missing_env
+        propagates MCPMissingUserEnvVarsError (412 + setup URL) on the call path; list ops degrade.
+        forward_caller_headers gates caller-header forwarding (call only; list/prompts/resources do
+        not forward, matching v1).
+        """
+        static = await self._resolve_static_headers_with_env_vars(
+            server, user_api_key_auth, raise_on_missing=raise_on_missing_env
+        )
+        forwarded = (
+            self._forwarded_request_headers(server, raw_headers)
+            if forward_caller_headers
+            else {}
+        )
+        return {**forwarded, **(static or {})}
+
+    @staticmethod
+    def _forwarded_request_headers(
+        server: MCPServer,
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Dict[str, str]:
+        """Caller request headers the server is configured to forward (server.extra_headers pulled
+        from raw_headers). Authorization is always stripped: the upstream credential is resolve()'s,
+        so the forwarder never ships inbound auth upstream (the credential-isolation invariant; the
+        passthrough/override paths that would forward an inbound token defer to v1).
+        """
+        if not server.extra_headers or not raw_headers:
+            return {}
+        normalized = {k.lower(): v for k, v in raw_headers.items()}
+        return {
+            header: normalized[header.lower()]
+            for header in server.extra_headers
+            if header.lower() != "authorization"
+            and normalized.get(header.lower()) is not None
+        }
 
     async def _get_tools_from_server(
         self,
@@ -264,6 +324,69 @@ class MCPServerManagerV2(MCPServerManager):
         result = await conn.ok.get_prompt(prompt_name, str_args)
         if isinstance(result, Error):
             self._egress_item_failure(server, result.error)
+        return result.ok
+
+    async def _open_and_call_tool(
+        self,
+        mcp_server: MCPServer,
+        original_tool_name: str,
+        arguments: Dict[str, object],
+        *,
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        hook_extra_headers: Optional[Dict[str, str]],
+        host_progress_callback: Optional[ProgressFnT],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> CallToolResult:
+        from litellm.proxy.gateway.mcp.result import Error
+
+        # The effective inbound credential is the per-server header if present, else the deprecated
+        # mcp_auth_header (matches v1); an override here means the request defers to v1.
+        server_auth_header: Optional[Union[str, Dict[str, str]]] = mcp_auth_header
+        if mcp_server_auth_headers:
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
+
+            found = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=mcp_server.alias,
+                server_name=mcp_server.server_name,
+            )
+            if found is not None:
+                server_auth_header = found
+
+        # Defer to v1 for guardrail-injected headers (JWT signer etc.), which the v2 path does not
+        # apply, in addition to the usual _should_defer cases (unmapped mode, OpenAPI, override).
+        if hook_extra_headers or self._should_defer(mcp_server, server_auth_header):
+            return await super()._open_and_call_tool(
+                mcp_server,
+                original_tool_name,
+                arguments,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                hook_extra_headers=hook_extra_headers,
+                host_progress_callback=host_progress_callback,
+                user_api_key_auth=user_api_key_auth,
+            )
+        conn = await self._v2_connection(
+            mcp_server,
+            user_api_key_auth,
+            raw_headers=raw_headers,
+            forward_caller_headers=True,
+            raise_on_missing_env=True,
+        )
+        if isinstance(conn, Error):
+            self._egress_item_failure(mcp_server, conn.error)
+        result = await conn.ok.call_tool(
+            original_tool_name, arguments, host_progress_callback
+        )
+        if isinstance(result, Error):
+            self._egress_item_failure(mcp_server, result.error)
         return result.ok
 
     def _egress_list_failure(
