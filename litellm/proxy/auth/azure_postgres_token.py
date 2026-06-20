@@ -2,7 +2,6 @@ import os
 from typing import Any, Optional
 from urllib.parse import quote
 
-
 AZURE_POSTGRES_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
 
 
