@@ -16,6 +16,152 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 
 
+def _sse(event: str, data: Dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def build_content_block_chunks(block_dict: Dict[str, Any], index: int) -> List[bytes]:
+    """Build the SSE chunks for a single content block (start, optional deltas,
+    stop). Shared by the fake iterator and the advisor streaming orchestrator."""
+    chunks: List[bytes] = []
+    block_type = block_dict.get("type")
+
+    if block_type == "text":
+        chunks.append(
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            )
+        )
+        chunks.append(
+            _sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "text_delta",
+                        "text": block_dict.get("text", ""),
+                    },
+                },
+            )
+        )
+
+    elif block_type == "thinking":
+        chunks.append(
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "thinking",
+                        "thinking": "",
+                        "signature": "",
+                    },
+                },
+            )
+        )
+        thinking_text = block_dict.get("thinking", "")
+        if thinking_text:
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": thinking_text,
+                        },
+                    },
+                )
+            )
+        signature = block_dict.get("signature", "")
+        if signature:
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {"type": "signature_delta", "signature": signature},
+                    },
+                )
+            )
+
+    elif block_type == "redacted_thinking":
+        chunks.append(
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {"type": "redacted_thinking"},
+                },
+            )
+        )
+
+    elif block_type in ("tool_use", "server_tool_use"):
+        chunks.append(
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": block_type,
+                        "id": block_dict.get("id"),
+                        "name": block_dict.get("name"),
+                        "input": {},
+                    },
+                },
+            )
+        )
+        chunks.append(
+            _sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(block_dict.get("input", {})),
+                    },
+                },
+            )
+        )
+
+    elif block_type == "advisor_tool_result":
+        chunks.append(
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "advisor_tool_result",
+                        "tool_use_id": block_dict.get("tool_use_id"),
+                        "content": block_dict.get("content"),
+                    },
+                },
+            )
+        )
+
+    if chunks:
+        chunks.append(
+            _sse(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": index},
+            )
+        )
+    return chunks
+
+
 class FakeAnthropicMessagesStreamIterator:
     """
     Fake streaming iterator for Anthropic Messages responses.
@@ -41,101 +187,7 @@ class FakeAnthropicMessagesStreamIterator:
     def _create_content_block_chunks(
         self, block_dict: Dict[str, Any], index: int
     ) -> List[bytes]:
-        """Build SSE chunks for a single content block."""
-        chunks = []
-        block_type = block_dict.get("type")
-
-        if block_type == "text":
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {"type": "text", "text": ""},
-            }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
-            text = block_dict.get("text", "")
-            content_block_delta = {
-                "type": "content_block_delta",
-                "index": index,
-                "delta": {"type": "text_delta", "text": text},
-            }
-            chunks.append(
-                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-            )
-
-        elif block_type == "thinking":
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
-            }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
-            thinking_text = block_dict.get("thinking", "")
-            if thinking_text:
-                content_block_delta = {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "thinking_delta", "thinking": thinking_text},
-                }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                )
-            signature = block_dict.get("signature", "")
-            if signature:
-                signature_delta = {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "signature_delta", "signature": signature},
-                }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode()
-                )
-
-        elif block_type == "redacted_thinking":
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {"type": "redacted_thinking"},
-            }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
-
-        elif block_type == "tool_use":
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": block_dict.get("id"),
-                    "name": block_dict.get("name"),
-                    "input": {},
-                },
-            }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
-            input_data = block_dict.get("input", {})
-            content_block_delta = {
-                "type": "content_block_delta",
-                "index": index,
-                "delta": {
-                    "type": "input_json_delta",
-                    "partial_json": json.dumps(input_data),
-                },
-            }
-            chunks.append(
-                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-            )
-
-        content_block_stop = {"type": "content_block_stop", "index": index}
-        chunks.append(
-            f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-        )
-        return chunks
+        return build_content_block_chunks(block_dict, index)
 
     def _create_streaming_chunks(self) -> List[bytes]:
         """Convert the non-streaming response to streaming chunks"""

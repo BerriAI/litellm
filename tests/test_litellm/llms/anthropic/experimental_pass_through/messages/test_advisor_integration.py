@@ -8,8 +8,9 @@ The only thing mocked is _call_messages_handler (the outbound LLM call), so the
 interceptor detection, loop logic, and message assembly all run for real.
 """
 
+import json
 from typing import Dict
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -113,7 +114,30 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
     assert len(text_blocks) >= 1, "Final response must have text"
     assert (
         len(advisor_uses) == 0
-    ), "No advisor tool_use blocks must appear in final output"
+    ), "No raw tool_use advisor blocks must appear in final output"
+
+    # The advisor exchange must surface as native server-side advisor blocks so
+    # clients (e.g. Claude Code) render the advisor activity. Pre-fix the loop
+    # flattened these away and the final content had no advisor blocks at all.
+    server_tool_uses = [
+        b
+        for b in content
+        if b.get("type") == "server_tool_use" and b.get("name") == "advisor"
+    ]
+    advisor_results = [b for b in content if b.get("type") == "advisor_tool_result"]
+    assert len(server_tool_uses) == 1, "advisor call must surface as server_tool_use"
+    assert (
+        len(advisor_results) == 1
+    ), "advisor reply must surface as advisor_tool_result"
+
+    call_block, result_block = server_tool_uses[0], advisor_results[0]
+    assert call_block["id"] == "tid_01"
+    assert call_block["input"] == {}
+    assert result_block["tool_use_id"] == call_block["id"]
+    assert result_block["content"] == {
+        "type": "advisor_result",
+        "text": "Use trial division.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +388,630 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
     assert captured["thinking"] == {"type": "enabled", "budget_tokens": 2048}
     assert captured["system"] == "Hook overrode the system prompt."
     assert captured["temperature"] == 0.1
+
+
+# ---------------------------------------------------------------------------
+# 6. Router routing: sub-calls go through the proxy router when available
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_handler_routes_through_router():
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _call_messages_handler,
+    )
+
+    expected = _text_resp("Router response.")
+    mock_router = MagicMock()
+    mock_router.anthropic_messages = AsyncMock(return_value=expected)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        result = await _call_messages_handler(
+            model="claude-opus-4-7",
+            messages=MESSAGES,
+            tools=None,
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider=None,
+        )
+
+    mock_router.anthropic_messages.assert_called_once_with(
+        model="claude-opus-4-7",
+        messages=MESSAGES,
+        tools=None,
+        stream=False,
+        max_tokens=512,
+    )
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_call_handler_falls_back_without_router():
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _call_messages_handler,
+    )
+
+    expected = _text_resp("Direct response.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages",
+            new_callable=AsyncMock,
+            return_value=expected,
+        ) as mock_direct,
+    ):
+        result = await _call_messages_handler(
+            model="claude-opus-4-7",
+            messages=MESSAGES,
+            tools=None,
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="anthropic",
+        )
+
+    mock_direct.assert_called_once_with(
+        model="claude-opus-4-7",
+        messages=MESSAGES,
+        tools=None,
+        stream=False,
+        max_tokens=512,
+        custom_llm_provider="anthropic",
+    )
+    assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# 7. Advisor sub-call does not pass None api_key/api_base to the router
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_omits_none_credentials():
+    """When the advisor tool definition has no api_key/api_base, those keys
+    must not appear in the kwargs passed to _call_messages_handler. Otherwise
+    None would override the router's deployment credentials during merging."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    captured_advisor_kwargs: Dict = {}
+    call_count = 0
+
+    mock_router = MagicMock()
+
+    async def mock_router_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            captured_advisor_kwargs.update(kwargs)
+            return _text_resp("Advice.", model="claude-opus-4-7")
+        return _text_resp("Final answer.")
+
+    mock_router.anthropic_messages = AsyncMock(side_effect=mock_router_call)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert "api_key" not in captured_advisor_kwargs
+    assert "api_base" not in captured_advisor_kwargs
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_forwards_explicit_credentials():
+    """When the advisor tool definition includes api_key/api_base, those
+    values must be forwarded to the router call so they override deployment
+    credentials."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    advisor_tool_with_creds = {
+        **ADVISOR_TOOL,
+        "api_key": "sk-explicit-override",
+        "api_base": "https://custom.endpoint.com",
+    }
+
+    captured_advisor_kwargs: Dict = {}
+    call_count = 0
+
+    mock_router = MagicMock()
+
+    async def mock_router_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            captured_advisor_kwargs.update(kwargs)
+            return _text_resp("Advice.", model="claude-opus-4-7")
+        return _text_resp("Final answer.")
+
+    mock_router.anthropic_messages = AsyncMock(side_effect=mock_router_call)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[advisor_tool_with_creds],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert captured_advisor_kwargs["api_key"] == "sk-explicit-override"
+    assert captured_advisor_kwargs["api_base"] == "https://custom.endpoint.com"
+
+
+# ---------------------------------------------------------------------------
+# 6. Advisor sub-call carries the caller's budget/auth context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_forwards_litellm_metadata_but_not_executor_params():
+    """The advisor leg must carry the caller's litellm_metadata (the proxy's
+    user_api_key/team/budget/session context) so its spend is attributed to the
+    caller's key and grouped under the session. It must NOT inherit the executor's
+    generation params (system prompt, tool_choice, sampling): feeding the advisor
+    the executor's agent system prompt makes it mimic the executor and echo the
+    advisor call instead of answering.
+
+    Two regressions guarded: (1) dropping litellm_metadata left the advisor's cost
+    unattributed; (2) forwarding the whole executor kwargs leaked the system
+    prompt / tool_choice into the advisor and broke its answers."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    sentinel_metadata = {
+        "user_api_key": "sk-caller-key",
+        "user_api_key_team_id": "team-42",
+        "litellm_session_id": "sess-abc",
+    }
+    executor_system = "You are the coding agent. Consult your advisor when stuck."
+    captured_executor_kwargs: Dict = {}
+    captured_advisor_kwargs: Dict = {}
+    call_count = 0
+
+    mock_router = MagicMock()
+
+    async def mock_router_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            captured_executor_kwargs.update(kwargs)
+            return _advisor_call_resp()
+        if call_count == 2:
+            captured_advisor_kwargs.update(kwargs)
+            return _text_resp("Advice.", model="claude-opus-4-6")
+        return _text_resp("Final answer.")
+
+    mock_router.anthropic_messages = AsyncMock(side_effect=mock_router_call)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+            system=executor_system,
+            tool_choice={"type": "auto"},
+            litellm_metadata=sentinel_metadata,
+        )
+
+    # Budget context reaches both legs.
+    assert captured_executor_kwargs.get("litellm_metadata") == sentinel_metadata
+    assert captured_advisor_kwargs.get("litellm_metadata") == sentinel_metadata
+
+    # The executor keeps its own system prompt. The advisor gets the dedicated
+    # advisor role prompt — NOT the executor's leaked one — and never the
+    # executor's tool_choice; otherwise it mimics the executor and echoes the call.
+    from litellm.constants import ADVISOR_SYSTEM_PROMPT
+
+    assert captured_executor_kwargs.get("system") == executor_system
+    assert captured_advisor_kwargs.get("system") == ADVISOR_SYSTEM_PROMPT
+    assert captured_advisor_kwargs.get("system") != executor_system
+    assert "tool_choice" not in captured_advisor_kwargs
+
+
+# ---------------------------------------------------------------------------
+# 9. Round-trip: the advisor blocks we emit are consumable on the next turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emitted_advisor_blocks_round_trip_through_strip():
+    """The server_tool_use / advisor_tool_result blocks we surface must be the
+    exact shape strip_advisor_blocks_from_messages recognizes, so when the client
+    echoes them back in history the next turn folds them into an <advisor_feedback>
+    text block for the executor rather than 400-ing on a dangling advisor block."""
+    from litellm.llms.anthropic.common_utils import (
+        strip_advisor_blocks_from_messages,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            return _text_resp("Prefer a sieve.", model="claude-opus-4-6")
+        return _text_resp("Done.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    history = [{"role": "assistant", "content": result["content"]}]
+    stripped = strip_advisor_blocks_from_messages(history, replace_with_text=True)
+
+    blocks = stripped[0]["content"]
+    assert not any(b.get("type") == "server_tool_use" for b in blocks)
+    assert not any(b.get("type") == "advisor_tool_result" for b in blocks)
+    feedback = [
+        b
+        for b in blocks
+        if b.get("type") == "text" and "<advisor_feedback>" in b.get("text", "")
+    ]
+    assert len(feedback) == 1
+    assert "Prefer a sieve." in feedback[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# 10. Streaming surfaces the advisor as in-progress, then done
+# ---------------------------------------------------------------------------
+
+
+def _block_type_from_start_event(raw: bytes):
+    text = raw.decode()
+    if "event: content_block_start" not in text:
+        return None
+    payload = json.loads(text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    return payload["content_block"]["type"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_flushes_advisor_call_before_running_advisor():
+    """The live advisor UX (running -> done) depends on the server_tool_use block
+    reaching the client BEFORE the advisor sub-call runs, and the advisor_tool_result
+    reaching it AFTER. A burst-at-end implementation runs the whole loop first and
+    emits everything at once, so the advisor never renders as in-progress.
+
+    We interleave call markers and emitted-block markers in one list: the
+    server_tool_use must be emitted before the advisor leg is invoked, and the
+    result after."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    events = []
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            events.append("advisor_leg_invoked")
+            return _text_resp("Advice text.", model="claude-opus-4-6")
+        return _text_resp("Final answer.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+        assert hasattr(result, "__aiter__"), "streaming must return an async iterator"
+
+        async for raw in result:
+            block_type = _block_type_from_start_event(raw)
+            if block_type in ("server_tool_use", "advisor_tool_result"):
+                events.append(f"emit:{block_type}")
+
+    assert "emit:server_tool_use" in events
+    assert "emit:advisor_tool_result" in events
+    assert events.index("emit:server_tool_use") < events.index(
+        "advisor_leg_invoked"
+    ), "advisor call block must be flushed before the advisor sub-call runs"
+    assert events.index("advisor_leg_invoked") < events.index(
+        "emit:advisor_tool_result"
+    ), "advisor result must be emitted after the advisor sub-call returns"
+
+
+# ---------------------------------------------------------------------------
+# 11. Advisor token usage is attributed to the advisor model via usage.iterations[]
+# ---------------------------------------------------------------------------
+
+
+def _advisor_iterations(usage):
+    return [
+        it
+        for it in (usage or {}).get("iterations", [])
+        if it.get("type") == "advisor_message"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_reports_advisor_usage_in_iterations():
+    """Without usage.iterations[], a client folds all spend into the executor
+    model and the advisor's cost disappears. The final response must carry an
+    advisor_message iteration tagged with the advisor model and its token counts,
+    and the last iteration must be the executor turn so the context-window readout
+    stays correct."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            resp = _text_resp("Use a sieve.", model="claude-opus-4-6")
+            resp["usage"] = {"input_tokens": 1234, "output_tokens": 56}
+            return resp
+        return _text_resp("def is_prime(n): ...")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    iterations = result["usage"]["iterations"]
+    advisor_iters = _advisor_iterations(result["usage"])
+    assert len(advisor_iters) == 1
+    entry = advisor_iters[0]
+    assert entry["model"] == "claude-opus-4-6"
+    assert entry["input_tokens"] == 1234
+    assert entry["output_tokens"] == 56
+    assert iterations[-1]["type"] != "advisor_message"
+
+
+@pytest.mark.asyncio
+async def test_streaming_reports_advisor_usage_in_message_delta():
+    """The streamed message_delta must carry usage.iterations[] with the advisor
+    leg, since clients read per-model usage from there."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            resp = _text_resp("Use a sieve.", model="claude-opus-4-6")
+            resp["usage"] = {"input_tokens": 1234, "output_tokens": 56}
+            return resp
+        return _text_resp("Final answer.")
+
+    delta_usage = None
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+        async for raw in result:
+            text = raw.decode()
+            if "event: message_delta" in text:
+                delta_usage = json.loads(
+                    text.split("data: ", 1)[1].split("\n\n", 1)[0]
+                )["usage"]
+
+    assert delta_usage is not None
+    advisor_iters = _advisor_iterations(delta_usage)
+    assert len(advisor_iters) == 1
+    assert advisor_iters[0]["model"] == "claude-opus-4-6"
+    assert advisor_iters[0]["input_tokens"] == 1234
+    assert advisor_iters[0]["output_tokens"] == 56
+
+
+# ---------------------------------------------------------------------------
+# 12. Advisor model access is validated against the caller's API key
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_model_access_denied_raises():
+    """When the proxy router is available and can_key_call_model rejects the
+    advisor model, the exception must propagate before any sub-call runs."""
+    from litellm.proxy._types import ProxyException
+
+    mock_router = MagicMock()
+    mock_token = MagicMock()
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+            return_value=mock_router,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            side_effect=ProxyException(
+                message="key not allowed to call claude-opus-4-6",
+                type="key_model_access_denied",
+                param="model",
+                code=403,
+            ),
+        ),
+    ):
+        with pytest.raises(ProxyException, match="key not allowed"):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                anthropic_messages,
+            )
+
+            await anthropic_messages(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[ADVISOR_TOOL],
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+                litellm_metadata={"user_api_key_auth": mock_token},
+            )
+
+    mock_router.anthropic_messages.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_advisor_model_access_skipped_without_router():
+    """Without a proxy router (standalone SDK), the auth check is skipped and
+    the advisor loop runs normally."""
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            return _text_resp("Advice.", model="claude-opus-4-6")
+        return _text_resp("Done.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+            side_effect=mock_handler,
+        ),
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            anthropic_messages,
+        )
+
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# 13. Streaming message_start carries real input_tokens
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_message_start_has_real_input_tokens():
+    """message_start must carry the executor's input_tokens, not a placeholder
+    zero. Clients that read usage from message_start (per the Anthropic SSE
+    protocol) would otherwise show incorrect billing data."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            resp = _advisor_call_resp()
+            resp["usage"] = {"input_tokens": 777, "output_tokens": 15}
+            return resp
+        if call_count == 2:
+            return _text_resp("Advice.", model="claude-opus-4-6")
+        return _text_resp("Final.")
+
+    message_start_usage = None
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+        async for raw in result:
+            text = raw.decode()
+            if "event: message_start" in text:
+                payload = json.loads(
+                    text.split("data: ", 1)[1].split("\n\n", 1)[0]
+                )
+                message_start_usage = payload["message"]["usage"]
+
+    assert message_start_usage is not None
+    assert message_start_usage["input_tokens"] == 777
