@@ -302,24 +302,6 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _usage_has_server_side_web_search_calls(usage: Optional[Usage]) -> bool:
-        """True when usage.server_side_tool_usage_details.web_search_calls > 0."""
-        if usage is None:
-            return False
-        details = getattr(usage, "server_side_tool_usage_details", None)
-        if details is None:
-            return False
-        try:
-            web_search_calls = (
-                details.get("web_search_calls")
-                if isinstance(details, dict)
-                else getattr(details, "web_search_calls", None)
-            )
-            return int(web_search_calls or 0) > 0
-        except (TypeError, ValueError):
-            return False
-
-    @staticmethod
     def response_object_includes_web_search_call(
         response_object: Any, usage: Optional[Usage] = None
     ) -> bool:
@@ -331,11 +313,6 @@ class StandardBuiltInToolCostTracking:
         - ResponsesAPIResponse (streaming + non-streaming)
         """
         from litellm.types.utils import PromptTokensDetailsWrapper
-
-        if StandardBuiltInToolCostTracking._usage_has_server_side_web_search_calls(
-            usage
-        ):
-            return True
 
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
