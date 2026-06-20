@@ -62,7 +62,7 @@ except Exception:
 
 
 # aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
-# versions don't — detect once and skip the keep-alive wiring there.
+# versions don't â detect once and skip the keep-alive wiring there.
 # https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
 _AIOHTTP_SUPPORTS_SOCKET_FACTORY = (
     "socket_factory" in inspect.signature(TCPConnector.__init__).parameters
@@ -470,7 +470,7 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         # Mask the original exception message too (it contains the full URL)
         masked_original_message = mask_sensitive_info(str(original_error))
 
-        # Safely access response content — decompression can fail (e.g. zlib error).
+        # Safely access response content â decompression can fail (e.g. zlib error).
         # `.content` returns already-decoded bytes, so we must strip transport
         # encoding headers before rebuilding the Response (otherwise httpx will
         # try to decode the bytes a second time and raise DecodingError).
@@ -500,7 +500,7 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         super().__init__(
             message=masked_original_message,
             request=masked_request,
-            # Attach the masked request so `response.request` is set — otherwise
+            # Attach the masked request so `response.request` is set â otherwise
             # downstream code that inspects err.response.request (e.g.
             # exception_mapping_utils) hits `RuntimeError: .request not set`.
             response=httpx.Response(
@@ -649,7 +649,11 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.            )
+            new_client = self.create_client(
+                timeout=timeout,
+                event_hooks=self.event_hooks,
+                ssl_verify=self.ssl_verify,
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -710,7 +714,11 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.            )
+            new_client = self.create_client(
+                timeout=timeout,
+                event_hooks=self.event_hooks,
+                ssl_verify=self.ssl_verify,
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -769,7 +777,11 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.            )
+            new_client = self.create_client(
+                timeout=timeout,
+                event_hooks=self.event_hooks,
+                ssl_verify=self.ssl_verify,
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -828,7 +840,11 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.            )
+            new_client = self.create_client(
+                timeout=timeout,
+                event_hooks=self.event_hooks,
+                ssl_verify=self.ssl_verify,
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -1037,7 +1053,7 @@ class AsyncHTTPHandler:
                 AIOHTTP_CONNECTOR_LIMIT_PER_HOST
             )
         # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
-        # accept socket_factory — version detection lives inside the builder.
+        # accept socket_factory â version detection lives inside the builder.
         socket_factory = _build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             transport_connector_kwargs["socket_factory"] = socket_factory
@@ -1135,7 +1151,7 @@ class HTTPHandler:
     @staticmethod
     def extract_query_params(url: str) -> Dict[str, str]:
         """
-        Parse a URL’s query-string into a dict.
+        Parse a URLâs query-string into a dict.
 
         :param url: full URL, e.g. "https://.../path?foo=1&bar=2"
         :return: {"foo": "1", "bar": "2"}
