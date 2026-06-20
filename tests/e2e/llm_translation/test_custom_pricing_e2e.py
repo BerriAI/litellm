@@ -126,7 +126,7 @@ def _poll_breakdown_row(
         for row in priced:
             if response_id and row.request_id == response_id:
                 return row
-        if priced:
+        if priced and response_id is None:
             return priced[0]
         time.sleep(client.gateway.poll_interval)
     pytest.fail("no spend row with a cost breakdown landed before the deadline")
