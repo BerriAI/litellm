@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
 
 import aiohttp
 import httpx  # type: ignore
+import ssl
 from aiohttp import ClientSession, FormData
 
 import litellm
@@ -16,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
+    get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.types.llms.openai import FileTypes
@@ -61,10 +63,16 @@ class BaseLLMAIOHTTPHandler:
         if self.transport:
             return self.transport
 
-        # Create a transport using AsyncHTTPHandler's logic
+        # Create a transport using AsyncHTTPHandler's logic.
+        # Convert ssl_verify (which may be a CA-bundle path string) to the correct
+        # type before calling _create_aiohttp_transport, which only accepts bool or
+        # ssl.SSLContext.  This mirrors what AsyncHTTPHandler.create_client() does.
         try:
+            import ssl as _ssl
+            ssl_config = get_ssl_configuration(self.ssl_verify)
             self.transport = AsyncHTTPHandler._create_aiohttp_transport(
-                ssl_verify=self.ssl_verify
+                ssl_context=ssl_config if isinstance(ssl_config, _ssl.SSLContext) else None,
+                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             )
             self._owns_transport = True
             return self.transport
