@@ -1837,6 +1837,7 @@ async def _user_api_key_auth_builder(
                                 team_member_spend = await get_current_spend(
                                     counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
                                     fallback_spend=team_member_spend,
+                                    max_budget=team_member_budget,
                                 )
                             if team_member_spend > team_member_budget:
                                 raise litellm.BudgetExceededError(
