@@ -84,6 +84,33 @@
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0
     },
+    "gonka24/kimi-k2.6": {
+        "input_cost_per_token": 0.00000005,
+        "litellm_provider": "gonka24",
+        "mode": "chat",
+        "output_cost_per_token": 0.00000005,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "gonka24/minimax-m2.7": {
+        "input_cost_per_token": 0.00000005,
+        "litellm_provider": "gonka24",
+        "mode": "chat",
+        "output_cost_per_token": 0.00000005,
+        "supports_function_calling": false,
+        "supports_tool_choice": false,
+        "supports_vision": false
+    },
+    "gonka24/qwen3-235b": {
+        "input_cost_per_token": 0.00000005,
+        "litellm_provider": "gonka24",
+        "mode": "chat",
+        "output_cost_per_token": 0.00000005,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "512-x-512/max-steps/stability.stable-diffusion-xl-v0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
