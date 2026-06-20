@@ -1,6 +1,7 @@
 """Regression test for #30761 — the Anthropic streaming bridge crashed with
 IndexError when an upstream OpenAI/Azure-compatible chunk had choices=[]
 (usage-only / keepalive chunk)."""
+
 import os
 import sys
 from typing import List, Optional
@@ -20,7 +21,10 @@ def _content_chunk(text: str, finish_reason: Optional[str] = None) -> MagicMock:
     chunk = MagicMock()
     chunk.choices = [
         StreamingChoices(
-            finish_reason=finish_reason, index=0, delta=Delta(content=text), logprobs=None
+            finish_reason=finish_reason,
+            index=0,
+            delta=Delta(content=text),
+            logprobs=None,
         )
     ]
     chunk.usage = None
@@ -38,7 +42,11 @@ def _usage_only_chunk() -> MagicMock:
 
 
 def test_sync_stream_survives_empty_choices_usage_chunk():
-    chunks = [_content_chunk("hi"), _content_chunk("", finish_reason="stop"), _usage_only_chunk()]
+    chunks = [
+        _content_chunk("hi"),
+        _content_chunk("", finish_reason="stop"),
+        _usage_only_chunk(),
+    ]
     wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
     events = list(wrapper)  # used to raise IndexError mid-stream
     assert events
@@ -59,7 +67,13 @@ async def test_async_stream_survives_empty_choices_usage_chunk():
             except StopIteration:
                 raise StopAsyncIteration
 
-    chunks = [_content_chunk("hi"), _content_chunk("", finish_reason="stop"), _usage_only_chunk()]
-    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+    chunks = [
+        _content_chunk("hi"),
+        _content_chunk("", finish_reason="stop"),
+        _usage_only_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(chunks), model="claude-x"
+    )
     events = [e async for e in wrapper]
     assert events

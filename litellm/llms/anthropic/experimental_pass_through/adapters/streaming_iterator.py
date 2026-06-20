@@ -440,8 +440,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     and getattr(chunk, "usage", None) is not None
                 )
                 is_final_chunk = (
-                    bool(chunk.choices)
-                    and chunk.choices[0].finish_reason is not None
+                    bool(chunk.choices) and chunk.choices[0].finish_reason is not None
                 )
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
@@ -690,8 +689,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     and getattr(chunk, "usage", None) is not None
                 )
                 is_final_chunk = (
-                    bool(chunk.choices)
-                    and chunk.choices[0].finish_reason is not None
+                    bool(chunk.choices) and chunk.choices[0].finish_reason is not None
                 )
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
