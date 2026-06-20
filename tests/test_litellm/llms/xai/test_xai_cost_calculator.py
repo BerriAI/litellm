@@ -27,9 +27,6 @@ from litellm.llms.xai.cost_calculator import (
     cost_per_token,
     cost_per_web_search_request,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
-
-
 class TestXAICostCalculator:
     """Test suite for XAI cost calculation functionality."""
 
@@ -409,35 +406,6 @@ class TestXAICostCalculator:
         assert usage.prompt_tokens_details.web_search_requests == 2
         assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=object(), usage=usage
-        )
-
-    def test_gate_detects_server_side_tool_usage_details_without_web_search_output(
-        self,
-    ):
-        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
-        setattr(
-            usage,
-            "server_side_tool_usage_details",
-            {"web_search_calls": 1},
-        )
-        response = ResponsesAPIResponse.model_construct(
-            id="resp_test",
-            created_at=0,
-            output=[{"type": "message", "role": "assistant", "content": []}],
-            usage=None,
-        )
-        assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-            response_object=response, usage=usage
-        )
-        assert (
-            StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-                model="grok-4.3",
-                response_object=response,
-                usage=usage,
-                standard_built_in_tools_params={},
-                custom_llm_provider="xai",
-            )
-            == 5.0 / 1000.0
         )
 
     def test_grok_4_20_beta_reasoning_cost_calculation(self):

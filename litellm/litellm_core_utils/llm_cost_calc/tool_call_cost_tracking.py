@@ -312,22 +312,6 @@ class StandardBuiltInToolCostTracking:
         return usage.model_copy(update={"server_tool_use": server_tool_use})
 
     @staticmethod
-    def _usage_has_server_side_web_search_calls(usage: Usage | None) -> bool:
-        """True when usage.server_side_tool_usage_details.web_search_calls > 0."""
-        if usage is None:
-            return False
-        details = getattr(usage, "server_side_tool_usage_details", None)
-        if details is None:
-            return False
-        try:
-            web_search_calls = (
-                details.get("web_search_calls") if isinstance(details, dict) else getattr(details, "web_search_calls", None)
-            )
-            return int(web_search_calls or 0) > 0
-        except (TypeError, ValueError):
-            return False
-
-    @staticmethod
     def response_object_includes_web_search_call(response_object: Any, usage: Usage | None = None) -> bool:
         """
         Check if the response object includes a web search call.
@@ -343,8 +327,6 @@ class StandardBuiltInToolCostTracking:
         from litellm.types.utils import PromptTokensDetailsWrapper
 
         if get_anthropic_web_search_requests_from_response(response_object) is not None:
-            return True
-        if StandardBuiltInToolCostTracking._usage_has_server_side_web_search_calls(usage):
             return True
 
         if isinstance(response_object, ModelResponse):
