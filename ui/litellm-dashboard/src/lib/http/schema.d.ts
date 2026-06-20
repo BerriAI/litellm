@@ -526,8 +526,10 @@ export interface paths {
          * List Plugins
          * @description Return registered plugins for authenticated UI callers.
          *
-         *     plugin_key is only returned to proxy admins — not to regular users —
-         *     so plugin credentials cannot be extracted by non-admin callers.
+         *     plugin_key is never returned — the browser never needs it (the proxy injects
+         *     it server-side from the registry), and exposing it here would leak the
+         *     credential into React state and DevTools.  Admin key management goes through
+         *     the redacted /config/field/info path instead.
          */
         get: operations["list_plugins_api_plugins_get"];
         put?: never;
