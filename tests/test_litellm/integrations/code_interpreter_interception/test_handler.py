@@ -717,3 +717,58 @@ def test_initialize_from_proxy_config_prefers_litellm_settings():
 
     assert logger.enabled_providers == ["openai"]
     assert logger.sandbox_tool_name == "e2b_default"
+
+
+@pytest.mark.asyncio
+async def test_build_plan_handles_dict_shaped_response():
+    """A responses payload delivered as a plain dict (not an object) must flow
+    through detection, execution, and re-injection the same as the typed form."""
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    dict_response = {"output": [_function_call_item()]}
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools={"tool_calls": logger._extract_code_execution_tool_calls(dict_response)},
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response=dict_response,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={"litellm_call_id": "k1"},
+    )
+
+    assert sandbox.run_calls, "code must run for a dict-shaped response"
+    assert plan.metadata["code_interpreter_calls"][0]["code"] == "print(40 + 2)"
+
+    out = await logger.async_post_agentic_loop_response_hook(
+        response={"output": [{"type": "message", "content": []}]},
+        plan=plan,
+        kwargs={},
+    )
+
+    assert [item.get("type") for item in out["output"]] == [
+        "code_interpreter_call",
+        "message",
+    ], "the dict-shaped response must get the code_interpreter_call re-injected"
+
+
+@pytest.mark.asyncio
+async def test_extract_tool_calls_reads_object_attributes():
+    """Detection must work when output items are objects with attributes, not
+    only dicts."""
+
+    class Item:
+        def __init__(self):
+            self.type = "function_call"
+            self.name = LITELLM_CODE_EXECUTION_TOOL_NAME
+            self.call_id = "c9"
+            self.arguments = '{"code":"print(1)"}'
+
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    calls = logger._extract_code_execution_tool_calls(FakeResponse(output=[Item()]))
+
+    assert len(calls) == 1
+    assert calls[0]["call_id"] == "c9"
+    assert calls[0]["arguments"] == '{"code":"print(1)"}'
