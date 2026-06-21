@@ -8,7 +8,7 @@ Talks to e2b's REST API directly over httpx (no e2b SDK dependency):
 """
 
 import json
-from typing import Union, cast
+from typing import Any, Union, cast
 
 import httpx
 
@@ -38,7 +38,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             return client
         return get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
 
-    def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
+    def validate_environment(self, api_key: str | None = None, **kwargs: Any) -> str:
         key = api_key or get_secret_str("E2B_API_KEY")
         if not key:
             raise ValueError("E2B API key not set. Set E2B_API_KEY or pass api_key=...")
@@ -54,7 +54,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         api_base: str | None = None,
         metadata: dict | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ContainerHandle:
         key = self.validate_environment(api_key=api_key)
         base = api_base or E2B_API_BASE
@@ -98,7 +98,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         env_vars: dict | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> CodeExecutionResult:
         handle = self._as_handle(container)
 
@@ -135,7 +135,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> bool:
         handle = self._as_handle(container)
         key = (

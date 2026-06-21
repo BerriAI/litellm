@@ -43,7 +43,7 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 class BaseSandboxConfig:
     """Provider-agnostic sandbox operations."""
 
-    def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
+    def validate_environment(self, api_key: str | None = None, **kwargs: Any) -> str:
         raise NotImplementedError(
             "validate_environment must be implemented by provider"
         )
@@ -55,7 +55,7 @@ class BaseSandboxConfig:
         timeout: int | None = None,
         allow_internet_access: bool = True,
         api_key: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> ContainerHandle:
         raise NotImplementedError("acreate_sandbox must be implemented by provider")
 
@@ -65,7 +65,7 @@ class BaseSandboxConfig:
         container: Union[ContainerHandle, str],
         code: str,
         api_key: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> CodeExecutionResult:
         raise NotImplementedError("arun_code must be implemented by provider")
 
@@ -74,6 +74,6 @@ class BaseSandboxConfig:
         *,
         container: Union[ContainerHandle, str],
         api_key: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> bool:
         raise NotImplementedError("adelete_sandbox must be implemented by provider")
