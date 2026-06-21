@@ -7110,6 +7110,22 @@ def _restamp_streaming_chunk_model(
     if request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
+    attempted_fallbacks = request_data.get("_litellm_attempted_fallbacks", 0)
+    if attempted_fallbacks is None:
+        attempted_fallbacks = 0
+    hidden_params = getattr(chunk, "_hidden_params", {}) or {}
+    if isinstance(hidden_params, dict):
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+        attempted_fallbacks = additional_headers.get(
+            "x-litellm-attempted-fallbacks", attempted_fallbacks
+        )
+    try:
+        attempted_fallbacks = int(attempted_fallbacks or 0)
+    except (TypeError, ValueError):
+        attempted_fallbacks = 0
+    if attempted_fallbacks > 0:
+        return chunk, model_mismatch_logged
+
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )

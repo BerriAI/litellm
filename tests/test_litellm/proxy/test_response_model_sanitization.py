@@ -86,6 +86,23 @@ def test_restamp_streaming_chunk_skips_matching_model():
     assert result.model == "client-model"
     assert model_mismatch_logged is False
 
+def test_restamp_streaming_chunk_preserves_fallback_model():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_model_response_stream_chunk("fallback-model")
+    chunk._hidden_params.setdefault("additional_headers", {})
+    chunk._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] = 1
+
+    result, model_mismatch_logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result is chunk
+    assert result.model == "fallback-model"
+    assert model_mismatch_logged is False
 
 def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json():
     from litellm.proxy.proxy_server import _serialize_streaming_chunk

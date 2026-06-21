@@ -2165,6 +2165,35 @@ class Router:
         )
         setattr(fallback_item, "usage", combined_usage)
 
+    @staticmethod
+    def _copy_stream_wrapper_additional_headers_to_chunk(
+        stream_response: Any,
+        stream_chunk: Any,
+    ) -> Any:
+        """
+        Copy wrapper-level headers onto streamed chunks.
+
+        Fallback headers are attached to the stream wrapper after a successful
+        fallback. The proxy only sees individual chunks during SSE serialization,
+        so the chunk needs the same hidden header metadata.
+        """
+        response_hidden_params = getattr(stream_response, "_hidden_params", {}) or {}
+        if not isinstance(response_hidden_params, dict):
+            return stream_chunk
+
+        response_headers = response_hidden_params.get("additional_headers", {}) or {}
+        if not response_headers or not hasattr(stream_chunk, "_hidden_params"):
+            return stream_chunk
+
+        chunk_hidden_params = getattr(stream_chunk, "_hidden_params", {}) or {}
+        if not isinstance(chunk_hidden_params, dict):
+            chunk_hidden_params = {}
+
+        chunk_hidden_params.setdefault("additional_headers", {})
+        chunk_hidden_params["additional_headers"].update(response_headers)
+        setattr(stream_chunk, "_hidden_params", chunk_hidden_params)
+        return stream_chunk
+
     async def _acompletion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,
@@ -2263,6 +2292,12 @@ class Router:
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
                         async for fallback_item in fallback_response:  # type: ignore
+                            fallback_item = (
+                                self._copy_stream_wrapper_additional_headers_to_chunk(
+                                    stream_response=fallback_response,
+                                    stream_chunk=fallback_item,
+                                )
+                            )
                             if (
                                 fallback_item
                                 and isinstance(fallback_item, ModelResponseStream)
@@ -2816,6 +2851,10 @@ class Router:
 
                     if hasattr(fallback_response, "__iter__"):
                         for fallback_item in fallback_response:
+                            fallback_item = router_self._copy_stream_wrapper_additional_headers_to_chunk(
+                                stream_response=fallback_response,
+                                stream_chunk=fallback_item,
+                            )
                             if (
                                 fallback_item
                                 and isinstance(fallback_item, ModelResponseStream)
@@ -9726,7 +9765,7 @@ class Router:
         # - else return the model's rate limit headers
         """
         if (
-            isinstance(response, BaseModel)
+            (isinstance(response, BaseModel) or hasattr(response, "_hidden_params"))
             and hasattr(response, "_hidden_params")
             and isinstance(response._hidden_params, dict)  # type: ignore
         ):

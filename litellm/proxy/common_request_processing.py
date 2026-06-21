@@ -1467,6 +1467,16 @@ class ProxyBaseLLMRequestProcessing:
                 # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
+                attempted_fallbacks = additional_headers.get(
+                    "x-litellm-attempted-fallbacks", 0
+                )
+                try:
+                    attempted_fallbacks = int(attempted_fallbacks or 0)
+                except (TypeError, ValueError):
+                    attempted_fallbacks = 0
+                if attempted_fallbacks > 0:
+                    self.data["_litellm_attempted_fallbacks"] = attempted_fallbacks
+
                 if requested_model_from_client:
                     self.data["_litellm_client_requested_model"] = (
                         requested_model_from_client

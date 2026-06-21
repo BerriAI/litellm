@@ -9,7 +9,9 @@ def _add_headers_to_response(response: Any, headers: dict) -> Any:
     """
     Helper function to add headers to a response's hidden params
     """
-    if response is None or not isinstance(response, BaseModel):
+    if response is None or not (
+        isinstance(response, BaseModel) or hasattr(response, "_hidden_params")
+    ):
         return response
 
     hidden_params: Optional[Union[dict, HiddenParams]] = getattr(
