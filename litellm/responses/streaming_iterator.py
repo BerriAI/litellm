@@ -26,6 +26,10 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.sse_output_recovery import (
+    record_output_item_chunk,
+    record_output_text_chunk,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
@@ -78,6 +82,8 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._streamed_output_items: dict[int, dict[str, Any]] = {}
+        self._streamed_text_only_output_items: dict[int, dict[str, Any]] = {}
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -138,6 +144,9 @@ class BaseResponsesAPIStreamingIterator:
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
+                self._record_streamed_output_chunk(parsed_chunk)
+                parsed_chunk = self._backfill_completed_response_output(parsed_chunk)
+
                 if self.responses_api_provider_config is None:
                     raise ValueError(
                         "responses_api_provider_config is required to process live streaming chunks"
@@ -291,6 +300,54 @@ class BaseResponsesAPIStreamingIterator:
             # This ensures failures are logged even when _process_chunk is called directly
             self._handle_failure(e)
             raise
+
+    def _record_streamed_output_chunk(self, parsed_chunk: dict[str, Any]) -> None:
+        event_type = parsed_chunk.get("type")
+        if event_type == ResponsesAPIStreamEvents.RESPONSE_CREATED:
+            self._streamed_output_items.clear()
+            self._streamed_text_only_output_items.clear()
+            return
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            record_output_item_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=self._streamed_output_items,
+            )
+            return
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            record_output_text_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=self._streamed_output_items,
+                text_only_items=self._streamed_text_only_output_items,
+            )
+
+    def _backfill_completed_response_output(
+        self, parsed_chunk: dict[str, Any]
+    ) -> dict[str, Any]:
+        if parsed_chunk.get("type") != ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            return parsed_chunk
+
+        response_payload = parsed_chunk.get("response")
+        if not isinstance(response_payload, dict):
+            return parsed_chunk
+        if response_payload.get("output"):
+            return parsed_chunk
+
+        recovered_output = self._recovered_streamed_output_items()
+        if not recovered_output:
+            return parsed_chunk
+
+        completed_chunk = dict(parsed_chunk)
+        completed_response = dict(response_payload)
+        completed_response["output"] = recovered_output
+        completed_chunk["response"] = completed_response
+        return completed_chunk
+
+    def _recovered_streamed_output_items(self) -> list[dict[str, Any]]:
+        output_items: dict[int, dict[str, Any]] = {
+            **self._streamed_text_only_output_items
+        }
+        output_items.update(self._streamed_output_items)
+        return [dict(item) for _, item in sorted(output_items.items())]
 
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
