@@ -285,6 +285,10 @@ class MistralConfig(OpenAIGPTConfig):
         """
         Handle modification of messages for Mistral API in an async context.
         """
+        # Strip reasoning_content from assistant messages — Mistral rejects it as input (extra_forbidden)
+        for m in messages:
+            if m.get("role") == "assistant":
+                m.pop("reasoning_content", None)
         # Call parent async method to handle basic transformations
         # and then apply Mistral-specific handling for files
         messages = await super()._transform_messages(messages, model, True)
@@ -295,6 +299,10 @@ class MistralConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         """Handle modification of messages for Mistral API in a sync context."""
+        # Strip reasoning_content from assistant messages — Mistral rejects it as input (extra_forbidden)
+        for m in messages:
+            if m.get("role") == "assistant":
+                m.pop("reasoning_content", None)
         # Call parent sync method to handle basic transformations
         # and then apply Mistral-specific handling for files
         # This is the sync version of the async method above
