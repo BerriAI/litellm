@@ -103,6 +103,31 @@ def test_init_rds_client_resolves_region_and_oidc_with_get_secret(monkeypatch):
     assert fake_boto_client.rds_kwargs["region_name"] == "us-east-1"
 
 
+def test_init_rds_client_resolves_os_environ_parameter(monkeypatch):
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    rds_client = object()
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(return_value=rds_client),
+    )
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "env-access-key")
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    assert (
+        init_rds_client(aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID") is rds_client
+    )
+    fake_boto3.client.assert_called_once_with(
+        service_name="rds",
+        region_name="us-east-1",
+        aws_access_key_id="env-access-key",
+        aws_secret_access_key=None,
+        config=fake_boto3.session.Config.return_value,
+    )
+
+
 class TestPrismaWrapperTokenRefresh:
     """Tests for the PrismaWrapper RDS IAM token refresh implementation."""
 

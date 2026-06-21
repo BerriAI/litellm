@@ -981,6 +981,44 @@ def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
     assert wrapper._parse_token_expiration(token) == datetime.utcfromtimestamp(exp)
 
 
+def test_azure_postgres_token_auth_log_name():
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        azure_postgresql_auth=True,
+    )
+
+    assert wrapper._token_auth_log_name() == "Azure PostgreSQL Entra token"
+
+
+def test_jwt_expiration_parse_returns_none_without_exp():
+    from litellm.proxy.db.prisma_client import _parse_jwt_expiration_claim
+
+    assert _parse_jwt_expiration_claim("header.e30.signature") is None
+
+
+def test_jwt_expiration_parse_returns_none_for_invalid_payload():
+    from litellm.proxy.db.prisma_client import _parse_jwt_expiration_claim
+
+    assert _parse_jwt_expiration_claim("header.invalid-payload.signature") is None
+
+
+def test_rds_token_expiration_parse_returns_none_for_invalid_query():
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+    )
+
+    assert (
+        wrapper._parse_token_expiration("token?X-Amz-Date=not-a-date&X-Amz-Expires=900")
+        is None
+    )
+
+
 def test_prisma_client_uses_azure_marker_not_jwt_shape(monkeypatch):
     import urllib.parse
 

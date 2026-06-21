@@ -8,6 +8,7 @@ import redis.asyncio as async_redis
 from litellm._redis import (
     _get_credential_provider_from_connect_func,
     _get_redis_cluster_kwargs,
+    create_azure_ad_redis_connect_func,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
@@ -431,6 +432,30 @@ def test_redis_connect_func_rejects_mixed_credential_markers():
         _get_credential_provider_from_connect_func(mock_connect_func, {})
 
 
+def test_redis_connect_func_without_markers_has_no_credential_provider():
+    assert _get_credential_provider_from_connect_func(lambda _: None, {}) is None
+
+
+def test_azure_ad_connect_func_sends_username_auth_argument():
+    mock_credential = MagicMock()
+    mock_credential.get_token.return_value.token = "access-token"
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        connect_func = create_azure_ad_redis_connect_func(username="redis-user")
+
+    connection = MagicMock()
+    connection.read_response.return_value = b"OK"
+
+    connect_func(connection)
+
+    connection.send_command.assert_called_once_with(
+        "AUTH", "redis-user", "access-token", check_health=False
+    )
+
+
 def test_sync_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
     """URL-based Azure Redis clients must keep token auth instead of filtering
     it out before Redis.from_url."""
@@ -460,6 +485,57 @@ def test_sync_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
     )
 
 
+def test_async_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.async_redis.Redis.from_url") as mock_from_url,
+    ):
+        get_redis_async_client(
+            url="rediss://cache.redis.cache.windows.net:6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_from_url.call_args.kwargs
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_async_client_azure_ad_auth_uses_credential_provider(monkeypatch):
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.async_redis.Redis") as mock_redis,
+    ):
+        get_redis_async_client(
+            host="cache.redis.cache.windows.net",
+            port=6380,
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_redis.call_args.kwargs
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
 def test_connection_pool_url_azure_ad_auth_uses_credential_provider(monkeypatch):
     """Connection pools built from Redis URLs need Azure AD credential_provider
     too, otherwise pooled connections authenticate with no token."""
@@ -483,6 +559,32 @@ def test_connection_pool_url_azure_ad_auth_uses_credential_provider(monkeypatch)
 
     call_kwargs = mock_from_url.call_args.kwargs
     assert call_kwargs["url"] == "rediss://cache.redis.cache.windows.net:6380"
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_connection_pool_azure_ad_auth_uses_credential_provider(monkeypatch):
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.async_redis.BlockingConnectionPool") as mock_pool,
+    ):
+        get_redis_connection_pool(
+            host="cache.redis.cache.windows.net",
+            port=6380,
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_pool.call_args.kwargs
     assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
     assert call_kwargs["credential_provider"].get_credentials() == (
         "managed-identity-object-id",
