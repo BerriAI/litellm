@@ -88,7 +88,7 @@ async def test_usage_overview_uses_provider_for_config_guardrails(monkeypatch):
     response = await usage_endpoints.guardrails_usage_overview(
         start_date="2026-06-19",
         end_date="2026-06-20",
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
     assert len(response.rows) == 1
@@ -122,3 +122,81 @@ async def test_usage_detail_resolves_config_guardrail_by_name(monkeypatch):
     assert response.time_series == [
         {"date": "2026-06-20", "passed": 8, "blocked": 2, "score": None}
     ]
+
+
+@pytest.mark.asyncio
+async def test_usage_detail_raises_404_when_guardrail_absent(monkeypatch):
+    from fastapi import HTTPException
+
+    _patch_common(monkeypatch, metrics=[], detail_unique=None)
+    monkeypatch.setattr(usage_endpoints, "_get_config_loaded_guardrails", lambda: [])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await usage_endpoints.guardrails_usage_detail(
+            guardrail_id="missing-guardrail",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_get_config_loaded_guardrails_filters_by_source(monkeypatch):
+    from litellm.proxy.guardrails import guardrail_registry
+
+    handler = guardrail_registry.InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS = {
+        "cfg-1": {"guardrail_id": "cfg-1", "guardrail_name": "config-one"},
+        "db-1": {"guardrail_id": "db-1", "guardrail_name": "db-one"},
+        "no-source": {"guardrail_id": "no-source", "guardrail_name": "no-source"},
+    }
+    handler._sources = {"cfg-1": "config", "db-1": "db"}
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", handler)
+
+    result = usage_endpoints._get_config_loaded_guardrails()
+
+    returned_ids = {g["guardrail_id"] for g in result}
+    assert "cfg-1" in returned_ids
+    assert "db-1" not in returned_ids
+    assert "no-source" not in returned_ids
+
+
+def test_merge_config_loaded_guardrails_dedupes_and_appends(monkeypatch):
+    db_guardrails = [
+        SimpleNamespace(guardrail_id="shared-id", guardrail_name="shared-name")
+    ]
+    monkeypatch.setattr(
+        usage_endpoints,
+        "_get_config_loaded_guardrails",
+        lambda: [
+            {"guardrail_id": "shared-id", "guardrail_name": "shared-name"},
+            {"guardrail_id": "cfg-only", "guardrail_name": "cfg-only-name"},
+        ],
+    )
+
+    merged = usage_endpoints._merge_config_loaded_guardrails(db_guardrails)
+
+    ids = [usage_endpoints._get_guardrail_attrs(g)[0] for g in merged]
+    assert ids == ["shared-id", "cfg-only"]
+
+
+def test_find_config_loaded_guardrail_returns_none_when_absent(monkeypatch):
+    monkeypatch.setattr(
+        usage_endpoints,
+        "_get_config_loaded_guardrails",
+        lambda: [{"guardrail_id": "cfg-1", "guardrail_name": "config-one"}],
+    )
+
+    assert usage_endpoints._find_config_loaded_guardrail("does-not-exist") is None
+
+
+def test_get_guardrail_litellm_params_handles_model_dump_and_missing():
+    pydantic_like = SimpleNamespace(
+        litellm_params=SimpleNamespace(
+            model_dump=lambda exclude_none: {"guardrail": "presidio"}
+        )
+    )
+    assert usage_endpoints._get_guardrail_litellm_params(pydantic_like) == {
+        "guardrail": "presidio"
+    }
+
+    assert usage_endpoints._get_guardrail_litellm_params(SimpleNamespace()) == {}
