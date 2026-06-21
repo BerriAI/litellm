@@ -16,6 +16,9 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.utils import CallTypes
 
+_ACTIVE_KEY = "_code_interpreter_interception_active"
+_SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+
 
 class FakeHandle:
     def __init__(self, sandbox_id="sbx_fake"):
@@ -94,7 +97,7 @@ async def test_build_plan_runs_code_and_feeds_output_back():
         anthropic_messages_optional_request_params={"tools": []},
         logging_obj=FakeLogging(litellm_call_id="k1"),
         stream=False,
-        kwargs={"litellm_call_id": "k1"},
+        kwargs={"litellm_call_id": "k1", _SANDBOX_KEY: "sbxkey1"},
     )
 
     assert sandbox.run_calls, "sandbox.arun_code must be invoked"
@@ -221,7 +224,7 @@ async def test_should_run_detects_only_matching_function_call():
 
 
 @pytest.mark.asyncio
-async def test_container_reused_across_calls_same_call_id():
+async def test_container_reused_within_request_via_server_sandbox_key():
     sandbox = FakeSandbox(stdout="42")
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
     response = FakeResponse(output=[_function_call_item()])
@@ -246,18 +249,78 @@ async def test_container_reused_across_calls_same_call_id():
 
     await logger.async_build_agentic_loop_plan(
         logging_obj=FakeLogging(litellm_call_id="k1"),
-        kwargs={"litellm_call_id": "k1"},
+        kwargs={"litellm_call_id": "k1", _SANDBOX_KEY: "server-nonce-1"},
         **common,
     )
     await logger.async_build_agentic_loop_plan(
         logging_obj=FakeLogging(litellm_call_id="k1"),
-        kwargs={"litellm_call_id": "k1"},
+        kwargs={"litellm_call_id": "k1", _SANDBOX_KEY: "server-nonce-1"},
         **common,
     )
 
     assert (
         len(sandbox.create_calls) == 1
-    ), "sandbox must be created once and reused across calls with the same litellm_call_id"
+    ), "the sandbox is reused across loop iterations sharing one server sandbox key"
+
+
+@pytest.mark.asyncio
+async def test_colliding_caller_call_id_does_not_share_sandbox():
+    """Two requests with the same caller-controlled litellm_call_id but distinct
+    server-minted sandbox keys must NOT share a container; otherwise one user's
+    code could read another in-flight request's sandbox state."""
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    common = dict(
+        tools={
+            "tool_calls": [
+                {
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"print(1)"}',
+                }
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response=FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        stream=False,
+    )
+
+    await logger.async_build_agentic_loop_plan(
+        logging_obj=FakeLogging(litellm_call_id="shared"),
+        kwargs={"litellm_call_id": "shared", _SANDBOX_KEY: "nonce-A"},
+        **common,
+    )
+    await logger.async_build_agentic_loop_plan(
+        logging_obj=FakeLogging(litellm_call_id="shared"),
+        kwargs={"litellm_call_id": "shared", _SANDBOX_KEY: "nonce-B"},
+        **common,
+    )
+
+    assert (
+        len(sandbox.create_calls) == 2
+    ), "distinct server sandbox keys must isolate sandboxes despite a colliding call id"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_mints_server_sandbox_key():
+    """The interceptor mints a server-side sandbox key (not derived from the
+    caller-controlled call id) when it activates."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+        "litellm_call_id": "caller-supplied",
+        _SANDBOX_KEY: "caller-forged",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
+
+    assert result is not None
+    assert result[_SANDBOX_KEY] not in ("caller-forged", "caller-supplied")
+    assert len(result[_SANDBOX_KEY]) >= 16
 
 
 @pytest.mark.asyncio
@@ -281,7 +344,7 @@ async def test_build_plan_records_code_interpreter_call_metadata():
         anthropic_messages_optional_request_params={"tools": []},
         logging_obj=FakeLogging(litellm_call_id="k1"),
         stream=False,
-        kwargs={"litellm_call_id": "k1"},
+        kwargs={"litellm_call_id": "k1", _SANDBOX_KEY: "sbxkey1"},
     )
 
     calls = plan.metadata["code_interpreter_calls"]
@@ -361,9 +424,6 @@ async def test_pre_call_forces_non_stream_for_loop():
     )
 
 
-_ACTIVE_KEY = "_code_interpreter_interception_active"
-
-
 async def _build_plan(logger, sandbox, call_id="k1", provider="openai"):
     return await logger.async_build_agentic_loop_plan(
         tools={
@@ -382,7 +442,7 @@ async def _build_plan(logger, sandbox, call_id="k1", provider="openai"):
         anthropic_messages_optional_request_params={"tools": []},
         logging_obj=FakeLogging(litellm_call_id=call_id),
         stream=False,
-        kwargs={"litellm_call_id": call_id},
+        kwargs={"litellm_call_id": call_id, _SANDBOX_KEY: "sbxkey1"},
     )
 
 
@@ -490,7 +550,7 @@ async def test_sandbox_deleted_after_loop_completes():
         "the sandbox must be deleted once the final response is assembled, "
         "otherwise it keeps running and billing"
     )
-    assert "k1" not in logger._container_cache_by_call_id
+    assert "sbxkey1" not in logger._container_cache
 
 
 @pytest.mark.asyncio
@@ -545,7 +605,7 @@ async def test_run_code_does_not_re_resolve_registry(monkeypatch):
 
     logger = CodeInterpreterInterceptionLogger(sandbox_tool_name="e2b_default")
     try:
-        container, params = await logger._get_or_create_container(call_id="k1")
+        container, params = await logger._get_or_create_container(cache_key="k1")
         assert params is not None and params["sandbox_provider"] == "e2b"
 
         sandbox_tools.clear_sandbox_tools()
@@ -670,7 +730,7 @@ async def test_prune_expired_cache_deletes_underlying_container():
     sandbox = FakeSandbox()
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
     container, params = await logger._create_container()
-    logger._container_cache_by_call_id["old"] = (
+    logger._container_cache["old"] = (
         container,
         params,
         time.time() - handler_mod._CACHE_TTL_SECONDS - 1,
@@ -678,7 +738,7 @@ async def test_prune_expired_cache_deletes_underlying_container():
 
     await logger._prune_expired_cache()
 
-    assert "old" not in logger._container_cache_by_call_id
+    assert "old" not in logger._container_cache
     assert len(sandbox.delete_calls) == 1, "expired sandbox must be deleted"
 
 
@@ -736,7 +796,7 @@ async def test_build_plan_handles_dict_shaped_response():
         anthropic_messages_optional_request_params={"tools": []},
         logging_obj=FakeLogging(litellm_call_id="k1"),
         stream=False,
-        kwargs={"litellm_call_id": "k1"},
+        kwargs={"litellm_call_id": "k1", _SANDBOX_KEY: "sbxkey1"},
     )
 
     assert sandbox.run_calls, "code must run for a dict-shaped response"

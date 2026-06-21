@@ -25,6 +25,7 @@ from litellm.types.utils import CallTypes
 
 LITELLM_CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
 _INTERCEPTION_ACTIVE_KEY = "_code_interpreter_interception_active"
+_SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 _CACHE_TTL_SECONDS = 15 * 60
 
 
@@ -44,8 +45,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     1. Replace the native ``code_interpreter`` tool with a function tool in the
        pre-call hook so the model emits code as function-call arguments.
     2. Detect ``litellm_code_execution`` function calls in the model response.
-    3. Run the emitted code in a sandbox (reused per request via call_id) and
-       build a typed rerun plan that appends the function_call_output.
+    3. Run the emitted code in a sandbox (reused per request via a server-minted
+       sandbox key) and build a typed rerun plan that appends the
+       function_call_output.
     """
 
     def __init__(
@@ -60,9 +62,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self.enabled_providers = enabled_providers
         self.sandbox_tool_name = sandbox_tool_name
         self.sandbox_config = sandbox_config
-        self._container_cache_by_call_id: dict[
-            str, tuple[Any, dict[str, Any] | None, float]
-        ] = {}
+        self._container_cache: dict[str, tuple[Any, dict[str, Any] | None, float]] = {}
 
     @classmethod
     def from_config_yaml(
@@ -96,6 +96,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     ) -> dict | None:
         if not kwargs.get("_agentic_loop_depth"):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
+            kwargs.pop(_SANDBOX_KEY, None)
         if not self.enabled:
             return None
         if call_type not in (CallTypes.responses, CallTypes.aresponses):
@@ -116,6 +117,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return None
 
         kwargs[_INTERCEPTION_ACTIVE_KEY] = True
+        kwargs[_SANDBOX_KEY] = uuid.uuid4().hex
         if kwargs.get("stream"):
             kwargs["stream"] = False
             kwargs["_code_interpreter_interception_converted_stream"] = True
@@ -206,8 +208,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     ) -> AgenticLoopPlan:
         await self._prune_expired_cache()
         tool_calls = cast(list[dict[str, Any]], tools.get("tool_calls", []))
-        call_id = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
-        container, params = await self._get_or_create_container(call_id=call_id)
+        sandbox_key = kwargs.get(_SANDBOX_KEY)
+        container, params = await self._get_or_create_container(cache_key=sandbox_key)
 
         container_id = getattr(container, "id", None)
         input_list = self._normalize_messages(messages)
@@ -258,7 +260,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             request_patch=request_patch,
             metadata={
                 "tool_type": "code_interpreter",
-                "call_id": call_id or "",
+                "sandbox_key": sandbox_key or "",
                 "code_interpreter_calls": code_interpreter_calls,
             },
         )
@@ -267,7 +269,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self, response: Any, plan: AgenticLoopPlan, kwargs: dict
     ) -> Any:
         metadata = plan.metadata or {} if plan else {}
-        await self._delete_container_for_call_id(metadata.get("call_id"))
+        await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
 
         calls = metadata.get("code_interpreter_calls")
         if not calls:
@@ -325,16 +327,16 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return getattr(result, "stdout", "") or ""
 
     async def _get_or_create_container(
-        self, call_id: str | None
+        self, cache_key: str | None
     ) -> tuple[Any, dict[str, Any] | None]:
-        if call_id:
-            cached = self._container_cache_by_call_id.get(call_id)
+        if cache_key:
+            cached = self._container_cache.get(cache_key)
             if cached is not None:
                 return cached[0], cached[1]
 
         container, params = await self._create_container()
-        if call_id:
-            self._container_cache_by_call_id[call_id] = (container, params, time.time())
+        if cache_key:
+            self._container_cache[cache_key] = (container, params, time.time())
         return container, params
 
     async def _create_container(self) -> tuple[Any, dict[str, Any] | None]:
@@ -391,10 +393,10 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                 "CodeInterpreterInterception: failed to delete sandbox container"
             )
 
-    async def _delete_container_for_call_id(self, call_id: str | None) -> None:
-        if not call_id:
+    async def _delete_container_for_cache_key(self, cache_key: str | None) -> None:
+        if not cache_key:
             return
-        cached = self._container_cache_by_call_id.pop(call_id, None)
+        cached = self._container_cache.pop(cache_key, None)
         if cached is None:
             return
         await self._delete_container(container=cached[0], params=cached[1])
@@ -446,22 +448,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     async def _prune_expired_cache(self) -> None:
         now = time.time()
         expired = [
-            (call_id, container, params)
-            for call_id, (
+            (cache_key, container, params)
+            for cache_key, (
                 container,
                 params,
                 created_at,
-            ) in self._container_cache_by_call_id.items()
+            ) in self._container_cache.items()
             if now - created_at > _CACHE_TTL_SECONDS
         ]
-        for call_id, container, params in expired:
-            self._container_cache_by_call_id.pop(call_id, None)
+        for cache_key, container, params in expired:
+            self._container_cache.pop(cache_key, None)
             await self._delete_container(container=container, params=params)
-
-    def _resolve_call_id(self, logging_obj: Any, kwargs: dict[str, Any]) -> str | None:
-        if logging_obj is not None:
-            logging_call_id = getattr(logging_obj, "litellm_call_id", None)
-            if isinstance(logging_call_id, str) and logging_call_id:
-                return logging_call_id
-        kwargs_call_id = kwargs.get("litellm_call_id")
-        return kwargs_call_id if isinstance(kwargs_call_id, str) else None

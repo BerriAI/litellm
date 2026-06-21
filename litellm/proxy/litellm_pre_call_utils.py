@@ -151,6 +151,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "_agentic_loop_fingerprints",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_converted_stream",
+    "_code_interpreter_interception_sandbox_key",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (

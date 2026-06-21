@@ -60,6 +60,28 @@ def test_register_clears_stale_entries_on_reload():
     _reset()
 
 
+def test_register_empty_list_clears_removed_tools():
+    """Reloading a config with sandbox_tools removed (the proxy passes an empty
+    list) must drop previously registered credentials from the process."""
+    _reset()
+    sandbox_tools.register_sandbox_tools(
+        [
+            {
+                "sandbox_tool_name": "e2b_default",
+                "litellm_params": {"sandbox_provider": "e2b", "api_key": "sk-x"},
+            }
+        ]
+    )
+    assert sandbox_tools.resolve_sandbox_tool("e2b_default") is not None
+
+    sandbox_tools.register_sandbox_tools([])
+
+    assert (
+        sandbox_tools.resolve_sandbox_tool("e2b_default") is None
+    ), "removing sandbox_tools from config must clear stale credentials"
+    _reset()
+
+
 def test_register_resolves_secret_from_env(monkeypatch):
     _reset()
     monkeypatch.setenv("MY_SANDBOX_KEY", "sk-from-env")
