@@ -96,6 +96,16 @@ class TestGetMetadataVariableName:
         request = self._make_request("/v1/embeddings")
         assert _get_metadata_variable_name(request) == "metadata"
 
+    def test_returns_litellm_metadata_for_bedrock_invoke(self):
+        # GH#30629: bedrock passthrough must use litellm_metadata
+        # to prevent key-level tags from leaking into provider body
+        request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_bedrock_converse(self):
+        request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
 
 def test_get_enforced_params_for_service_account_settings():
     """

@@ -699,6 +699,12 @@ async def common_checks(
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+            # GH#30629: pre-seed litellm_metadata for bedrock routes so
+            # apply_key_tags_pre_auth writes tags there instead of
+            # leaking them into the provider-facing metadata field
+            if "bedrock" in route:
+                request_body.setdefault("litellm_metadata", {})
+
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
                 user_api_key_dict=valid_token,

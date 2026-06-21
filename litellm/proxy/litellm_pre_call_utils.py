@@ -108,6 +108,7 @@ def parse_cache_control(cache_control):
 
 LITELLM_METADATA_ROUTES = (
     "batches",
+    "bedrock",
     "/v1/messages",
     "responses",
     "files",
