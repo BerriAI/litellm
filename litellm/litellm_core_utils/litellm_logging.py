@@ -99,6 +99,7 @@ from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
+    CostPerToken,
     CostResponseTypes,
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
@@ -1534,6 +1535,22 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         )
 
+        # Pass the deployment's actual rates through the call, so custom pricing
+        # holds even when the router_model_id entry is missing from
+        # litellm.model_cost (model-cost-map reloads replace the map wholesale,
+        # after which cost calc would fall back to the model's public price).
+        custom_cost_per_token: Optional[CostPerToken] = None
+        custom_cost_per_second: Optional[float] = None
+        if custom_pricing is True:
+            (
+                custom_cost_per_token,
+                custom_cost_per_second,
+            ) = get_custom_cost_from_litellm_params(
+                litellm_params=(
+                    self.litellm_params if hasattr(self, "litellm_params") else None
+                )
+            )
+
         prompt = ""  # use for tts cost calc
         _input = self.model_call_details.get("input", None)
         if _input is not None and isinstance(_input, str):
@@ -1556,6 +1573,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 "call_type": self.call_type,
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
+                "custom_cost_per_token": custom_cost_per_token,
+                "custom_cost_per_second": custom_cost_per_second,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
@@ -4878,6 +4897,53 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
                     return True
 
     return False
+
+
+def get_custom_cost_from_litellm_params(
+    litellm_params: Optional[dict],
+) -> Tuple[Optional[CostPerToken], Optional[float]]:
+    """
+    Extract explicit (per-token, per-second) rates from litellm_params or its
+    metadata/litellm_metadata model_info, mirroring the lookup order of
+    `use_custom_pricing_for_model`. A literal 0 is a valid rate (e.g. zero-cost
+    BYOK deployments). Per-token pricing requires both base rates. Per-second
+    pricing requires input_cost_per_second (the same rule pricing registration
+    uses in main.py); an output_cost_per_second is folded into litellm's
+    single custom_cost_per_second rate so the billed total matches a
+    registered per-second cost-map entry.
+    """
+    if litellm_params is None:
+        return None, None
+
+    sources = [litellm_params]
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata: dict = litellm_params.get(metadata_key, {}) or {}
+        model_info: dict = metadata.get("model_info", {}) or {}
+        if model_info:
+            sources.append(model_info)
+
+    for source in sources:
+        input_cost = source.get("input_cost_per_token")
+        output_cost = source.get("output_cost_per_token")
+        if input_cost is not None and output_cost is not None:
+            custom_cost: CostPerToken = {
+                "input_cost_per_token": input_cost,
+                "output_cost_per_token": output_cost,
+            }
+            for cache_key in (
+                "cache_read_input_token_cost",
+                "cache_creation_input_token_cost",
+            ):
+                if source.get(cache_key) is not None:
+                    custom_cost[cache_key] = source[cache_key]  # type: ignore[literal-required]
+            return custom_cost, None
+        input_cost_per_second = source.get("input_cost_per_second")
+        if input_cost_per_second is not None:
+            return None, input_cost_per_second + (
+                source.get("output_cost_per_second") or 0.0
+            )
+
+    return None, None
 
 
 def is_valid_sha256_hash(value: str) -> bool:
