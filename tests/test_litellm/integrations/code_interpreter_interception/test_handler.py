@@ -513,3 +513,42 @@ async def test_run_code_does_not_re_resolve_registry(monkeypatch):
 
     assert stdout == "ok", "run must succeed using the params captured at create time"
     assert run_kwargs["provider"] == "e2b"
+
+
+@pytest.mark.asyncio
+async def test_run_tool_call_surfaces_execution_error():
+    """A sandbox execution error must be fed back to the model as a labelled
+    string, not raised, so the agentic loop can react to it."""
+
+    class ErroringSandbox(FakeSandbox):
+        async def arun_code(self, *, container, code, **kwargs):
+            self.run_calls.append({"container": container, "code": code})
+            return CodeExecutionResult(
+                stdout="", error={"name": "ValueError", "value": "boom"}
+            )
+
+    sandbox = ErroringSandbox()
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    container = await logger._create_container()
+
+    stdout = await logger._run_tool_call(
+        container=container[0], params=None, arguments='{"code":"raise ValueError(1)"}'
+    )
+
+    assert stdout == "[execution error] boom"
+
+
+@pytest.mark.asyncio
+async def test_run_tool_call_reports_unparseable_arguments():
+    """Malformed tool arguments must produce a parse error string the model can
+    see rather than crashing the interceptor."""
+    sandbox = FakeSandbox()
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    container = await logger._create_container()
+
+    stdout = await logger._run_tool_call(
+        container=container[0], params=None, arguments="not-json"
+    )
+
+    assert stdout == "[invalid tool arguments: could not parse code]"
+    assert not sandbox.run_calls, "code must not run when arguments cannot be parsed"
