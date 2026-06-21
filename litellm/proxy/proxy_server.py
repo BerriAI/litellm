@@ -4779,6 +4779,11 @@ class ProxyConfig:
             config
         )
 
+        ## SANDBOX TOOLS SETTINGS
+        from litellm.sandbox.sandbox_tools import register_sandbox_tools
+
+        register_sandbox_tools(config.get("sandbox_tools") or [])
+
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
         set_fine_tuning_config(config=finetuning_config)
