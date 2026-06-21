@@ -265,6 +265,13 @@ class MistralConfig(OpenAIGPTConfig):
             if MistralConfig._is_empty_assistant_message(m):
                 continue
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
+            # GH#30882: strip fields not permitted by Mistral
+            # (additionalProperties: false on their message schema)
+            if isinstance(m, dict):
+                m.pop("metadata", None)
+                m.pop("provider_specific_fields", None)
+                m.pop("thinking_blocks", None)
+                m.pop("cache_control", None)
             new_messages.append(m)
 
         if is_async:
