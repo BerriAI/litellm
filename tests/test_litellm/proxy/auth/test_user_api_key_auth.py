@@ -1106,7 +1106,7 @@ async def test_proxy_admin_expired_key_from_cache():
     # Mock get_key_object to return expired token from cache
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key_object,
         patch(
@@ -1261,7 +1261,7 @@ async def test_scim_deactivated_user_key_is_rejected():
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
@@ -2484,7 +2484,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
                 stack.enter_context(p)
             stack.enter_context(
                 patch(
-                    "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                    "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                     new_callable=AsyncMock,
                     return_value=valid_token,
                 )
@@ -2598,7 +2598,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
@@ -3652,7 +3652,7 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
         request._url = URL(url="/chat/completions")
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 get_key_object_mock,
             ),
             patch(

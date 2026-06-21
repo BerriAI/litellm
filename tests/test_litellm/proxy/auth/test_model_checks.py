@@ -436,7 +436,9 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
+        litellm_params=LiteLLM_Params(
+            model="huggingface/*", custom_llm_provider="huggingface"
+        ),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
