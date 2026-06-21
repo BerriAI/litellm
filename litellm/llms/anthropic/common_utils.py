@@ -603,7 +603,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif api_key:
             if api_key.startswith("Bearer "):
                 headers["authorization"] = api_key
-            elif api_base and "api.anthropic.com" not in api_base and not api_key.startswith("sk-ant-"):
+            elif (
+                api_base
+                and "api.anthropic.com" not in api_base
+                and not api_key.startswith("sk-ant-")
+            ):
                 headers["authorization"] = f"Bearer {api_key}"
             else:
                 headers["x-api-key"] = api_key
@@ -728,7 +732,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
 
     @staticmethod
-    def get_auth_header(api_key: Optional[str] = None, api_base: Optional[str] = None) -> Optional[dict]:
+    def get_auth_header(
+        api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> Optional[dict]:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
         Checks ANTHROPIC_API_KEY first (-> x-api-key), then
@@ -741,7 +747,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return {"authorization": f"Bearer {resolved_key}"}
             if resolved_key.startswith("Bearer "):
                 return {"authorization": resolved_key}
-            if api_base and "api.anthropic.com" not in api_base and not resolved_key.startswith("sk-ant-"):
+            if (
+                api_base
+                and "api.anthropic.com" not in api_base
+                and not resolved_key.startswith("sk-ant-")
+            ):
                 return {"authorization": f"Bearer {resolved_key}"}
             return {"x-api-key": resolved_key}
         auth_token = AnthropicModelInfo.get_auth_token()
