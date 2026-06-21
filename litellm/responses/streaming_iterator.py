@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 import traceback
@@ -347,7 +348,7 @@ class BaseResponsesAPIStreamingIterator:
             **self._streamed_text_only_output_items
         }
         output_items.update(self._streamed_output_items)
-        return [dict(item) for _, item in sorted(output_items.items())]
+        return [copy.deepcopy(item) for _, item in sorted(output_items.items())]
 
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:

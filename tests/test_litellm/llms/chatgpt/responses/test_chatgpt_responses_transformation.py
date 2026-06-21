@@ -407,6 +407,8 @@ class TestChatGPTResponsesAPITransformation:
 
         assert recovered_output[0] == streamed_output_item
         assert recovered_output[0] is not streamed_output_item
+        recovered_output[0]["content"][0]["text"] = "Mutated"
+        assert streamed_output_item["content"][0]["text"] == "Recovered"
 
     def test_chatgpt_streaming_response_created_resets_recovered_output_state(self):
         config = ChatGPTResponsesAPIConfig()
