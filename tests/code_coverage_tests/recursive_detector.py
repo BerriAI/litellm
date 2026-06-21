@@ -47,6 +47,7 @@ IGNORE_FUNCTIONS = [
     "_read_image_bytes",  # max depth set.
     "_get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
     "_redact_sensitive_litellm_params",  # max depth set (default 10).
+    "_redact_secret_values_in_obj",  # config secret redaction; bounded by operator-authored general_settings schema depth, JsonValue is acyclic so no cycles possible.
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
