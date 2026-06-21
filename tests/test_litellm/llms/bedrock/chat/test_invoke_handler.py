@@ -297,6 +297,47 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
 
 
+@pytest.mark.asyncio
+async def test_make_call_guards_against_leaked_control_param():
+    """The dispatch wrapper validates the payload right before sending, so a
+    control param that slipped into the body aborts the request instead of
+    being rejected downstream by Bedrock."""
+    client = MagicMock()
+    client.post = AsyncMock()
+
+    with pytest.raises(ValueError, match="stream_chunk_size"):
+        await make_call(
+            client=client,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.command-text-v14/invoke-with-response-stream",
+            headers={},
+            data='{"prompt": "hi", "stream_chunk_size": 2048}',
+            model="cohere.command-text-v14",
+            messages=[],
+            logging_obj=MagicMock(),
+        )
+
+    client.post.assert_not_called()
+
+
+def test_make_sync_call_guards_against_leaked_control_param():
+    client = MagicMock()
+    client.post = MagicMock()
+
+    with pytest.raises(ValueError, match="stream_chunk_size"):
+        make_sync_call(
+            client=client,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.command-text-v14/invoke-with-response-stream",
+            headers={},
+            data='{"prompt": "hi", "stream_chunk_size": 2048}',
+            signed_json_body=None,
+            model="cohere.command-text-v14",
+            messages=[],
+            logging_obj=MagicMock(),
+        )
+
+    client.post.assert_not_called()
+
+
 def test_legacy_bedrock_llm_streaming_does_not_rechunk_by_default():
     mock_response = MagicMock()
     mock_response.status_code = 200

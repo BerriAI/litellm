@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
 )
 from litellm.types.llms.bedrock import LITELLM_CONTROL_PARAM_KEYS
+from litellm.types.llms.bedrock_invoke import parse_invoke_inference_params
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
@@ -170,8 +171,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = self.filter_invoke_request_params(
-            copy.deepcopy(optional_params)
+        drop_params = bool(litellm_params.get("drop_params") or litellm.drop_params)
+        inference_params = parse_invoke_inference_params(
+            provider=provider,
+            model=model,
+            params=self.filter_invoke_request_params(copy.deepcopy(optional_params)),
+            drop_params=drop_params,
         )
         request_data: dict = {}
         if provider == "cohere":

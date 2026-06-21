@@ -14,6 +14,8 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.types.llms.bedrock import LITELLM_CONTROL_PARAM_KEYS
+from litellm.types.llms.bedrock_invoke import assert_no_control_params_in_payload
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -37,6 +39,7 @@ def make_sync_call(
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
 
+    assert_no_control_params_in_payload(data)
     response = client.post(
         api_base,
         headers=headers,
@@ -268,7 +271,9 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", None)
+        stream_chunk_size = optional_params.get("stream_chunk_size")
+        for _control_key in LITELLM_CONTROL_PARAM_KEYS:
+            optional_params.pop(_control_key, None)
         unencoded_model_id = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode = optional_params.get("json_mode", False)

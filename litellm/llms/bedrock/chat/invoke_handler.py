@@ -45,6 +45,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.bedrock import *
+from litellm.types.llms.bedrock_invoke import assert_no_control_params_in_payload
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
@@ -199,6 +200,7 @@ async def make_call(
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
     stream_chunk_size: Optional[int] = None,
 ):
+    assert_no_control_params_in_payload(data)
     try:
         if client is None:
             client = get_async_httpx_client(
@@ -296,6 +298,7 @@ def make_sync_call(
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
     stream_chunk_size: Optional[int] = None,
 ):
+    assert_no_control_params_in_payload(data)
     try:
         if client is None:
             client = _get_httpx_client(
