@@ -1168,7 +1168,9 @@ def build_bedrock_stream_error(
     if exception_type is not None and response_stream_shape is not None:
         member = response_stream_shape.members.get(exception_type)
         if member is not None:
-            modeled_status = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            modeled_status = (
+                (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            )
             if modeled_status is not None:
                 status_code = int(modeled_status)
 
