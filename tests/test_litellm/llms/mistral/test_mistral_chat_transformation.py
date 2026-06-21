@@ -719,3 +719,76 @@ class TestMistralFileHandling:
         # Check that file_ids are modified to match Mistral's expected format
         assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
         assert result[0]["content"][2]["file_id"] == "file-67890"  # type: ignore
+
+
+class TestReasoningContentStripping:
+    """Tests that reasoning_content is stripped from assistant messages in all _transform_messages paths."""
+
+    def test_strip_reasoning_content_text_only_path(self):
+        """reasoning_content is stripped in the primary (text-only) _transform_messages path."""
+        config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "assistant", "content": "Paris.", "reasoning_content": "<think>France's capital is Paris</think>"},  # type: ignore
+            {"role": "user", "content": "Tell me more."},
+        ]
+        result = config._transform_messages(messages, model="mistral-large-latest", is_async=False)
+        assistant_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert "reasoning_content" not in assistant_msgs[0]
+        assert assistant_msgs[0]["content"] == "Paris."
+
+    @pytest.mark.asyncio
+    async def test_strip_reasoning_content_multimodal_async_path(self):
+        """reasoning_content is stripped in _transform_messages_async (image/file multimodal path)."""
+        config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.jpg"}},  # type: ignore
+                    {"type": "text", "text": "Describe this."},
+                ],
+            },
+            {"role": "assistant", "content": "A photo.", "reasoning_content": "<think>I see a photo</think>"},  # type: ignore
+            {"role": "user", "content": "Tell me more."},
+        ]
+        result = await config._transform_messages_async(messages, model="mistral-large-latest")
+        assistant_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert "reasoning_content" not in assistant_msgs[0]
+        assert assistant_msgs[0]["content"] == "A photo."
+
+    def test_strip_reasoning_content_multimodal_sync_path(self):
+        """reasoning_content is stripped in _transform_messages_sync (image/file multimodal path)."""
+        config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.jpg"}},  # type: ignore
+                    {"type": "text", "text": "Describe this."},
+                ],
+            },
+            {"role": "assistant", "content": "A photo.", "reasoning_content": "<think>I see a photo</think>"},  # type: ignore
+            {"role": "user", "content": "Tell me more."},
+        ]
+        result = config._transform_messages_sync(messages, model="mistral-large-latest")
+        assistant_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert "reasoning_content" not in assistant_msgs[0]
+        assert assistant_msgs[0]["content"] == "A photo."
+
+    def test_strip_reasoning_content_non_assistant_messages_untouched(self):
+        """reasoning_content in non-assistant roles is not stripped."""
+        config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            {"role": "user", "content": "Hello", "reasoning_content": "should be ignored"},  # type: ignore
+            {"role": "assistant", "content": "Hi.", "reasoning_content": "my thinking"},  # type: ignore
+        ]
+        result = config._transform_messages(messages, model="mistral-large-latest", is_async=False)
+        user_msgs = [m for m in result if m.get("role") == "user"]
+        assert len(user_msgs) == 1
+        # User message reasoning_content is left alone (not stripped by Mistral transform)
+        assistant_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert "reasoning_content" not in assistant_msgs[0]
