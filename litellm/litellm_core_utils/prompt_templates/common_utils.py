@@ -691,8 +691,8 @@ def _decode_vector_store_ids_in_tools(
 
 
 def _decode_container_ids_in_tools(
-    tools: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Decode managed code_interpreter container ids to their native provider ids.
 
     A LiteLLM-managed container id (``cntr_...``) encodes provider/model_id/native-id
@@ -707,7 +707,7 @@ def _decode_container_ids_in_tools(
     """
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
-    updated_tools: List[Dict[str, Any]] = []
+    updated_tools: list[dict[str, Any]] = []
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "code_interpreter":
             updated_tools.append(tool)
