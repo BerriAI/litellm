@@ -3640,7 +3640,7 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     spend: Optional[float] = Field(
-        default=None, description="Amount spent by team member"
+        default=None, ge=0, description="Amount spent by team member"
     )
     role: Optional[Literal["admin", "user"]] = None
     tpm_limit: Optional[int] = Field(
