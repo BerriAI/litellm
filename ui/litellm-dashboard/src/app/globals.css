@@ -13,12 +13,12 @@
 
   /* Dark mode color tokens (for reference and non-component usage) */
   /* Using a more subtle gradient with less contrast between levels */
-  --dark-bg-base: #141414; /* Main background - slightly lighter for less stark contrast */
-  --dark-bg-elevated: #1a1a1a; /* Cards, panels - subtle elevation */
-  --dark-bg-surface: #1e1e1e; /* Interior content areas */
-  --dark-bg-hover: #252525; /* Hover states */
-  --dark-border: #2a2a2a; /* Subtle borders */
-  --dark-border-hover: #3a3a3a; /* Hover borders */
+  --dark-bg-base: #0e0e0e; /* Main background */
+  --dark-bg-elevated: #151515; /* Cards, panels - subtle elevation */
+  --dark-bg-surface: #1a1a1a; /* Interior content areas */
+  --dark-bg-hover: #1f1f1f; /* Hover states */
+  --dark-border: #1e1e1e; /* Subtle borders - barely lifted from surfaces */
+  --dark-border-hover: #282828; /* Hover borders */
   --dark-text-primary: #e5e7eb;
   --dark-text-secondary: #a1a1aa;
   --dark-text-muted: #71717a;
@@ -27,23 +27,23 @@
 
 .dark {
   --foreground-rgb: 229, 231, 235;
-  --background-start-rgb: 20, 20, 20; /* Matches --dark-bg-base #141414 */
-  --background-end-rgb: 20, 20, 20;
-  --neutral-border: #2a2a2a; /* Matches --dark-border */
+  --background-start-rgb: 14, 14, 14; /* Matches --dark-bg-base #0e0e0e */
+  --background-end-rgb: 14, 14, 14;
+  --neutral-border: #1e1e1e; /* Matches --dark-border */
 
   /* Tremor CSS variable overrides for dark mode */
-  --tremor-background-muted: #141414;
-  --tremor-background-subtle: #1a1a1a;
-  --tremor-background-default: #141414;
-  --tremor-background-emphasis: #252525;
-  --tremor-border-default: #2a2a2a;
-  --tremor-ring-default: #2a2a2a;
+  --tremor-background-muted: #0e0e0e;
+  --tremor-background-subtle: #151515;
+  --tremor-background-default: #0e0e0e;
+  --tremor-background-emphasis: #1f1f1f;
+  --tremor-border-default: #1e1e1e;
+  --tremor-ring-default: #1e1e1e;
   --tremor-content-default: #e5e7eb;
   --tremor-content-emphasis: #e5e7eb;
   --tremor-content-strong: #e5e7eb;
   --tremor-content-moderate: #a1a1aa;
   --tremor-content-subtle: #71717a;
-  --tremor-content-inverted: #141414;
+  --tremor-content-inverted: #0e0e0e;
 }
 
 body {
@@ -54,6 +54,22 @@ body {
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+}
+
+/* ============================================
+   Dark Mode - default border color
+   Tailwind preflight falls colorless `border` utilities back to a light gray
+   (#e5e7eb), which stands out against dark surfaces (e.g. the Top Virtual Keys
+   table box). Override the default in dark mode so plain `border` boxes blend
+   in. Lives in @layer base so any explicit border-color utility (border-blue-200,
+   the scoped .dark .border-gray-* rules below, etc.) still wins.
+   ============================================ */
+@layer base {
+  .dark *,
+  .dark ::before,
+  .dark ::after {
+    border-color: var(--dark-border);
   }
 }
 
@@ -248,7 +264,7 @@ body {
 
 /* Dropdown dark mode - ConfigProvider doesn't fully control dropdowns rendered in portals */
 .dark .ant-dropdown-menu {
-  background-color: #141414 !important;
+  background-color: var(--dark-bg-base) !important;
   border-color: var(--dark-border) !important;
 }
 
@@ -863,11 +879,18 @@ body {
   background-color: transparent !important;
 }
 
-/* Tremor Badge */
-.dark [class*="tremor-Badge"],
-.dark .tremor-Badge-root {
-  background-color: var(--dark-bg-hover) !important;
-  color: var(--dark-text-primary) !important;
+/* Tremor Badge - render as a subtle dark pill that keeps its colored text.
+   The previous `[class*="tremor-Badge"]` selector also matched the inner
+   `tremor-Badge-text` span, giving the text its own grey background box. Target
+   only the root, and explicitly clear the text span. `span.tremor-Badge-root`
+   outranks the `.dark .bg-*-500` status-dot overrides so colored badges (which
+   carry bg-green-500 etc.) stay a neutral pill instead of a solid color block,
+   while real status dots are untouched. */
+.dark span.tremor-Badge-root {
+  background-color: var(--dark-bg-elevated) !important;
+}
+.dark .tremor-Badge-text {
+  background-color: transparent !important;
 }
 
 /* Tremor Accordion */
@@ -911,11 +934,13 @@ body {
   color: var(--dark-text-primary) !important;
 }
 
-/* Tremor Switch */
-.dark [class*="tremor-Switch"],
-.dark .tremor-Switch-root {
-  background-color: var(--dark-border-hover) !important;
-}
+/* Tremor Switch
+   Tremor's switch already ships dark classes (dark:bg-dark-tremor-border for the
+   off track, dark:bg-dark-tremor-brand for the on track) and those tokens are
+   defined in tailwind.config, so it renders correctly on its own. The previous
+   `[class*="tremor-Switch"]` override matched the root wrapper and button too,
+   painting a box behind the whole toggle and flattening the on/off colors. Leave
+   it to Tremor's native dark styling. */
 
 /* Tremor List */
 .dark [class*="tremor-List"],
@@ -1127,6 +1152,17 @@ body {
 
 /* Override bg-gray-100 in dark mode */
 .dark .bg-gray-100 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Override bg-gray-200 / bg-gray-300 in dark mode - these stay light otherwise,
+   rendering as pale boxes behind text (e.g. the model-hub URL chip and disabled
+   buttons). Map them to subtle dark surfaces. */
+.dark .bg-gray-200 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .bg-gray-300 {
   background-color: var(--dark-bg-hover) !important;
 }
 

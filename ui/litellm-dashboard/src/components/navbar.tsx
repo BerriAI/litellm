@@ -87,7 +87,7 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="bg-white dark:bg-[#141414] border-b border-gray-200 dark:border-[#2a2a2a] sticky top-0 z-10">
+    <nav className="bg-white dark:bg-[#0e0e0e] border-b border-gray-200 dark:border-[#1e1e1e] sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
           <div className="flex items-center flex-shrink-0">

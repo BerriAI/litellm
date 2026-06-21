@@ -68,7 +68,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ConfigProvider theme={getAntdTheme(isDarkMode)}>
-      <div className="flex flex-col min-h-screen bg-white dark:bg-[#141414]">
+      <div className="flex flex-col min-h-screen bg-white dark:bg-[#0e0e0e]">
         <Navbar
           isPublicPage={false}
           sidebarCollapsed={sidebarCollapsed}
@@ -88,7 +88,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           <div className="mt-2">
             <SidebarProvider setPage={handleSetPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
           </div>
-          <main className="flex-1 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-gray-100">{children}</main>
+          <main className="flex-1 bg-gray-50 dark:bg-[#151515] text-gray-900 dark:text-gray-100">{children}</main>
         </div>
       </div>
     </ConfigProvider>

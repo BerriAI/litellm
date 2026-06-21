@@ -1,13 +1,13 @@
 import { theme, ThemeConfig } from "antd";
 
 export const darkModeColors = {
-  bgBase: "#141414",
-  bgElevated: "#1a1a1a",
-  bgSurface: "#1e1e1e",
-  bgHover: "#252525",
+  bgBase: "#0e0e0e",
+  bgElevated: "#151515",
+  bgSurface: "#1a1a1a",
+  bgHover: "#1f1f1f",
 
-  border: "#2a2a2a",
-  borderHover: "#3a3a3a",
+  border: "#1e1e1e",
+  borderHover: "#282828",
 
   textPrimary: "#e5e7eb",
   textSecondary: "#a1a1aa",
