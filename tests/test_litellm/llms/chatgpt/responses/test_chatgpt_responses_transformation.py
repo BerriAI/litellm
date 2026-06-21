@@ -7,7 +7,8 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -19,6 +20,16 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+from litellm.responses.streaming_iterator import SyncResponsesAPIStreamingIterator
+
+
+def _output_text(output_item: object) -> str:
+    if hasattr(output_item, "model_dump"):
+        serialized = cast("dict[str, object]", output_item.model_dump())
+    else:
+        serialized = cast("dict[str, object]", output_item)
+    content = cast("list[dict[str, object]]", serialized["content"])
+    return cast(str, content[0]["text"])
 
 
 class TestChatGPTResponsesAPITransformation:
@@ -247,6 +258,205 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello from stream!"
+
+    def test_chatgpt_streaming_response_completed_recovers_output_item_done(self):
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.async_success_handler = AsyncMock()
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.5",
+            responses_api_provider_config=config,
+            logging_obj=logging_obj,
+            custom_llm_provider=LlmProviders.CHATGPT,
+        )
+        streamed_output_item = {
+            "id": "msg_from_item",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "OK my lord",
+                    "annotations": [],
+                    "logprobs": [],
+                }
+            ],
+        }
+        completed_response = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [],
+        }
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": streamed_output_item,
+                }
+            )
+        )
+        completed_event = iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": completed_response,
+                }
+            )
+        )
+
+        assert completed_event is not None
+        assert completed_event.type == "response.completed"
+        assert _output_text(completed_event.response.output[0]) == "OK my lord"
+
+    def test_chatgpt_streaming_response_completed_keeps_authoritative_output(self):
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.async_success_handler = AsyncMock()
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.5",
+            responses_api_provider_config=config,
+            logging_obj=logging_obj,
+            custom_llm_provider=LlmProviders.CHATGPT,
+        )
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_text.done",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "item_id": "msg_from_stream",
+                    "text": "Earlier stream text",
+                }
+            )
+        )
+        completed_event = iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_test",
+                        "object": "response",
+                        "created_at": 1700000000,
+                        "status": "completed",
+                        "model": "gpt-5.5",
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": "Authoritative completed text",
+                                        "annotations": [],
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                }
+            )
+        )
+
+        assert completed_event is not None
+        assert (
+            _output_text(completed_event.response.output[0])
+            == "Authoritative completed text"
+        )
+
+    def test_chatgpt_streaming_recovered_output_items_are_copied(self):
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.async_success_handler = AsyncMock()
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.5",
+            responses_api_provider_config=config,
+            logging_obj=logging_obj,
+            custom_llm_provider=LlmProviders.CHATGPT,
+        )
+        streamed_output_item = {
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Recovered"}],
+        }
+
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": streamed_output_item,
+                }
+            )
+        )
+        recovered_output = iterator._recovered_streamed_output_items()
+
+        assert recovered_output[0] == streamed_output_item
+        assert recovered_output[0] is not streamed_output_item
+
+    def test_chatgpt_streaming_response_created_resets_recovered_output_state(self):
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.async_success_handler = AsyncMock()
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.5",
+            responses_api_provider_config=config,
+            logging_obj=logging_obj,
+            custom_llm_provider=LlmProviders.CHATGPT,
+        )
+        iterator._streamed_output_items[0] = {"type": "message"}
+        iterator._streamed_text_only_output_items[1] = {"type": "message"}
+
+        iterator._record_streamed_output_chunk({"type": "response.created"})
+
+        assert iterator._streamed_output_items == {}
+        assert iterator._streamed_text_only_output_items == {}
+
+    def test_chatgpt_streaming_completed_output_backfill_ignores_invalid_payloads(self):
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.async_success_handler = AsyncMock()
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.5",
+            responses_api_provider_config=config,
+            logging_obj=logging_obj,
+            custom_llm_provider=LlmProviders.CHATGPT,
+        )
+        non_dict_response_chunk = {
+            "type": "response.completed",
+            "response": None,
+        }
+        empty_unrecoverable_chunk = {
+            "type": "response.completed",
+            "response": {"output": []},
+        }
+
+        assert (
+            iterator._backfill_completed_response_output(non_dict_response_chunk)
+            is non_dict_response_chunk
+        )
+        assert (
+            iterator._backfill_completed_response_output(empty_unrecoverable_chunk)
+            is empty_unrecoverable_chunk
+        )
 
     def test_chatgpt_non_stream_sse_recovers_whitespace_padded_chunks(self):
         """Chunks with leading whitespace before `data:` must still parse.
