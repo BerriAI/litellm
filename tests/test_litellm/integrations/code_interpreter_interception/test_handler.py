@@ -5,6 +5,8 @@ All sandbox dependencies are injected (dependency injection, no monkeypatch):
 a FakeSandbox stands in for the real e2b config and records how it is called.
 """
 
+import time
+
 import pytest
 
 from litellm.integrations.code_interpreter_interception.handler import (
@@ -126,6 +128,49 @@ async def test_pre_call_converts_code_interpreter_tool():
     ), "code_interpreter tool must be removed"
     names = [t.get("name") or (t.get("function") or {}).get("name") for t in tools]
     assert LITELLM_CODE_EXECUTION_TOOL_NAME in names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "code_interpreter"},
+        {"type": "hosted_tool", "name": "code_interpreter"},
+    ],
+)
+async def test_pre_call_rewrites_forced_code_interpreter_tool_choice(tool_choice):
+    """A forced tool_choice targeting the native code_interpreter tool must be
+    rewritten to the generated function tool; otherwise the outbound request
+    references a tool that no longer exists and the provider rejects it."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "tool_choice": tool_choice,
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
+
+    assert result is not None
+    assert result["tool_choice"] == {
+        "type": "function",
+        "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_leaves_unrelated_tool_choice_untouched():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "tool_choice": "auto",
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
+
+    assert result is not None
+    assert result["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio
@@ -552,3 +597,123 @@ async def test_run_tool_call_reports_unparseable_arguments():
 
     assert stdout == "[invalid tool arguments: could not parse code]"
     assert not sandbox.run_calls, "code must not run when arguments cannot be parsed"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_skips_provider_outside_scope():
+    """enabled_providers must filter the pre-call conversion so a request to an
+    out-of-scope provider is left untouched."""
+    logger = CodeInterpreterInterceptionLogger(
+        sandbox_config=FakeSandbox(), enabled_providers=["openai"]
+    )
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "anthropic",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
+
+    assert result is None
+    assert kwargs["tools"][0]["type"] == "code_interpreter", "tool must be untouched"
+    assert _ACTIVE_KEY not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_falls_back_to_model_lookup():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+
+    assert logger._resolve_provider({"custom_llm_provider": "openai"}) == "openai"
+    assert logger._resolve_provider({"model": "gpt-5"}) == "openai"
+    assert logger._resolve_provider({"model": 123}) is None
+    assert logger._resolve_provider({"model": "no-such-provider-xyz"}) is None
+
+
+@pytest.mark.asyncio
+async def test_create_container_without_sandbox_raises():
+    """The registry path must raise a clear error when no sandbox is resolvable
+    instead of silently creating nothing."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_tool_name="missing")
+
+    with pytest.raises(ValueError, match="no sandbox available"):
+        await logger._create_container()
+
+
+@pytest.mark.asyncio
+async def test_run_code_without_params_raises():
+    logger = CodeInterpreterInterceptionLogger(sandbox_tool_name="missing")
+
+    with pytest.raises(ValueError, match="no sandbox available to run code"):
+        await logger._run_code(container=FakeHandle(), params=None, code="print(1)")
+
+
+@pytest.mark.asyncio
+async def test_delete_container_swallows_errors():
+    """A delete failure must not propagate; the request already succeeded."""
+
+    class FailingDeleteSandbox(FakeSandbox):
+        async def adelete_sandbox(self, *, container, **kwargs):
+            raise RuntimeError("e2b unreachable")
+
+    sandbox = FailingDeleteSandbox()
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    container, params = await logger._create_container()
+
+    await logger._delete_container(container=container, params=params)
+
+
+@pytest.mark.asyncio
+async def test_prune_expired_cache_deletes_underlying_container():
+    """Expired cache entries must have their sandbox deleted, not just dropped,
+    otherwise an orphaned sandbox keeps running."""
+    import litellm.integrations.code_interpreter_interception.handler as handler_mod
+
+    sandbox = FakeSandbox()
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    container, params = await logger._create_container()
+    logger._container_cache_by_call_id["old"] = (
+        container,
+        params,
+        time.time() - handler_mod._CACHE_TTL_SECONDS - 1,
+    )
+
+    await logger._prune_expired_cache()
+
+    assert "old" not in logger._container_cache_by_call_id
+    assert len(sandbox.delete_calls) == 1, "expired sandbox must be deleted"
+
+
+@pytest.mark.asyncio
+async def test_normalize_messages_handles_str_and_unknown():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+
+    assert logger._normalize_messages("hi") == [{"role": "user", "content": "hi"}]
+    assert logger._normalize_messages([{"role": "user"}]) == [{"role": "user"}]
+    assert logger._normalize_messages(42) == []
+
+
+def test_from_config_yaml_reads_fields():
+    cfg = {
+        "enabled": False,
+        "enabled_providers": ["openai"],
+        "sandbox_tool_name": "e2b_default",
+    }
+    logger = CodeInterpreterInterceptionLogger.from_config_yaml(cfg)
+
+    assert logger.enabled is False
+    assert logger.enabled_providers == ["openai"]
+    assert logger.sandbox_tool_name == "e2b_default"
+
+
+def test_initialize_from_proxy_config_prefers_litellm_settings():
+    logger = CodeInterpreterInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={
+            "code_interpreter_interception_params": {
+                "enabled_providers": ["openai"],
+                "sandbox_tool_name": "e2b_default",
+            }
+        },
+        callback_specific_params={},
+    )
+
+    assert logger.enabled_providers == ["openai"]
+    assert logger.sandbox_tool_name == "e2b_default"

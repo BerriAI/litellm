@@ -138,7 +138,21 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             )
             for tool in tools
         ]
+        if self._tool_choice_targets_code_interpreter(kwargs.get("tool_choice")):
+            kwargs["tool_choice"] = {
+                "type": "function",
+                "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+            }
         return kwargs
+
+    @staticmethod
+    def _tool_choice_targets_code_interpreter(tool_choice: Any) -> bool:
+        if not isinstance(tool_choice, dict):
+            return False
+        return (
+            tool_choice.get("type") == "code_interpreter"
+            or tool_choice.get("name") == "code_interpreter"
+        )
 
     def _resolve_provider(self, kwargs: dict[str, Any]) -> str | None:
         provider = kwargs.get("custom_llm_provider")
