@@ -51,6 +51,19 @@ def test_command_r_and_legacy_resolve_to_different_bodies():
     assert legacy == {}
 
 
+def test_none_provider_passes_through_untouched():
+    params = {"anything": 1}
+    assert (
+        parse_invoke_inference_params(
+            provider=None,
+            model="some-unresolved-model",
+            params=params,
+            drop_params=True,
+        )
+        == params
+    )
+
+
 def test_unmodeled_provider_passes_through_untouched():
     params = {"anything": 1, "stream_chunk_size": 4}
     assert (
