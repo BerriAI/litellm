@@ -690,6 +690,42 @@ def _decode_vector_store_ids_in_tools(
     return updated_tools
 
 
+def _decode_container_ids_in_tools(
+    tools: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Decode managed code_interpreter container ids to their native provider ids.
+
+    A LiteLLM-managed container id (``cntr_...``) encodes provider/model_id/native-id
+    so it can round-trip through the proxy for routing. Before the request reaches the
+    upstream provider the managed id must be translated back to the native id, otherwise
+    the provider rejects it (e.g. Azure caps ``tools[].container`` at 64 chars and 400s
+    on the ~237-char managed id). Routing to the owning deployment is handled separately
+    by DeploymentAffinityCheck; this only rewrites the wire value.
+
+    No-ops on the object container form (provision-new) and on non-managed strings:
+    ``decode_container_id_to_original`` returns the input unchanged when it isn't managed.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    updated_tools: List[Dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "code_interpreter":
+            updated_tools.append(tool)
+            continue
+        container = tool.get("container")
+        if not isinstance(container, str):
+            updated_tools.append(tool)
+            continue
+        native_id = ResponsesAPIRequestUtils.decode_container_id_to_original(container)
+        if native_id != container:
+            updated_tool = tool.copy()
+            updated_tool["container"] = native_id
+            updated_tools.append(updated_tool)
+        else:
+            updated_tools.append(tool)
+    return updated_tools
+
+
 def update_responses_tools_with_model_file_ids(
     tools: Optional[List[Dict[str, Any]]],
     model_id: Optional[str] = None,
@@ -712,6 +748,9 @@ def update_responses_tools_with_model_file_ids(
 
     # Pass 1: decode unified vector_store_ids (no mapping needed)
     tools = _decode_vector_store_ids_in_tools(tools) or tools
+    # Pass 1b: decode managed code_interpreter container ids to native provider ids
+    # (no mapping needed; must run before the Pass 2 mapping gate returns early)
+    tools = _decode_container_ids_in_tools(tools) or tools
 
     # Pass 2: map code_interpreter file IDs (requires mapping)
     if not model_file_id_mapping or not model_id:

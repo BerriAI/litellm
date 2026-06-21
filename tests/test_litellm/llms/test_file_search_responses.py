@@ -162,6 +162,48 @@ class TestUpdateResponsesToolsWithModelFileIds:
         assert result[0]["vector_store_ids"] == ["vs_decoded"]
         assert result[1]["container"]["file_ids"] == ["provider_file_xyz"]
 
+    def test_B4_managed_container_string_decoded_to_native(self):
+        """Pass 1b: a managed cntr_ string is rewritten to the native id (no mapping needed)."""
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        native = "cntr_nativehex0123456789abcdef0123456789abcdef"
+        composite = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="dep-42",
+            container_id=native,
+        )
+        assert composite != native  # managed form is longer / encoded
+        tools = [{"type": "code_interpreter", "container": composite}]
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=None,
+            model_file_id_mapping=None,
+        )
+        assert result is not None
+        assert result[0]["container"] == native
+
+    def test_B5_container_object_form_untouched(self):
+        """The provision-new object container ({'type': 'auto'}) carries no id and is left as-is."""
+        tools = [{"type": "code_interpreter", "container": {"type": "auto"}}]
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=None,
+            model_file_id_mapping=None,
+        )
+        assert result is not None
+        assert result[0]["container"] == {"type": "auto"}
+
+    def test_B6_non_managed_container_string_passes_through(self):
+        """A bare native id (not LiteLLM-managed) is forwarded unchanged."""
+        tools = [{"type": "code_interpreter", "container": "cntr_plainnative"}]
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=None,
+            model_file_id_mapping=None,
+        )
+        assert result is not None
+        assert result[0]["container"] == "cntr_plainnative"
+
 
 # ---------------------------------------------------------------------------
 # C/D-series: supports_native_file_search
