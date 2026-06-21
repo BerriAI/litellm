@@ -132,6 +132,31 @@ def test_register_skips_malformed_entries_without_crashing():
     _reset()
 
 
+def test_register_skips_entry_missing_sandbox_provider():
+    """An entry with a name but no sandbox_provider must be skipped at
+    registration so it cannot later resolve and call acreate_sandbox(provider=None),
+    which fails with a cryptic runtime error instead of a clear startup warning."""
+    _reset()
+    sandbox_tools.register_sandbox_tools(
+        [
+            {"sandbox_tool_name": "no_provider", "litellm_params": {"api_key": "sk-x"}},
+            {
+                "sandbox_tool_name": "null_provider",
+                "litellm_params": {"sandbox_provider": None},
+            },
+            {
+                "sandbox_tool_name": "good",
+                "litellm_params": {"sandbox_provider": "e2b"},
+            },
+        ]
+    )
+
+    assert sandbox_tools.resolve_sandbox_tool("no_provider") is None
+    assert sandbox_tools.resolve_sandbox_tool("null_provider") is None
+    assert set(sandbox_tools._SANDBOX_TOOL_REGISTRY) == {"good"}
+    _reset()
+
+
 def test_register_swaps_registry_atomically():
     """register_sandbox_tools must replace the registry in one rebind so a
     concurrent resolve never observes a half-populated or transiently empty

@@ -721,7 +721,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_agentic_loop_cleanup_hook(
         self,
         plan: AgenticLoopPlan,
-        kwargs: Dict,
+        kwargs: dict,
     ) -> None:
         """
         Release resources held for an agentic-loop iteration.

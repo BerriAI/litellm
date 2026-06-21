@@ -34,8 +34,14 @@ def _iter_valid_tools(tools: list[dict]) -> Iterator[tuple[str, dict]]:
             )
             continue
         params = tool.get("litellm_params") or {}
+        provider = params.get("sandbox_provider")
+        if not provider:
+            verbose_logger.warning(
+                "sandbox_tools: skipping entry missing 'sandbox_provider': %r", tool
+            )
+            continue
         yield name, {
-            "sandbox_provider": params.get("sandbox_provider"),
+            "sandbox_provider": provider,
             "api_key": _resolve_secret_value(params.get("api_key")),
             "api_base": _resolve_secret_value(params.get("api_base")),
         }
