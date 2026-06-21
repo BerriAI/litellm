@@ -21,6 +21,7 @@ def _resolve_secret_value(value: Optional[str]) -> Optional[str]:
 
 
 def register_sandbox_tools(tools: list[dict]) -> None:
+    _SANDBOX_TOOL_REGISTRY.clear()
     for tool in tools:
         name = tool["sandbox_tool_name"]
         litellm_params = tool.get("litellm_params", {}) or {}

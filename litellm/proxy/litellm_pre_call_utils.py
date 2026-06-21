@@ -141,6 +141,14 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "service_callback",
     "logger_fn",
     "litellm_disabled_callbacks",
+    # Agentic-loop control fields. These are set only by the server while it
+    # drives an interceptor's agentic loop (web search, compression, code
+    # interpreter). A client-supplied value would forge loop depth/cycle state
+    # or mark an interception as active, letting a caller trigger sandbox code
+    # execution without the native tool ever being present.
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_code_interpreter_interception_active",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (

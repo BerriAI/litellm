@@ -4937,7 +4937,7 @@ class BaseLLMHTTPHandler:
         optional_params = {
             k: v
             for k, v in optional_params.items()
-            if k != "stream" and not k.startswith("_code_interpreter_interception")
+            if k != "stream" and k != "_code_interpreter_interception_converted_stream"
         }
 
         internal_keys = {"litellm_logging_obj"}
@@ -4946,16 +4946,11 @@ class BaseLLMHTTPHandler:
             for k, v in kwargs.items()
             if not k.startswith("_websearch_interception")
             and not k.startswith("_compression_interception")
-            and not k.startswith("_code_interpreter_interception")
+            and k != "_code_interpreter_interception_converted_stream"
             and k not in internal_keys
             and k not in optional_params
         }
         kwargs_for_followup.update(patch.kwargs)
-        kwargs_for_followup = {
-            k: v
-            for k, v in kwargs_for_followup.items()
-            if not k.startswith("_code_interpreter_interception")
-        }
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
