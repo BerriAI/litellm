@@ -2061,3 +2061,21 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     assert "aws_access_key_id" not in cleaned
     assert cleaned.get("api_base") == "https://example.test/v1"
     assert cleaned.get("api_version") == "2024-10-21"
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_503_when_db_configured_but_not_initialized():
+    """
+    readiness probe should return 503 when a DB is configured (DATABASE_URL is set) but prisma_client is None.
+    """
+    from unittest.mock import patch
+    from fastapi import Response
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    response = Response()
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with patch("litellm.get_secret", return_value="postgresql://fake:fake@localhost:5432/fake"):
+            result = await health_readiness(response=response)
+
+    assert response.status_code == 503
+    assert result == {"status": "healthy", "db": "disconnected"}

@@ -1660,8 +1660,13 @@ async def _resolve_public_readiness_db(response: Response) -> str:
     "Not connected" (no DB configured), "connected", "disconnected".
     """
     from litellm.proxy.proxy_server import prisma_client
+    from litellm import get_secret
 
+    _db_url = get_secret("DATABASE_URL", None)
     if prisma_client is None:
+        if _db_url is not None:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return "disconnected"
         return "Not connected"
 
     db_health_status = await _db_health_readiness_check()
