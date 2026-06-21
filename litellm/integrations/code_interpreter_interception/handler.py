@@ -109,6 +109,10 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         ):
             return None
 
+        if kwargs.get("stream"):
+            kwargs["stream"] = False
+            kwargs["_code_interpreter_interception_converted_stream"] = True
+
         function_tool = {
             "type": "function",
             "name": LITELLM_CODE_EXECUTION_TOOL_NAME,

@@ -289,3 +289,22 @@ async def test_post_hook_noop_without_recorded_calls():
         response=response, plan=AgenticLoopPlan(run_agentic_loop=True), kwargs={}
     )
     assert [item.get("type") for item in out.output] == ["message"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_forces_non_stream_for_loop():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+        "stream": True,
+    }
+
+    out = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
+
+    assert out is not None
+    assert out["stream"] is False, "loop requires a non-streaming upstream call"
+    assert out["_code_interpreter_interception_converted_stream"] is True, (
+        "the converted-stream flag must be set so the final response is wrapped "
+        "back into a stream for the caller"
+    )

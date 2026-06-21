@@ -2601,7 +2601,18 @@ class BaseLLMHTTPHandler:
             api_surface="responses",
         )
 
-        return final_response if final_response is not None else initial_response
+        result = final_response if final_response is not None else initial_response
+        if litellm_params.get(
+            "_code_interpreter_interception_converted_stream"
+        ) and not litellm_params.get("_agentic_loop_depth"):
+            return self._wrap_responses_response_as_fake_stream(
+                result=result,
+                model=model,
+                responses_api_provider_config=responses_api_provider_config,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+            )
+        return result
 
     async def async_delete_response_api_handler(
         self,
@@ -4923,6 +4934,11 @@ class BaseLLMHTTPHandler:
         optional_params.update(patch.optional_params)
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
+        optional_params = {
+            k: v
+            for k, v in optional_params.items()
+            if k != "stream" and not k.startswith("_code_interpreter_interception")
+        }
 
         internal_keys = {"litellm_logging_obj"}
         kwargs_for_followup = {
@@ -4930,10 +4946,16 @@ class BaseLLMHTTPHandler:
             for k, v in kwargs.items()
             if not k.startswith("_websearch_interception")
             and not k.startswith("_compression_interception")
+            and not k.startswith("_code_interpreter_interception")
             and k not in internal_keys
             and k not in optional_params
         }
         kwargs_for_followup.update(patch.kwargs)
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs_for_followup.items()
+            if not k.startswith("_code_interpreter_interception")
+        }
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
@@ -4961,6 +4983,36 @@ class BaseLLMHTTPHandler:
                 )
 
         return response
+
+    def _wrap_responses_response_as_fake_stream(
+        self,
+        result: Any,
+        model: str,
+        responses_api_provider_config: Any,
+        logging_obj: "LiteLLMLoggingObj",
+        custom_llm_provider: str,
+    ) -> Any:
+        """
+        Wrap a completed responses result as a synthetic stream.
+
+        Used when an interceptor forced stream=False to run the agentic loop on
+        the non-streaming path, but the caller originally asked for streaming.
+        """
+        import httpx
+
+        from litellm.responses.streaming_iterator import (
+            MockResponsesAPIStreamingIterator,
+        )
+
+        payload = result.model_dump() if hasattr(result, "model_dump") else result
+        raw_response = httpx.Response(status_code=200, json=payload)
+        return MockResponsesAPIStreamingIterator(
+            response=raw_response,
+            model=model,
+            responses_api_provider_config=responses_api_provider_config,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     async def _execute_chat_completion_agentic_plan(
         self,
