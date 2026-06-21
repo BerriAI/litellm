@@ -159,6 +159,57 @@ class TestGetAnthropicHeaders:
         assert "authorization" not in headers
         assert "anthropic-dangerous-direct-browser-access" not in headers
 
+    def test_custom_api_base_uses_bearer_header(self):
+        """Custom api_base and non-standard API key should produce Authorization: Bearer header."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key="my-custom-ollama-token",
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+            api_base="https://ollama.com/",
+        )
+
+        assert headers["authorization"] == "Bearer my-custom-ollama-token"
+        assert "x-api-key" not in headers
+
+    def test_custom_api_base_uses_bearer_header_already_starts_with_bearer(self):
+        """If the key already starts with Bearer, use it directly."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key="Bearer my-custom-ollama-token",
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+            api_base="https://ollama.com/",
+        )
+
+        assert headers["authorization"] == "Bearer my-custom-ollama-token"
+        assert "x-api-key" not in headers
+
+    def test_custom_api_base_uses_x_api_key_when_standard_key(self):
+        """If the key is standard sk-ant- key, use x-api-key even with custom api_base."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key=FAKE_REGULAR_KEY,
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+            api_base="https://ollama.com/",
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in headers
+
     def test_oauth_includes_standard_headers(self):
         """OAuth path should still include standard Anthropic headers."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -242,6 +293,46 @@ class TestValidateEnvironmentOAuth:
 
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
+
+    def test_custom_api_base_via_param(self):
+        """validate_environment with custom api_base via parameter and custom key should use Bearer."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = {}
+
+        updated_headers = config.validate_environment(
+            headers=headers,
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key="custom-api-key",
+            api_base="https://custom-gateway.com",
+        )
+
+        assert updated_headers["authorization"] == "Bearer custom-api-key"
+        assert "x-api-key" not in updated_headers
+
+    def test_custom_api_base_via_litellm_params(self):
+        """validate_environment with custom api_base inside litellm_params should use Bearer."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = {}
+
+        updated_headers = config.validate_environment(
+            headers=headers,
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"api_base": "https://custom-gateway.com"},
+            api_key="custom-api-key",
+            api_base=None,
+        )
+
+        assert updated_headers["authorization"] == "Bearer custom-api-key"
+        assert "x-api-key" not in updated_headers
         assert "anthropic-dangerous-direct-browser-access" not in updated_headers
 
 
@@ -1003,6 +1094,20 @@ class TestGetAuthHeader:
         ):
             result = AnthropicModelInfo.get_auth_header()
             assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+    def test_custom_api_base_get_auth_header_uses_bearer(self):
+        """Non-standard API key and custom api_base should return Authorization: Bearer."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com")
+        assert result == {"authorization": "Bearer my-custom-key"}
+
+    def test_custom_api_base_get_auth_header_uses_x_api_key_when_standard(self):
+        """Standard sk-ant- key with custom api_base should still return x-api-key."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key=FAKE_REGULAR_KEY, api_base="https://custom-gateway.com")
+        assert result == {"x-api-key": FAKE_REGULAR_KEY}
 
 
 class TestGetApiBaseFallbackChain:

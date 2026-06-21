@@ -95,7 +95,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."

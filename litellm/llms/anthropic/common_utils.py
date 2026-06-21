@@ -552,6 +552,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers: Optional[List[str]] = None,
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
+        api_base: Optional[str] = None,
     ) -> dict:
         betas = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -600,7 +601,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
-            headers["x-api-key"] = api_key
+            if api_key.startswith("Bearer "):
+                headers["authorization"] = api_key
+            elif api_base and "api.anthropic.com" not in api_base and not api_key.startswith("sk-ant-"):
+                headers["authorization"] = f"Bearer {api_key}"
+            else:
+                headers["x-api-key"] = api_key
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -629,6 +635,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
         # Check for Anthropic OAuth token in headers
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
@@ -684,6 +692,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             effort_used=effort_used,
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
+            api_base=api_base,
         )
 
         headers = {**headers, **anthropic_headers}
@@ -719,7 +728,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
 
     @staticmethod
-    def get_auth_header(api_key: Optional[str] = None) -> Optional[dict]:
+    def get_auth_header(api_key: Optional[str] = None, api_base: Optional[str] = None) -> Optional[dict]:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
         Checks ANTHROPIC_API_KEY first (-> x-api-key), then
@@ -729,6 +738,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         resolved_key = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
+                return {"authorization": f"Bearer {resolved_key}"}
+            if resolved_key.startswith("Bearer "):
+                return {"authorization": resolved_key}
+            if api_base and "api.anthropic.com" not in api_base and not resolved_key.startswith("sk-ant-"):
                 return {"authorization": f"Bearer {resolved_key}"}
             return {"x-api-key": resolved_key}
         auth_token = AnthropicModelInfo.get_auth_token()
@@ -744,7 +757,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
-        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if api_base is None or auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
