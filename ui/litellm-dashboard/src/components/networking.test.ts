@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
+import { migratedHref } from "@/utils/migratedPages";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -349,6 +350,20 @@ describe("UI config and public endpoints", () => {
     );
     expect(configCall).toBeDefined();
   });
+
+  it("updates serverRootPath so path-based nav links carry the root path", async () => {
+    const uiConfig = {
+      server_root_path: "/litellm",
+      proxy_base_url: "https://example.com",
+    };
+
+    setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+
+    expect(Networking.serverRootPath).toBe("/litellm");
+    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+  });
 });
 
 describe("individualModelHealthCheckCall", () => {
@@ -450,5 +465,52 @@ describe("teamInfoCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.has("team_id")).toBe(false);
+  });
+});
+
+describe("sessionSpendLogsCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should request the first page with defaults so the caller can page through the session", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, page_size: 100, total_pages: 1 }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.sessionSpendLogsCall("token", "session-123");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+
+    expect(urlStr).toContain("/spend/logs/session/ui");
+    expect(parsed.searchParams.get("session_id")).toBe("session-123");
+    expect(parsed.searchParams.get("page")).toBe("1");
+    expect(parsed.searchParams.get("page_size")).toBe("100");
+  });
+
+  it("should pass explicit page and page_size query params for later pages", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 250, page: 3, page_size: 100, total_pages: 3 }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.sessionSpendLogsCall("token", "session-123", 3, 100);
+
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("page")).toBe("3");
+    expect(parsed.searchParams.get("page_size")).toBe("100");
   });
 });

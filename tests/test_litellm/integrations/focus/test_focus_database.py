@@ -72,3 +72,18 @@ async def test_should_reject_invalid_limit(monkeypatch: pytest.MonkeyPatch):
         await db.get_usage_data(limit="invalid")
 
     assert query_mock.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
+    db, query_mock = _setup_db(monkeypatch, [])
+
+    await db.get_usage_data()
+
+    query_text, *_ = query_mock.await_args.args
+    assert (
+        "COALESCE(vt.organization_id, tt.organization_id) as organization_id"
+        in query_text
+    )
+    assert "ot.organization_alias as organization_alias" in query_text
+    assert 'LEFT JOIN "LiteLLM_OrganizationTable" ot' in query_text

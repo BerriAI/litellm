@@ -14,11 +14,15 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        # Check out the PR head, not the default refs/pull/N/merge: the merge ref
+        # folds in newer base commits, which the diff-based gates (ruff delta,
+        # Any-discipline) would otherwise blame on this branch.
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           clean: true
           persist-credentials: false
@@ -67,15 +71,25 @@ jobs:
           uv run --no-sync ruff check .
           cd ..
 
+      - name: Check strict-rule budget (delta vs base)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          uv run --no-sync python scripts/ruff_strict_gate.py --base "$BASE_SHA"
+
+      - name: Check type-discipline budget (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs base)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          uv run --no-sync python scripts/type_discipline_gate.py --base "$BASE_SHA"
+
       - name: Print OpenAI version
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
-      - name: Run MyPy type checking
+      - name: Run basedpyright type checking
         run: |
-          cd litellm
-          uv run --no-sync mypy .
-          cd ..
+          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py
 
       - name: Check for circular imports
         run: |
@@ -86,6 +100,33 @@ jobs:
       - name: Check import safety
         run: |
           uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+
+  # Intentionally NON-GATING. This job turns red when a *-budget.json ceiling is
+  # raised (or a rule/budget is dropped) so a loosening is obvious in review, but it
+  # must be kept OUT of the branch-protection required-checks list so a justified
+  # bump can still be merged by a human who has seen and accepted the red.
+  budget-ratchet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Ratchet check (budgets may only decrease; non-gating)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python scripts/budget_ratchet_check.py --base "$BASE_SHA"
 
   secret-scan:
     runs-on: ubuntu-latest

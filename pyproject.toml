@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.89.0"
+version = "1.90.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -53,7 +53,7 @@ proxy = [
     "orjson>=3.11.6,<4.0",
     "apscheduler>=3.11.2,<4.0",
     "fastapi-sso>=0.19.0,<1.0",
-    "PyJWT>=2.12.0,<3.0",
+    "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
     "cryptography>=46.0.7,<47.0",
     "pynacl>=1.6.2,<2.0",
@@ -63,13 +63,21 @@ proxy = [
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.26.0,<2.0",
     "litellm-proxy-extras==0.4.74",
-    "litellm-enterprise==0.1.42",
+    "litellm-enterprise==0.1.43",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "pydantic-settings>=2.14.1,<3.0",
+]
+# Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
+# imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
+# SDK plus just these three; none of the server runtime in `proxy` is pulled in.
+cli = [
+    "rich>=13.9.4,<14.0",
+    "pyyaml>=6.0.3,<7.0",
+    "requests>=2.32.0,<3.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
@@ -125,13 +133,14 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.10.2,<7.0; python_version < '3.14'",
+    "pypdf>=6.12.0,<7.0; python_version < '3.14'",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
 
 [project.scripts]
 litellm = "litellm:run_server"
+lite = "litellm.proxy.client.cli:cli"
 litellm-proxy = "litellm.proxy.client.cli:cli"
 
 [dependency-groups]
@@ -139,7 +148,7 @@ dev = [
     "diff-cover==9.7.2",
     "flake8==7.3.0",
     "black==26.3.1",
-    "mypy==1.19.0",
+    "basedpyright==1.39.7",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
@@ -158,6 +167,8 @@ dev = [
     "types-setuptools==75.8.0.20250225",
     "types-redis==4.6.0.20241004",
     "types-PyYAML==6.0.12.20250915",
+    "botocore-stubs==1.43.14",
+    "types-boto3[bedrock,bedrock-agent,bedrock-runtime,kms,s3,sagemaker-runtime,sts]==1.43.30",
     "opentelemetry-api==1.28.0",
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
@@ -211,7 +222,6 @@ ci = [
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
     "pylint==4.0.5",
-    "pyright==1.1.408",
     "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
     "langgraph==1.0.10",
@@ -231,6 +241,10 @@ requires = ["uv_build==0.11.8"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = [
+    "tornado>=6.5.6",
+    "aiohttp>=3.13.5,<3.14",
+]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
@@ -248,8 +262,6 @@ source-exclude = [
     "litellm/proxy/enterprise",
     "**/__pycache__",
     "**/__pycache__/**",
-    "**/.mypy_cache",
-    "**/.mypy_cache/**",
     "**/.pytest_cache",
     "**/.pytest_cache/**",
     "**/.ruff_cache",
@@ -260,13 +272,10 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.89.0"
+version = "1.90.0"
 version_files = [
     "pyproject.toml:^version",
 ]
-
-[tool.mypy]
-plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

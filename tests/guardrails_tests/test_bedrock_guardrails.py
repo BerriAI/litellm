@@ -1160,7 +1160,10 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
         output_call = bedrock_calls[0]
         assert output_call["source"] == "OUTPUT"
         assert output_call["response"] is not None
-        assert output_call["messages"] is None  # OUTPUT calls don't need messages
+        # OUTPUT forwards the request messages so contextual grounding can pull
+        # grounding_source/query blocks from them even on streamed responses. A
+        # plain-text (non-grounding) request still yields the single-block payload.
+        assert output_call["messages"] == request_data["messages"]
 
         # Verify that the response content was masked
         # The streaming chunks should now contain the masked content

@@ -6,6 +6,7 @@ from litellm.proxy._types import (
     Member,
     NewUserResponse,
 )
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 
@@ -29,7 +30,7 @@ class ScimTransformations:
         # Get user's teams/groups
         groups = []
         for team_id in user.teams or []:
-            team = await prisma_client.db.litellm_teamtable.find_unique(
+            team = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": team_id}
             )
             if team:

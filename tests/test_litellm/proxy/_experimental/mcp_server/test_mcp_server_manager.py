@@ -30,6 +30,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
     _deserialize_json_list,
+    _normalize_mcp_server_cost_info,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -256,6 +257,69 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_coerces_cost_string_to_float(self):
+        """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
+        manager = MCPServerManager()
+        config = {
+            "google_maps": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "mcp_info": {
+                    "mcp_server_cost_info": {
+                        "default_cost_per_query": "7e-05",
+                        "tool_name_to_cost_per_query": {"geocode": "1e-3"},
+                    }
+                },
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        cost_info = server.mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 7e-05
+        assert isinstance(cost_info["default_cost_per_query"], float)
+        assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
+        assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
+
+    def test_normalize_mcp_server_cost_info_preserves_float_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": 0.01,
+                "tool_name_to_cost_per_query": {"search": 0.05},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 0.01
+        assert cost_info["tool_name_to_cost_per_query"] == {"search": 0.05}
+
+    def test_normalize_mcp_server_cost_info_drops_non_numeric_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": "not-a-number",
+                "tool_name_to_cost_per_query": {"search": "free", "geocode": "2e-4"},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert "default_cost_per_query" not in cost_info
+        assert cost_info["tool_name_to_cost_per_query"] == {"geocode": 2e-4}
+
+    def test_normalize_mcp_server_cost_info_leaves_missing_cost_info_alone(self):
+        mcp_info = {"server_name": "maps"}
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        assert "mcp_server_cost_info" not in mcp_info
 
     def test_warns_when_custom_separator_invalid(self, monkeypatch, caplog):
         """Invalid MCP_TOOL_PREFIX_SEPARATOR values should log a warning."""

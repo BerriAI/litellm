@@ -1,10 +1,10 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import S3VectorsConfig from "./S3VectorsConfig";
-import * as fetchModels from "../playground/llm_calls/fetch_models";
+import * as fetchModels from "@/components/llm_calls/fetch_models";
 
 // Mock fetchAvailableModels
-vi.mock("../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 

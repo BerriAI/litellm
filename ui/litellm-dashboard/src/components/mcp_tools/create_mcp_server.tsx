@@ -134,6 +134,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     status: oauthStatus,
     error: oauthError,
     tokenResponse: oauthTokenResponse,
+    reset: resetOAuthFlow,
   } = useMcpOAuthFlow({
     accessToken,
     getCredentials: () => form.getFieldValue("credentials"),
@@ -188,6 +189,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     },
     onBeforeRedirect: persistCreateUiState,
+    flowSource: "create",
   });
 
   React.useEffect(() => {
@@ -553,12 +555,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [formValues.server_name]);
 
-  // Clear formValues when modal closes to reset child components
+  // Clear form, tools, and OAuth state when the modal closes so a previous server's
+  // authorization, credentials, or tool list never bleed into the next "Add New MCP
+  // Server" session, including when a parent dismisses the modal without routing
+  // through handleCancel or handleCreate.
   React.useEffect(() => {
     if (!isModalVisible) {
+      form.resetFields();
       setFormValues({});
+      setOauthAccessToken(null);
+      clearTools();
+      resetOAuthFlow();
     }
-  }, [isModalVisible]);
+  }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
 
@@ -1088,7 +1097,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <div className="mt-6">
             <MCPToolConfiguration
               accessToken={accessToken}
-              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
               allowedTools={allowedTools}
               existingAllowedTools={null}

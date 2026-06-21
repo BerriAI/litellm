@@ -456,7 +456,10 @@ class LLMCachingHandler:
                             index=idx,
                             object="embedding",
                         )
-                    if isinstance(kwargs_input_as_list[idx], str):
+                    cached_prompt_tokens = cr.get("prompt_tokens")
+                    if cached_prompt_tokens is not None:
+                        prompt_tokens += cached_prompt_tokens
+                    elif isinstance(kwargs_input_as_list[idx], str):
                         from litellm.utils import token_counter
 
                         prompt_tokens += token_counter(

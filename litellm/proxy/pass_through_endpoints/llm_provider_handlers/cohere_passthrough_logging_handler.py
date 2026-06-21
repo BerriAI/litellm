@@ -71,7 +71,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         complete_streaming_response = stream_chunk_builder(chunks=all_openai_chunks)
         return complete_streaming_response
 
-    def cohere_passthrough_handler(  # noqa: PLR0915
+    def cohere_passthrough_handler(
         self,
         httpx_response: httpx.Response,
         response_body: dict,

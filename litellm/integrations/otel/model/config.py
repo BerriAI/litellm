@@ -1,5 +1,6 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+from enum import Enum
 from typing import Any, List
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -21,6 +22,23 @@ class CaptureMessageContent(str):
     SPAN_ONLY = "span_only"
     EVENT_ONLY = "event_only"
     SPAN_AND_EVENT = "span_and_event"
+
+
+class ExporterOwner(str, Enum):
+    """The preset that contributed an exporter. Values match the callback names
+    in ``presets.PRESET_BY_CALLBACK`` so per-request dynamic-credential routing
+    can match an exporter's owner against the credential source's callback name.
+    A ``str`` enum so the value compares equal to the bare callback-name string."""
+
+    # Arize AX (the hosted platform) and Arize Phoenix (the open-source / Phoenix
+    # Cloud tracer) are distinct backends with separate config and auth, so they
+    # are separate owners. The member value stays the public callback name.
+    ARIZE_AX = "arize"
+    ARIZE_PHOENIX = "arize_phoenix"
+    LANGFUSE_OTEL = "langfuse_otel"
+    WEAVE_OTEL = "weave_otel"
+    LEVO = "levo"
+    AGENTOPS = "agentops"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -49,6 +67,15 @@ class ExporterSpec(BaseModel):
     )
     endpoint: str | None = None
     headers: str | None = None
+    owner: ExporterOwner | None = Field(
+        default=None,
+        description=(
+            "The preset that contributed this exporter. Per-request dynamic OTLP "
+            "credentials are applied only to the exporter whose owner matches the "
+            "credential source, so one tenant's vendor key never lands on a "
+            "different backend's exporter."
+        ),
+    )
     options: dict[str, str] | None = Field(
         default=None,
         description=(
@@ -183,6 +210,20 @@ class OpenTelemetryV2Config(BaseSettings):
             "``callback_settings.otel.baggage_team_metadata_keys`` in config.yaml."
         ),
     )
+
+    @field_validator("capture_message_content", mode="before")
+    @classmethod
+    def _normalize_capture_message_content(cls, value: object) -> object:
+        """Fold the capture mode to its canonical lower_snake_case form.
+
+        V1 read this env var case-insensitively, so operators set the
+        UPPER_SNAKE_CASE form (e.g. ``SPAN_AND_EVENT``). The canonical values
+        here are lower_snake_case; normalizing at the boundary keeps both
+        spellings working and lets every downstream comparison stay exact.
+        """
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
     @field_validator(
         "baggage_promoted_keys",

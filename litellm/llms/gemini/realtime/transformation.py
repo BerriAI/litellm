@@ -195,12 +195,47 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def get_audio_mime_type(self, input_audio_format: str = "pcm16"):
         mime_types = {
-            "pcm16": "audio/pcm",
+            "pcm16": "audio/pcm;rate=24000",
             "g711_ulaw": "audio/pcmu",
             "g711_alaw": "audio/pcma",
         }
 
         return mime_types.get(input_audio_format, "application/octet-stream")
+
+    def _manual_turn_detection_enabled(
+        self, session_configuration_request: Optional[str]
+    ) -> bool:
+        if not session_configuration_request:
+            return False
+        try:
+            setup = json.loads(session_configuration_request).get("setup", {})
+            automatic_detection = setup.get("realtimeInputConfig", {}).get(
+                "automaticActivityDetection", {}
+            )
+            return (
+                isinstance(automatic_detection, dict)
+                and automatic_detection.get("disabled") is True
+            )
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return False
+
+    def _handle_input_audio_buffer_commit_or_end(
+        self, session_configuration_request: Optional[str]
+    ) -> List[str]:
+        """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
+        if self._manual_turn_detection_enabled(session_configuration_request):
+            realtime_input_dict: BidiGenerateContentRealtimeInput = {
+                "activityEnd": True,
+            }
+            verbose_logger.debug(
+                "Gemini Realtime: Sending activityEnd realtimeInput to backend"
+            )
+        else:
+            realtime_input_dict = {"audioStreamEnd": True}
+            verbose_logger.debug(
+                "Gemini Realtime: Sending audioStreamEnd realtimeInput to backend"
+            )
+        return [json.dumps({"realtimeInput": realtime_input_dict})]
 
     def map_automatic_turn_detection(
         self, value: OpenAIRealtimeTurnDetection
@@ -656,6 +691,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
             messages.append(gemini_msg)
             return messages
+
+        if msg_type in ("input_audio_buffer.commit", "input_audio_buffer.end"):
+            return self._handle_input_audio_buffer_commit_or_end(
+                session_configuration_request
+            )
+
+        if msg_type == "input_audio_buffer.clear":
+            # Local OpenAI buffer op — nothing to forward to Gemini Live.
+            verbose_logger.debug(
+                "Gemini Realtime: input_audio_buffer.clear is a local buffer op"
+            )
+            return []
+
         # Unknown/unsupported OpenAI event type — drop silently rather than
         # forwarding raw JSON as text input to the model.
         return []
@@ -1330,7 +1378,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(f"Unknown openai event: {key}, value: {value}")
         return openai_event
 
-    def transform_realtime_response(  # noqa: PLR0915
+    def transform_realtime_response(
         self,
         message: Union[str, bytes],
         model: str,

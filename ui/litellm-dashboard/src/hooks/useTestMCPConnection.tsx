@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
 import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT } from "@/components/mcp_tools/types";
 
@@ -177,12 +177,12 @@ export const useTestMCPConnection = ({
     }
   };
 
-  const clearTools = () => {
+  const clearTools = useCallback(() => {
     setTools([]);
     setToolsError(null);
     setToolsErrorStackTrace(null);
     setHasShownSuccessMessage(false);
-  };
+  }, []);
 
   // Auto-fetch tools when form values change and required fields are available
   useEffect(() => {

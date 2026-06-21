@@ -3,7 +3,6 @@ Hooks that are triggered when a litellm user event occurs
 """
 
 import asyncio
-from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -11,6 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     AUDIT_ACTIONS,
     CommonProxyErrors,
@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.repositories.user_repository import UserRepository
 
 
 class UserManagementEventHooks:
@@ -57,7 +58,7 @@ class UserManagementEventHooks:
         try:
             if prisma_client is None:
                 raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            user_row: BaseModel = await prisma_client.db.litellm_usertable.find_first(
+            user_row: BaseModel = await UserRepository(prisma_client).table.find_first(
                 where={"user_id": response.user_id}
             )
 

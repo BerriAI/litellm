@@ -80,6 +80,46 @@ class TestGeminiTTSTransformation:
         assert "responseModalities" in result
         assert "AUDIO" in result["responseModalities"]
 
+    def test_gemini_tts_audio_parameter_mapping_with_language_code(self):
+        config = GoogleAIStudioGeminiConfig()
+
+        non_default_params = {
+            "audio": {"voice": "Kore", "format": "pcm16", "language_code": "en-US"}
+        }
+        optional_params = {}
+
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gemini-2.5-flash-preview-tts",
+            drop_params=False,
+        )
+
+        assert "speechConfig" in result
+        assert result["speechConfig"]["languageCode"] == "en-US"
+        assert (
+            result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
+            == "Kore"
+        )
+
+    def test_map_audio_params_language_code(self):
+        config = GoogleAIStudioGeminiConfig()
+
+        result = config._map_audio_params(
+            {"voice": "Kore", "format": "pcm16", "language_code": "de-DE"}
+        )
+
+        assert result["languageCode"] == "de-DE"
+        assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+    def test_map_audio_params_no_language_code(self):
+        config = GoogleAIStudioGeminiConfig()
+
+        result = config._map_audio_params({"voice": "Kore", "format": "pcm16"})
+
+        assert "languageCode" not in result
+        assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
     def test_gemini_tts_audio_parameter_with_existing_modalities(self):
         """Test audio parameter mapping when modalities already exist"""
         config = GoogleAIStudioGeminiConfig()
@@ -325,6 +365,58 @@ class TestGeminiTTSSpeechConfigInRequestBody:
 
         # Also verify responseModalities is present
         assert "responseModalities" in generation_config
+        assert "AUDIO" in generation_config["responseModalities"]
+
+
+    @pytest.mark.parametrize(
+        "model,custom_llm_provider",
+        [
+            ("gemini-2.5-flash-tts", "vertex_ai"),
+            ("gemini-2.5-flash-tts", "gemini"),
+            ("gemini-2.5-flash-preview-tts", "vertex_ai"),
+        ],
+    )
+    def test_language_code_end_to_end_mapping(self, model, custom_llm_provider):
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _transform_request_body,
+        )
+
+        config = VertexGeminiConfig()
+
+        non_default_params = {
+            "audio": {"voice": "Puck", "format": "pcm16", "language_code": "pt-BR"}
+        }
+        optional_params = {}
+
+        mapped_params = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+        assert mapped_params["speechConfig"]["languageCode"] == "pt-BR"
+
+        request_body = _transform_request_body(
+            messages=[{"role": "user", "content": "Hello world"}],
+            model=model,
+            optional_params=mapped_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={},
+            cached_content=None,
+        )
+
+        generation_config = request_body["generationConfig"]
+        assert generation_config["speechConfig"]["languageCode"] == "pt-BR"
+        assert (
+            generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"][
+                "voiceName"
+            ]
+            == "Puck"
+        )
         assert "AUDIO" in generation_config["responseModalities"]
 
 

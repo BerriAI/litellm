@@ -1,5 +1,6 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
+import copy
 import json
 import traceback
 from collections import deque
@@ -27,6 +28,98 @@ from litellm.types.utils import AdapterCompletionStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
+
+
+class _CombinedChunkSplitter:
+    """
+    Splits a streaming chunk that carries BOTH response content and a
+    ``finish_reason`` into two chunks: a content-only chunk followed by a
+    finish-only chunk.
+
+    ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
+    assumes content and ``finish_reason`` never arrive in the same chunk — true for
+    real provider streams, but false for fake-streamed providers (e.g. Vertex AI
+    Gemma ``:predict``) where ``MockResponseIterator`` collapses the entire response
+    into a single chunk. Without this split the assumption causes all content to be
+    silently dropped (only the ``message_delta`` stop event is emitted).
+
+    Supports both sync and async iteration, since ``AnthropicStreamWrapper`` exposes
+    both ``__next__`` and ``__anext__``. An instance is single-mode: callers must
+    iterate it either synchronously or asynchronously, never both — the two modes
+    hold independent iterator references on the upstream stream and mixing them
+    would advance them out of sync.
+    """
+
+    def __init__(self, completion_stream: Any):
+        self._stream = completion_stream
+        self._sync_iter: Optional[Iterator[Any]] = None
+        self._async_iter: Optional[AsyncIterator[Any]] = None
+        self._buffer: deque = deque()
+
+    @staticmethod
+    def _is_combined(chunk: Any) -> bool:
+        """True if ``chunk`` carries response content AND a finish_reason."""
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return False
+        choice = choices[0]
+        if getattr(choice, "finish_reason", None) is None:
+            return False
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            return False
+        return bool(
+            getattr(delta, "content", None)
+            or getattr(delta, "tool_calls", None)
+            or getattr(delta, "reasoning_content", None)
+            or getattr(delta, "thinking_blocks", None)
+        )
+
+    @staticmethod
+    def _split(chunk: Any) -> List[Any]:
+        """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
+        if not _CombinedChunkSplitter._is_combined(chunk):
+            return [chunk]
+
+        # Content chunk: keep the delta payload, clear the finish_reason.
+        content_chunk = copy.deepcopy(chunk)
+        content_chunk.choices[0].finish_reason = None
+
+        # Finish chunk: keep finish_reason (and usage), clear the delta payload.
+        finish_chunk = copy.deepcopy(chunk)
+        finish_delta = finish_chunk.choices[0].delta
+        finish_delta.content = None
+        if hasattr(finish_delta, "tool_calls"):
+            finish_delta.tool_calls = None
+        if hasattr(finish_delta, "reasoning_content"):
+            finish_delta.reasoning_content = None
+        if hasattr(finish_delta, "thinking_blocks"):
+            finish_delta.thinking_blocks = None
+        return [content_chunk, finish_chunk]
+
+    def __iter__(self) -> "Iterator[Any]":
+        return self
+
+    def __next__(self) -> Any:
+        if self._buffer:
+            return self._buffer.popleft()
+        if self._sync_iter is None:
+            self._sync_iter = iter(self._stream)
+        chunk = next(self._sync_iter)  # propagates StopIteration when exhausted
+        self._buffer.extend(self._split(chunk))
+        return self._buffer.popleft()
+
+    def __aiter__(self) -> "AsyncIterator[Any]":
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._buffer:
+            return self._buffer.popleft()
+        if self._async_iter is None:
+            self._async_iter = self._stream.__aiter__()
+        chunk = await self._async_iter.__anext__()  # propagates StopAsyncIteration
+        self._buffer.extend(self._split(chunk))
+        return self._buffer.popleft()
 
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
@@ -62,7 +155,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         compaction_block: Optional[CompactionBlock] = None,
         iterations_usage: Optional[List[UsageIteration]] = None,
     ):
-        super().__init__(completion_stream)
+        # Wrap the upstream stream so chunks that carry both content and a
+        # finish_reason (fake-streamed providers) are split into two — see
+        # _CombinedChunkSplitter.
+        super().__init__(_CombinedChunkSplitter(completion_stream))
         self.model = model
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
@@ -276,7 +372,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
-    def __next__(self):  # noqa: PLR0915
+    def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -373,12 +469,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
-                    # For text blocks the trigger chunk is not emitted as a separate
-                    # delta because content_block_start carries the information.
-                    # For tool_use blocks we must also emit the trigger chunk's delta
-                    # when it carries input_json_delta data, because some providers
-                    # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                    # chunk as the function name/id.
+                    # -> (optionally) the trigger chunk's delta.
+                    #
+                    # The synthesized content_block_start always carries an
+                    # empty body, so the chunk that *triggered* the transition
+                    # also carries the new block's first delta. It must be
+                    # re-emitted or the first token of the new block is lost.
+                    # This applies to text_delta and thinking_delta (the first
+                    # non-empty text/thinking token) as well as input_json_delta
+                    # (providers like xAI/Gemini bundle tool arguments with the
+                    # function name/id in a single chunk).
 
                     # 1. Stop current content block
                     self.chunk_queue.append(
@@ -397,14 +497,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
 
-                    # 3. If the trigger chunk carries tool argument data, queue it
-                    # so the input_json_delta is not silently dropped.
-                    if (
-                        processed_chunk.get("type") == "content_block_delta"
-                        and isinstance(processed_chunk.get("delta"), dict)
-                        and processed_chunk["delta"].get("type") == "input_json_delta"
-                        and processed_chunk["delta"].get("partial_json")
-                    ):
+                    # 3. If the trigger chunk carries delta content, queue it
+                    # so the first delta of the new block is not silently dropped.
+                    if self._trigger_delta_has_content(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
 
                     self.sent_content_block_finish = False
@@ -523,7 +618,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
             raise StopIteration
 
-    async def __anext__(self):  # noqa: PLR0915
+    async def __anext__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -615,12 +710,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # For text blocks the trigger chunk is not emitted as a separate
-                        # delta because content_block_start carries the information.
-                        # For tool_use blocks we must also emit the trigger chunk's delta
-                        # when it carries input_json_delta data, because some providers
-                        # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                        # chunk as the function name/id.
+                        # -> (optionally) the trigger chunk's delta.
+                        #
+                        # The synthesized content_block_start always carries an
+                        # empty body, so the chunk that *triggered* the transition
+                        # also carries the new block's first delta. It must be
+                        # re-emitted or the first token of the new block is lost.
+                        # This applies to text_delta and thinking_delta (the
+                        # first non-empty text/thinking token) as well as
+                        # input_json_delta (providers like xAI/Gemini bundle tool
+                        # arguments with the function name/id in a single chunk).
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -637,15 +736,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
 
-                        # 3. If the trigger chunk carries tool argument data, queue it
-                        # so the input_json_delta is not silently dropped.
-                        if (
-                            processed_chunk.get("type") == "content_block_delta"
-                            and isinstance(processed_chunk.get("delta"), dict)
-                            and processed_chunk["delta"].get("type")
-                            == "input_json_delta"
-                            and processed_chunk["delta"].get("partial_json")
-                        ):
+                        # 3. If the trigger chunk carries delta content, queue it
+                        # so the first delta of the new block is not silently dropped.
+                        if self._trigger_delta_has_content(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
@@ -801,6 +894,38 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
+
+    @staticmethod
+    def _trigger_delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
+        """Return True if a translated trigger chunk carries a non-empty
+        ``content_block_delta`` payload that must be re-emitted after a
+        block transition.
+
+        When an upstream chunk both *triggers* a new content block (its type
+        differs from the active block) and *carries* delta content, that
+        content belongs to the new block. The synthesized
+        ``content_block_start`` only ever carries an empty body — see
+        ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
+        which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
+        so the trigger chunk's delta must be re-queued or the first token of
+        the new block (the first non-empty text/thinking delta, or bundled
+        tool arguments) is silently dropped.
+        """
+        if processed_chunk.get("type") != "content_block_delta":
+            return False
+        delta = processed_chunk.get("delta")
+        if not isinstance(delta, dict):
+            return False
+        delta_type = delta.get("type")
+        if delta_type == "text_delta":
+            return bool(delta.get("text"))
+        if delta_type == "input_json_delta":
+            return bool(delta.get("partial_json"))
+        if delta_type == "thinking_delta":
+            return bool(delta.get("thinking"))
+        if delta_type == "signature_delta":
+            return bool(delta.get("signature"))
+        return False
 
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """

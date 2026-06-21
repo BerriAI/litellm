@@ -44,15 +44,19 @@ def _build_db_connection_url_params(
     pool_timeout: Optional[Union[int, float]],
     connect_timeout: Optional[Union[int, float]] = None,
     socket_timeout: Optional[Union[int, float]] = None,
+    disable_prepared_statements: bool = False,
     extra_params: Optional[dict] = None,
 ) -> dict:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
     `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
     name (https://www.prisma.io/docs/orm/overview/databases/postgresql) and are
-    omitted when None so Prisma's defaults apply. `extra_params` is an
-    untyped passthrough — keys it provides win over the named arguments above,
-    so it can be used to override any default we set here.
+    omitted when None so Prisma's defaults apply. `disable_prepared_statements`
+    sets `pgbouncer=true`, which makes Prisma stop using server-side prepared
+    statements (pgbouncer transaction-pool compatible; also sidesteps the
+    "cached plan must not change result type" error during rolling migrations).
+    `extra_params` is an untyped passthrough — keys it provides win over the
+    named arguments above, so it can be used to override any default we set here.
     """
     params: dict = {
         "connection_limit": connection_limit,
@@ -63,6 +67,8 @@ def _build_db_connection_url_params(
         params["connect_timeout"] = connect_timeout
     if socket_timeout is not None:
         params["socket_timeout"] = socket_timeout
+    if disable_prepared_statements:
+        params["pgbouncer"] = "true"
     if extra_params:
         params.update(extra_params)
     return params
@@ -96,9 +102,9 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _run_health_check(host, port):
-        print("\nLiteLLM: Health Testing models in config")  # noqa
+        print("\nLiteLLM: Health Testing models in config")
         response = httpx.get(url=f"http://{host}:{port}/health")
-        print(json.dumps(response.json(), indent=4))  # noqa
+        print(json.dumps(response.json(), indent=4))
 
     @staticmethod
     def _run_test_chat_completion(
@@ -132,7 +138,7 @@ class ProxyInitializationHelpers:
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 
-        print(  # noqa
+        print(
             f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
         )
 
@@ -148,11 +154,11 @@ class ProxyInitializationHelpers:
         )
         for chunk in stream_response:
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")  # noqa
+        print("\n making completion request to proxy")
         completion_response = client.completions.create(
             model=request_model, prompt="this is a test request, write a short poem"
         )
-        print(completion_response)  # noqa
+        print(completion_response)
 
     @staticmethod
     def _get_default_unvicorn_init_args(
@@ -178,7 +184,7 @@ class ProxyInitializationHelpers:
             "port": port,
         }
         if log_config is not None:
-            print(f"Using log_config: {log_config}")  # noqa
+            print(f"Using log_config: {log_config}")
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
             # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
@@ -192,12 +198,43 @@ class ProxyInitializationHelpers:
             ):
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
             else:
-                print(  # noqa
+                print(
                     f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
                     f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
                     f"Ignoring the flag.\033[0m"
                 )
         return uvicorn_args
+
+    @staticmethod
+    def _apply_uvicorn_max_requests_jitter(
+        uvicorn_args: dict,
+        max_requests_before_restart: Optional[int],
+        jitter: int,
+    ) -> None:
+        """
+        Stagger uvicorn worker restarts via limit_max_requests_jitter (uvicorn>=0.41.0).
+        """
+        import inspect
+
+        import uvicorn
+
+        if max_requests_before_restart is None:
+            print(
+                "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                "has no effect without --max_requests_before_restart\033[0m\n"
+            )
+            return
+        if (
+            "limit_max_requests_jitter"
+            in inspect.signature(uvicorn.Config.__init__).parameters
+        ):
+            uvicorn_args["limit_max_requests_jitter"] = jitter
+        else:
+            print(
+                f"\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
+                f"Ignoring the flag.\033[0m"
+            )
 
     @staticmethod
     def _get_reload_options(config_path: Optional[str]) -> dict:
@@ -298,15 +335,15 @@ class ProxyInitializationHelpers:
         from hypercorn.asyncio import serve
         from hypercorn.config import Config
 
-        print(  # noqa
-            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n"  # noqa
-        )  # noqa
+        print(
+            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n"
+        )
         config = Config()
         config.bind = [f"{host}:{port}"]
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(  # noqa
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+            print(
+                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
             )
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
@@ -336,16 +373,16 @@ class ProxyInitializationHelpers:
         from granian import Granian
         from granian.constants import Interfaces
 
-        print(  # noqa
+        print(
             f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n"
         )
         if max_requests_before_restart is not None:
-            print(  # noqa
+            print(
                 "\033[1;33mLiteLLM: --max_requests_before_restart is not supported by Granian "
                 "(Granian uses workers_lifetime in seconds, not a per-request limit).\033[0m\n"
             )
         if ciphers is not None:
-            print(  # noqa
+            print(
                 "\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n"
             )
 
@@ -360,7 +397,7 @@ class ProxyInitializationHelpers:
         if granian_runtime_threads is not None:
             kwargs["runtime_threads"] = granian_runtime_threads
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(  # noqa
+            print(
                 f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
             )
             kwargs["ssl_cert"] = Path(ssl_certfile_path)
@@ -381,6 +418,7 @@ class ProxyInitializationHelpers:
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
         max_requests_before_restart: Optional[int] = None,
+        max_requests_before_restart_jitter: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -413,19 +451,19 @@ class ProxyInitializationHelpers:
                 }'
                 \n
                 """
-                print()  # noqa
-                print(  # noqa
+                print()
+                print(
                     '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
                 )
-                print(  # noqa
+                print(
                     f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
                 )
-                print(  # noqa
+                print(
                     "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
-                )  # noqa
-                print(  # noqa
+                )
+                print(
                     f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
-                )  # noqa
+                )
 
             def load_config(self):
                 # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
@@ -445,8 +483,8 @@ class ProxyInitializationHelpers:
                 # gunicorn app function
                 return self.application
 
-        print(  # noqa
-            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"  # noqa
+        print(
+            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
         )
         gunicorn_options = {
             "bind": f"{host}:{port}",
@@ -461,6 +499,16 @@ class ProxyInitializationHelpers:
         # Optional: recycle workers after N requests to mitigate memory growth
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
+        if max_requests_before_restart_jitter is not None:
+            if max_requests_before_restart is None:
+                print(
+                    "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                    "has no effect without --max_requests_before_restart\033[0m\n"
+                )
+            else:
+                gunicorn_options["max_requests_jitter"] = (
+                    max_requests_before_restart_jitter
+                )
 
         # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
@@ -472,8 +520,8 @@ class ProxyInitializationHelpers:
             gunicorn_options["child_exit"] = child_exit
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(  # noqa
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+            print(
+                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
             )
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
@@ -490,7 +538,7 @@ class ProxyInitializationHelpers:
         except Exception as e:
             print(f"""
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-            """)  # noqa  # noqa
+            """)
 
     @staticmethod
     def _is_port_in_use(port):
@@ -551,10 +599,11 @@ class ProxyInitializationHelpers:
         os.makedirs(multiproc_dir, exist_ok=True)
         wipe_directory(multiproc_dir)
         action = "Auto-created" if auto_created else "Using existing"
-        print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")  # noqa
+        print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
 
 
 @click.command()
+@click.argument("cli_args", nargs=-1)
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
 )
@@ -785,6 +834,18 @@ class ProxyInitializationHelpers:
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 @click.option(
+    "--max_requests_before_restart_jitter",
+    default=None,
+    type=int,
+    help=(
+        "Stagger worker restarts by adding a random amount in [0, jitter] to "
+        "--max_requests_before_restart so workers do not recycle at the same time "
+        "(uvicorn: limit_max_requests_jitter, requires uvicorn>=0.41.0; gunicorn: max_requests_jitter). "
+        "Has no effect without --max_requests_before_restart."
+    ),
+    envvar="MAX_REQUESTS_BEFORE_RESTART_JITTER",
+)
+@click.option(
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
@@ -807,7 +868,8 @@ class ProxyInitializationHelpers:
     default=False,
     help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
-def run_server(  # noqa: PLR0915
+def run_server(
+    cli_args,
     host,
     port,
     api_base,
@@ -850,10 +912,25 @@ def run_server(  # noqa: PLR0915
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
+    max_requests_before_restart_jitter: Optional[int],
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
 ):
+    if cli_args:
+        if cli_args == ("xai-oauth", "login"):
+            from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+
+            authenticator = XAIOAuthAuthenticator()
+            auth_data = authenticator.login()
+            click.echo(
+                f"xAI OAuth login successful. Credentials saved to {authenticator.auth_file}."
+            )
+            if auth_data.get("expires_at"):
+                click.echo(f"Access token expires at {auth_data['expires_at']}.")
+            return
+        raise click.UsageError(f"Unknown command: {' '.join(cli_args)}")
+
     if setup:
         from litellm.setup_wizard import run_setup_wizard
 
@@ -947,6 +1024,7 @@ def run_server(  # noqa: PLR0915
         db_connection_timeout: Optional[Union[int, float]] = 60
         db_connect_timeout: Optional[Union[int, float]] = None
         db_socket_timeout: Optional[Union[int, float]] = None
+        db_disable_prepared_statements: bool = False
         db_extra_connection_params: Optional[dict] = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
@@ -1067,6 +1145,17 @@ def run_server(  # noqa: PLR0915
                 )
             db_connect_timeout = general_settings.get("database_connect_timeout")
             db_socket_timeout = general_settings.get("database_socket_timeout")
+            _disable_prepared_statements = general_settings.get(
+                "database_disable_prepared_statements", False
+            )
+            if isinstance(_disable_prepared_statements, str):
+                from litellm.secret_managers.main import str_to_bool
+
+                db_disable_prepared_statements = (
+                    str_to_bool(_disable_prepared_statements) is True
+                )
+            else:
+                db_disable_prepared_statements = bool(_disable_prepared_statements)
             db_extra_connection_params = general_settings.get(
                 "database_extra_connection_params"
             )
@@ -1114,6 +1203,7 @@ def run_server(  # noqa: PLR0915
                     pool_timeout=db_connection_timeout,
                     connect_timeout=db_connect_timeout,
                     socket_timeout=db_socket_timeout,
+                    disable_prepared_statements=db_disable_prepared_statements,
                     extra_params=db_extra_connection_params,
                 )
                 if os.getenv("DATABASE_URL", None) is not None:
@@ -1150,7 +1240,7 @@ def run_server(  # noqa: PLR0915
                     check_prisma_schema_diff(db_url=None)
                 else:
                     if not use_v2_migration_resolver:
-                        print(  # noqa
+                        print(
                             "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
                             "If your deployment has seen schema thrashing during rolling "
                             "deploys, try --use_v2_migration_resolver (safer: avoids the "
@@ -1166,7 +1256,7 @@ def run_server(  # noqa: PLR0915
                         # (e.g. non-idempotent failures, permission issues).
                         # v1 never raises here, so this only fires when the
                         # operator opted into v2.
-                        print(  # noqa
+                        print(
                             "\033[1;31mLiteLLM Proxy: Database migration cannot proceed. "
                             f"{e}\033[0m",
                             file=sys.stderr,
@@ -1175,19 +1265,19 @@ def run_server(  # noqa: PLR0915
                         sys.exit(2)
                     if not setup_ok:
                         if enforce_prisma_migration_check:
-                            print(  # noqa
+                            print(
                                 "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
                                 "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
                             )
                             sys.exit(1)
                         else:
-                            print(  # noqa
+                            print(
                                 "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
                                 "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
                             )
             else:
-                print(  # noqa
-                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
+                print(
+                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa: F541
                 )
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
             port = random.randint(1024, 49152)
@@ -1198,7 +1288,7 @@ def run_server(  # noqa: PLR0915
             litellm._turn_on_debug()
 
         # DO NOT DELETE - enables global variables to work across files
-        from litellm.proxy.proxy_server import app  # noqa
+        from litellm.proxy.proxy_server import app
 
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
@@ -1208,9 +1298,7 @@ def run_server(  # noqa: PLR0915
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
-            print(  # noqa
-                "LiteLLM: Setup complete. Skipping server startup as requested."
-            )
+            print("LiteLLM: Setup complete. Skipping server startup as requested.")
             return
 
         running_uvicorn = run_gunicorn is False and run_hypercorn is False
@@ -1227,9 +1315,15 @@ def run_server(  # noqa: PLR0915
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+            if max_requests_before_restart_jitter is not None:
+                ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                    uvicorn_args=uvicorn_args,
+                    max_requests_before_restart=max_requests_before_restart,
+                    jitter=max_requests_before_restart_jitter,
+                )
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-                print(  # noqa
-                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+                print(
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
                 )
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
@@ -1254,6 +1348,7 @@ def run_server(  # noqa: PLR0915
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
+                max_requests_before_restart_jitter=max_requests_before_restart_jitter,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(

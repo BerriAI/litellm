@@ -40,6 +40,15 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.table_repositories import OrganizationMembershipRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -245,7 +254,7 @@ async def new_organization(
 
     if user_api_key_dict.user_id is not None:
         try:
-            user_object = await prisma_client.db.litellm_usertable.find_unique(
+            user_object = await UserRepository(prisma_client).table.find_unique(
                 where={"user_id": user_api_key_dict.user_id}
             )
             user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
@@ -267,7 +276,7 @@ async def new_organization(
 
         new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
-        _budget = await prisma_client.db.litellm_budgettable.create(
+        _budget = await BudgetRepository(prisma_client).table.create(
             data={
                 **new_budget,  # type: ignore
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -323,7 +332,7 @@ async def new_organization(
     verbose_proxy_logger.info(
         f"new_organization_row: {json.dumps(new_organization_row, indent=2)}"
     )
-    response = await prisma_client.db.litellm_organizationtable.create(
+    response = await OrganizationRepository(prisma_client).table.create(
         data={
             **new_organization_row,  # type: ignore
         },
@@ -372,9 +381,9 @@ async def get_organization_daily_activity(
 
     # Restrict non-proxy-admins to only organizations where they are org_admin
     if not _user_has_admin_view(user_api_key_dict):
-        memberships = await prisma_client.db.litellm_organizationmembership.find_many(
-            where={"user_id": user_api_key_dict.user_id}
-        )
+        memberships = await OrganizationMembershipRepository(
+            prisma_client
+        ).table.find_many(where={"user_id": user_api_key_dict.user_id})
         admin_org_ids = [
             m.organization_id
             for m in memberships
@@ -400,7 +409,7 @@ async def get_organization_daily_activity(
     where_condition = {}
     if org_ids_list:
         where_condition["organization_id"] = {"in": list(org_ids_list)}
-    org_aliases = await prisma_client.db.litellm_organizationtable.find_many(
+    org_aliases = await OrganizationRepository(prisma_client).table.find_many(
         where=where_condition
     )
     org_alias_metadata = {
@@ -439,10 +448,10 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
-        created_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data.object_permission.model_dump(exclude_none=True),
-            )
+        created_object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.create(
+            data=data.object_permission.model_dump(exclude_none=True),
         )
         del data.object_permission
         return created_object_permission.object_permission_id
@@ -525,10 +534,10 @@ async def update_organization(
         prisma_client=prisma_client,
     )
 
-    existing_organization_row = (
-        await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": data.organization_id},
-        )
+    existing_organization_row = await OrganizationRepository(
+        prisma_client
+    ).table.find_unique(
+        where={"organization_id": data.organization_id},
     )
 
     if existing_organization_row is None:
@@ -574,7 +583,7 @@ async def update_organization(
     for field in LiteLLM_BudgetTable.model_fields.keys():
         updated_organization_row.pop(field, None)
 
-    response = await prisma_client.db.litellm_organizationtable.update(
+    response = await OrganizationRepository(prisma_client).table.update(
         where={"organization_id": data.organization_id},
         data=updated_organization_row,
         include={"members": True, "teams": True, "litellm_budget_table": True},
@@ -644,19 +653,19 @@ async def delete_organization(
     deleted_orgs = []
     for organization_id in data.organization_ids:
         # delete all teams in the organization
-        await prisma_client.db.litellm_teamtable.delete_many(
+        await TeamRepository(prisma_client).table.delete_many(
             where={"organization_id": organization_id}
         )
         # delete all members in the organization
-        await prisma_client.db.litellm_organizationmembership.delete_many(
+        await OrganizationMembershipRepository(prisma_client).table.delete_many(
             where={"organization_id": organization_id}
         )
         # delete all keys in the organization
-        await prisma_client.db.litellm_verificationtoken.delete_many(
+        await VerificationTokenRepository(prisma_client).table.delete_many(
             where={"organization_id": organization_id}
         )
         # delete the organization
-        deleted_org = await prisma_client.db.litellm_organizationtable.delete(
+        deleted_org = await OrganizationRepository(prisma_client).table.delete(
             where={"organization_id": organization_id},
             include={"members": True, "teams": True, "litellm_budget_table": True},
         )
@@ -732,17 +741,15 @@ async def list_organization(
 
     # if proxy admin or admin viewer - get all orgs (with optional filters)
     if _user_has_admin_view(user_api_key_dict):
-        response = await prisma_client.db.litellm_organizationtable.find_many(
+        response = await OrganizationRepository(prisma_client).table.find_many(
             where=where_conditions if where_conditions else None,
             include={"litellm_budget_table": True, "members": True, "teams": True},
         )
     # if internal user - get orgs they are a member of (with optional filters)
     else:
-        org_memberships = (
-            await prisma_client.db.litellm_organizationmembership.find_many(
-                where={"user_id": user_api_key_dict.user_id}
-            )
-        )
+        org_memberships = await OrganizationMembershipRepository(
+            prisma_client
+        ).table.find_many(where={"user_id": user_api_key_dict.user_id})
         membership_org_ids = [
             membership.organization_id for membership in org_memberships
         ]
@@ -756,20 +763,20 @@ async def list_organization(
                     response = []
                 else:
                     where_conditions["organization_id"] = org_id
-                    response = (
-                        await prisma_client.db.litellm_organizationtable.find_many(
-                            where=where_conditions,
-                            include={
-                                "litellm_budget_table": True,
-                                "members": True,
-                                "teams": True,
-                            },
-                        )
+                    response = await OrganizationRepository(
+                        prisma_client
+                    ).table.find_many(
+                        where=where_conditions,
+                        include={
+                            "litellm_budget_table": True,
+                            "members": True,
+                            "teams": True,
+                        },
                     )
             else:
                 # Filter by membership and any additional filters
                 where_conditions["organization_id"] = {"in": membership_org_ids}
-                response = await prisma_client.db.litellm_organizationtable.find_many(
+                response = await OrganizationRepository(prisma_client).table.find_many(
                     where=where_conditions,
                     include={
                         "litellm_budget_table": True,
@@ -809,20 +816,20 @@ async def info_organization(
         prisma_client=prisma_client,
     )
 
-    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
-        await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": organization_id},
-            include={
-                "litellm_budget_table": True,
-                "members": {
-                    "include": {
-                        "user": True,
-                    }
-                },
-                "teams": True,
-                "object_permission": True,
+    response: Optional[
+        LiteLLM_OrganizationTableWithMembers
+    ] = await OrganizationRepository(prisma_client).table.find_unique(
+        where={"organization_id": organization_id},
+        include={
+            "litellm_budget_table": True,
+            "members": {
+                "include": {
+                    "user": True,
+                }
             },
-        )
+            "teams": True,
+            "object_permission": True,
+        },
     )
 
     if response is None:
@@ -868,7 +875,7 @@ async def deprecated_info_organization(
             prisma_client=prisma_client,
         )
 
-    response = await prisma_client.db.litellm_organizationtable.find_many(
+    response = await OrganizationRepository(prisma_client).table.find_many(
         where={"organization_id": {"in": data.organizations}},
         include={"litellm_budget_table": True},
     )
@@ -945,11 +952,9 @@ async def organization_member_add(
         )
 
         # Check if organization exists
-        existing_organization_row = (
-            await prisma_client.db.litellm_organizationtable.find_unique(
-                where={"organization_id": data.organization_id}
-            )
-        )
+        existing_organization_row = await OrganizationRepository(
+            prisma_client
+        ).table.find_unique(where={"organization_id": data.organization_id})
         if existing_organization_row is None:
             raise HTTPException(
                 status_code=404,
@@ -1012,11 +1017,9 @@ async def find_member_if_email(
     """
 
     try:
-        existing_user_email_row: BaseModel = (
-            await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_email": user_email}
-            )
-        )
+        existing_user_email_row: BaseModel = await UserRepository(
+            prisma_client
+        ).table.find_unique(where={"user_email": user_email})
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -1064,11 +1067,9 @@ async def organization_member_update(
         )
 
         # Check if organization exists
-        existing_organization_row = (
-            await prisma_client.db.litellm_organizationtable.find_unique(
-                where={"organization_id": data.organization_id}
-            )
-        )
+        existing_organization_row = await OrganizationRepository(
+            prisma_client
+        ).table.find_unique(where={"organization_id": data.organization_id})
         if existing_organization_row is None:
             raise HTTPException(
                 status_code=400,
@@ -1085,15 +1086,15 @@ async def organization_member_update(
             data.user_id = existing_user_email_row.user_id
 
         try:
-            existing_organization_membership = (
-                await prisma_client.db.litellm_organizationmembership.find_unique(
-                    where={
-                        "user_id_organization_id": {
-                            "user_id": data.user_id,
-                            "organization_id": data.organization_id,
-                        }
+            existing_organization_membership = await OrganizationMembershipRepository(
+                prisma_client
+            ).table.find_unique(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
                     }
-                )
+                }
             )
         except Exception as e:
             raise HTTPException(
@@ -1114,7 +1115,7 @@ async def organization_member_update(
         # org-scoped operations. An org-admin of any org could otherwise
         # alter a PROXY_ADMIN user's per-org role, which has downstream
         # effects on admin UI filtering and scope derivation.
-        target_user_row = await prisma_client.db.litellm_usertable.find_unique(
+        target_user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": data.user_id}
         )
         if target_user_row is not None and getattr(
@@ -1136,7 +1137,7 @@ async def organization_member_update(
 
         # Update member role
         if data.role is not None:
-            await prisma_client.db.litellm_organizationmembership.update(
+            await OrganizationMembershipRepository(prisma_client).table.update(
                 where={
                     "user_id_organization_id": {
                         "user_id": data.user_id,
@@ -1165,7 +1166,7 @@ async def organization_member_update(
                 )
 
             # update organization membership with new budget_id
-            await prisma_client.db.litellm_organizationmembership.update(
+            await OrganizationMembershipRepository(prisma_client).table.update(
                 where={
                     "user_id_organization_id": {
                         "user_id": data.user_id,
@@ -1174,16 +1175,16 @@ async def organization_member_update(
                 },
                 data={"budget_id": budget_id},
             )
-        final_organization_membership: Optional[BaseModel] = (
-            await prisma_client.db.litellm_organizationmembership.find_unique(
-                where={
-                    "user_id_organization_id": {
-                        "user_id": data.user_id,
-                        "organization_id": data.organization_id,
-                    }
-                },
-                include={"litellm_budget_table": True},
-            )
+        final_organization_membership: Optional[
+            BaseModel
+        ] = await OrganizationMembershipRepository(prisma_client).table.find_unique(
+            where={
+                "user_id_organization_id": {
+                    "user_id": data.user_id,
+                    "organization_id": data.organization_id,
+                }
+            },
+            include={"litellm_budget_table": True},
         )
 
         if final_organization_membership is None:
@@ -1239,7 +1240,9 @@ async def organization_member_delete(
             )
             data.user_id = existing_user_email_row.user_id
 
-        member_to_delete = await prisma_client.db.litellm_organizationmembership.delete(
+        member_to_delete = await OrganizationMembershipRepository(
+            prisma_client
+        ).table.delete(
             where={
                 "user_id_organization_id": {
                     "user_id": data.user_id,
@@ -1273,17 +1276,15 @@ async def add_member_to_organization(
         existing_user_email_row = None
         ## Check if user exists in LiteLLM_UserTable - user exists - either the user_id or user_email is in LiteLLM_UserTable
         if member.user_id is not None:
-            existing_user_id_row = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": member.user_id}
-            )
+            existing_user_id_row = await UserRepository(
+                prisma_client
+            ).table.find_unique(where={"user_id": member.user_id})
 
         if existing_user_id_row is None and member.user_email is not None:
             try:
-                existing_user_email_row = (
-                    await prisma_client.db.litellm_usertable.find_unique(
-                        where={"user_email": member.user_email}
-                    )
-                )
+                existing_user_email_row = await UserRepository(
+                    prisma_client
+                ).table.find_unique(where={"user_email": member.user_email})
             except Exception as e:
                 raise ValueError(
                     f"Potential NON-Existent or Duplicate user email in DB: Error finding a unique instance of user_email={member.user_email} in LiteLLM_UserTable.: {e}"
@@ -1326,14 +1327,14 @@ async def add_member_to_organization(
             )
 
         # Add user to organization
-        _organization_membership = (
-            await prisma_client.db.litellm_organizationmembership.create(
-                data={
-                    "organization_id": organization_id,
-                    "user_id": user_object.user_id,
-                    "user_role": member.role,
-                }
-            )
+        _organization_membership = await OrganizationMembershipRepository(
+            prisma_client
+        ).table.create(
+            data={
+                "organization_id": organization_id,
+                "user_id": user_object.user_id,
+                "user_role": member.role,
+            }
         )
         organization_membership = LiteLLM_OrganizationMembershipTable(
             **_organization_membership.model_dump()

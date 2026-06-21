@@ -38,6 +38,7 @@ export interface passThroughItem {
   headers: object;
   include_subpath?: boolean;
   cost_per_request?: number;
+  timeout?: number;
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;

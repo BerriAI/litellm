@@ -197,7 +197,7 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
@@ -294,7 +294,7 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
@@ -473,7 +473,7 @@ class BedrockLLM(BaseAWSLLM):
                     prompt += f"{message['content']}"
         return prompt, chat_history  # type: ignore
 
-    def process_response(  # noqa: PLR0915
+    def process_response(
         self,
         model: str,
         response: httpx.Response,
@@ -765,7 +765,7 @@ class BedrockLLM(BaseAWSLLM):
 
         return model_response
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,
@@ -790,7 +790,7 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", None)
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -1203,7 +1203,7 @@ class BedrockLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         transformed_request = (
             await litellm.AmazonAnthropicClaudeConfig().async_transform_request(
@@ -1350,7 +1350,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 

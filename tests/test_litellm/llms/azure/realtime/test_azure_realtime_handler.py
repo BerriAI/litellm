@@ -148,6 +148,103 @@ async def test_construct_url_ga_protocol():
 
 
 @pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_ga():
+    """
+    Transcription sessions connect with intent=transcription. The Azure handler
+    must forward that query param so gpt-realtime-whisper opens a transcription
+    session instead of a normal realtime session.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"model": "gpt-realtime-whisper", "intent": "transcription"},
+    )
+
+    assert "/openai/v1/realtime?" in url
+    assert "intent=transcription" in url
+    assert "model=" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_ga_without_model_query():
+    """
+    OpenAI-compatible transcription clients may connect with only
+    intent=transcription and send the transcription model in session.update.
+    Preserve that query shape instead of forcing model= into the upstream URL.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"intent": "transcription"},
+    )
+
+    assert url == (
+        "wss://my-endpoint.openai.azure.com/openai/v1/realtime"
+        "?intent=transcription"
+    )
+
+
+@pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_beta():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="whisper-deploy",
+        api_version="2024-10-01-preview",
+        query_params={"intent": "transcription"},
+    )
+
+    assert "/openai/realtime?" in url
+    assert "deployment=whisper-deploy" in url
+    assert "intent=transcription" in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_encodes_intent_value():
+    """A crafted intent value must be URL-encoded, not injected as raw query params."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"intent": "transcription&foo=bar"},
+    )
+    assert "intent=transcription%26foo%3Dbar" in url
+    assert "&foo=bar" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_no_intent_when_absent():
+    """No intent param leaks into the URL when not provided."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+        realtime_protocol="GA",
+        query_params={"model": "gpt-4o-realtime-preview"},
+    )
+    assert "intent=" not in url
+
+
+@pytest.mark.asyncio
 async def test_construct_url_v1_protocol():
     """
     Test that realtime_protocol='v1' also uses /openai/v1/realtime.
@@ -366,6 +463,45 @@ async def test_realtime_protocol_from_litellm_params():
     # Simulate config.yaml with realtime_protocol as an extra field
     litellm_params = GenericLiteLLMParams(realtime_protocol="GA")
     assert litellm_params.get("realtime_protocol") == "GA"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
+    """
+    Azure gpt-realtime-whisper transcription connects on the GA /openai/v1/realtime
+    path. If the DB model lacks realtime_protocol, infer GA from intent=transcription.
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "azure_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return (
+            "gpt-realtime-whisper",
+            "azure",
+            "test-key",
+            "https://my-endpoint.openai.azure.com",
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    await realtime_main._arealtime(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_key="test-key",
+        api_version="2025-04-01-preview",
+        query_params={"intent": "transcription"},
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["realtime_protocol"] == "GA"
+    assert called_kwargs["query_params"] == {"intent": "transcription"}
 
 
 @pytest.mark.asyncio

@@ -6,11 +6,11 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
+import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Tag } from "antd";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
@@ -19,8 +19,6 @@ import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
-  proxySettings: any;
-  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   accessToken: string | null;
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
@@ -28,15 +26,13 @@ interface NavbarProps {
 }
 
 const Navbar: React.FC<NavbarProps> = ({
-  proxySettings,
-  setProxySettings,
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const [logoutUrl, setLogoutUrl] = useState("");
+  const proxySettings = useProxySettings(accessToken);
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
@@ -47,29 +43,11 @@ const Navbar: React.FC<NavbarProps> = ({
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
-  useEffect(() => {
-    const initializeProxySettings = async () => {
-      if (accessToken) {
-        const settings = await fetchProxySettings(accessToken);
-        console.log("response from fetchProxySettings", settings);
-        if (settings) {
-          setProxySettings(settings);
-        }
-      }
-    };
-
-    initializeProxySettings();
-  }, [accessToken]);
-
-  useEffect(() => {
-    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
-  }, [proxySettings]);
-
   const handleLogout = () => {
     clearTokenCookies();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = logoutUrl;
+    window.location.href = proxySettings.PROXY_LOGOUT_URL || "";
   };
 
   const handleWorkerSwitch = (workerId: string) => {

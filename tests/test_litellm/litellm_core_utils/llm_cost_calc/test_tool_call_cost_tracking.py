@@ -1,17 +1,14 @@
-import json
 import os
 import sys
-from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
-from litellm.types.utils import ModelInfo, ModelResponse, StandardBuiltInToolsParams
+from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -137,6 +134,22 @@ def test_get_cost_for_anthropic_web_search():
         custom_llm_provider="anthropic",
     )
     assert cost > 0.0
+
+
+def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
+    """
+    Anthropic-compatible passthrough responses can construct Usage from a raw
+    usage payload. Ensure dict server_tool_use values are normalized before
+    built-in tool cost tracking reads server_tool_use.web_search_requests.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    usage = Usage(server_tool_use={"web_search_requests": 1})
+
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=None, usage=usage
+    )
 
 
 @pytest.mark.parametrize(

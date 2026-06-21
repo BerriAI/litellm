@@ -359,6 +359,8 @@ ignored_keys = [
     "metadata.additional_usage_values.cache_read_input_tokens",
     "metadata.additional_usage_values.inference_geo",
     "metadata.additional_usage_values.speed",
+    "metadata.additional_usage_values.service_tier",
+    "metadata.additional_usage_values.iterations",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
     "metadata.user_api_key",
@@ -1314,7 +1316,8 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             assert session_id == "session-123"
             assert page_size == 1
             assert skip == 1  # page=2, page_size=1
-            return [mock_spend_logs[1]]
+            assert 'ORDER BY "startTime" DESC' in sql_query
+            return [mock_spend_logs[0]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -1337,7 +1340,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
     assert data["page_size"] == 1
     assert data["total_pages"] == 2
     assert len(data["data"]) == 1
-    assert data["data"][0]["request_id"] == "req2"
+    assert data["data"][0]["request_id"] == "req1"
 
 
 @pytest.mark.asyncio
@@ -2628,7 +2631,8 @@ async def test_ui_view_spend_logs_with_error_code(client):
             assert data["total"] == 1
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "log1"
-            metadata = json.loads(data["data"][0]["metadata"])
+            metadata = data["data"][0]["metadata"]
+            assert isinstance(metadata, dict)
             assert "error_information" in metadata
             assert metadata["error_information"]["error_code"] == "404"
     finally:
@@ -2701,7 +2705,8 @@ async def test_ui_view_spend_logs_with_error_message(client):
             assert data["total"] == 1
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "log1"
-            metadata = json.loads(data["data"][0]["metadata"])
+            metadata = data["data"][0]["metadata"]
+            assert isinstance(metadata, dict)
             assert "error_information" in metadata
             assert (
                 "Rate limit exceeded" in metadata["error_information"]["error_message"]
@@ -2793,7 +2798,8 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
             assert data["total"] == 1
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "log3"
-            metadata = json.loads(data["data"][0]["metadata"])
+            metadata = data["data"][0]["metadata"]
+            assert isinstance(metadata, dict)
             assert "user_api_key_alias" in metadata
             assert metadata["user_api_key_alias"] == "test-key-1"
             assert "error_information" in metadata
@@ -3603,5 +3609,180 @@ async def test_spend_user_fn_strips_password_field(client, monkeypatch):
         body = response.json()
         assert len(body) == 1
         assert "password" not in body[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_rehydrates_metadata_jsonb_text(client, monkeypatch):
+    """
+    Regression for #29674: query_raw returns the JSONB `metadata` column as a
+    string, so failure rows (status="failure", error_information.error_code=...)
+    looked like successes at the UI layer because metadata.status was the
+    string ".status" attribute lookup on a str. The endpoint must re-hydrate
+    `metadata` to a dict before returning.
+    """
+    failure_metadata = {
+        "status": "failure",
+        "error_information": {
+            "error_code": "403",
+            "error_message": "Forbidden by upstream",
+        },
+        "user_api_key_alias": "alias-1",
+    }
+
+    raw_row = {
+        "request_id": "req-failure-1",
+        "call_type": "completion",
+        "api_key": "hashed-key",
+        "spend": 0.0,
+        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "startTime": "2025-01-01T00:00:00Z",
+        "endTime": "2025-01-01T00:00:01Z",
+        "completionStartTime": None,
+        "model": "gpt-4o",
+        "model_id": None,
+        "model_group": None,
+        "custom_llm_provider": "openai",
+        "api_base": None,
+        "user": "u",
+        "metadata": json.dumps(failure_metadata),  # JSONB column comes back as str
+        "cache_hit": None,
+        "cache_key": None,
+        "request_tags": None,
+        "team_id": None,
+        "organization_id": None,
+        "end_user": None,
+        "requester_ip_address": None,
+        "session_id": None,
+        "status": "failure",
+        "mcp_namespaced_tool_name": None,
+        "agent_id": None,
+        "request_duration_ms": 1000,
+    }
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    async def mock_query_raw(sql_query, *params):
+        return [raw_row]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"], "expected one row in data"
+        row = body["data"][0]
+        md = row["metadata"]
+        # The bug had metadata returned as a JSON string; the fix re-hydrates
+        # it so the dashboard's metadata.status / metadata.error_information
+        # accessors work.
+        assert isinstance(md, dict), f"metadata should be dict, got {type(md)}"
+        assert md["status"] == "failure"
+        assert md["error_information"]["error_code"] == "403"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict(
+    client, monkeypatch
+):
+    """
+    Defensive: if `metadata` is somehow not valid JSON, fall back to {} rather
+    than 500-ing the whole UI page.
+    """
+    raw_row = {
+        "request_id": "req-bad-json",
+        "call_type": "completion",
+        "api_key": "hashed-key",
+        "spend": 0.0,
+        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "startTime": "2025-01-01T00:00:00Z",
+        "endTime": "2025-01-01T00:00:01Z",
+        "completionStartTime": None,
+        "model": "gpt-4o",
+        "model_id": None,
+        "model_group": None,
+        "custom_llm_provider": "openai",
+        "api_base": None,
+        "user": "u",
+        "metadata": "{not-json",
+        "cache_hit": None,
+        "cache_key": None,
+        "request_tags": None,
+        "team_id": None,
+        "organization_id": None,
+        "end_user": None,
+        "requester_ip_address": None,
+        "session_id": None,
+        "status": "success",
+        "mcp_namespaced_tool_name": None,
+        "agent_id": None,
+        "request_duration_ms": 500,
+    }
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    async def mock_query_raw(sql_query, *params):
+        return [raw_row]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"]
+        assert body["data"][0]["metadata"] == {}
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

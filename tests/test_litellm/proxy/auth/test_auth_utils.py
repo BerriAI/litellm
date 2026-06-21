@@ -13,6 +13,8 @@ from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
+    custom_auth_common_checks_warning,
+    warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
@@ -23,6 +25,78 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
+
+
+class TestCustomAuthCommonChecksWarning:
+    """custom_auth_common_checks_warning only warns when custom auth is configured
+    and the common-checks opt-in is off, since that is the only state where
+    project/team enforcement silently does nothing."""
+
+    def test_warns_when_custom_auth_configured_and_checks_off(self):
+        warning = custom_auth_common_checks_warning(
+            custom_auth_configured=True,
+            run_common_checks=False,
+        )
+        assert warning is not None
+        assert "custom_auth_run_common_checks: true" in warning
+        assert "https://docs.litellm.ai/docs/proxy/custom_auth" in warning
+
+    def test_no_warning_when_common_checks_enabled(self):
+        assert (
+            custom_auth_common_checks_warning(
+                custom_auth_configured=True,
+                run_common_checks=True,
+            )
+            is None
+        )
+
+    def test_no_warning_when_custom_auth_not_configured(self):
+        assert (
+            custom_auth_common_checks_warning(
+                custom_auth_configured=False,
+                run_common_checks=False,
+            )
+            is None
+        )
+        assert (
+            custom_auth_common_checks_warning(
+                custom_auth_configured=False,
+                run_common_checks=True,
+            )
+            is None
+        )
+
+
+class TestWarnOnceIfCustomAuthSkipsCommonChecks:
+    """The startup warning must fire at most once per process, since load_config
+    re-runs on hot-reload / config refresh and would otherwise spam the log."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_sentinel(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.auth.auth_utils._custom_auth_common_checks_warning_emitted",
+            False,
+        )
+
+    def test_warns_only_once_across_repeated_calls(self):
+        logger = MagicMock()
+        for _ in range(3):
+            warn_once_if_custom_auth_skips_common_checks(
+                custom_auth_configured=True,
+                run_common_checks=False,
+                logger=logger,
+            )
+        assert logger.warning.call_count == 1
+        assert "custom_auth_run_common_checks" in logger.warning.call_args[0][0]
+
+    def test_does_not_warn_when_common_checks_enabled(self):
+        logger = MagicMock()
+        warn_once_if_custom_auth_skips_common_checks(
+            custom_auth_configured=True,
+            run_common_checks=True,
+            logger=logger,
+        )
+        assert logger.warning.call_count == 0
 
 
 class TestGetKeyModelRpmLimit:
@@ -528,6 +602,59 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
             )
             is None
         )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+    ],
+)
+def test_get_model_from_request_extracts_realtime_session_model(route):
+    """The effective realtime model lives in ``session.model`` (not the
+    top-level ``model``). It must be surfaced so can_key_call_model() can
+    validate the model a restricted key is actually requesting.
+
+    Regression test for the model-access bypass on the GA Realtime WebRTC
+    HTTP routes (https://github.com/BerriAI/litellm/issues/29923).
+    """
+    assert (
+        get_model_from_request(
+            request_data={"session": {"type": "realtime", "model": "gpt-realtime"}},
+            route=route,
+        )
+        == "gpt-realtime"
+    )
+
+
+def test_get_model_from_request_realtime_includes_top_level_and_session_model():
+    """When both top-level and session model are present, both are returned so
+    neither path can smuggle a disallowed model past the model-access check."""
+    models = get_model_from_request(
+        request_data={
+            "model": "gpt-4o-realtime-preview",
+            "session": {"type": "realtime", "model": "gpt-realtime"},
+        },
+        route="/v1/realtime/client_secrets",
+    )
+    assert models == ["gpt-4o-realtime-preview", "gpt-realtime"]
+
+
+def test_get_model_from_request_ignores_session_model_on_non_realtime_routes():
+    """A nested ``session.model`` must not leak into model resolution for
+    unrelated routes."""
+    assert (
+        get_model_from_request(
+            request_data={"session": {"type": "realtime", "model": "gpt-realtime"}},
+            route="/v1/chat/completions",
+        )
+        is None
+    )
 
 
 def test_abbreviate_api_key():
@@ -1543,6 +1670,40 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         assert (
             is_request_body_safe(
                 request_body={"model": "gpt-4", "api_base": "https://my-byok.example"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksBedrockProjectOverride:
+    """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
+    that project's data-retention policy applies to its requests. A
+    caller-supplied value would run the request under any project reachable
+    with the deployment's shared AWS credentials, bypassing the configured
+    retention/accounting association."""
+
+    def test_project_id_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="aws_bedrock_project_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "aws_bedrock_project_id": "proj_attacker000000",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_project_id(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "aws_bedrock_project_id": "proj_byok000000",
+                },
                 general_settings={"allow_client_side_credentials": True},
                 llm_router=None,
                 model="gpt-4",

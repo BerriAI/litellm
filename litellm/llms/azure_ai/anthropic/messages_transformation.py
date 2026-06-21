@@ -21,6 +21,9 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     and Azure endpoint format.
     """
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,

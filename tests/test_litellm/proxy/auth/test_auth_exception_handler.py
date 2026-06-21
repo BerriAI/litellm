@@ -113,6 +113,166 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_error",
+    [
+        ConnectionError("connection refused"),
+        TimeoutError("timed out"),
+        asyncio.TimeoutError(),
+        OSError("network is unreachable"),
+        HTTPClientClosedError(),
+        PrismaError("can't reach database server"),
+        RawQueryError(
+            data={
+                "user_facing_error": {
+                    "message": "cached plan must not change result type",
+                    "meta": {"table": "t"},
+                }
+            }
+        ),
+    ],
+)
+async def test_handle_authentication_error_db_infra_error_returns_503(db_error):
+    """Regression for the outage where valid keys got 401 for 4 hours: an
+    infrastructure-level DB failure during auth must surface as 503 (the DB
+    could not confirm the key), never as 401 ("Invalid API key")."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                db_error,
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-valid-but-db-down",
+            )
+
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert "Invalid API key" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_prisma_engine_teardown_returns_503():
+    """Regression for the first-request-of-an-outage edge case: at the instant
+    the DB socket drops, the prisma query engine returns a malformed error
+    payload and prisma-client-py crashes with a bare
+    ``AttributeError: 'NoneType' object has no attribute 'get'`` before it can
+    raise P1001. That AttributeError reached auth and fell through to 401. It
+    must surface as 503 like every other infra failure during the outage."""
+    from prisma.engine import utils as prisma_engine_utils
+
+    malformed_payload = [
+        {
+            "error": "Can't reach database server",
+            "user_facing_error": {
+                "error_code": "P1001",
+                "message": "Can't reach database server at `localhost`:`5503`",
+                "meta": None,
+            },
+        }
+    ]
+    try:
+        prisma_engine_utils.handle_response_errors(None, malformed_payload)
+        raise AssertionError("expected prisma to raise AttributeError")
+    except AttributeError as e:
+        teardown_error = e
+
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                teardown_error,
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-valid-but-db-down",
+            )
+
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert "Invalid API key" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_error",
+    [
+        # DB returned no row -> get_key_object raises this exact 401.
+        ProxyException(
+            message="Authentication Error, Invalid proxy server token passed.",
+            type=ProxyErrorTypes.token_not_found_in_db,
+            param="key",
+            code=status.HTTP_401_UNAUTHORIZED,
+        ),
+        # A bare auth failure raised as a plain Exception (e.g. master-key-only
+        # route) must keep returning 401, not get reclassified as 503.
+        Exception("Invalid proxy server token passed"),
+    ],
+)
+async def test_handle_authentication_error_genuine_auth_failure_stays_401(auth_error):
+    """Guard against the 503 conversion being too broad: a genuine auth
+    failure (missing key / wrong key) must still be 401."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                auth_error,
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
 async def test_handle_authentication_error_budget_exceeded():
     handler = UserAPIKeyAuthExceptionHandler()
 

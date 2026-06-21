@@ -7,6 +7,7 @@ import click
 from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
+from .commands.agents import agent_commands
 from .commands.auth import get_stored_api_key, login, logout, whoami
 from .commands.chat import chat
 from .commands.credentials import credentials
@@ -112,6 +113,9 @@ cli.add_command(keys)
 cli.add_command(teams)
 # Add the users command group
 cli.add_command(users)
+# Add a top-level command per coding agent (claude, codex, opencode, ...)
+for agent_command in agent_commands():
+    cli.add_command(agent_command)
 
 
 if __name__ == "__main__":

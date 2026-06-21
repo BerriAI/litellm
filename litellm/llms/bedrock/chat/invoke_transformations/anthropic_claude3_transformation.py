@@ -60,6 +60,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
@@ -212,6 +215,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
+        anthropic_request.pop("stream_chunk_size", None)
         output_format = anthropic_request.pop("output_format", None)
         output_config_format = pop_bedrock_invoke_output_config_format(
             anthropic_request

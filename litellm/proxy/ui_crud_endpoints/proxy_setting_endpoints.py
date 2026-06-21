@@ -12,9 +12,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.table_repositories import (
+    SSOConfigRepository,
+    UISettingsRepository,
+)
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
-    InProductNudgeResponse,
     SSOConfig,
 )
 
@@ -665,7 +669,7 @@ async def get_sso_settings():
         )
 
     # Get SSO config from dedicated table
-    sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+    sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
         where={"id": "sso_config"}
     )
 
@@ -836,7 +840,7 @@ async def update_sso_settings(sso_config: SSOConfig):
     )
 
     # Save to dedicated SSO table
-    await prisma_client.db.litellm_ssoconfig.upsert(
+    await SSOConfigRepository(prisma_client).table.upsert(
         where={"id": "sso_config"},
         data={
             "create": {
@@ -851,7 +855,7 @@ async def update_sso_settings(sso_config: SSOConfig):
 
     # Remove SSO-related env vars from config.environment_variables
     try:
-        env_var_entry = await prisma_client.db.litellm_config.find_unique(
+        env_var_entry = await ConfigRepository(prisma_client).table.find_unique(
             where={"param_name": "environment_variables"}
         )
 
@@ -872,7 +876,7 @@ async def update_sso_settings(sso_config: SSOConfig):
                 if key not in env_vars_to_remove
             }
 
-            await prisma_client.db.litellm_config.update(
+            await ConfigRepository(prisma_client).table.update(
                 where={"param_name": "environment_variables"},
                 data={
                     "param_value": json.dumps(filtered_env_vars, default=str),
@@ -1105,34 +1109,6 @@ async def update_mcp_semantic_filter_settings(
     return result
 
 
-@router.get(
-    "/in_product_nudges",
-    tags=["UI Settings"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=InProductNudgeResponse,
-)
-async def get_in_product_nudges():
-    """
-    Get in-product nudges configuration.
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Database not connected. Please connect a database."},
-        )
-
-    db_record = await prisma_client.db.litellm_dailytagspend.find_first(
-        where={"tag": "User-Agent: claude-cli"}
-    )
-
-    if db_record:
-        return InProductNudgeResponse(is_claude_code_enabled=True)
-
-    return InProductNudgeResponse(is_claude_code_enabled=False)
-
-
 UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL = 600  # 10 minutes
 
@@ -1155,7 +1131,7 @@ async def get_ui_settings_cached() -> Dict[str, Any]:
     if prisma_client is None:
         return {}
 
-    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+    db_record = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": "ui_settings"}
     )
     ui_settings: Dict[str, Any] = {}
@@ -1196,7 +1172,7 @@ async def get_ui_settings():
 
     ui_settings: Dict[str, Any] = {}
 
-    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+    db_record = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": "ui_settings"}
     )
 
@@ -1309,7 +1285,7 @@ async def update_ui_settings(
     # Merge with existing persisted settings so a partial PATCH doesn't
     # overwrite fields the caller didn't send.
     existing: dict = {}
-    db_existing = await prisma_client.db.litellm_uisettings.find_unique(
+    db_existing = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": "ui_settings"}
     )
     if db_existing and db_existing.ui_settings:
@@ -1318,7 +1294,7 @@ async def update_ui_settings(
 
     ui_settings = {**existing, **incoming}
 
-    await prisma_client.db.litellm_uisettings.upsert(
+    await UISettingsRepository(prisma_client).table.upsert(
         where={"id": "ui_settings"},
         data={
             "create": {

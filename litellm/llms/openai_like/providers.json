@@ -131,6 +131,42 @@
     "base_class": "openai_gpt",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "parasail": {
+    "base_url": "https://api.parasail.io/v1",
+    "api_key_env": "PARASAIL_API_KEY",
+    "api_base_env": "PARASAIL_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    "special_handling": {
+      "force_store_false": true
     }
+  },
+  "libertai": {
+    "base_url": "https://api.libertai.io/v1",
+    "api_key_env": "LIBERTAI_API_KEY",
+    "api_base_env": "LIBERTAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "empiriolabs": {
+    "base_url": "https://api.empiriolabs.ai/v1",
+    "api_key_env": "EMPIRIOLABS_API_KEY",
+    "api_base_env": "EMPIRIOLABS_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "pinstripes": {
+    "base_url": "https://pinstripes.io/v1",
+    "api_key_env": "PINSTRIPES_API_KEY",
+    "api_base_env": "PINSTRIPES_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   }
 }

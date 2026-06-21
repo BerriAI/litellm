@@ -32,13 +32,20 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
-from litellm.proxy.hooks.rate_limiter_utils import (
-    ProxyHTTPRateLimitError,
-    resolve_llm_provider_for_rate_limit,
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import CallTypes, ModelResponse, Usage
+from litellm.types.utils import (
+    CallTypes,
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -305,6 +312,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.check_and_increment_by_n_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+
+        # When disabled, TPM is enforced post-call from actual usage (pre-v1.82
+        # behavior) instead of reserving an estimated budget upfront, shedding
+        # the extra per-request Redis Lua round-trip and the global-lock
+        # in-memory fallback that the reservation path incurs.
+        self.tpm_reservation_enabled = (
+            os.getenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "true").lower() == "true"
+        )
 
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: Optional[Any] = None
@@ -1971,7 +1986,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: List[RateLimitDescriptor],
         requested_model: Optional[str] = None,
     ) -> None:
-        """Handle rate limit exceeded error by raising HTTPException."""
+        """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
@@ -2005,14 +2020,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
                     requested_model
                 )
-                raise ProxyHTTPRateLimitError(
-                    status_code=429,
+                raise ProxyRateLimitError(
                     detail=detail,
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
                         "reset_at": reset_time_formatted,
                     },
+                    rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                     model=resolved_model,
                     llm_provider=llm_provider,
                 )
@@ -2106,17 +2121,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
             # First pass: RPM and max_parallel_requests sliding-window check.
-            # `skip_tpm_check=True` tells should_rate_limit to ignore each
-            # descriptor's tokens_per_unit so its +1-per-key Lua / in-memory
-            # increment never touches the :tokens counters — those are owned
-            # exclusively by the atomic reserve_tpm_tokens path below. Without
-            # this, every concurrent in-flight request would pre-inflate the
-            # :tokens counter by 1, shrinking the effective TPM budget by N
-            # and causing false-positive 429s under bursts.
+            # When reservation is enabled, `skip_tpm_check=True` tells
+            # should_rate_limit to ignore each descriptor's tokens_per_unit so
+            # its +1-per-key Lua / in-memory increment never touches the
+            # :tokens counters — those are owned exclusively by the atomic
+            # reserve_tpm_tokens path below. Without this, every concurrent
+            # in-flight request would pre-inflate the :tokens counter by 1,
+            # shrinking the effective TPM budget by N and causing
+            # false-positive 429s under bursts. When reservation is disabled,
+            # this pass enforces TPM directly from the post-call counters.
             response = await self.should_rate_limit(
                 descriptors=descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
-                skip_tpm_check=True,
+                skip_tpm_check=self.tpm_reservation_enabled,
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -2146,7 +2163,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ]
             has_tpm_limits = bool(configured_tpm_limits)
 
-            if has_tpm_limits:
+            if has_tpm_limits and self.tpm_reservation_enabled:
                 min_configured_tpm_limit = min(configured_tpm_limits)
 
                 # When the configured TPM cap is small enough to constrain the
@@ -2735,9 +2752,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Get total tokens from response
         total_tokens = 0
-        # spot fix for /responses api
-        if isinstance(response_obj, ModelResponse) or isinstance(
-            response_obj, BaseLiteLLMOpenAIResponseObject
+        if isinstance(
+            response_obj,
+            (
+                ModelResponse,
+                EmbeddingResponse,
+                TextCompletionResponse,
+                BaseLiteLLMOpenAIResponseObject,
+            ),
         ):
             _usage = getattr(response_obj, "usage", None)
             total_tokens = self._get_total_tokens_from_usage(
@@ -2931,6 +2953,46 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.exception(
                 f"Error in rate limit failure event: {str(e)}"
             )
+
+    async def async_release_max_parallel_requests_on_disconnect(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Release the api-key ``max_parallel_requests`` slot that
+        ``async_pre_call_hook`` reserved, for a request that ended without
+        either logging callback firing.
+
+        The +1 is normally undone by ``async_log_success_event`` (natural
+        stream completion) or ``async_log_failure_event`` (LLM error). When a
+        client cancels a stream mid-flight, the cancellation surfaces as
+        ``asyncio.CancelledError`` / ``GeneratorExit`` and neither callback
+        runs, so without this the counter leaks one slot per cancelled stream
+        until the key wedges at its limit.
+        """
+        if (
+            not user_api_key_dict.api_key
+            or user_api_key_dict.max_parallel_requests is None
+        ):
+            return
+
+        await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+            increment_list=[
+                RedisPipelineIncrementOperation(
+                    key=self.create_rate_limit_keys(
+                        key="api_key",
+                        value=user_api_key_dict.api_key,
+                        rate_limit_type="max_parallel_requests",
+                    ),
+                    increment_value=-1,
+                    # Refresh the window TTL on the decrement, matching the
+                    # failure path. max_parallel_requests is a concurrency
+                    # gauge, not a rolling-window count, so the key must
+                    # outlive in-flight requests rather than expire mid-stream.
+                    ttl=self.window_size,
+                )
+            ],
+            litellm_parent_otel_span=None,
+        )
 
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response

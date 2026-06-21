@@ -5,7 +5,9 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	install-dev install-proxy-dev install-test-deps \
+	lint-basedpyright lint-basedpyright-budget-update \
+	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
+	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
@@ -17,12 +19,18 @@ help:
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
+	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
-	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
+	@echo "  make lint               - Run all linting (Ruff, basedpyright, Black check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
-	@echo "  make lint-mypy          - Run MyPy type checking only"
+	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
+	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
+	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
+	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
+	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
+	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -68,6 +76,11 @@ install-test-deps: install-proxy-dev
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
 
+# Install git hooks that enforce Conventional Commits and Conventional Branches.
+# Opt-in: not chained into install-dev.
+install-hooks:
+	./scripts/install_git_hooks.sh
+
 # Formatting
 format: install-dev
 	cd litellm && $(UV_RUN) black . && cd ..
@@ -111,10 +124,28 @@ lint-ruff-FULL-dev: install-dev
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
-lint-mypy: install-dev
-	cd litellm && $(UV_RUN) mypy . --ignore-missing-imports && cd ..
+lint-basedpyright: install-dev
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py
+
+lint-basedpyright-budget-update: install-dev
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-black: format-check
+
+lint-ruff-budget: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py
+
+# Strict gate, invoked the same way CI does in test-linting.yml so a local pass
+# means the CI check will pass too.
+lint-gate: install-dev
+	git fetch origin litellm_internal_staging
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
+
+lint-ruff-budget-update: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py --update
+
+# Ratchet all budgets in one shot (ruff strict + basedpyright)
+lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -123,10 +154,10 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
+lint: format-check lint-ruff lint-basedpyright check-circular-imports check-import-safety lint-ruff-budget
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety
+lint-dev: lint-format-changed check-circular-imports check-import-safety
 
 # Testing targets
 test: install-test-deps

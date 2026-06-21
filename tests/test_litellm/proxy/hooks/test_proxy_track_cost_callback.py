@@ -1067,3 +1067,40 @@ async def test_failure_hook_drops_error_information_traceback_when_env_set(
     assert "traceback" not in error_information
     assert error_information["error_class"] == "RuntimeError"
     assert error_information["error_message"] == "boom-with-traceback"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_records_recovered_partial_spend():
+    """A stream that broke mid-flight still billed the provider. The failure
+    hook lifts the recovered cost onto request_data as ``response_cost``; this
+    hook must pass it through to update_database so the failure row records the
+    real partial spend instead of the hardcoded zero.
+    """
+    from litellm.types.utils import Usage
+
+    logger = _ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key", user_id="u", team_id="t")
+
+    request_data = {
+        "model": "anthropic/claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "proxy_server_request": {"request_id": "rid"},
+        "response_cost": 3.5e-05,
+        "combined_usage_object": Usage(
+            prompt_tokens=30, completion_tokens=1, total_tokens=31
+        ),
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("MidStreamFallbackError: read timeout"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        assert mock_update_database.call_args[1]["response_cost"] == 3.5e-05

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -8,6 +8,10 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     DailySpendData,
@@ -31,16 +35,25 @@ _PRISMA_TO_PG_TABLE: Dict[str, str] = {
 
 
 def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
-    """Update metrics with new record data."""
-    existing_metrics.spend += record.spend
-    existing_metrics.prompt_tokens += record.prompt_tokens
-    existing_metrics.completion_tokens += record.completion_tokens
-    existing_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
-    existing_metrics.cache_read_input_tokens += record.cache_read_input_tokens
-    existing_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens
-    existing_metrics.api_requests += record.api_requests
-    existing_metrics.successful_requests += record.successful_requests
-    existing_metrics.failed_requests += record.failed_requests
+    """Update metrics with new record data.
+
+    Rollup rows can carry None for numeric fields when SUM() spans zero rows
+    (e.g. a key with no spend), so coalesce to 0 before accumulating to avoid
+    a TypeError. Mirrors the handling in ``_record_to_spend_metrics``.
+    """
+    prompt_tokens = record.prompt_tokens or 0
+    completion_tokens = record.completion_tokens or 0
+    existing_metrics.spend += record.spend or 0.0
+    existing_metrics.prompt_tokens += prompt_tokens
+    existing_metrics.completion_tokens += completion_tokens
+    existing_metrics.total_tokens += prompt_tokens + completion_tokens
+    existing_metrics.cache_read_input_tokens += record.cache_read_input_tokens or 0
+    existing_metrics.cache_creation_input_tokens += (
+        record.cache_creation_input_tokens or 0
+    )
+    existing_metrics.api_requests += record.api_requests or 0
+    existing_metrics.successful_requests += record.successful_requests or 0
+    existing_metrics.failed_requests += record.failed_requests or 0
     return existing_metrics
 
 
@@ -346,7 +359,7 @@ async def get_api_key_metadata(
     This ensures that key_alias and team_id are preserved in historical activity logs
     even after a key is deleted or regenerated.
     """
-    key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+    key_records = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}
     )
     result = {
@@ -357,11 +370,11 @@ async def get_api_key_metadata(
     missing_keys = api_keys - set(result.keys())
     if missing_keys:
         try:
-            deleted_key_records = (
-                await prisma_client.db.litellm_deletedverificationtoken.find_many(
-                    where={"token": {"in": list(missing_keys)}},
-                    order={"deleted_at": "desc"},
-                )
+            deleted_key_records = await DeletedVerificationTokenRepository(
+                prisma_client
+            ).table.find_many(
+                where={"token": {"in": list(missing_keys)}},
+                order={"deleted_at": "desc"},
             )
             # Use the most recent deleted record for each token (ordered by deleted_at desc)
             for k in deleted_key_records:
@@ -386,38 +399,24 @@ def _adjust_dates_for_timezone(
     timezone_offset_minutes: Optional[int],
 ) -> Tuple[str, str]:
     """
-    Adjust date range to account for timezone differences.
+    Pass-through for the local date range; the timezone offset is intentionally ignored here.
 
-    The database stores dates in UTC. When a user in a different timezone
-    selects a local date range, we need to expand the UTC query range to
-    capture all records that fall within their local date range.
+    The aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
+    buckets keyed on date as YYYY-MM-DD. Any conversion from a local date range to a
+    UTC date range using only date arithmetic must round to whole UTC days, allowing up
+    to 24h of slop at each boundary. The previous implementation expanded the SQL range
+    by an extra full UTC day on whichever side the offset pointed, which pulled in 24h
+    of unrelated bucket data per boundary and produced approximately 100% over-counting
+    on single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
+    Sums of single-day queries then exceeded the equivalent multi-day aggregate, which
+    is mathematically impossible.
 
-    Args:
-        start_date: Start date in YYYY-MM-DD format (user's local date)
-        end_date: End date in YYYY-MM-DD format (user's local date)
-        timezone_offset_minutes: Minutes behind UTC (positive = west of UTC)
-            This matches JavaScript's Date.getTimezoneOffset() convention.
-            For example: PST = +480 (8 hours * 60 = 480 minutes behind UTC)
-
-    Returns:
-        Tuple of (adjusted_start_date, adjusted_end_date) in YYYY-MM-DD format
+    Treating the local date as the UTC date trades a small one-time boundary slop for
+    correct, monotonic, additive results across single-day and multi-day queries. A
+    later fix can introduce hour-level buckets or pro-rata weighting on adjacent UTC
+    days; both require data the current schema does not store.
     """
-    if timezone_offset_minutes is None or timezone_offset_minutes == 0:
-        return start_date, end_date
-
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-
-    if timezone_offset_minutes > 0:
-        # West of UTC (Americas): local evening extends into next UTC day
-        # e.g., Feb 4 23:59 PST = Feb 5 07:59 UTC
-        end = end + timedelta(days=1)
-    else:
-        # East of UTC (Asia/Europe): local morning starts in previous UTC day
-        # e.g., Feb 4 00:00 IST = Feb 3 18:30 UTC
-        start = start - timedelta(days=1)
-
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    return start_date, end_date
 
 
 def _build_where_conditions(
@@ -695,17 +694,23 @@ _GROUP_DATE_ENDPOINT_API_KEY = 30  # 0b0011110
 
 
 def _record_to_spend_metrics(record: Any) -> SpendMetrics:
-    """Build a SpendMetrics directly from one already-aggregated rollup row."""
+    """Build a SpendMetrics directly from one already-aggregated rollup row.
+
+    SUM() over zero rows is SQL NULL, so rollup rows (notably the grand-total
+    row, which Postgres emits even on an empty match) can carry None values.
+    """
+    prompt_tokens = record.prompt_tokens or 0
+    completion_tokens = record.completion_tokens or 0
     return SpendMetrics(
-        spend=record.spend,
-        prompt_tokens=record.prompt_tokens,
-        completion_tokens=record.completion_tokens,
-        total_tokens=record.prompt_tokens + record.completion_tokens,
-        cache_read_input_tokens=record.cache_read_input_tokens,
-        cache_creation_input_tokens=record.cache_creation_input_tokens,
-        api_requests=record.api_requests,
-        successful_requests=record.successful_requests,
-        failed_requests=record.failed_requests,
+        spend=record.spend or 0.0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cache_read_input_tokens=record.cache_read_input_tokens or 0,
+        cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        api_requests=record.api_requests or 0,
+        successful_requests=record.successful_requests or 0,
+        failed_requests=record.failed_requests or 0,
     )
 
 
@@ -716,7 +721,7 @@ def _key_metadata(
     return KeyMetadata(key_alias=meta.get("key_alias"), team_id=meta.get("team_id"))
 
 
-def _aggregate_grouping_sets_records_sync(  # noqa: PLR0915
+def _aggregate_grouping_sets_records_sync(
     *,
     records: List[Any],
     api_key_metadata: Dict[str, Dict[str, Any]],
@@ -914,11 +919,21 @@ async def get_daily_activity(
             where=where_conditions
         )
 
-        # Fetch paginated results
+        # Fetch paginated results.
+        # ``date`` alone is not a unique sort key -- a busy tenant has many
+        # rows per date (one per api_key, model, model_group, provider,
+        # endpoint, ...), so offset pagination over ``date desc`` lands on
+        # arbitrary boundaries and the same row can be skipped on one page
+        # and returned on another. A client that pages through and sums the
+        # per-page metrics (the Usage dashboard) then gets a non-deterministic
+        # total. Adding ``id`` (the row's UUID primary key, present on both
+        # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
+        # gives every page a stable cursor (#30164).
         daily_spend_data = await getattr(prisma_client.db, table_name).find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},
+                {"id": "asc"},
             ],
             skip=(page - 1) * page_size,
             take=page_size,

@@ -19,3 +19,9 @@ _mcp_active_toolset_id: ContextVar[Optional[str]] = ContextVar(
 _mcp_gateway_initialize_instructions: ContextVar[Optional[str]] = ContextVar(
     "_mcp_gateway_initialize_instructions", default=None
 )
+
+# Per-request scoped server name; set in MCP HTTP/SSE handlers when the path
+# identifies exactly one upstream server. Never populated from client-supplied headers.
+_mcp_gateway_server_name: ContextVar[Optional[str]] = ContextVar(
+    "_mcp_gateway_server_name", default=None
+)

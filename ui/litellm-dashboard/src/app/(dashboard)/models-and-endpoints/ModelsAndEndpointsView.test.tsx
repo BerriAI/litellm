@@ -120,14 +120,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { findByText } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
     expect(await findByText("Model Management", {}, { timeout: 10000 })).toBeInTheDocument();
@@ -138,14 +131,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { findByText } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
     expect(await findByText("Missing a provider?", {}, { timeout: 10000 })).toBeInTheDocument();
@@ -156,14 +142,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { findByText, queryByText, container } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
 
@@ -188,14 +167,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { findByText, queryByText } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
 
@@ -228,14 +200,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { getByRole } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: modelDataWithIds.data }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
 

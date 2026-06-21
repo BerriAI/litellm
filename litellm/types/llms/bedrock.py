@@ -250,6 +250,7 @@ class ToolJsonSchemaBlock(TypedDict, total=False):
     type: Literal["object"]
     properties: dict
     required: List[str]
+    additionalProperties: bool
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -260,6 +261,7 @@ class ToolSpecBlock(TypedDict, total=False):
     inputSchema: Required[ToolInputSchemaBlock]
     name: Required[str]
     description: str
+    strict: bool
 
 
 class SystemToolBlock(TypedDict, total=False):
@@ -281,6 +283,36 @@ class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
     systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
+
+
+class BedrockToolSpec(dict):
+    def __init__(
+        self,
+        *,
+        name: str,
+        description: str,
+        parameters: dict,
+        strict: Optional[bool],
+        supports_strict_tools: bool,
+    ) -> None:
+        json_schema: ToolJsonSchemaBlock = {
+            "type": parameters["type"],
+            "properties": parameters.get("properties", {}),
+            "required": parameters.get("required", []),
+        }
+        additional_properties = parameters.get("additionalProperties")
+        if supports_strict_tools and additional_properties is not None:
+            json_schema["additionalProperties"] = additional_properties
+
+        tool_spec: ToolSpecBlock = {
+            "inputSchema": {"json": json_schema},
+            "name": name,
+            "description": description,
+        }
+        if supports_strict_tools and strict is not None:
+            tool_spec["strict"] = strict
+
+        super().__init__(toolSpec=tool_spec)
 
 
 class SpecificToolChoiceBlock(TypedDict):

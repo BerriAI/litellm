@@ -6,9 +6,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
+from litellm.types.utils import LlmProviders
 from litellm.utils import get_valid_models
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
@@ -86,7 +88,7 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-        result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        result = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
@@ -307,10 +309,21 @@ def get_known_models_from_wildcard(
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
+    known_providers = {provider.value for provider in LlmProviders}
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
         if not model.startswith(wildcard_provider_prefix):
-            model = f"{wildcard_provider_prefix}/{model}"
+            # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
+            # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
+            # multiple instances), replace that existing provider prefix instead of stacking
+            # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
+            # Only strip the leading segment when it is a known provider, so ids whose first
+            # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
+            leading, sep, model_suffix = model.partition("/")
+            if sep and leading in known_providers:
+                model = f"{wildcard_provider_prefix}/{model_suffix}"
+            else:
+                model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
 

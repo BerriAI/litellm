@@ -158,6 +158,32 @@ class TestUpdateMetadataFieldsEmptyCollections:
         assert updated_kv["metadata"]["guardrails"] == ["my-guardrail"]
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_does_not_trigger_premium_check(self, mock_premium_check):
+        """
+        Regression #30285: /team/update sends disable_global_guardrails=False
+        (the UI's unchanged default). A falsy boolean must not trigger the
+        premium check, so non-premium users are not wrongly 403'd.
+        """
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_not_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_still_updates_metadata(self, mock_premium_check):
+        """A falsy boolean must still be moved into metadata so it persists."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        assert "disable_global_guardrails" not in updated_kv
+        assert updated_kv["metadata"]["disable_global_guardrails"] is False
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_true_boolean_triggers_premium_check(self, mock_premium_check):
+        """Control: enabling the premium feature (True) still requires a license."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": True}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
     def test_ui_typical_payload_does_not_trigger_premium_check(
         self, mock_premium_check
     ):

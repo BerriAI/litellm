@@ -37,6 +37,7 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         )
 
     async def handle_streaming(
@@ -57,5 +58,6 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         ):
             yield chunk

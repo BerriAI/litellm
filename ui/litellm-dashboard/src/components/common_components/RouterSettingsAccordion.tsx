@@ -5,7 +5,7 @@ import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {

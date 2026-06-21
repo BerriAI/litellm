@@ -8,7 +8,6 @@ interface RouterSettingsProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  modelData: any;
 }
 
 interface routingStrategyArgs {
@@ -16,7 +15,7 @@ interface routingStrategyArgs {
   lowest_latency_buffer?: number;
 }
 
-const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, userID, modelData }) => {
+const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, userID }) => {
   const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
     routerSettings: {},
     selectedStrategy: null,

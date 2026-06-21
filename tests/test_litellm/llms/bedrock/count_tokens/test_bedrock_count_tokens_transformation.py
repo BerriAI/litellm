@@ -1,10 +1,15 @@
+import base64
+import json
 import os
 import sys
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
-from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
+from litellm.llms.bedrock.count_tokens.transformation import (
+    DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
+    BedrockCountTokensConfig,
+)
 
 
 def test_detect_input_type():
@@ -18,6 +23,71 @@ def test_detect_input_type():
     # Test text format -> invokeModel
     request_with_text = {"inputText": "hello"}
     assert config._detect_input_type(request_with_text) == "invokeModel"
+
+
+def test_detect_input_type_anthropic_blocks_route_to_invoke_model():
+    """Anthropic-shape content blocks must not go through the Converse path,
+    which Bedrock rejects with a 400 (and the caller then silently falls back
+    to the local tokenizer)."""
+    config = BedrockCountTokensConfig()
+
+    request = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Reading the file."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "read_file",
+                        "input": {"path": "main.py"},
+                    },
+                ],
+            },
+        ],
+    }
+    assert config._detect_input_type(request) == "invokeModel"
+
+
+def test_detect_input_type_converse_blocks_route_to_converse():
+    """Converse-shape blocks (no "type" key) keep using the converse input."""
+    config = BedrockCountTokensConfig()
+
+    request = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
+    assert config._detect_input_type(request) == "converse"
+
+
+def test_transform_to_invoke_model_format_base64_encodes_body():
+    """The CountTokens API expects invokeModel.body as a base64-encoded blob;
+    Anthropic Messages bodies additionally need anthropic_version/max_tokens
+    to pass Bedrock's InvokeModel schema validation."""
+    config = BedrockCountTokensConfig()
+
+    request = {
+        "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+    }
+
+    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+
+    body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
+    assert body["messages"] == request["messages"]
+    assert "model" not in body
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert body["max_tokens"] == DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
+
+
+def test_transform_to_invoke_model_format_raw_body_unchanged():
+    """Non-messages bodies (e.g. Titan inputText) must not get Anthropic fields."""
+    config = BedrockCountTokensConfig()
+
+    result = config.transform_anthropic_to_bedrock_count_tokens(
+        {"model": "amazon.titan-text-express-v1", "inputText": "hello"}
+    )
+
+    body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
+    assert body == {"inputText": "hello"}
 
 
 def test_transform_anthropic_to_bedrock_request():

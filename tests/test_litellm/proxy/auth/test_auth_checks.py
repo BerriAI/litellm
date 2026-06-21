@@ -2365,7 +2365,7 @@ async def test_virtual_key_budget_check_reads_from_spend_counter():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:key:test-hashed-token":
             return 1.5
         return fallback_spend
@@ -2397,7 +2397,7 @@ async def test_virtual_key_budget_check_fallback_no_counter():
     proxy_logging_obj.budget_alerts = AsyncMock()
 
     # get_current_spend returns fallback_spend when no counter exists
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         return fallback_spend
 
     with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
@@ -2424,7 +2424,7 @@ async def test_team_budget_check_reads_from_spend_counter():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team:test-team":
             return 1.5
         return fallback_spend
@@ -2449,7 +2449,7 @@ async def test_end_user_budget_check_reads_from_spend_counter():
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:end_user:customer-1":
             return 1.5
         return fallback_spend
@@ -2475,7 +2475,7 @@ async def test_tag_budget_check_reads_from_spend_counter():
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:tag:paid-tag":
             return 1.5
         return fallback_spend
@@ -2523,7 +2523,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return 1.5
         return fallback_spend
@@ -2756,7 +2756,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
         return_value=fake_budget_row
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return 70.0
         return fallback_spend
@@ -2853,7 +2853,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
 
     mocked_spend = 70.0
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return mocked_spend
         return fallback_spend
@@ -2943,7 +2943,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
         return_value=fake_default_row
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return 500.0
         return fallback_spend
@@ -3010,7 +3010,7 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
         return_value=fake_default_row
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return 1000.0
         return fallback_spend
@@ -3077,7 +3077,7 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
         return_value=fake_default_row
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return 0.0
         return fallback_spend
@@ -3135,7 +3135,7 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
             return 0.0
         return fallback_spend

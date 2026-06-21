@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
@@ -37,22 +38,27 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.litellm_core_utils.cloud_storage_security import (
+    is_managed_cloud_storage_uri,
+)
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+    encode_file_id_with_model,
+    extract_file_creation_params,
+    get_credentials_for_model,
+    get_team_provider_credentials,
+    handle_model_based_routing,
+    prepare_data_with_credentials,
+    validate_managed_files_requirement,
+)
 from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
     OpenAIFileObject,
     OpenAIFilesPurpose,
-)
-
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    _is_base64_encoded_unified_file_id,
-    encode_file_id_with_model,
-    extract_file_creation_params,
-    get_credentials_for_model,
-    handle_model_based_routing,
-    prepare_data_with_credentials,
 )
 
 router = APIRouter()
@@ -282,7 +288,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(  # noqa: PLR0915
+async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
@@ -344,6 +350,11 @@ async def create_file(  # noqa: PLR0915
         target_storage = file_params.target_storage
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
+
+        validate_managed_files_requirement(
+            target_model_names=target_model_names_list, model=model_param
+        )
+
         # Prepare the data for forwarding
 
         # Replace with:
@@ -582,7 +593,7 @@ async def create_file(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content(  # noqa: PLR0915
+async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,
@@ -666,7 +677,7 @@ async def get_file_content(  # noqa: PLR0915
                 managed_files_obj, "prisma_client", None
             ):
                 prisma_client = getattr(managed_files_obj, "prisma_client")
-                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                db_file = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
@@ -718,6 +729,15 @@ async def get_file_content(  # noqa: PLR0915
                     }
                 )
         else:
+            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
+            # managed-file owner/team check that only runs for unified ids, letting
+            # a caller read another tenant's object by its key. Such objects are only
+            # reachable through their managed unified id.
+            if is_managed_cloud_storage_uri(file_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                )
             # Check for model-based credential routing
             (
                 should_route,
@@ -1344,14 +1364,20 @@ async def list_files(
                     status_code=400,
                     detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
                 )
-            ## Use router to list fine-tuning jobs for that model
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            data["model"] = target_model_names_list[0]
-            response = await llm_router.afile_list(
+            credentials = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=target_model_names_list[0],
+                operation_context="file list",
+            )
+            prepare_data_with_credentials(data=data, credentials=credentials)
+            response = await litellm.afile_list(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                purpose=purpose,
                 **data,
             )
         else:
@@ -1362,6 +1388,18 @@ async def list_files(
                 or await get_custom_llm_provider_from_request_body(request=request)
                 or "openai"
             )
+
+            # No model/target_model_names pinned: resolve upstream credentials from
+            # the team's deployment for this provider so the call is authenticated
+            # against the team's own account (e.g. the team's openai deployment).
+            team_credentials = get_team_provider_credentials(
+                llm_router=llm_router,
+                team_models=user_api_key_dict.team_models or [],
+                custom_llm_provider=custom_llm_provider,
+                team_id=user_api_key_dict.team_id,
+            )
+            if team_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=team_credentials)
 
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore

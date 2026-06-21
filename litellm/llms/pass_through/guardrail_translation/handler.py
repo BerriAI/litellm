@@ -6,7 +6,7 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -16,6 +16,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
 
 
 class PassThroughEndpointHandler(BaseTranslation):
@@ -208,3 +210,128 @@ class PassThroughEndpointHandler(BaseTranslation):
         )
 
         return response
+
+
+_PROVIDER_HANDLERS: Dict[str, Type[BaseTranslation]] = {}
+
+
+def _get_provider_handlers() -> Dict[str, Type[BaseTranslation]]:
+    global _PROVIDER_HANDLERS
+    if not _PROVIDER_HANDLERS:
+        from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
+            BedrockPassthroughGuardrailHandler,
+        )
+
+        _PROVIDER_HANDLERS = {"bedrock": BedrockPassthroughGuardrailHandler}
+    return _PROVIDER_HANDLERS
+
+
+class LlmPassthroughRouteHandler(BaseTranslation):
+    """
+    Dispatcher for allm_passthrough_route guardrail translation.
+
+    Routes to a per-provider handler based on data["custom_llm_provider"].
+    Unknown providers are skipped with a debug log.
+    """
+
+    async def process_input_messages(
+        self,
+        data: dict,
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> Any:
+        provider = data.get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
+        if handler_cls is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
+                provider,
+            )
+            return data
+        return await handler_cls().process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+    async def process_output_response(
+        self,
+        response: Any,
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
+    ) -> Any:
+        provider = (request_data or {}).get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
+        if handler_cls is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
+                provider,
+            )
+            return response
+        return await handler_cls().process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+
+    @staticmethod
+    def is_event_stream_response(provider: Optional[str], content_type: str) -> bool:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        detector = getattr(handler_cls, "is_event_stream_content_type", None)
+        if detector is None:
+            return False
+        return detector(content_type)
+
+    @staticmethod
+    def event_stream_media_type(provider: Optional[str]) -> Optional[str]:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        getter = getattr(handler_cls, "event_stream_media_type", None)
+        if getter is None:
+            return None
+        return getter()
+
+    @staticmethod
+    def _resolve_event_stream_de_anonymizer(provider: Optional[str]):
+        handler_cls = _get_provider_handlers().get(provider or "")
+        return getattr(handler_cls, "de_anonymize_event_stream", None)
+
+    @staticmethod
+    def supports_event_stream_de_anonymization(
+        provider: Optional[str], endpoint: Optional[str]
+    ) -> bool:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        endpoint_check = getattr(
+            handler_cls, "event_stream_endpoint_is_de_anonymizable", None
+        )
+        if endpoint_check is None:
+            return False
+        return endpoint_check(endpoint or "")
+
+    @staticmethod
+    async def de_anonymize_event_stream(
+        body_bytes: bytes,
+        proxy_logging_obj: "ProxyLogging",
+        user_api_key_dict: "UserAPIKeyAuth",
+        data: dict,
+    ) -> bytes:
+        provider = data.get("custom_llm_provider")
+        de_anonymize = LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(
+            provider
+        )
+        if de_anonymize is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no event-stream handler for provider=%s, "
+                "leaving stream unmodified",
+                provider,
+            )
+            return body_bytes
+        return await de_anonymize(
+            body_bytes=body_bytes,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+        )

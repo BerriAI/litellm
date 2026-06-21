@@ -861,14 +861,58 @@ class BaseAWSLLM:
         with tracer.trace("boto3.client(sts)"):
             sts_client = boto3.client("sts", **sts_client_kwargs)
 
+        # The session policy is an IAM PERMISSION CEILING — effective
+        # permissions are the intersection of the role's identity policies
+        # and this policy. Any action not listed here is silently denied
+        # even when the IAM role grants it. So every Bedrock route we
+        # support needs a matching action statement, or it 403s on OIDC
+        # auth only (static creds + IRSA take other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+        bedrock_session_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "BedrockLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock:InvokeModel",
+                        "bedrock:InvokeModelWithResponseStream",
+                        "bedrock:ApplyGuardrail",
+                        "bedrock:GetGuardrail",
+                        "bedrock:ListGuardrails",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+                # Claude Platform on AWS (added by #27678 for the
+                # ``bedrock/claude_platform/<model>`` route) lives under
+                # a separate IAM action namespace; without these entries
+                # the OIDC path 403s on every claude_platform request
+                # even with a fully permissive identity policy (#30200).
+                {
+                    "Sid": "ClaudePlatformLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "aws-external-anthropic:CreateInference",
+                        "aws-external-anthropic:CreateBatchInference",
+                        "aws-external-anthropic:CancelBatchInference",
+                        "aws-external-anthropic:DeleteBatchInference",
+                        "aws-external-anthropic:CountTokens",
+                        "aws-external-anthropic:Get*",
+                        "aws-external-anthropic:List*",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+            ],
+        }
         assume_role_params = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": '{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream","bedrock:ApplyGuardrail","bedrock:GetGuardrail","bedrock:ListGuardrails"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}',
+            "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
         }
 
         # Add ExternalId parameter if provided

@@ -37,7 +37,7 @@ def get_litellm_gateway_api_key(
     """
     Get the stored CLI API key for use with LiteLLM SDK.
 
-    This function reads the token file created by `litellm-proxy login`
+    This function reads the token file created by `lite login`
     and returns the API key for use in Python scripts.
 
     Args:

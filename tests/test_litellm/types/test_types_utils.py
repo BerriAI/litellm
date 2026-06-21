@@ -1,13 +1,9 @@
-import asyncio
 import os
 import sys
-from typing import Optional
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-import json
 
 from litellm.types.utils import HiddenParams
 
@@ -73,6 +69,48 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
+    from litellm.types.utils import ServerToolUse, Usage
+
+    current_usage = Usage(
+        completion_tokens=1,
+        prompt_tokens=1,
+        total_tokens=2,
+        server_tool_use={"web_search_requests": 1},
+    )
+
+    assert isinstance(current_usage.server_tool_use, ServerToolUse)
+    assert current_usage.server_tool_use.web_search_requests == 1
+
+    new_usage = Usage(**current_usage.model_dump())
+    assert isinstance(new_usage.server_tool_use, ServerToolUse)
+    assert new_usage.server_tool_use.web_search_requests == 1
+
+
+def test_usage_converts_server_tool_use_dict():
+    from litellm.types.utils import ServerToolUse, Usage
+
+    usage = Usage(
+        completion_tokens=2,
+        prompt_tokens=1,
+        total_tokens=3,
+        server_tool_use={"web_search_requests": 4, "tool_search_requests": 1},
+    )
+
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert usage.server_tool_use.web_search_requests == 4
+    assert usage.server_tool_use["web_search_requests"] == 4
+    assert usage.server_tool_use.tool_search_requests == 1
+    with pytest.raises(KeyError):
+        usage.server_tool_use["unknown_metric"]
+
+    round_trip = Usage(**usage.model_dump())
+    assert isinstance(round_trip.server_tool_use, ServerToolUse)
+    assert round_trip.server_tool_use.web_search_requests == 4
+    assert round_trip.server_tool_use["web_search_requests"] == 4
+    assert round_trip.server_tool_use.tool_search_requests == 1
 
 
 def test_usage_completion_tokens_details_text_tokens():
@@ -281,6 +319,29 @@ class TestNativeFinishReason:
         choice = Choices(finish_reason="MAX_TOKENS")
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
+
+
+def test_parallel_request_limiter_internal_fields_in_all_litellm_params():
+    """
+    Regression test: internal fields written by parallel_request_limiter_v3 must
+    be in all_litellm_params so they are stripped before forwarding to upstream
+    providers.  If missing, they are sent as extra body parameters and providers
+    like OpenAI reject the request with a 400 invalid_request_error.
+    """
+    from litellm.types.utils import all_litellm_params
+
+    internal_fields = [
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
+    ]
+    for field in internal_fields:
+        assert field in all_litellm_params, (
+            f"{field!r} is not in all_litellm_params. "
+            "It will be forwarded to upstream providers and cause 400 errors."
+        )
 
 
 def test_delta_maps_reasoning_to_reasoning_content():

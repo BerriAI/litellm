@@ -744,6 +744,17 @@ def _count_content_list(
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
+            elif c["type"] == "tool_reference":
+                # Anthropic tool-search reference block: a lightweight pointer to
+                # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
+                # The full tool definition is counted via the `tools` param, so we
+                # only count the referenced name here. Without this branch,
+                # token_counter raises on tool-search traffic; on the streaming
+                # anthropic_messages path that nulls response_cost and causes the
+                # proxy to drop the SpendLogs row entirely (silent cost undercount).
+                tool_name = str(c.get("tool_name") or "")
+                if tool_name:
+                    num_tokens += count_function(tool_name)
             else:
                 content_type = (
                     c.get("type", type(c).__name__)
@@ -752,7 +763,7 @@ def _count_content_list(
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
+                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

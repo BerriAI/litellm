@@ -43,7 +43,10 @@ from .common_utils import (
     process_azure_headers,
     select_azure_base_url_or_endpoint,
 )
-from .image_generation import get_azure_image_generation_config
+from .image_generation import (
+    AzureFoundryMAIImageGenerationConfig,
+    get_azure_image_generation_config,
+)
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
 
 
@@ -186,7 +189,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             raise e
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,
@@ -1097,10 +1100,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         )
 
     def create_azure_base_url(
-        self, azure_client_params: dict, model: Optional[str]
+        self,
+        azure_client_params: dict,
+        model: Optional[str],
+        base_model: Optional[str] = None,
     ) -> str:
         from litellm.llms.azure_ai.image_generation import (
             AzureFoundryFluxImageGenerationConfig,
+            AzureFoundryMAIImageGenerationConfig,
         )
 
         api_base: str = azure_client_params.get(
@@ -1111,6 +1118,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
+
+        if AzureFoundryMAIImageGenerationConfig.is_mai_model(base_model or model):
+            return AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
+                api_base=api_base,
+                api_version=api_version,
+            )
 
         # Handle FLUX 2 models on Azure AI which use a different URL pattern
         # e.g., /providers/blackforestlabs/v1/flux-2-pro instead of /openai/deployments/{model}/images/generations
@@ -1153,10 +1166,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if api_base.endswith("/"):
                 api_base = api_base.rstrip("/")
             api_version: str = azure_client_params.get("api_version", "")
-            # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params,
                 model=model or data.get("model", ""),
+                base_model=data.get("model", ""),
             )
 
             ## LOGGING
@@ -1285,9 +1298,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if aimg_generation is True:
                 return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers, model=model)  # type: ignore
 
-            # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
-                azure_client_params=azure_client_params, model=model
+                azure_client_params=azure_client_params,
+                model=model,
+                base_model=base_model,
             )
 
             ## LOGGING
@@ -1309,6 +1323,21 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 data=data,
                 headers=headers,
             )
+            provider_config = get_azure_image_generation_config(
+                data.get("model", "dall-e-2")
+            )
+            if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
+                return provider_config.transform_image_generation_response(
+                    model=data.get("model", "dall-e-2"),
+                    raw_response=httpx_response,
+                    model_response=model_response or ImageResponse(),
+                    logging_obj=logging_obj,
+                    request_data=data,
+                    optional_params=data,
+                    litellm_params=data,
+                    encoding=litellm.encoding,
+                )
+
             response = httpx_response.json()
 
             ## LOGGING

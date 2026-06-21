@@ -5,18 +5,23 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Set, Type, cast
 
+from pydantic import ValidationError
+
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.guardrails.guardrail_hooks.grayswan import GraySwanGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrail,
+)
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
     initialize_guardrail as initialize_grayswan,
 )
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     Guardrail,
@@ -26,6 +31,9 @@ from litellm.types.guardrails import (
     SupportedGuardrailIntegrations,
 )
 
+from .guardrail_hooks.llm_as_a_judge import (
+    initialize_guardrail as initialize_llm_as_a_judge,
+)
 from .guardrail_initializers import (
     initialize_bedrock,
     initialize_hide_secrets,
@@ -33,9 +41,6 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_tool_permission,
-)
-from .guardrail_hooks.llm_as_a_judge import (
-    initialize_guardrail as initialize_llm_as_a_judge,
 )
 
 guardrail_initializer_registry = {
@@ -257,7 +262,7 @@ class GuardrailRegistry:
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
-            created_guardrail = await prisma_client.db.litellm_guardrailstable.create(
+            created_guardrail = await GuardrailsRepository(prisma_client).table.create(
                 data={
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
@@ -283,7 +288,7 @@ class GuardrailRegistry:
         """
         try:
             # Delete from DB
-            await prisma_client.db.litellm_guardrailstable.delete(
+            await GuardrailsRepository(prisma_client).table.delete(
                 where={"guardrail_id": guardrail_id}
             )
 
@@ -311,7 +316,7 @@ class GuardrailRegistry:
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
-            updated_guardrail = await prisma_client.db.litellm_guardrailstable.update(
+            updated_guardrail = await GuardrailsRepository(prisma_client).table.update(
                 where={"guardrail_id": guardrail_id},
                 data={
                     "guardrail_name": guardrail_name,
@@ -335,11 +340,11 @@ class GuardrailRegistry:
         Only rows with status == "active" are returned (pending_review and rejected are excluded).
         """
         try:
-            guardrails_from_db = (
-                await prisma_client.db.litellm_guardrailstable.find_many(
-                    where={"status": "active"},
-                    order={"created_at": "desc"},
-                )
+            guardrails_from_db = await GuardrailsRepository(
+                prisma_client
+            ).table.find_many(
+                where={"status": "active"},
+                order={"created_at": "desc"},
             )
 
             guardrails: List[Guardrail] = []
@@ -357,7 +362,7 @@ class GuardrailRegistry:
         Get a guardrail by its ID from the database
         """
         try:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_id": guardrail_id}
             )
 
@@ -375,7 +380,7 @@ class GuardrailRegistry:
         Get a guardrail by its name from the database
         """
         try:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_name": guardrail_name}
             )
 
@@ -598,21 +603,25 @@ class InMemoryGuardrailHandler:
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
         Delete a guardrail in memory and remove from litellm callbacks.
+
+        The callback is purged from every callback list, not just
+        litellm.callbacks: request handling promotes guardrail callbacks into the
+        success/failure/async lists, so removing it from only litellm.callbacks
+        leaves the old instance stranded in those lists on every re-initialization.
         """
         # Remove from in-memory storage
         self.IN_MEMORY_GUARDRAILS.pop(guardrail_id, None)
         self._sources.pop(guardrail_id, None)
 
-        # Remove the callback from litellm.callbacks
         custom_guardrail_callback = self.guardrail_id_to_custom_guardrail.pop(
             guardrail_id, None
         )
-        if custom_guardrail_callback:
-            litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                callback_list=litellm.callbacks,
-                obj=custom_guardrail_callback,
-                require_self=False,
-            )
+        if custom_guardrail_callback is None:
+            return
+
+        litellm.logging_callback_manager.remove_callback_from_all_lists(
+            custom_guardrail_callback
+        )
 
     def list_in_memory_guardrails(self) -> List[Guardrail]:
         """
@@ -654,6 +663,34 @@ class InMemoryGuardrailHandler:
             self.delete_in_memory_guardrail(guardrail_id)
         return stale_ids
 
+    @staticmethod
+    def _normalize_litellm_params_for_comparison(
+        params: Optional[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Render litellm_params to a canonical dict so an in-memory LitellmParams and
+        the raw dict loaded from the DB compare equal when they describe the same
+        config. The in-memory side is a LitellmParams whose model_dump() carries
+        every field default and coerces enums, while the DB side is the raw stored
+        dict holding only the keys originally provided. Comparing those two shapes
+        directly never matches, so each DB poll would re-initialize the guardrail
+        forever; normalizing both through LitellmParams keeps the diff meaningful.
+        """
+        if params is None:
+            return None
+        if isinstance(params, LitellmParams):
+            return params.model_dump()
+        if isinstance(params, dict):
+            try:
+                return LitellmParams(**params).model_dump()
+            except ValidationError as e:
+                verbose_proxy_logger.warning(
+                    f"Could not normalize guardrail litellm_params for comparison; "
+                    f"treating the guardrail as changed. Error: {e}"
+                )
+                return params
+        return params
+
     def _has_guardrail_params_changed(
         self, guardrail_id: str, new_guardrail: Guardrail
     ) -> bool:
@@ -670,19 +707,11 @@ class InMemoryGuardrailHandler:
             return True
 
         # Compare litellm_params
-        existing_params = existing.get("litellm_params")
-        new_params = new_guardrail.get("litellm_params")
-
-        # Convert to dicts for comparison
-        existing_dict = (
-            existing_params.model_dump()
-            if isinstance(existing_params, LitellmParams)
-            else existing_params
+        existing_dict = self._normalize_litellm_params_for_comparison(
+            existing.get("litellm_params")
         )
-        new_dict = (
-            new_params.model_dump()
-            if isinstance(new_params, LitellmParams)
-            else new_params
+        new_dict = self._normalize_litellm_params_for_comparison(
+            new_guardrail.get("litellm_params")
         )
 
         # Compare and identify specific differences

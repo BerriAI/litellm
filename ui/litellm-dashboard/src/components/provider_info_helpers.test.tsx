@@ -97,6 +97,27 @@ describe("provider_info_helpers", () => {
     });
   });
 
+  describe("provider logo asset paths", () => {
+    // Regression: a relative "../ui/assets/logos/" base resolved to
+    // "/ui/ui/assets/logos/..." (404) on the public model hub at
+    // /ui/model_hub_table/, which sits a level below the /ui/ SPA. Root-absolute
+    // paths resolve correctly at any route depth.
+    it("should expose every provider logo as a root-absolute /ui path", () => {
+      const logos = Object.values(providerLogoMap);
+      expect(logos.length).toBeGreaterThan(0);
+      logos.forEach((logo) => {
+        expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
+        expect(logo).not.toContain("../");
+      });
+    });
+
+    it("should resolve a provider logo to a root-absolute path via getProviderLogoAndName", () => {
+      const { logo } = getProviderLogoAndName("openai");
+      expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
+      expect(logo).not.toContain("../");
+    });
+  });
+
   describe("getPlaceholder", () => {
     it("should return aiml placeholder for AIML provider", () => {
       expect(getPlaceholder(Providers.AIML)).toBe("aiml/flux-pro/v1.1");

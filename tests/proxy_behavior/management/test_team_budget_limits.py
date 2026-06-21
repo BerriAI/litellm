@@ -28,7 +28,7 @@ import pytest
 from litellm.proxy.utils import hash_token
 
 from .actors import Actor
-from .conftest import create_scratch_org, create_scratch_team
+from .conftest import MASTER_KEY, create_scratch_org, create_scratch_team
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -288,34 +288,130 @@ async def test_check_user_team_limits(
 
 
 # ---------------------------------------------------------------------------
-# /team/update path — _check_user_team_limits on existing team, no-org.
-# Pin one over-budget rejection here so the update-side wiring is also
-# covered (the update path is a second call site with its own data shape).
+# /team/update path — budget authority.
+#
+# The caller's PERSONAL limits are never applied on update (that compared the
+# wrong thing). But raising a team's spend ceiling is reserved for proxy admins:
+# a team admin may keep or LOWER the budget, only a proxy admin may RAISE it.
+# _check_user_team_limits() only runs on /team/new.
 # ---------------------------------------------------------------------------
 
 
-async def test_team_update_user_limit_rejected(proxy_client, prisma, scratch):
+async def test_team_admin_raise_budget_blocked(proxy_client, prisma, scratch):
+    """A team admin cannot raise the team's budget; the block is NOT based on
+    their personal budget (which here is higher than the requested value)."""
     caller_cleartext = await _seed_scratch_actor_with_caps(
         prisma,
         scratch.prefix,
-        max_budget=100.0,
+        max_budget=100000.0,  # generous personal budget; must not matter
     )
     creator_user_id = f"{scratch.prefix}-team-creator"
-    # Team must exist before /team/update; seed a standalone scratch team
-    # owned by the same actor so the update authz gate passes.
     team_id = await create_scratch_team(
         prisma,
         team_id=scratch.tag("team"),
         admin_user_ids=[creator_user_id],
         max_budget=50.0,
     )
+    # Raise the team budget 50 -> 999 as a team admin.
     resp = await proxy_client.post(
         "/team/update",
         headers={"Authorization": f"Bearer {caller_cleartext}"},
         json={"team_id": team_id, "max_budget": 999.0},
     )
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 403, resp.text
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
     assert row is not None
-    assert row.max_budget == 50.0, "row max_budget mutated despite rejection"
+    assert row.max_budget == 50.0, "team budget must not change on a blocked raise"
+
+
+async def test_team_admin_lower_budget_allowed(proxy_client, prisma, scratch):
+    """A team admin may freely lower (or keep) the team's budget."""
+    caller_cleartext = await _seed_scratch_actor_with_caps(
+        prisma,
+        scratch.prefix,
+        max_budget=10.0,  # below both the old and new team budget; must not matter
+    )
+    creator_user_id = f"{scratch.prefix}-team-creator"
+    team_id = await create_scratch_team(
+        prisma,
+        team_id=scratch.tag("team"),
+        admin_user_ids=[creator_user_id],
+        max_budget=500.0,
+    )
+    # Lower the team budget 500 -> 300 as a team admin.
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {caller_cleartext}"},
+        json={"team_id": team_id, "max_budget": 300.0},
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    assert row.max_budget == 300.0, "team admin should be able to lower the budget"
+
+
+async def test_proxy_admin_raise_budget_allowed(proxy_client, prisma, scratch):
+    """A proxy admin may raise a team's budget."""
+    team_id = await create_scratch_team(
+        prisma,
+        team_id=scratch.tag("team"),
+        admin_user_ids=[f"{scratch.prefix}-team-creator"],
+        max_budget=50.0,
+    )
+    # MASTER_KEY acts as proxy admin.
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        json={"team_id": team_id, "max_budget": 999.0},
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    assert row.max_budget == 999.0, "proxy admin should be able to raise the budget"
+
+
+async def test_team_admin_remove_budget_cap_blocked(proxy_client, prisma, scratch):
+    """A team admin cannot strip the team's cap (max_budget=null); removing the
+    ceiling is the strongest possible raise -> proxy-admin only."""
+    caller_cleartext = await _seed_scratch_actor_with_caps(
+        prisma, scratch.prefix, max_budget=100000.0
+    )
+    team_id = await create_scratch_team(
+        prisma,
+        team_id=scratch.tag("team"),
+        admin_user_ids=[f"{scratch.prefix}-team-creator"],
+        max_budget=50.0,
+    )
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {caller_cleartext}"},
+        json={"team_id": team_id, "max_budget": None},
+    )
+    assert resp.status_code == 403, resp.text
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    assert row.max_budget == 50.0, "team budget cap must not be removed by a team admin"
+
+
+async def test_proxy_admin_remove_budget_cap_allowed(proxy_client, prisma, scratch):
+    """A proxy admin may remove a team's cap (max_budget=null)."""
+    team_id = await create_scratch_team(
+        prisma,
+        team_id=scratch.tag("team"),
+        admin_user_ids=[f"{scratch.prefix}-team-creator"],
+        max_budget=50.0,
+    )
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        json={"team_id": team_id, "max_budget": None},
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    assert row.max_budget is None, "proxy admin should be able to remove the cap"

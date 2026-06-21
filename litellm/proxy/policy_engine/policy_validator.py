@@ -12,6 +12,10 @@ Validates:
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.policy_engine import (
     Policy,
     PolicyValidationError,
@@ -95,7 +99,7 @@ class PolicyValidator:
             return True  # Can't validate without DB, assume valid
 
         try:
-            team = await self.prisma_client.db.litellm_teamtable.find_first(
+            team = await TeamRepository(self.prisma_client).table.find_first(
                 where={"team_alias": team_alias},
             )
             return team is not None
@@ -119,7 +123,9 @@ class PolicyValidator:
             return True  # Can't validate without DB, assume valid
 
         try:
-            key = await self.prisma_client.db.litellm_verificationtoken.find_first(
+            key = await VerificationTokenRepository(
+                self.prisma_client
+            ).table.find_first(
                 where={"key_alias": key_alias},
             )
             return key is not None

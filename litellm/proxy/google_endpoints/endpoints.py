@@ -107,6 +107,7 @@ async def google_stream_generate_content(
     data["stream"] = True
     # google-genai SDK (?alt=sse) must not receive OpenAI's data: [DONE] terminator.
     data["_litellm_skip_openai_stream_done"] = True
+    data["_litellm_raw_sse_stream"] = True
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:

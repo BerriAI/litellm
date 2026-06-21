@@ -16,9 +16,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     HttpPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    create_pass_through_route,
     pass_through_request,
+    resolve_pass_through_request_timeout,
+    resolve_llm_passthrough_timeout,
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -871,6 +875,131 @@ async def test_create_pass_through_route_with_cost_per_request():
         assert call_kwargs["cost_per_request"] == 3.75
 
 
+def test_resolve_pass_through_request_timeout_precedence():
+    assert resolve_pass_through_request_timeout(endpoint_timeout=900) == 900.0
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"pass_through_request_timeout": 1200},
+    ):
+        assert resolve_pass_through_request_timeout() == 1200.0
+        assert resolve_pass_through_request_timeout(endpoint_timeout=800) == 800.0
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert (
+            resolve_pass_through_request_timeout()
+            == DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS
+        )
+
+
+def test_resolve_llm_passthrough_timeout_precedence():
+    assert resolve_llm_passthrough_timeout(kwargs={"timeout": 45}) == 45.0
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"request_timeout": 30},
+            litellm_params={"timeout": 60},
+        )
+        == 30.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            litellm_params={"timeout": 90},
+        )
+        == 90.0
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"pass_through_request_timeout": 6},
+    ):
+        assert resolve_llm_passthrough_timeout() == 6.0
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_uses_resolved_timeout():
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_proxy_logging.pre_call_hook = AsyncMock(
+                side_effect=lambda **kwargs: kwargs["data"]
+            )
+
+            mock_client = MagicMock()
+            mock_client.client = MagicMock()
+            mock_client.client.request = AsyncMock(
+                side_effect=httpx.HTTPError("Request failed")
+            )
+            mock_get_client.return_value = mock_client
+
+            mock_request = MagicMock(spec=Request)
+            mock_request.method = "POST"
+            mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
+            mock_request.headers = Headers({})
+            mock_request.query_params = QueryParams({})
+
+            mock_user_api_key_dict = MagicMock()
+
+            with pytest.raises(Exception):
+                await pass_through_request(
+                    request=mock_request,
+                    target="http://test.com",
+                    custom_headers={},
+                    user_api_key_dict=mock_user_api_key_dict,
+                    timeout=1500,
+                )
+
+            mock_get_client.assert_called_once()
+            assert mock_get_client.call_args[1]["params"]["timeout"] == 1500
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_route_forwards_timeout():
+    unique_path = "/test/path/unique/timeout"
+    endpoint_func = create_pass_through_route(
+        endpoint=unique_path,
+        target="http://example.com",
+        custom_headers={},
+        _forward_headers=True,
+        _merge_query_params=False,
+        dependencies=[],
+        timeout=1800,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+    ):
+        mock_pass_through.return_value = MagicMock()
+        mock_is_registered.return_value = True
+        mock_get_registered.return_value = None
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url = MagicMock()
+        mock_request.url.path = unique_path
+        mock_request.path_params = {}
+        mock_request.query_params = QueryParams({})
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "test-key"
+
+        await endpoint_func(
+            request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+            fastapi_response=MagicMock(),
+        )
+
+        call_kwargs = mock_pass_through.call_args[1]
+        assert call_kwargs["timeout"] == 1800
+
+
 def test_initialize_pass_through_endpoints_with_cost_per_request():
     """
     Test that initialize_pass_through_endpoints correctly passes cost_per_request to route creation
@@ -931,7 +1060,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  # noqa: PLR0915
+async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
     """
     Test that pass_through_request (parent method) correctly includes proxy_server_request
     in kwargs passed to the success handler.
@@ -957,6 +1086,9 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
                             return_value={"test": "data"}
                         )
                         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                            return_value={"x-callback-test": "value"}
+                        )
 
                         # Setup mock for http response
                         mock_response = MagicMock()
@@ -1069,6 +1201,9 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
                     return_value={"model": "claude-3", "stream": True}
                 )
                 mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    return_value={"x-callback-test": "value"}
+                )
 
                 upstream_response = MagicMock()
                 upstream_response.status_code = 200
@@ -1134,6 +1269,9 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                     return_value={"model": "claude-3"}
                 )
                 mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    return_value={"x-callback-test": "value"}
+                )
 
                 upstream_response = MagicMock()
                 upstream_response.status_code = 200
@@ -1975,6 +2113,9 @@ async def test_pass_through_request_query_params_forwarding():
                         mock_proxy_logging.pre_call_hook = AsyncMock(
                             return_value=test_body
                         )
+                        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                            return_value={"x-callback-test": "value"}
+                        )
 
                         # Setup mock for http response
                         mock_response = MagicMock()
@@ -2704,6 +2845,10 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
             new=AsyncMock(side_effect=_hook_mutates_body),
         ),
         patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_response_headers_hook",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
             new=AsyncMock(),
         ),
@@ -2762,6 +2907,10 @@ async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
         patch(
             "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
             new=AsyncMock(side_effect=lambda **kw: kw["data"]),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_response_headers_hook",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",

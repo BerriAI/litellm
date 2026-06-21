@@ -22,7 +22,6 @@ export enum Page {
   CostTracking = "cost-tracking",
   ModelHubTable = "model-hub-table",
   Caching = "caching",
-  PassThroughSettings = "pass-through-settings",
   Logs = "logs",
   McpServers = "mcp-servers",
   SearchTools = "search-tools",

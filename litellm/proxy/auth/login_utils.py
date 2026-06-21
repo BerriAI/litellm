@@ -34,6 +34,7 @@ from litellm.proxy.utils import (
     hash_password,
     verify_password,
 )
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
@@ -45,7 +46,7 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is not None:
-        await prisma_client.db.litellm_usertable.update(
+        await UserRepository(prisma_client).table.update(
             where={"user_id": user_id},
             data={"password": hash_password(password)},
         )
@@ -102,7 +103,7 @@ class LoginResult:
         self.login_method = login_method
 
 
-async def authenticate_user(  # noqa: PLR0915
+async def authenticate_user(
     username: str,
     password: str,
     master_key: Optional[str],
@@ -151,7 +152,7 @@ async def authenticate_user(  # noqa: PLR0915
     if prisma_client is not None:
         _user_row = cast(
             Optional[LiteLLM_UserTable],
-            await prisma_client.db.litellm_usertable.find_first(
+            await UserRepository(prisma_client).table.find_first(
                 where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
         )

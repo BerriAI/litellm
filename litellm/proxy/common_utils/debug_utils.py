@@ -92,12 +92,12 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     try:
         import objgraph  # type: ignore
 
-        print("growth of objects")  # noqa
+        print("growth of objects")  # noqa: T201
         objgraph.show_growth()
-        print("\n\nMost common types")  # noqa
+        print("\n\nMost common types")  # noqa: T201
         objgraph.show_most_common_types()
         roots = objgraph.get_leaking_objects()
-        print("\n\nLeaking objects")  # noqa
+        print("\n\nLeaking objects")  # noqa: T201
         objgraph.show_most_common_types(objects=roots)
     except ImportError:
         raise ImportError(
@@ -739,7 +739,7 @@ async def get_otel_spans():
     else:
         recorded_spans = []
 
-    print("Spans: ", recorded_spans)  # noqa
+    print("Spans: ", recorded_spans)  # noqa: T201
 
     most_recent_parent = None
     most_recent_start_time = 1000000

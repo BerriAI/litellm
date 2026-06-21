@@ -192,6 +192,29 @@ def test_remove_callback_from_list_by_object():
     assert len(litellm._async_failure_callback) == 0
 
 
+def test_remove_callback_from_all_lists():
+    manager = LoggingCallbackManager()
+    manager._reset_all_callbacks()
+
+    class TestLogger(CustomLogger):
+        pass
+
+    obj = TestLogger()
+    manager.add_litellm_callback(obj)
+    manager.add_litellm_success_callback(obj)
+    manager.add_litellm_failure_callback(obj)
+    manager.add_litellm_async_success_callback(obj)
+    manager.add_litellm_async_failure_callback(obj)
+
+    manager.remove_callback_from_all_lists(obj)
+
+    assert obj not in litellm.callbacks
+    assert obj not in litellm.success_callback
+    assert obj not in litellm.failure_callback
+    assert obj not in litellm._async_success_callback
+    assert obj not in litellm._async_failure_callback
+
+
 def test_reset_callbacks(callback_manager):
     # Add various callbacks
     callback_manager.add_litellm_callback("test")

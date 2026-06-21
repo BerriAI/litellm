@@ -284,6 +284,12 @@ def test_prometheus_metrics_use_normalized_routes():
 
     # Create a mock PrometheusLogger
     prometheus_logger = MagicMock()
+    # ``get_labels_for_metric`` reads ``_cached_metric_labels`` and
+    # ``label_filters`` off ``self``; default MagicMock attribute access
+    # returns Mocks that masquerade as a populated cache, so seed real
+    # containers before binding the real method.
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
     prometheus_logger.get_labels_for_metric = (
         PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
     )
@@ -327,6 +333,8 @@ def test_prometheus_label_value_sanitization():
     from unittest.mock import MagicMock
 
     prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
     prometheus_logger.get_labels_for_metric = (
         PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
     )

@@ -4150,7 +4150,7 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
             if counter_key == "spend:tag:paid":
                 return 0.50
             return fallback_spend
@@ -4207,7 +4207,7 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
             if counter_key == "spend:tag:tenant:acme":
                 return 0.50
             return fallback_spend
@@ -4362,7 +4362,7 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
             if counter_key == "spend:tag:engineering":
                 return 0.50
             return fallback_spend
@@ -4413,7 +4413,7 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
             if counter_key == "spend:tag:engineering":
                 return 0.05
             return fallback_spend
@@ -4603,3 +4603,65 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
     router.get_deployment_by_model_group_name.assert_not_called()
+
+
+def _make_request_mock(path: str, headers: dict) -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = path
+    request_mock.url.__str__.return_value = f"http://localhost{path}"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = headers
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
+    [
+        ("claude-cli/2.0.69 (external, cli)", None, None, True),
+        ("claude-cli/1.0.44 (external, sdk-py)", None, None, True),
+        ("claude-cli/2.0.69 (external, cli)", False, None, False),
+        ("claude-cli/2.0.69 (external, cli)", None, False, None),
+        ("claude-cli/2.0.69 (external, cli)", None, True, None),
+        ("PostmanRuntime/7.53.0", None, None, None),
+        (None, None, None, None),
+    ],
+)
+async def test_add_litellm_data_to_request_claude_code_drop_params(
+    user_agent, request_drop_params, operator_drop_params, expected_drop_params
+):
+    """Claude Code sends Anthropic-specific params that fail on non-Anthropic
+    providers, so its user agent must turn on drop_params automatically,
+    without overriding an explicit caller value, an explicit operator-level
+    litellm_settings value, or affecting other clients.
+    """
+    headers = {"Content-Type": "application/json"}
+    if user_agent is not None:
+        headers["user-agent"] = user_agent
+    request_mock = _make_request_mock("/v1/messages", headers)
+
+    data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+    if request_drop_params is not None:
+        data["drop_params"] = request_drop_params
+
+    proxy_config = MagicMock()
+    proxy_config.config = (
+        {"litellm_settings": {"drop_params": operator_drop_params}}
+        if operator_drop_params is not None
+        else {"litellm_settings": {}}
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=proxy_config,
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated.get("drop_params") == expected_drop_params

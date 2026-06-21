@@ -14,8 +14,12 @@ from litellm.proxy._types import (
     SpecialHeaders,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import (
+    AgentsRepository,
+    MCPServerRepository,
+)
 
 
 def _parse_mcp_server_names_from_path(
@@ -63,9 +67,10 @@ def _is_mcp_passthrough_cold_start(
     spec-compliant WWW-Authenticate challenge instead of surfacing a generic
     admission error.
 
-    Uses "all" semantics (mirrors :meth:`MCPRequestHandler._target_servers_use_oauth2`):
-    one non-passthrough target in a co-targeted set must not flip the bypass
-    open for the others. Fails closed when any target cannot be resolved."""
+    Uses "all" semantics (mirrors
+    :meth:`MCPRequestHandler._target_servers_delegate_auth_to_upstream`): one
+    non-passthrough target in a co-targeted set must not flip the bypass open
+    for the others. Fails closed when any target cannot be resolved."""
     if not mcp_servers:
         return False
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -120,7 +125,7 @@ class MCPRequestHandler:
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
     @staticmethod
-    async def process_mcp_request(  # noqa: PLR0915
+    async def process_mcp_request(
         scope: Scope,
     ) -> Tuple[
         UserAPIKeyAuth,
@@ -210,101 +215,64 @@ class MCPRequestHandler:
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
-        elif (
-            not litellm_api_key
-            and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
-                path=request_route,
-                mcp_servers=mcp_servers,
-                client_ip=IPAddressUtils.get_mcp_client_ip(request),
-            )
-        ):
-            # Operator opted this oauth2 server into upstream-delegated auth
-            # (PKCE passthrough): skip LiteLLM API-key/SSO entirely so the
-            # client authenticates directly with the upstream MCP server.
-            # Fires ONLY when neither x-litellm-api-key nor Authorization is
-            # present. If any LiteLLM key is supplied (primary or secondary
-            # header), we fall through so user_id is resolved, spend/rate
-            # limiting apply, and any stored OAuth token can be retrieved
-            # and forwarded upstream. Gated by
-            # _target_servers_delegate_auth_to_upstream, which only returns
-            # True when EVERY target is auth_type=oauth2 AND has the
-            # delegate_auth_to_upstream flag set — fails closed otherwise.
-            validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
-            # Explicit x-litellm-api-key provided - always validate normally
+            # An explicit x-litellm-api-key is always a LiteLLM credential, even
+            # for a delegated server, so validate it: identity / spend / rate
+            # limits resolve and any stored upstream token can be forwarded.
             validated_user_api_key_auth = await user_api_key_auth(
                 api_key=litellm_api_key, request=request
             )
+        elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
+            path=request_route,
+            mcp_servers=mcp_servers,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ):
+            # Operator opted this oauth2 server into upstream-delegated auth: the
+            # client authenticates directly with the upstream MCP server, so any
+            # Authorization bearer is an upstream token, never a LiteLLM key. Skip
+            # LiteLLM validation entirely — covering both the no-credential
+            # discovery request and the authenticated call carrying the upstream
+            # bearer — so a tool call that succeeds never carries a phantom 401
+            # auth span; the bearer is forwarded upstream unchanged. Gated by
+            # _target_servers_delegate_auth_to_upstream, which returns True only
+            # when EVERY target is auth_type=oauth2 with delegate_auth_to_upstream
+            # set; fails closed otherwise.
+            validated_user_api_key_auth = UserAPIKeyAuth()
         elif oauth2_headers:
-            # No x-litellm-api-key, but Authorization header present.
-            # Could be a LiteLLM key (backward compat) OR an opaque OAuth2 token
-            # the operator wants forwarded to an upstream OAuth2-mode MCP server.
-            # Try LiteLLM auth first; on auth failure, only fall back to anonymous
-            # passthrough when the request actually targets a server whose operator
-            # configured ``auth_type=oauth2``. For any other server (api_key,
-            # bearer_token, basic, etc.), a failed LiteLLM auth is a real failure
-            # and must propagate — otherwise an attacker can exchange any garbage
-            # bearer for an anonymous session.
+            # Authorization on a non-delegated server: the bearer must be a real
+            # LiteLLM credential, so a failed validation is a genuine 401/403 and
+            # propagates. The sole anonymous fallback is the auth_type=none
+            # pass-through cold-start (RFC 9728 discovery return), gated on a 401
+            # so a recognized-but-forbidden key still fails closed.
+            client_ip = IPAddressUtils.get_mcp_client_ip(request)
             try:
                 validated_user_api_key_auth = await user_api_key_auth(
                     api_key=litellm_api_key, request=request
                 )
             except (HTTPException, ProxyException) as e:
-                # HTTPException.status_code is int; ProxyException.code is
-                # normalized to str in its __init__ but can be ``"None"`` or any
-                # non-numeric string when the caller didn't supply a numeric
-                # code, so we compare against both int and str forms rather
-                # than coercing (``int("None")`` would raise ValueError and
-                # rewrite the auth error as a 500).
+                # ProxyException.code is normalized to str (possibly "None"), so
+                # compare both int and str forms rather than coercing.
                 status = e.status_code if isinstance(e, HTTPException) else e.code
-                is_auth_error = status in (401, 403, "401", "403")
                 is_unauthenticated = status in (401, "401")
-                client_ip = IPAddressUtils.get_mcp_client_ip(request)
-                if is_auth_error and MCPRequestHandler._target_servers_use_oauth2(
-                    path=request_route,
-                    mcp_servers=mcp_servers,
-                    client_ip=client_ip,
+                mcp_servers_from_path = _parse_mcp_server_names_from_path(
+                    request_route, mcp_servers
+                )
+                if (
+                    is_unauthenticated
+                    and mcp_servers_from_path is not None
+                    and not _has_client_supplied_mcp_auth(
+                        mcp_auth_header,
+                        mcp_server_auth_headers,
+                    )
+                    and _is_mcp_passthrough_cold_start(
+                        mcp_servers_from_path, client_ip=client_ip
+                    )
                 ):
                     verbose_logger.debug(
-                        "MCP OAuth2: target server is OAuth2-mode, treating "
-                        "Authorization as upstream OAuth2 token passthrough"
+                        "MCP pass-through return: forwarding Authorization as "
+                        "upstream OAuth token for delegated auth"
                     )
                     validated_user_api_key_auth = UserAPIKeyAuth()
-                elif is_unauthenticated:
-                    # Pass-through cold-start return: per RFC 9728 / MCP
-                    # Authorization spec the client completes upstream OAuth
-                    # discovery and returns with ``Authorization: Bearer
-                    # <upstream-token>``. For ``auth_type=none`` passthrough
-                    # servers that bearer is not a LiteLLM key (auth above
-                    # failed) but is meant to be forwarded upstream
-                    # unchanged. Fall back to anonymous admission so the
-                    # caller is not rejected for following the discovery
-                    # flow without also setting ``x-litellm-api-key``.
-                    # Only trigger on 401 (token unrecognized); a 403 means
-                    # the key WAS recognized but is forbidden (e.g. over
-                    # budget / rate limited) and must propagate so those
-                    # controls are not bypassed via anonymous admission.
-                    mcp_servers_from_path = _parse_mcp_server_names_from_path(
-                        request_route, mcp_servers
-                    )
-                    if (
-                        mcp_servers_from_path is not None
-                        and not _has_client_supplied_mcp_auth(
-                            mcp_auth_header,
-                            mcp_server_auth_headers,
-                        )
-                        and _is_mcp_passthrough_cold_start(
-                            mcp_servers_from_path, client_ip=client_ip
-                        )
-                    ):
-                        verbose_logger.debug(
-                            "MCP pass-through return: target server is "
-                            "passthrough, treating Authorization as "
-                            "upstream OAuth token for delegated auth"
-                        )
-                        validated_user_api_key_auth = UserAPIKeyAuth()
-                    else:
-                        raise
                 else:
                     raise
         else:
@@ -409,45 +377,6 @@ class MCPRequestHandler:
         return [servers_and_path]
 
     @staticmethod
-    def _target_servers_use_oauth2(
-        path: str, mcp_servers: Optional[List[str]], client_ip: Optional[str]
-    ) -> bool:
-        """
-        True only when EVERY MCP server the request targets is configured for
-        ``auth_type == oauth2``. If any target is non-OAuth2 — or if the target
-        cannot be resolved at all — return False so the caller fails closed.
-
-        Used to gate the "treat Authorization as opaque OAuth2 token" fallback
-        in :meth:`process_mcp_request` so a failed LiteLLM-auth cannot be
-        exchanged for an anonymous session against a non-OAuth2 server.
-        """
-        # Inline imports avoid a circular dependency: mcp_server_manager imports
-        # from this module.
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-        from litellm.types.mcp import MCPAuth
-
-        # Resolve the same target list downstream routing will use. For
-        # ``/mcp/...`` routes, ``extract_mcp_auth_context`` overrides the
-        # ``x-mcp-servers`` header with path-derived names, so we must mirror
-        # that here — otherwise a caller could set the header to a permissive
-        # server while the path targets a stricter one (header/path TOCTOU).
-        target_names = MCPRequestHandler._resolve_target_server_names(
-            path=path, mcp_servers_header=mcp_servers
-        )
-        if not target_names:
-            return False
-
-        for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(
-                name, client_ip=client_ip
-            )
-            if server is None or server.auth_type != MCPAuth.oauth2:
-                return False
-        return True
-
-    @staticmethod
     def _target_servers_delegate_auth_to_upstream(
         path: str, mcp_servers: Optional[List[str]], client_ip: Optional[str]
     ) -> bool:
@@ -468,8 +397,8 @@ class MCPRequestHandler:
         )
         from litellm.types.mcp import MCPAuth
 
-        # See _target_servers_use_oauth2: must mirror the downstream
-        # header-vs-path override or an attacker could set
+        # Must mirror the downstream header-vs-path override
+        # (``extract_mcp_auth_context``) or an attacker could set
         # ``x-mcp-servers`` to a delegate-enabled server while the URL path
         # targets a non-delegate server, skipping LiteLLM auth for it.
         target_names = MCPRequestHandler._resolve_target_server_names(
@@ -1445,7 +1374,7 @@ class MCPRequestHandler:
                 return None
 
             if object_permission_id is None:
-                agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                agent_row = await AgentsRepository(prisma_client).table.find_unique(
                     where={"agent_id": agent_id},
                 )
                 object_permission_id = (
@@ -1600,7 +1529,7 @@ class MCPRequestHandler:
         server_ids: Set[str] = set()
         if access_groups and prisma_client is not None:
             try:
-                mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+                mcp_servers = await MCPServerRepository(prisma_client).table.find_many(
                     where={"mcp_access_groups": {"hasSome": access_groups}}
                 )
                 for server in mcp_servers:

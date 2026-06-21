@@ -16,11 +16,12 @@ import math
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.utils import jsonify_object
+from litellm.repositories.budget_repository import BudgetRepository
 
 router = APIRouter()
 
@@ -98,7 +99,7 @@ async def new_budget(
     budget_obj_json = budget_obj.model_dump(exclude_none=True)
     budget_obj_jsonified = jsonify_object(budget_obj_json)  # json dump any dictionaries
     try:
-        response = await prisma_client.db.litellm_budgettable.create(
+        response = await BudgetRepository(prisma_client).table.create(
             data={
                 **budget_obj_jsonified,  # type: ignore
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -182,10 +183,23 @@ async def update_budget(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
-    response = await prisma_client.db.litellm_budgettable.update(
+    # recompute budget_reset_at when the duration changes, unless the caller pinned a reset time explicitly
+    recomputed_reset_at = (
+        {
+            "budget_reset_at": get_budget_reset_time(
+                budget_duration=budget_obj.budget_duration
+            )
+        }
+        if budget_obj.budget_duration is not None
+        and "budget_reset_at" not in budget_obj.model_fields_set
+        else {}
+    )
+
+    response = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id},
         data={
             **budget_obj.model_dump(exclude_unset=True),  # type: ignore
+            **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         },  # type: ignore
     )
@@ -217,7 +231,7 @@ async def info_budget(data: BudgetRequest):
                 "error": f"Specify list of budget id's to query. Passed in={data.budgets}"
             },
         )
-    response = await prisma_client.db.litellm_budgettable.find_many(
+    response = await BudgetRepository(prisma_client).table.find_many(
         where={"budget_id": {"in": data.budgets}},
     )
 
@@ -261,7 +275,7 @@ async def budget_settings(
         )
 
     ## get budget item from db
-    db_budget_row = await prisma_client.db.litellm_budgettable.find_first(
+    db_budget_row = await BudgetRepository(prisma_client).table.find_first(
         where={"budget_id": budget_id}
     )
 
@@ -327,7 +341,7 @@ async def list_budget(
             },
         )
 
-    response = await prisma_client.db.litellm_budgettable.find_many()
+    response = await BudgetRepository(prisma_client).table.find_many()
 
     return response
 
@@ -366,7 +380,7 @@ async def delete_budget(
             },
         )
 
-    response = await prisma_client.db.litellm_budgettable.delete(
+    response = await BudgetRepository(prisma_client).table.delete(
         where={"budget_id": data.id}
     )
 

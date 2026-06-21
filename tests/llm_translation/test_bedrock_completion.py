@@ -2712,6 +2712,10 @@ def test_bedrock_top_k_param(model, expected_params):
         data = json.loads(mock_post.call_args.kwargs["data"])
         if "mistral" in model:
             assert data["top_k"] == 2
+        elif expected_params == {}:
+            # Models that don't support top_k produce no additionalModelRequestFields;
+            # the empty block is now omitted entirely rather than sent as `{}`.
+            assert "additionalModelRequestFields" not in data
         else:
             assert data["additionalModelRequestFields"] == expected_params
 
@@ -3059,8 +3063,6 @@ async def test_bedrock_max_completion_tokens(model: str):
 
         assert request_body == {
             "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
-            "additionalModelRequestFields": {},
-            "system": [],
             "inferenceConfig": {"maxTokens": 10},
         }
 

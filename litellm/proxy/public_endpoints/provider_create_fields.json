@@ -1244,6 +1244,16 @@
     "litellm_provider": "gemini",
     "credential_fields": [
       {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://generativelanguage.googleapis.com/v1beta",
+        "tooltip": "Leave blank to let LiteLLM pick the right Gemini API version automatically (v1alpha for Gemini 3+ models, v1beta otherwise). Override only when fronting Gemini through a custom gateway; if you do, include the version prefix (e.g. /v1beta) but not the trailing slash. LiteLLM appends '/models/{model}:generateContent'.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "api_key",
         "label": "API Key",
         "placeholder": "aig-",
@@ -2586,7 +2596,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "soniox/stt-async-v4"
+    "default_model_placeholder": "soniox/stt-async-v5"
   },
   {
     "provider": "TEXT_COMPLETION_CODESTRAL",

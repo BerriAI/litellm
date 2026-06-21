@@ -5,7 +5,7 @@ from litellm.exceptions import BadRequestError
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
-def get_supported_openai_params(  # noqa: PLR0915
+def get_supported_openai_params(
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal[
@@ -295,6 +295,15 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "predibase":
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "voyage":
+        if (
+            request_type == "embeddings"
+            and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(model)
+        ):
+            return (
+                litellm.VoyageMultimodalEmbeddingConfig().get_supported_openai_params(
+                    model=model
+                )
+            )
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "infinity":
         return litellm.InfinityEmbeddingConfig().get_supported_openai_params(

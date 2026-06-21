@@ -3702,6 +3702,39 @@ def test_fast_mode_with_inference_geo():
         assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
 
 
+def test_calculate_usage_captures_service_tier():
+    """
+    Anthropic returns the assigned service tier on the response usage object
+    (e.g. ``"priority"``). It must be surfaced on the Usage object so it is
+    visible in logs and used to select tier-specific pricing.
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 410,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 585,
+        "service_tier": "priority",
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.service_tier == "priority"
+
+
+def test_calculate_usage_service_tier_defaults_to_none():
+    """A response without a service tier must not invent one."""
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 5},
+        reasoning_content=None,
+    )
+
+    assert usage.service_tier is None
+
+
 def test_fast_mode_parameter_in_supported_params():
     """
     Test that 'speed' is in the list of supported OpenAI params.
@@ -5092,6 +5125,177 @@ def test_map_tool_helper_collision_prefers_definitions_over_components_schemas()
     assert transformed["input_schema"]["properties"]["from_components"] == expected
 
 
+BILLING_HEADER_BLOCK = {
+    "type": "text",
+    "text": "x-anthropic-billing-header: cc_version=1.0.abc; cc_entrypoint=cli; cch=00000;",
+}
+
+
+def _system_with_billing_header(real_text: str) -> list:
+    return [
+        {
+            "role": "system",
+            "content": [BILLING_HEADER_BLOCK, {"type": "text", "text": real_text}],
+        }
+    ]
+
+
+def test_translate_system_message_keeps_billing_header_for_first_party_anthropic():
+    config = AnthropicConfig()
+    assert config.should_strip_billing_metadata() is False
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header(
+            "You are Claude Code, Anthropic's official CLI for Claude."
+        )
+    )
+
+    texts = [block["text"] for block in result]
+    assert any(t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "You are Claude Code, Anthropic's official CLI for Claude." in texts
+
+
+def test_translate_system_message_strips_billing_header_for_bedrock():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header("real system prompt")
+    )
+
+    texts = [block["text"] for block in result]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "real system prompt" in texts
+
+
+def test_anthropic_messages_request_keeps_billing_header_for_first_party():
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AnthropicMessagesConfig()
+    assert config.should_strip_billing_metadata() is False
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            BILLING_HEADER_BLOCK,
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result["system"]]
+    assert any(t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+def test_anthropic_messages_request_strips_billing_header_for_minimax():
+    from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = MinimaxMessagesConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            BILLING_HEADER_BLOCK,
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result.get("system", [])]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeConfig,
+    )
+
+    config = AmazonAnthropicClaudeConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header("real system prompt")
+    )
+
+    texts = [block["text"] for block in result]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "real system prompt" in texts
+
+
+@pytest.mark.parametrize(
+    "module_path, class_name, expected_strip",
+    [
+        ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
+        (
+            "litellm.llms.anthropic.experimental_pass_through.messages.transformation",
+            "AnthropicMessagesConfig",
+            False,
+        ),
+        (
+            "litellm.llms.bedrock.claude_platform.transformation",
+            "BedrockClaudePlatformConfig",
+            True,
+        ),
+        (
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "AmazonAnthropicClaudeConfig",
+            True,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
+            "VertexAIAnthropicConfig",
+            True,
+        ),
+        (
+            "litellm.llms.azure_ai.anthropic.transformation",
+            "AzureAnthropicConfig",
+            True,
+        ),
+        ("litellm.llms.minimax.messages.transformation", "MinimaxMessagesConfig", True),
+        (
+            "litellm.llms.azure_ai.anthropic.messages_transformation",
+            "AzureAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.deepseek.messages.transformation",
+            "DeepSeekAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation",
+            "VertexAIPartnerModelsAnthropicMessagesConfig",
+            True,
+        ),
+    ],
+)
+def test_should_strip_billing_metadata_by_provider(
+    module_path, class_name, expected_strip
+):
+    import importlib
+
+    config_cls = getattr(importlib.import_module(module_path), class_name)
+    assert config_cls().should_strip_billing_metadata() is expected_strip
+
+
 def test_namespace_tool_flat_nested_tools_are_extracted():
     """Codex sends nested tools in flat format {type, name, description, parameters} with no 'function' wrapper.
     These must be normalized and mapped without raising KeyError: 'function'."""
@@ -5188,3 +5392,140 @@ def test_client_metadata_stripped_from_anthropic_request():
         headers={},
     )
     assert "client_metadata" not in result
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-fable-5", "claude-opus-4-7", "claude-opus-4-8-20260120"],
+)
+def test_sampling_params_dropped_for_models_that_removed_them(model):
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p with a
+    400; with drop_params set they must be dropped, not forwarded (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+
+
+@pytest.mark.parametrize("params", [{"temperature": 0.5}, {"top_p": 0.9}, {"top_p": 1}])
+def test_sampling_params_raise_clean_error_without_drop_params(params, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="claude-fable-5",
+            drop_params=False,
+        )
+
+
+def test_temperature_1_forwarded_on_models_that_removed_sampling_params():
+    """temperature=1 (the API default) is still accepted and must pass through."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 1},
+        optional_params={},
+        model="claude-fable-5",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 1
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-6", "claude-sonnet-4-6"])
+def test_sampling_params_forwarded_on_models_that_accept_them(model):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["top_p"] == 0.9
+
+
+def test_sampling_param_gating_driven_by_model_map_flag(monkeypatch):
+    """The drop/raise decision must come from ``supports_sampling_params`` in
+    the model map, not just name matching: a flagged entry gates a model whose
+    name says nothing, and an explicit ``true`` overrides the name fallback."""
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False}
+    )
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-fable-5-test", {"supports_sampling_params": True}
+    )
+    config = AnthropicConfig()
+
+    flagged_off = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+    assert "top_p" not in flagged_off
+
+    flagged_on = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-fable-5-test",
+        drop_params=True,
+    )
+    assert flagged_on["top_p"] == 0.9
+
+
+def test_top_k_dropped_at_transform_for_models_that_removed_it():
+    """``top_k`` is a provider-specific kwarg that bypasses
+    ``map_openai_params``, so it must be stripped at the transform_request
+    boundary shared by the direct, invoke, Vertex, and Azure paths (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result
+
+
+def test_top_k_raises_at_transform_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"max_tokens": 10, "top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_top_k_forwarded_at_transform_on_models_that_accept_it():
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["top_k"] == 40

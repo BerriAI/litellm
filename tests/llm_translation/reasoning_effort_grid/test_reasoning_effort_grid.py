@@ -15,7 +15,6 @@ from .grid_spec import (
     all_cells,
 )
 
-
 _PROMPT_MESSAGES: List[Dict[str, str]] = [
     {"role": "user", "content": "Step by step, calculate 47 * 53. Show your work."}
 ]
@@ -201,8 +200,8 @@ async def test_reasoning_effort_grid(
 
 
 def test_grid_cell_count() -> None:
-    assert len(_PARAMS) == 25 * 11, (
-        f"expected 275 cells (25 provider x model combos x 11 efforts), "
+    assert len(_PARAMS) == 29 * 11, (
+        f"expected 319 cells (29 provider x model combos x 11 efforts), "
         f"got {len(_PARAMS)}"
     )
 

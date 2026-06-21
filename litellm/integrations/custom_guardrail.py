@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -43,12 +44,19 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
     ModifyResponseException,
     SensitiveDataRouteException,
 )
+
+# Per-process secret tagging each recorded marker. The deployment hook only
+# honors markers carrying this token, so a caller cannot forge the metadata
+# field to suppress a guardrail on the direct-SDK path that never reaches the
+# proxy's metadata sanitizer.
+_PRE_CALL_EXECUTED_TOKEN = secrets.token_hex(16)
 
 
 def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
@@ -458,6 +466,49 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
+    def _pre_call_marker(self) -> Optional[str]:
+        name = self.guardrail_name
+        if not name:
+            return None
+        return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
+
+    def mark_pre_call_hook_ran(self, data: Dict[str, Any]) -> None:
+        """
+        Record that this guardrail's ``async_pre_call_hook`` already ran for this
+        request, so the deployment-level hook does not run it a second time.
+
+        The proxy runs pre-call guardrails in ``ProxyLogging.pre_call_hook``. The
+        router later spreads a deployment's model-level ``guardrails`` into the
+        top-level request kwargs, which would otherwise re-trigger the same hook
+        from ``async_pre_call_deployment_hook``.
+        """
+        marker = self._pre_call_marker()
+        if marker is None:
+            return
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+                if isinstance(executed, list):
+                    if marker not in executed:
+                        executed.append(marker)
+                else:
+                    meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
+                return
+        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
+
+    def _pre_call_hook_already_ran(self, data: Dict[str, Any]) -> bool:
+        marker = self._pre_call_marker()
+        if marker is None:
+            return False
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+                if isinstance(executed, list) and marker in executed:
+                    return True
+        return False
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -466,6 +517,9 @@ class CustomGuardrail(CustomLogger):
         # should run guardrail
         litellm_guardrails = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
+            return kwargs
+
+        if self._pre_call_hook_already_ran(kwargs):
             return kwargs
 
         if (
@@ -565,6 +619,9 @@ class CustomGuardrail(CustomLogger):
             self.default_on is True
             and self.guardrail_name in opted_out_global_guardrails
         ):
+            return False
+
+        if self.default_on is True and disable_global_guardrail is True:
             return False
 
         if self.default_on is True and disable_global_guardrail is not True:

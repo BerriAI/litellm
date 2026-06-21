@@ -43,6 +43,7 @@ from typing import (
     Type,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
+from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -72,6 +73,7 @@ from litellm.constants import (
     replicate_models,
     clarifai_models,
     huggingface_models,
+    modelscope_models,
     empower_models,
     together_ai_models,
     baseten_models,
@@ -154,10 +156,12 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "focus",
+    "mavvrik",
     "vantage",
     "posthog",
     "levo",
     "compression_interception",
+    "newrelic",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -209,6 +213,15 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+# When True (default — preserves historical behavior), the Router appends
+# internal config names (model_group, fallback model groups, deployment
+# timeouts, fallback failure details) onto exception messages and surfaces
+# them to clients via ProxyException.message. Set to False if you do NOT
+# want the proxy's internal model_name / fallback wiring visible to clients.
+# Deprecation: planned to flip to False (redact by default) in a future
+# major release; opt in early with `litellm.expose_router_debug_in_errors
+# = False`.
+expose_router_debug_in_errors: bool = True
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
@@ -231,6 +244,17 @@ modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+# When True, strip the OpenAI-flavored `usage.total_tokens` field that
+# LiteLLM injects into non-streaming /v1/messages responses, bringing the
+# wire response into line with the Anthropic spec (matches the streaming
+# SSE path, which already omits total_tokens). Default False to preserve
+# backward compatibility for clients that read the LiteLLM-shaped
+# `usage.total_tokens` today. Planned to flip to True in a future major
+# release; opt in early via Python:
+#   `litellm.strip_anthropic_total_tokens = True`
+# Or via `litellm_settings.strip_anthropic_total_tokens: true` in
+# config.yaml.
+strip_anthropic_total_tokens: bool = False
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
@@ -359,6 +383,9 @@ enable_gemini_default_thinking_level_low: bool = (
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
+require_managed_files: bool = (
+    False  # proxy only - require target_model_names on POST /v1/files
+)
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
@@ -406,12 +433,13 @@ anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
-suppress_debug_info = False
+suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
+newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -442,6 +470,13 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+# Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
+# `litellm_proxy_failed_requests_metric`. Off by default to preserve the
+# pre-unification label set so existing dashboards / recording rules keyed on
+# that metric keep matching after upgrade. Enable when downstream consumers
+# are ready to split 429s by source (vendor vs. litellm) and dimension
+# (RPM/TPM/concurrent/budget).
+prometheus_emit_rate_limit_labels: bool = False
 prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
@@ -886,6 +921,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "modelscope":
+            modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
@@ -1005,6 +1042,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | modelscope_models
     | azure_ai_models
     | voyage_models
     | infinity_models
@@ -1138,6 +1176,7 @@ models_by_provider: dict = {
     "elevenlabs": elevenlabs_models,
     "heroku": heroku_models,
     "dashscope": dashscope_models,
+    "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
     "v0": v0_models,
@@ -1303,6 +1342,8 @@ from .exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RateLimitErrorCategory,
+    RateLimitType,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1360,10 +1401,12 @@ from .skills.main import (
 from .containers.main import *
 from .ocr.main import *
 from .rag.main import *
+from .sandbox.main import *
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
+    acreate_realtime_transcription_session,
     arealtime_calls,
 )
 from .responses.main import _aresponses_websocket
@@ -1714,6 +1757,9 @@ if TYPE_CHECKING:
     from .llms.voyage.embedding.transformation_contextual import (
         VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig,
     )
+    from .llms.voyage.embedding.transformation_multimodal import (
+        VoyageMultimodalEmbeddingConfig as VoyageMultimodalEmbeddingConfig,
+    )
     from .llms.infinity.embedding.transformation import (
         InfinityEmbeddingConfig as InfinityEmbeddingConfig,
     )
@@ -1954,6 +2000,9 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
+    )
+    from .llms.modelscope.chat.transformation import (
+        ModelScopeChatConfig as ModelScopeChatConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

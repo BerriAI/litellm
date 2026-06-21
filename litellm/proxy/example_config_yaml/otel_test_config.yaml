@@ -3,7 +3,7 @@ model_list:
    litellm_params:
      model: openai/gpt-5-mini
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
      tags: ["teamA"]
    model_info:
      id: "team-a-model"
@@ -11,7 +11,7 @@ model_list:
    litellm_params:
      model: openai/gpt-5-mini
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
      tags: ["teamB"]
    model_info:
      id: "team-b-model"
@@ -24,7 +24,7 @@ model_list:
    litellm_params:
      model: openai/429
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app
+     api_base: os.environ/FAKE_OPENAI_API_BASE
  - model_name: llava-hf
    litellm_params:
      model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
@@ -35,12 +35,12 @@ model_list:
  - model_name: bedrock/*
    litellm_params:
      model:  bedrock/*
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
  - model_name: openai/*
    litellm_params:
      model: openai/*
      api_key: os.environ/OPENAI_API_KEY
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
 
 
 litellm_settings:

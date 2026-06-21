@@ -8,6 +8,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_content_from_model_response,
+)
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
@@ -101,6 +104,120 @@ class AnthropicPassthroughLoggingHandler:
         return None
 
     @staticmethod
+    def _resolve_costing_model(model: str, logging_obj: LiteLLMLoggingObj) -> str:
+        if model and model != "unknown":
+            return model
+        litellm_params = (getattr(logging_obj, "model_call_details", {}) or {}).get(
+            "litellm_params", {}
+        ) or {}
+        deployment_model = litellm_params.get("model")
+        if deployment_model and deployment_model != "unknown":
+            return deployment_model
+        model_group = (litellm_params.get("metadata", {}) or {}).get("model_group")
+        if model_group:
+            return model_group.removeprefix("passthrough/")
+        return model
+
+    @staticmethod
+    def _extract_model_from_anthropic_chunks(
+        all_chunks: Sequence[Union[str, bytes]],
+    ) -> Optional[str]:
+        for raw in all_chunks:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            for line in text.splitlines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[len("data:") :].strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("type") == "message_start":
+                    model = (data.get("message") or {}).get("model")
+                    if model:
+                        return model
+        return None
+
+    @staticmethod
+    def _stream_was_interrupted(
+        all_chunks: Sequence[Union[str, bytes]],
+    ) -> bool:
+        """
+        Anthropic ends a stream with ``content_block_stop`` -> ``message_delta``
+        -> ``message_stop``; a client disconnect leaves the last event mid
+        ``content_block_delta``. Scan from the tail and decide on the first
+        terminal-region event, so the common completed case is O(1) rather than
+        re-deserializing every line of the stream.
+        """
+        for raw in reversed(all_chunks):
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            for line in reversed(text.splitlines()):
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[len("data:") :].strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                etype = data.get("type")
+                if etype == "message_delta":
+                    return False
+                if etype in (
+                    "content_block_delta",
+                    "content_block_stop",
+                    "message_start",
+                ):
+                    return True
+        return True
+
+    @staticmethod
+    def _recover_interrupted_stream_output_tokens(
+        response: Union[ModelResponse, TextCompletionResponse],
+        all_chunks: Sequence[Union[str, bytes]],
+        model: str,
+    ) -> None:
+        """
+        An Anthropic stream interrupted before its terminal ``message_delta``
+        (client disconnect) carries only the ``message_start`` ``output_tokens``
+        placeholder (typically 1-3), so completion tokens and spend are
+        undercounted ~20x. Re-tokenize the buffered output text to recover a
+        realistic ``output_tokens`` for usage/cost. Completed streams are
+        untouched because their terminal ``message_delta`` short-circuits here.
+        """
+        if not isinstance(response, ModelResponse):
+            return
+        if not AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks):
+            return
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        output_text = get_content_from_model_response(response)
+        if not output_text:
+            return
+        try:
+            recovered_output_tokens = litellm.token_counter(
+                model=model, text=output_text, count_response_tokens=True
+            )
+        except Exception:
+            verbose_proxy_logger.warning(
+                "Could not re-tokenize interrupted stream output; "
+                "keeping placeholder completion token count."
+            )
+            return
+        if recovered_output_tokens <= (usage.completion_tokens or 0):
+            return
+        usage.completion_tokens = recovered_output_tokens
+        usage.total_tokens = (usage.prompt_tokens or 0) + recovered_output_tokens
+        # Anthropic costing reads completion_tokens_details.text_tokens, so the
+        # stale message_start placeholder there must be corrected too or spend
+        # stays undercounted even after completion_tokens is fixed.
+        details = getattr(usage, "completion_tokens_details", None)
+        if details is not None and getattr(details, "text_tokens", None) is not None:
+            details.text_tokens = recovered_output_tokens
+
+    @staticmethod
     def _create_anthropic_response_logging_payload(
         litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
@@ -125,6 +242,10 @@ class AnthropicPassthroughLoggingHandler:
             # Get custom_llm_provider from logging object if available (e.g., azure_ai for Azure Anthropic)
             custom_llm_provider = logging_obj.model_call_details.get(
                 "custom_llm_provider"
+            )
+
+            model = AnthropicPassthroughLoggingHandler._resolve_costing_model(
+                model, logging_obj
             )
 
             # Prepend custom_llm_provider to model if not already present
@@ -213,6 +334,15 @@ class AnthropicPassthroughLoggingHandler:
         ):
             model = cast(str, litellm_logging_obj.model_call_details.get("model"))
 
+        if not model or model == "unknown":
+            chunk_model = (
+                AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                    all_chunks
+                )
+            )
+            if chunk_model:
+                model = chunk_model
+
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
@@ -228,6 +358,11 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
+            response=complete_streaming_response,
+            all_chunks=all_chunks,
+            model=model,
+        )
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
@@ -317,7 +452,7 @@ class AnthropicPassthroughLoggingHandler:
     )
 
     @staticmethod
-    def _collapse_pure_text_chunks(  # noqa: PLR0915
+    def _collapse_pure_text_chunks(
         all_chunks: Sequence[Union[str, bytes]],
     ) -> Optional[List[str]]:
         """
@@ -468,6 +603,13 @@ class AnthropicPassthroughLoggingHandler:
             # Process each individual event
             for event_str in individual_events:
                 try:
+                    # Skip OpenAI-style [DONE] sentinels some Anthropic-compatible
+                    # providers emit. Match the whole SSE line so a valid chunk whose
+                    # text payload happens to contain "[DONE]" is not dropped.
+                    if any(
+                        line.strip() == "data: [DONE]" for line in event_str.split("\n")
+                    ):
+                        continue
                     transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                         chunk=event_str
                     )
@@ -476,6 +618,14 @@ class AnthropicPassthroughLoggingHandler:
 
                 except (StopIteration, StopAsyncIteration):
                     break
+                except json.JSONDecodeError:
+                    # Some upstreams emit non-JSON SSE lines; skip them so the
+                    # logging pipeline is not broken by a single bad frame.
+                    verbose_proxy_logger.debug(
+                        "Skipping non-JSON SSE event: %s",
+                        event_str[:200],
+                    )
+                    continue
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks,
@@ -487,7 +637,7 @@ class AnthropicPassthroughLoggingHandler:
         return complete_streaming_response
 
     @staticmethod
-    def batch_creation_handler(  # noqa: PLR0915
+    def batch_creation_handler(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,

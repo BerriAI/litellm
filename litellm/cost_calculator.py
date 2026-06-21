@@ -94,6 +94,7 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
+    ServiceTier,
     StandardBuiltInToolsParams,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
@@ -288,7 +289,7 @@ def _transcription_usage_has_token_details(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
-def cost_per_token(  # noqa: PLR0915
+def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
@@ -614,7 +615,9 @@ def cost_per_token(  # noqa: PLR0915
                 service_tier=service_tier,
             )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block)
+        return anthropic_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
@@ -885,6 +888,23 @@ def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[s
     return service_tier
 
 
+def _normalize_service_tier(service_tier: object) -> str | None:
+    """
+    Reduce a service_tier value to a concrete billable tier string or None.
+
+    "auto" is a routing preference and any non-string value is not a billable
+    tier, so both defer to standard pricing (or to the tier the provider reports
+    on the response usage) instead of crashing the downstream cost-key lookup,
+    which calls service_tier.lower()
+    """
+    if (
+        not isinstance(service_tier, str)
+        or service_tier.lower() == ServiceTier.AUTO.value
+    ):
+        return None
+    return service_tier
+
+
 def _get_usage_object(
     completion_response: Any,
 ) -> Optional[Usage]:
@@ -1136,7 +1156,7 @@ def _store_cost_breakdown_in_logging_obj(
         pass
 
 
-def completion_cost(  # noqa: PLR0915
+def completion_cost(
     completion_response=None,
     model: Optional[str] = None,
     prompt="",
@@ -1224,12 +1244,16 @@ def completion_cost(  # noqa: PLR0915
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
+        service_tier = _normalize_service_tier(service_tier)
+
         # Extract service_tier from completion_response if not provided
         if service_tier is None and completion_response is not None:
             if isinstance(completion_response, BaseModel):
                 service_tier = getattr(completion_response, "service_tier", None)
             elif isinstance(completion_response, dict):
                 service_tier = completion_response.get("service_tier")
+
+        service_tier = _normalize_service_tier(service_tier)
 
         # Extract service_tier from usage object if not provided
         if service_tier is None and cost_per_token_usage_object is not None:
@@ -1239,6 +1263,8 @@ def completion_cost(  # noqa: PLR0915
                 )
             elif isinstance(cost_per_token_usage_object, dict):
                 service_tier = cost_per_token_usage_object.get("service_tier")
+
+        service_tier = _normalize_service_tier(service_tier)
 
         selected_model = _select_model_name_for_cost_calc(
             model=model,
@@ -2488,6 +2514,11 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
 
 
+_TRANSCRIPTION_COMPLETED_EVENT_TYPE = (
+    "conversation.item.input_audio_transcription.completed"
+)
+
+
 def handle_realtime_stream_cost_calculation(
     results: OpenAIRealtimeStreamList,
     combined_usage_object: Usage,
@@ -2533,4 +2564,99 @@ def handle_realtime_stream_cost_calculation(
         break  # exit if we find a valid model
     total_cost = input_cost_per_token + output_cost_per_token
 
+    if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results):
+        total_cost += handle_realtime_transcription_cost_calculation(
+            results=results,
+            custom_llm_provider=custom_llm_provider,
+            litellm_model_name=litellm_model_name,
+        )
+
     return total_cost
+
+
+def handle_realtime_transcription_cost_calculation(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    """
+    Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
+
+    Transcription sessions emit no `response.done` events; instead each
+    `conversation.item.input_audio_transcription.completed` event carries a
+    `usage` object billed by the ASR model. The usage is one of:
+      - {"type": "duration", "seconds": <float>}  → priced via input_cost_per_second
+      - {"type": "tokens", "input_tokens": ...}    → priced via input/audio token cost
+    """
+    completed_events = [
+        cast(dict, result)
+        for result in results
+        if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
+    ]
+    if not completed_events:
+        return 0.0
+
+    model_name = (
+        _get_transcription_model_name_from_results(results) or litellm_model_name
+    )
+    try:
+        model_info = litellm.get_model_info(
+            model=model_name, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = None
+
+    total_cost = 0.0
+    for event in completed_events:
+        usage = event.get("usage") or {}
+        total_cost += _transcription_usage_cost(usage, model_info)
+    return total_cost
+
+
+def _get_transcription_model_name_from_results(
+    results: OpenAIRealtimeStreamList,
+) -> Optional[str]:
+    """Resolve the ASR model from a transcription_session.* / session.* event."""
+    for result in results:
+        if result.get("type") in (
+            "transcription_session.created",
+            "transcription_session.updated",
+            "session.created",
+            "session.updated",
+        ):
+            session = cast(dict, result).get("session", {}) or {}
+            transcription = (
+                (session.get("audio", {}) or {}).get("input", {}) or {}
+            ).get("transcription", {}) or session.get("input_audio_transcription", {})
+            model = (transcription or {}).get("model") or session.get("model")
+            if model:
+                return model
+    return None
+
+
+def _transcription_usage_cost(usage: dict, model_info: Optional[ModelInfo]) -> float:
+    if model_info is None:
+        return 0.0
+    usage_type = usage.get("type")
+    if usage_type == "duration":
+        seconds = usage.get("seconds") or 0.0
+        per_second = model_info.get("input_cost_per_second") or 0.0
+        return float(seconds) * float(per_second)
+    if usage_type == "tokens":
+        input_token_details = usage.get("input_token_details") or {}
+        audio_tokens = input_token_details.get("audio_tokens") or 0
+        text_tokens = input_token_details.get("text_tokens") or 0
+        output_tokens = usage.get("output_tokens") or 0
+        audio_cost = float(audio_tokens) * float(
+            model_info.get("input_cost_per_audio_token")
+            or model_info.get("input_cost_per_token")
+            or 0.0
+        )
+        text_cost = float(text_tokens) * float(
+            model_info.get("input_cost_per_token") or 0.0
+        )
+        output_cost = float(output_tokens) * float(
+            model_info.get("output_cost_per_token") or 0.0
+        )
+        return audio_cost + text_cost + output_cost
+    return 0.0

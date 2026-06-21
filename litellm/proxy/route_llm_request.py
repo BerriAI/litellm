@@ -1,6 +1,7 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+import httpx
 from fastapi import HTTPException, status
 
 import litellm
@@ -46,6 +47,30 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _raise_if_model_fully_blocked(
+    llm_router: LitellmRouter, model_name: Any, team_id: Optional[str]
+) -> None:
+    if not isinstance(model_name, str) or not model_name:
+        return
+    if not isinstance(llm_router, litellm.Router):
+        return
+    deployments = (
+        llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    )
+    if llm_router._are_all_deployments_blocked(deployments):
+        raise litellm.PermissionDeniedError(
+            message="Model is blocked",
+            model=model_name,
+            llm_provider="",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request(
+                    method="POST", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -74,6 +99,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "avideo_extension": "/videos/extensions",
     "acreate_realtime_client_secret": "/realtime/client_secrets",
     "arealtime_calls": "/realtime/calls",
+    "acreate_realtime_transcription_session": "/realtime/transcription_sessions",
     "acreate_container": "/containers",
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
@@ -238,7 +264,7 @@ async def add_shared_session_to_data(data: dict) -> None:
             pass
 
 
-async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
+async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
     user_model: Optional[str],
@@ -261,6 +287,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "_arealtime",  # private function for realtime API
         "acreate_realtime_client_secret",
         "arealtime_calls",
+        "acreate_realtime_transcription_session",
         "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
@@ -411,6 +438,9 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        _raise_if_model_fully_blocked(
+            llm_router=llm_router, model_name=data.get("model"), team_id=team_id
+        )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
@@ -427,6 +457,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "adelete_run",
             "acreate_realtime_client_secret",
             "arealtime_calls",
+            "acreate_realtime_transcription_session",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")

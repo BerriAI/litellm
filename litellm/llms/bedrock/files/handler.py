@@ -1,8 +1,6 @@
 import asyncio
-import base64
-import os
-from types import MappingProxyType
-from typing import Any, Coroutine, Mapping, Optional, Tuple, Union, cast
+from collections.abc import Mapping
+from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
 
@@ -17,7 +15,6 @@ from litellm.types.llms.openai import (
     FileContentRequest,
     HttpxBinaryResponseContent,
 )
-from litellm.types.utils import SpecialEnums
 
 from ..base_aws_llm import BaseAWSLLM
 
@@ -37,40 +34,9 @@ class BedrockFilesHandler(BaseAWSLLM):
         )
 
     def _extract_s3_uri_from_file_id(self, file_id: str) -> str:
-        """
-        Extract S3 URI from encoded file ID.
+        from .transformation import extract_s3_uri_from_file_id
 
-        The file ID can be in two formats:
-        1. Base64-encoded unified file ID containing: llm_output_file_id,s3://bucket/path
-        2. Direct S3 URI: s3://bucket/litellm-managed-prefix/path
-
-        Args:
-            file_id: Encoded file ID or direct S3 URI
-
-        Returns:
-            S3 URI (e.g., "s3://bucket-name/path/to/file")
-        """
-        # First, try to decode if it's a base64-encoded unified file ID
-        try:
-            # Add padding if needed
-            padded = file_id + "=" * (-len(file_id) % 4)
-            decoded = base64.urlsafe_b64decode(padded).decode()
-
-            # Check if it's a unified file ID format
-            if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-                # Extract llm_output_file_id from the decoded string
-                if "llm_output_file_id," in decoded:
-                    s3_uri = decoded.split("llm_output_file_id,")[1].split(";")[0]
-                    return s3_uri
-        except Exception:
-            pass
-
-        # If not base64 encoded or doesn't contain llm_output_file_id, accept only
-        # explicit S3 URIs. Bucket and key validation happens before any S3 call.
-        if file_id.startswith("s3://"):
-            return file_id
-
-        raise ValueError("file_id must be a managed LiteLLM S3 file id")
+        return extract_s3_uri_from_file_id(file_id)
 
     def _parse_s3_uri(
         self,
@@ -95,26 +61,12 @@ class BedrockFilesHandler(BaseAWSLLM):
             allow_legacy_cloud_file_ids=allow_legacy_cloud_file_ids,
         )
 
-    def _get_configured_s3_bucket_name(self, litellm_params: dict) -> str:
-        trusted_model_credentials = litellm_params.get(
-            "_litellm_internal_model_credentials"
-        )
-        bucket_name = None
-        if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-            trusted_model_credentials_mapping = cast(
-                Mapping[str, Any], trusted_model_credentials
-            )
-            candidate_bucket_name = trusted_model_credentials_mapping.get(
-                "s3_bucket_name"
-            )
-            if isinstance(candidate_bucket_name, str):
-                bucket_name = candidate_bucket_name
-        bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
-        if not bucket_name:
-            raise ValueError(
-                "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
-            )
-        return bucket_name
+    def _get_configured_s3_bucket_name(
+        self, litellm_params: Mapping[str, object]
+    ) -> str:
+        from .transformation import get_configured_s3_bucket_name
+
+        return get_configured_s3_bucket_name(litellm_params)
 
     async def afile_content(
         self,

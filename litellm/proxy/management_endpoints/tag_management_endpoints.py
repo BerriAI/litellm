@@ -25,6 +25,14 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.table_repositories import (
+    DailyTagSpendRepository,
+    TagRepository,
+)
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.tag_management import (
     TagConfig,
     TagDeleteRequest,
@@ -56,7 +64,7 @@ async def _get_internal_user_api_keys(
     if user_id is None:
         return sorted(user_api_keys)
 
-    key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+    key_records = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"user_id": user_id},
         select={"token": True},
     )
@@ -109,7 +117,7 @@ async def _get_tag_daily_activity_api_key_filter(
 async def _get_model_names(prisma_client, model_ids: list) -> Dict[str, str]:
     """Helper function to get model names from model IDs"""
     try:
-        models = await prisma_client.db.litellm_proxymodeltable.find_many(
+        models = await ModelRepository(prisma_client).table.find_many(
             where={"model_id": {"in": model_ids}}
         )
         return {model.model_id: model.model_name for model in models}
@@ -189,7 +197,7 @@ async def new_tag(
         )
     try:
         # Check if tag already exists
-        existing_tag = await prisma_client.db.litellm_tagtable.find_unique(
+        existing_tag = await TagRepository(prisma_client).table.find_unique(
             where={"tag_name": tag.name}
         )
         if existing_tag is not None:
@@ -210,7 +218,7 @@ async def new_tag(
         model_info = await _get_model_names(prisma_client, tag.models or [])
 
         # Create new tag in database
-        new_tag_record = await prisma_client.db.litellm_tagtable.create(
+        new_tag_record = await TagRepository(prisma_client).table.create(
             data={
                 "tag_name": tag.name,
                 "description": tag.description,
@@ -267,7 +275,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
 
     try:
         # Get current model from database to preserve encrypted fields
-        db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+        db_model = await ModelRepository(prisma_client).table.find_unique(
             where={"model_id": deployment.model_info.id}
         )
 
@@ -292,7 +300,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
             existing_params["tags"].append(tag)
 
         # Update database with modified params (keeps encrypted fields encrypted)
-        await prisma_client.db.litellm_proxymodeltable.update(
+        await ModelRepository(prisma_client).table.update(
             where={"model_id": deployment.model_info.id},
             data={"litellm_params": json.dumps(existing_params)},
         )
@@ -335,7 +343,7 @@ async def update_tag(
 
     try:
         # Check if tag exists
-        existing_tag = await prisma_client.db.litellm_tagtable.find_unique(
+        existing_tag = await TagRepository(prisma_client).table.find_unique(
             where={"tag_name": tag.name}
         )
         if existing_tag is None:
@@ -367,7 +375,7 @@ async def update_tag(
             update_data["budget_id"] = budget_id
 
         # Update tag in database
-        updated_tag_record = await prisma_client.db.litellm_tagtable.update(
+        updated_tag_record = await TagRepository(prisma_client).table.update(
             where={"tag_name": tag.name},
             data=update_data,
         )
@@ -414,7 +422,7 @@ async def info_tag(
 
     try:
         # Query tags from database with budget info
-        tag_records = await prisma_client.db.litellm_tagtable.find_many(
+        tag_records = await TagRepository(prisma_client).table.find_many(
             where={"tag_name": {"in": data.names}},
             include={"litellm_budget_table": True},
         )
@@ -535,7 +543,7 @@ async def list_tags(
         if start_date is not None and end_date is not None:
             dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
 
-        dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
+        dynamic_tag_rows = await DailyTagSpendRepository(prisma_client).table.group_by(
             by=["tag"],
             where=dynamic_tag_where,
             min={"created_at": True},
@@ -551,7 +559,7 @@ async def list_tags(
         )
 
         ## QUERY STORED TAGS ##
-        tag_records = await prisma_client.db.litellm_tagtable.find_many(
+        tag_records = await TagRepository(prisma_client).table.find_many(
             where=stored_tag_where,
             include={"litellm_budget_table": True},
         )
@@ -626,14 +634,14 @@ async def delete_tag(
 
     try:
         # Check if tag exists
-        existing_tag = await prisma_client.db.litellm_tagtable.find_unique(
+        existing_tag = await TagRepository(prisma_client).table.find_unique(
             where={"tag_name": data.name}
         )
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {data.name} not found")
 
         # Delete tag from database
-        await prisma_client.db.litellm_tagtable.delete(where={"tag_name": data.name})
+        await TagRepository(prisma_client).table.delete(where={"tag_name": data.name})
 
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:

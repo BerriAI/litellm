@@ -19,7 +19,7 @@ Usage:
     response = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "Create a bouncing ball GIF"}],
-        container={"skills": [{"skill_id": "litellm:skill_abc123"}]},
+        container={"skills": [{"skill_id": "litellm_skill_abc123"}]},
     )
     # Response includes file_ids for generated files
 """
@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Union
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
 )
@@ -43,7 +44,7 @@ class SkillsInjectionHook(CustomLogger):
     Pre/Post-call hook that processes skills from container.skills parameter.
 
     Pre-call (async_pre_call_hook):
-    - Skills with 'litellm:' prefix are fetched from LiteLLM DB
+    - Skills with 'litellm_skill_' prefix are fetched from LiteLLM DB
     - For Anthropic models: native skills pass through, LiteLLM skills converted to tools
     - For non-Anthropic models: LiteLLM skills are converted to tools + execute_code tool
 
@@ -78,7 +79,7 @@ class SkillsInjectionHook(CustomLogger):
         Process skills from container.skills before the LLM call.
 
         1. Check if container.skills exists in request
-        2. Separate skills by prefix (litellm: vs native)
+        2. Separate skills by prefix (litellm_skill_ vs native)
         3. Fetch LiteLLM skills from database
         4. For Anthropic: keep native skills in container
         5. For non-Anthropic: convert LiteLLM skills to tools, inject content, add execute_code
@@ -108,7 +109,7 @@ class SkillsInjectionHook(CustomLogger):
                 continue
 
             skill_id = skill.get("skill_id", "")
-            if skill_id.startswith("litellm_"):
+            if skill_id.startswith(LITELLM_SKILL_ID_PREFIX):
                 # Fetch from LiteLLM DB
                 db_skill = await self._fetch_skill_from_db(
                     skill_id,
@@ -287,7 +288,7 @@ class SkillsInjectionHook(CustomLogger):
         Fetch a skill from the LiteLLM database.
 
         Args:
-            skill_id: The skill ID (without 'litellm:' prefix)
+            skill_id: The skill ID (including the 'litellm_skill_' prefix)
 
         Returns:
             LiteLLM_SkillsTable or None if not found
@@ -382,10 +383,10 @@ class SkillsInjectionHook(CustomLogger):
         has_executable_tool = False
         for tc in tool_calls:
             tool_name = tc.get("name", "")
-            # Execute if it's litellm_code_execution OR a skill tool (skill_xxx)
+            # Execute if it's litellm_code_execution OR a skill tool (litellm_skill_xxx)
             if (
                 tool_name == LiteLLMInternalTools.CODE_EXECUTION.value
-                or tool_name.startswith("skill_")
+                or tool_name.startswith(LITELLM_SKILL_ID_PREFIX)
             ):
                 has_executable_tool = True
                 break
@@ -543,7 +544,7 @@ class SkillsInjectionHook(CustomLogger):
                     result = await self._execute_code(
                         code, skill_files, executor, generated_files
                     )
-                elif tool_name.startswith("skill_"):
+                elif tool_name.startswith(LITELLM_SKILL_ID_PREFIX):
                     # Skill tool - execute the skill's code
                     result = await self._execute_skill_tool(
                         tool_name, tool_input, skill_files, executor, generated_files

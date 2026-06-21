@@ -685,6 +685,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in Bedrock Knowledge Base.
@@ -701,6 +702,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             content_type: MIME type
             chunks: Ignored - Bedrock handles chunking
             embeddings: Ignored - Bedrock handles embedding
+            existing_file_id: Existing provider file ID, unsupported for Bedrock
 
         Returns:
             Tuple of (knowledge_base_id, file_key)

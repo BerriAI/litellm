@@ -19,6 +19,11 @@ from pydantic import BaseModel
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import DailyTagSpendRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 # Constants for analytics periods
 MAX_DAYS = 7  # Number of days to show in DAU analytics
@@ -676,7 +681,7 @@ async def get_per_user_analytics(
             where_clause["tag"] = {"contains": tag_filter}
 
         # Get all tag records in the date range with optional tag filtering
-        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
+        tag_records = await DailyTagSpendRepository(prisma_client).table.find_many(
             where=where_clause
         )
 
@@ -693,9 +698,9 @@ async def get_per_user_analytics(
             )
 
         # Lookup user_id for each api_key
-        api_key_records = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"token": {"in": list(api_keys)}}
-        )
+        api_key_records = await VerificationTokenRepository(
+            prisma_client
+        ).table.find_many(where={"token": {"in": list(api_keys)}})
 
         # Create mapping from api_key to user_id
         api_key_to_user_id = {
@@ -704,7 +709,7 @@ async def get_per_user_analytics(
 
         # Get user emails for the user_ids
         user_ids = list(set(api_key_to_user_id.values()))
-        user_records = await prisma_client.db.litellm_usertable.find_many(
+        user_records = await UserRepository(prisma_client).table.find_many(
             where={"user_id": {"in": user_ids}}
         )
 

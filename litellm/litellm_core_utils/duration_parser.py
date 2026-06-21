@@ -131,6 +131,8 @@ def get_next_standardized_reset_time(
     # Handle different time units
     if unit == "d":
         return _handle_day_reset(current_time, base_midnight, value, tz)
+    elif unit == "w":
+        return _handle_day_reset(current_time, base_midnight, value * 7, tz)
     elif unit == "h":
         return _handle_hour_reset(current_time, base_midnight, value)
     elif unit == "m":

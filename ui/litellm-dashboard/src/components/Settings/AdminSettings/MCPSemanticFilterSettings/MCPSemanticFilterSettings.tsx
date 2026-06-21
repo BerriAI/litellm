@@ -21,7 +21,7 @@ import {
 } from "antd";
 import { QuestionCircleOutlined, CheckCircleOutlined, SaveOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
-import { fetchAvailableModels, ModelGroup } from "@/components/playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import MCPSemanticFilterTestPanel from "./MCPSemanticFilterTestPanel";
 import { getCurlCommand, runSemanticFilterTest, TestResult } from "./semanticFilterTestUtils";
 

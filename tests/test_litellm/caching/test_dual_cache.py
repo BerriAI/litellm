@@ -243,6 +243,67 @@ def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
         ), "concurrent callers should be fast-failed in HALF_OPEN"
 
 
+def test_circuit_breaker_disabled_never_opens():
+    """When disabled, failures never open the circuit and is_open() stays False."""
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
+
+    for _ in range(100):
+        cb.record_failure()
+
+    assert cb._state == "closed"
+    assert cb.is_open() is False
+
+
+def test_circuit_breaker_disabled_record_success_leaves_state_untouched():
+    """
+    A disabled breaker must not mutate state in any state-machine method. Force
+    a non-default (OPEN) state and assert record_success() returns without
+    resetting it — the same enabled-guard contract as is_open/record_failure.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
+    cb._state = "open"
+    cb._failure_count = 3
+
+    cb.record_success()
+
+    assert cb._state == "open"
+    assert cb._failure_count == 3
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_disabled_guard_always_calls_method():
+    """A disabled breaker lets every guarded call through, even after failures."""
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=1, recovery_timeout=60, enabled=False
+            )
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def boom(self):
+            self.call_count += 1
+            raise RuntimeError("redis down")
+
+    fr = FakeRedis()
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="redis down"):
+            await fr.boom()
+
+    # Every call reached the method body; the breaker never short-circuited.
+    assert fr.call_count == 5
+    assert fr._circuit_breaker.is_open() is False
+
+
 @pytest.mark.asyncio
 async def test_async_increment_cache_returns_none_when_no_in_memory_cache_and_redis_fails():
     """

@@ -23,6 +23,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
+    OvalixGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
@@ -41,8 +44,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
+    RepelloAIGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
+    CiscoAIDefenseGuardrailConfigModel,
 )
 
 """
@@ -77,6 +86,7 @@ class SupportedGuardrailIntegrations(Enum):
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
+    CISCO_AI_DEFENSE = "cisco_ai_defense"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     MODEL_ARMOR = "model_armor"
@@ -97,6 +107,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    OVALIX = "ovalix"
     MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
@@ -107,6 +118,7 @@ class SupportedGuardrailIntegrations(Enum):
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
+    REPELLOAI = "repelloai"
 
 
 class Role(Enum):
@@ -203,6 +215,9 @@ class PiiEntityType(str, Enum):
     # UK
     UK_NHS = "UK_NHS"
     UK_NINO = "UK_NINO"
+    UK_PASSPORT = "UK_PASSPORT"
+    UK_POSTCODE = "UK_POSTCODE"
+    UK_VEHICLE_REGISTRATION = "UK_VEHICLE_REGISTRATION"
     # Spain
     ES_NIF = "ES_NIF"
     ES_NIE = "ES_NIE"
@@ -257,7 +272,13 @@ PII_ENTITY_CATEGORIES_MAP = {
         PiiEntityType.US_PASSPORT,
         PiiEntityType.US_SSN,
     ],
-    PiiEntityCategory.UK: [PiiEntityType.UK_NHS, PiiEntityType.UK_NINO],
+    PiiEntityCategory.UK: [
+        PiiEntityType.UK_NHS,
+        PiiEntityType.UK_NINO,
+        PiiEntityType.UK_PASSPORT,
+        PiiEntityType.UK_POSTCODE,
+        PiiEntityType.UK_VEHICLE_REGISTRATION,
+    ],
     PiiEntityCategory.SPAIN: [PiiEntityType.ES_NIF, PiiEntityType.ES_NIE],
     PiiEntityCategory.ITALY: [
         PiiEntityType.IT_FISCAL_CODE,
@@ -311,8 +332,7 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
     presidio_filter_scope: Optional[Literal["input", "output", "both"]] = Field(
         default=None,
         description=(
-            "Where to apply Presidio checks: 'input' (user -> model), "
-            "'output' (model -> user), or 'both' (default)."
+            "Where to apply Presidio checks: 'input' (user -> model), 'output' (model -> user), or 'both' (default)."
         ),
     )
     output_parse_pii: Optional[bool] = Field(
@@ -742,7 +762,7 @@ class BaseLitellmParams(
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. "
+            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', and 'repelloai'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -836,9 +856,11 @@ class Mode(BaseModel):
 
 
 class LitellmParams(
+    CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
@@ -852,6 +874,7 @@ class LitellmParams(
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
+    OvalixGuardrailConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,

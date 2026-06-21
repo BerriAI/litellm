@@ -68,22 +68,24 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile && \
-    npm install -g npm@11.14.0 tar@7.5.11 glob@13.0.6 @isaacs/brace-expansion@5.0.1 brace-expansion@5.0.5 minimatch@10.2.4 diff@8.0.3 picomatch@4.0.4 && \
-    GLOBAL="$(npm root -g)" && \
-    for pkg in tar glob @isaacs/brace-expansion brace-expansion minimatch diff picomatch; do \
-        name="${pkg##*/}"; \
-        find "$GLOBAL/npm" -type d -name "$name" -path "*/node_modules/$pkg" | while read d; do \
-            rm -rf "$d" && cp -rL "$GLOBAL/$pkg" "$d"; \
-        done; \
-    done && \
-    npm cache clean --force && \
-    { apk del --no-cache npm 2>/dev/null || true; }
+# node (without npm) is required by the prisma CLI at runtime
+RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}"
 
-COPY --from=builder /app /app
+# Copy only what runtime needs. The application is installed inside the venv;
+# the rest of the builder's /app is source and build metadata that must not
+# ship (manifest-scanning tools attribute everything in it to this image).
+# entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/docker /app/docker
+COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+# enterprise/ is imported by source path at runtime (proxy_cli puts the
+# working directory on sys.path; litellm/proxy/hooks resolves
+# enterprise.enterprise_hooks from it)
+COPY --from=builder /app/enterprise /app/enterprise
 # Prisma binaries live in $HOME/.cache (default prisma-python location),
 # which is /root/.cache here. Copy only the Prisma subdirs — copying the
 # whole /root/.cache drags in the uv build cache (~660 MB, includes a
