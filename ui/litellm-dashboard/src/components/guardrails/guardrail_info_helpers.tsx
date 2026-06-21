@@ -54,6 +54,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Xecguard: "xecguard",
   Deepkeep: "deepkeep",
   QostodianNexus: "qostodian_nexus",
+  Repelloai: "repelloai",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -144,6 +145,7 @@ export const guardrailLogoMap: Record<string, string> = {
   Akto: `${asset_logos_folder}akto.svg`,
   "DeepKeep AI Firewall": `${asset_logos_folder}deepkeep.svg`,
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
+  "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {

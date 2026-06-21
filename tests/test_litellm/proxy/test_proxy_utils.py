@@ -427,6 +427,183 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         assert "litellm_logging_obj" not in request_data
 
 
+class TestPostCallFailureHookLiftsRecoveredPartialSpend:
+    """A stream that broke mid-flight still billed the provider for the chunks
+    already delivered. The streaming handler stashes that recovered usage and
+    cost on the logging object; post_call_failure_hook must lift them onto
+    request_data before the logging object is popped, so the failure-path spend
+    callbacks (which run after the pop) record the real partial spend.
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_recovered_usage_and_cost(self):
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "combined_usage_object": recovered_usage,
+            "response_cost": 3.5e-05,
+        }
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 3.5e-05
+        assert "litellm_logging_obj" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_no_recovered_usage_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+
+from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import ModelGroupInfo
+
+
+def _router_returning(model_group_info):
+    router = MagicMock()
+    router.get_model_group_info = MagicMock(return_value=model_group_info)
+    return router
+
+
+def test_create_model_info_response_includes_max_tokens_when_available():
+    router = _router_returning(
+        ModelGroupInfo(
+            model_group="qwen-vllm",
+            providers=["hosted_vllm"],
+            max_input_tokens=32768,
+            max_output_tokens=8192,
+        )
+    )
+
+    response = create_model_info_response(
+        model_id="qwen-vllm", provider="openai", llm_router=router
+    )
+
+    router.get_model_group_info.assert_called_once_with("qwen-vllm")
+    assert response["id"] == "qwen-vllm"
+    assert response["object"] == "model"
+    assert response["max_input_tokens"] == 32768
+    assert response["max_output_tokens"] == 8192
+
+
+def test_create_model_info_response_emits_integer_token_counts():
+    # ModelGroupInfo types the limits as float; OpenAI-compatible clients expect
+    # plain integers, so the response must not leak 128000.0.
+    router = _router_returning(
+        ModelGroupInfo(
+            model_group="gpt-4o",
+            providers=["openai"],
+            max_input_tokens=128000.0,
+            max_output_tokens=16384.0,
+        )
+    )
+
+    response = create_model_info_response(
+        model_id="gpt-4o", provider="openai", llm_router=router
+    )
+
+    assert response["max_input_tokens"] == 128000
+    assert isinstance(response["max_input_tokens"], int)
+    assert response["max_output_tokens"] == 16384
+    assert isinstance(response["max_output_tokens"], int)
+
+
+def test_create_model_info_response_omits_unknown_individual_limit():
+    router = _router_returning(
+        ModelGroupInfo(
+            model_group="partial",
+            providers=["openai"],
+            max_input_tokens=4096,
+            max_output_tokens=None,
+        )
+    )
+
+    response = create_model_info_response(
+        model_id="partial", provider="openai", llm_router=router
+    )
+
+    assert response["max_input_tokens"] == 4096
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_omits_limits_when_both_none():
+    router = _router_returning(
+        ModelGroupInfo(
+            model_group="no-limits",
+            providers=["openai"],
+            max_input_tokens=None,
+            max_output_tokens=None,
+        )
+    )
+
+    response = create_model_info_response(
+        model_id="no-limits", provider="openai", llm_router=router
+    )
+
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_omits_limits_when_group_unknown():
+    # Wildcard routes / access groups have no ModelGroupInfo.
+    router = _router_returning(None)
+
+    response = create_model_info_response(
+        model_id="openai/*", provider="openai", llm_router=router
+    )
+
+    assert response["id"] == "openai/*"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_degrades_when_group_info_raises():
+    # A malformed deployment must not turn the listing into a 500; the entry
+    # falls back to the base fields without limits.
+    router = MagicMock()
+    router.get_model_group_info = MagicMock(side_effect=ValueError("bad deployment"))
+
+    response = create_model_info_response(
+        model_id="broken", provider="openai", llm_router=router
+    )
+
+    assert response["id"] == "broken"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_no_router_keeps_base_fields():
+    response = create_model_info_response(
+        model_id="some-model", provider="openai", llm_router=None
+    )
+
+    assert response == {
+        "id": "some-model",
+        "object": "model",
+        "created": response["created"],
+        "owned_by": "openai",
+    }
 class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized

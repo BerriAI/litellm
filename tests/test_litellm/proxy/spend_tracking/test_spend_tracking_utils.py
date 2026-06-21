@@ -2073,3 +2073,50 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
+
+
+def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
+    """A request that fails mid-stream has no usable response_obj usage, but the
+    streaming handler recovers the usage from the chunks already delivered and
+    the failure hook surfaces it as ``combined_usage_object``. The spend-log
+    payload must record those token counts instead of zero.
+    """
+    from litellm.types.utils import Usage
+
+    kwargs = {
+        "model": "anthropic/claude-haiku-4-5",
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+        "combined_usage_object": Usage(
+            prompt_tokens=30, completion_tokens=1, total_tokens=31
+        ),
+    }
+    response_obj = Exception("MidStreamFallbackError: read timeout")
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert payload["prompt_tokens"] == 30
+    assert payload["completion_tokens"] == 1
+    assert payload["total_tokens"] == 31
+
+
+def test_get_logging_payload_failure_without_recovered_usage_is_zero():
+    """A failure with no recovered usage keeps zero token counts, so the
+    combined-usage override never invents tokens for ordinary failures.
+    """
+    kwargs = {
+        "model": "anthropic/claude-haiku-4-5",
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = Exception("BadRequestError")
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert payload["total_tokens"] == 0

@@ -1042,3 +1042,62 @@ describe("OldTeams - Resources column keys badge", () => {
     expect(cyanTag?.textContent).toContain("2");
   });
 });
+
+describe("OldTeams - delete team warning copy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  const openDeleteModal = async (team: any) => {
+    vi.mocked(teamListCall).mockResolvedValue({
+      teams: [team],
+      total: 1,
+      page: 1,
+      page_size: 100,
+      total_pages: 1,
+    });
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("delete-team-button"));
+    });
+    expect(screen.getByText("Delete Team?")).toBeInTheDocument();
+  };
+
+  const baseTeam = {
+    team_id: "1",
+    team_alias: "Test Team",
+    organization_id: "org-123",
+    models: ["gpt-4"],
+    max_budget: 100,
+    budget_duration: "1d",
+    tpm_limit: 1000,
+    rpm_limit: 1000,
+    created_at: new Date().toISOString(),
+    members_with_roles: [],
+    spend: 0,
+  };
+
+  it("warns that the team's models are deleted when the team has keys", async () => {
+    await openDeleteModal({ ...baseTeam, keys: [], keys_count: 5 });
+
+    expect(screen.getByText(/Warning: This team has 5 keys associated with it/i)).toHaveTextContent(
+      /along with any models created for this team/i,
+    );
+    expect(screen.getByText(/Are you sure you want to delete this team/i)).toHaveTextContent(
+      /any models created for it/i,
+    );
+  });
+
+  it("still warns about model deletion in the confirmation message when the team has no keys", async () => {
+    await openDeleteModal({ ...baseTeam, keys: [], keys_count: 0 });
+
+    expect(screen.queryByText(/Warning: This team has/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Are you sure you want to delete this team/i)).toHaveTextContent(
+      /any models created for it/i,
+    );
+  });
+});

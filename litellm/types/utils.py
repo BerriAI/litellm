@@ -435,6 +435,14 @@ class CallTypes(str, Enum):
     alist_container_files = "alist_container_files"
     upload_container_file = "upload_container_file"
     aupload_container_file = "aupload_container_file"
+    create_sandbox = "create_sandbox"
+    acreate_sandbox = "acreate_sandbox"
+    delete_sandbox = "delete_sandbox"
+    adelete_sandbox = "adelete_sandbox"
+    run_code = "run_code"
+    arun_code = "arun_code"
+    code_interpreter_tool = "code_interpreter_tool"
+    acode_interpreter_tool = "acode_interpreter_tool"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -3246,6 +3254,11 @@ all_litellm_params = (
         "order",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3434,6 +3447,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    PINSTRIPES = "pinstripes"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3477,10 +3491,20 @@ class SearchProviders(str, Enum):
     SERPER = "serper"
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
+    TINYFISH = "tinyfish"
 
 
 # Create a set of all search provider values for quick lookup
 SearchProvidersSet = {provider.value for provider in SearchProviders}
+
+
+class SandboxProviders(str, Enum):
+    """
+    Enum for code execution sandbox provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+
+    E2B = "e2b"
 
 
 class LiteLLMLoggingBaseClass:

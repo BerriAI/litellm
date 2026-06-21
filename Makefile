@@ -6,7 +6,7 @@
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
 	lint-basedpyright lint-basedpyright-budget-update \
-	lint-ruff-budget lint-ruff-budget-update lint-budget-update \
+	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -28,6 +28,7 @@ help:
 	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
+	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
 	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
@@ -136,6 +137,12 @@ lint-strict-budget: install-dev
 
 lint-ruff-budget: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py
+
+# Strict gate, invoked the same way CI does in test-linting.yml so a local pass
+# means the CI check will pass too.
+lint-gate: install-dev
+	git fetch origin litellm_internal_staging
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
 
 lint-ruff-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update

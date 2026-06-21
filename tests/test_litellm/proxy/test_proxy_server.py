@@ -6896,14 +6896,15 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
-    """When the reservation reconcile fails, the reserved counters are
-    invalidated and the actual response cost must still be written via the
-    direct increment fallback. Leaving the counter at ``None`` lets the next
-    request reseed a stale value from the DB and silently stops budget gating,
-    which is the bug this fix addresses."""
+async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter():
+    """When the reservation reconcile finds the counter in an inconsistent state
+    (here: missing), it must NOT delete the counter and fail open (the old
+    behavior, which left the counter unenforced after a Redis reload). It reseeds
+    from the authoritative DB so the counter reflects the recorded total and
+    budget gating continues."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     counter_cache = DualCache()
     budget_reservation = {
@@ -6923,11 +6924,11 @@ async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_re
     import litellm.proxy.proxy_server as ps
 
     orig_counter = ps.spend_counter_cache
+    orig_prisma = ps.prisma_client
     ps.spend_counter_cache = counter_cache
+    ps.prisma_client = MagicMock()  # truthy so reseed reaches from_db
     try:
-        with patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger.warning"
-        ) as mock_warning:
+        with patch.object(SpendCounterReseed, "from_db", AsyncMock(return_value=0.6)):
             await increment_spend_counters(
                 token="key-bad-reserved-counter",
                 team_id=None,
@@ -6936,16 +6937,15 @@ async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_re
                 budget_reservation=budget_reservation,
             )
 
-        mock_warning.assert_called_once()
         assert budget_reservation["finalized"] is True
-        assert (
-            counter_cache.in_memory_cache.get_cache(
-                key="spend:key:key-bad-reserved-counter"
-            )
-            == 0.25
-        )
+        # counter reseeded to the authoritative DB value, not deleted/left None
+        # and not double-counted via a direct increment
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-bad-reserved-counter"
+        ) == pytest.approx(0.6)
     finally:
         ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
 
 
 @pytest.mark.asyncio
@@ -8326,3 +8326,39 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_preserve_redacted_plugin_keys_keeps_stored_credential():
+    """A redacted or blank plugin_key on update must not overwrite the real key."""
+    from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
+
+    existing = [{"name": "p1", "url": "https://p1", "plugin_key": "sk-real-1"}]
+
+    redacted = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1-new", "plugin_key": "***"}], existing
+    )
+    assert redacted == [
+        {"name": "p1", "url": "https://p1-new", "plugin_key": "sk-real-1"}
+    ]
+
+    blanked = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1", "plugin_key": ""}], existing
+    )
+    assert blanked[0]["plugin_key"] == "sk-real-1"
+
+
+def test_preserve_redacted_plugin_keys_sets_new_and_drops_orphan_placeholder():
+    """A real new key replaces; a placeholder with no stored key is dropped, never persisted."""
+    from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
+
+    existing = [{"name": "p1", "url": "https://p1", "plugin_key": "sk-real-1"}]
+
+    rotated = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1", "plugin_key": "sk-new"}], existing
+    )
+    assert rotated[0]["plugin_key"] == "sk-new"
+
+    new_plugin = _preserve_redacted_plugin_keys(
+        [{"name": "p2", "url": "https://p2", "plugin_key": "***"}], existing
+    )
+    assert "plugin_key" not in new_plugin[0]

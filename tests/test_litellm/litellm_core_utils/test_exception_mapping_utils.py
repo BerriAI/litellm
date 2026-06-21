@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
+    _get_body_error_code,
     exception_type,
     extract_and_raise_litellm_exception,
 )
@@ -357,6 +358,122 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+
+class TestGetBodyErrorCode:
+    """Unit tests for _get_body_error_code helper."""
+
+    def test_parses_int_code(self):
+        body = (
+            '{"error":{"message":"high demand","type":"upstream_error",'
+            '"param":"","code":429}}'
+        )
+        assert _get_body_error_code(body) == 429
+
+    def test_parses_string_code(self):
+        # some gateways serialize code as a string
+        body = '{"error":{"message":"x","code":"503"}}'
+        assert _get_body_error_code(body) == 503
+
+    def test_returns_none_on_non_json(self):
+        assert _get_body_error_code("not json") is None
+
+    def test_returns_none_when_no_error_key(self):
+        assert _get_body_error_code('{"ok":true}') is None
+
+    def test_returns_none_when_no_code_key(self):
+        assert _get_body_error_code('{"error":{"message":"x"}}') is None
+
+
+# Test cases for Gemini upstream-error body-code mapping.
+#
+# Body code 429 wrapped in a 5xx HTTP envelope (e.g. new-api gateways)
+# must map to RateLimitError so Router retries kick in. A 4xx HTTP
+# envelope with body code:429 must NOT — it falls through to whatever
+# the HTTP status code maps to (BadRequestError, AuthenticationError,
+# etc.), matching upstream's existing semantics.
+gemini_body_code_429_test_cases = [
+    # (status_code, error_body, expected_exception_type, description)
+    (
+        500,
+        '{"error":{"message":" This model is currently experiencing high demand.'
+        " Spikes in demand are usually temporary. Please try again later."
+        ' (request id: x)","type":"upstream_error","param":"","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 500 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        503,
+        '{"error":{"message":"upstream unavailable","type":"upstream_error",'
+        '"param":"","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 503 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        502,
+        '{"error":{"message":"bad gateway","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 502 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        500,
+        '{"error":{"message":"server boom","code":500}}',
+        litellm.InternalServerError,
+        "HTTP 500 with body code:500 stays InternalServerError",
+    ),
+    (
+        500,
+        "plain text 500 error",
+        litellm.InternalServerError,
+        "HTTP 500 with non-JSON body falls through to status_code mapping",
+    ),
+    (
+        400,
+        '{"error":{"message":"malformed","code":429}}',
+        litellm.BadRequestError,
+        "HTTP 400 with body code:429 must NOT be promoted to RateLimitError",
+    ),
+    (
+        401,
+        '{"error":{"message":"bad key","code":429}}',
+        litellm.AuthenticationError,
+        "HTTP 401 with body code:429 must NOT be promoted to RateLimitError",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "status_code, error_body, expected_exception, description",
+    gemini_body_code_429_test_cases,
+)
+def test_gemini_upstream_error_body_code_429_maps_to_rate_limit(
+    status_code, error_body, expected_exception, description
+):
+    """
+    Body code 429 inside a 5xx envelope -> RateLimitError so Router
+    retries kick in. Body code 429 inside a 4xx envelope must fall
+    through to the HTTP-status-code branch (P1 from greptile review).
+    """
+    model = "gemini/gemini-2.5-flash"
+    custom_llm_provider = "gemini"
+
+    # Build an exception that looks like what _handle_error produces:
+    # a BaseLLMException-style object with .status_code and .message
+    class _FakeGeminiError(Exception):
+        def __init__(self, status_code, message):
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    original_exception = _FakeGeminiError(status_code=status_code, message=error_body)
+
+    with pytest.raises(expected_exception) as excinfo:
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
+    assert isinstance(excinfo.value, expected_exception), description
 
 
 class TestExtractAndRaiseLitellmException:
