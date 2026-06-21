@@ -149,7 +149,7 @@ async def test_api_failure_blocks_when_configured():
 
 
 @pytest.mark.asyncio
-async def test_request_metadata_slugs_are_checked():
+async def test_request_metadata_slugs_are_checked_when_opted_in():
     handler = FakeHandler(
         [
             _resp(_agent_body()),
@@ -163,7 +163,7 @@ async def test_request_metadata_slugs_are_checked():
             ),
         ]
     )
-    guardrail = _make_guardrail(handler, min_score=60)
+    guardrail = _make_guardrail(handler, min_score=60, trust_request_slugs=True)
 
     with pytest.raises(GuardrailRaisedException) as excinfo:
         await guardrail._check_request({"metadata": {"hlido_slugs": ["weak-agent"]}})
@@ -173,6 +173,87 @@ async def test_request_metadata_slugs_are_checked():
         _ENDPOINT,
         "https://hlido.test/v1/agents/weak-agent",
     ]
+
+
+@pytest.mark.asyncio
+async def test_request_metadata_slugs_ignored_by_default():
+    # SECURITY: a caller must not be able to choose its own trust subject.
+    handler = FakeHandler([_resp(_agent_body())])
+    guardrail = _make_guardrail(handler, min_score=60)
+
+    await guardrail._check_request({"metadata": {"hlido_slugs": ["weak-agent"]}})
+
+    # Only the server-configured slug was looked up; the request slug was ignored.
+    assert [c.url for c in handler.calls] == [_ENDPOINT]
+
+
+@pytest.mark.asyncio
+async def test_malicious_request_slug_is_rejected():
+    # Path-injection / traversal payloads never reach the request URL.
+    handler = FakeHandler([_resp(_agent_body())])
+    guardrail = _make_guardrail(handler, min_score=60, trust_request_slugs=True)
+
+    await guardrail._check_request(
+        {"metadata": {"hlido_slugs": ["../../secret", "evil/path", "a b"]}}
+    )
+
+    # Only the valid server slug is fetched; all malformed request slugs dropped.
+    assert [c.url for c in handler.calls] == [_ENDPOINT]
+
+
+@pytest.mark.asyncio
+async def test_request_slugs_are_capped():
+    bodies = [_resp(_agent_body())]  # static slug
+    bodies += [_resp(_agent_body()) for _ in range(2)]  # only 2 request slugs allowed
+    handler = FakeHandler(bodies)
+    guardrail = _make_guardrail(
+        handler, min_score=60, trust_request_slugs=True, max_request_slugs=2
+    )
+
+    await guardrail._check_request(
+        {"metadata": {"hlido_slugs": ["req-a", "req-b", "req-c", "req-d"]}}
+    )
+
+    # static + at most 2 request slugs = 3 lookups, never 5.
+    assert len(handler.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_valid_slug_is_url_encoded_path():
+    handler = FakeHandler([_resp(_agent_body())])
+    guardrail = _make_guardrail(handler, slugs=("some-agent",), min_score=60)
+
+    await guardrail._check_request({})
+
+    # The slug occupies exactly one path segment (no traversal possible).
+    assert handler.calls[0].url == "https://hlido.test/v1/agents/some-agent"
+
+
+@pytest.mark.asyncio
+async def test_cache_is_bounded():
+    # Many distinct slugs must not grow the cache without bound.
+    handler = FakeHandler([_resp(_agent_body()) for _ in range(50)])
+    guardrail = _make_guardrail(
+        handler, slugs=None, trust_request_slugs=True, max_cache_entries=8
+    )
+
+    for i in range(50):
+        await guardrail._check_request(
+            {"metadata": {"hlido_slugs": [f"agent-{i}"]}}
+        )
+
+    assert len(guardrail._cache) <= 8
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_is_configurable():
+    handler = FakeHandler([_resp(_agent_body())])
+    guardrail = _make_guardrail(handler, min_score=60, request_timeout=2.5)
+
+    await guardrail._check_request({})
+
+    assert handler.calls[0].timeout.read == 2.5
+    assert handler.calls[0].timeout.connect == 5.0
 
 
 @pytest.mark.asyncio

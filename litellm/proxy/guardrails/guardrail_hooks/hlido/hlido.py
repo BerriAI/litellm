@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass
 from typing import (
@@ -5,6 +6,7 @@ from typing import (
     Any,
     Awaitable,
     Dict,
+    List,
     Literal,
     Optional,
     Protocol,
@@ -12,6 +14,7 @@ from typing import (
     Type,
     Union,
 )
+from urllib.parse import quote
 
 import httpx
 
@@ -41,9 +44,26 @@ if TYPE_CHECKING:
 DEFAULT_API_BASE = "https://hlido.eu"
 DEFAULT_MIN_SCORE = 60
 DEFAULT_CACHE_TTL_SECONDS = 300.0
-_REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
+# Hard ceiling on the in-memory trust cache so a high-cardinality stream of
+# slugs cannot grow it without bound (review: "unbounded in-memory cache").
+DEFAULT_MAX_CACHE_ENTRIES = 1024
+# Hard ceiling on how many caller-supplied slugs we will look up per request
+# when trust_request_slugs is enabled (review: "unbounded slug lookups").
+DEFAULT_MAX_REQUEST_SLUGS = 20
+
+# Hlido slugs are lowercase kebab/dot identifiers. We constrain the shape both
+# to drop junk early and as defense-in-depth against path injection — only
+# values matching this ever reach the request URL (review: "client-controlled
+# trust subject" / "URL path injection").
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 _FailureAction = Literal["allow", "block"]
+
+
+def _is_valid_slug(slug: str) -> bool:
+    return bool(_SLUG_RE.match(slug))
 
 
 class _AsyncGetHandler(Protocol):
@@ -102,6 +122,10 @@ class HlidoGuardrail(CustomGuardrail):
         on_unverified: Optional[str] = None,
         on_error: Optional[str] = None,
         cache_ttl: Optional[float] = None,
+        trust_request_slugs: Optional[bool] = None,
+        max_request_slugs: Optional[int] = None,
+        request_timeout: Optional[float] = None,
+        max_cache_entries: Optional[int] = None,
         async_handler: Optional[_AsyncGetHandler] = None,
         **kwargs: Any,
     ) -> None:
@@ -115,13 +139,37 @@ class HlidoGuardrail(CustomGuardrail):
         self.allowed_tiers = (
             tuple(tier.upper() for tier in allowed_tiers) if allowed_tiers else None
         )
-        self.static_slugs: Tuple[str, ...] = tuple(slugs) if slugs else ()
+        # Server-configured slugs are the source of truth. Invalid entries are
+        # dropped at init with a warning rather than crashing the proxy.
+        self.static_slugs: Tuple[str, ...] = self._sanitize_slugs(
+            slugs or (), source="config", limit=None
+        )
+        # SECURITY: caller-supplied metadata.hlido_slugs are IGNORED by default
+        # so a request cannot choose its own trust subject (or, when no static
+        # slug is set, dodge the check). The proxy admin must opt in explicitly.
+        self.trust_request_slugs: bool = bool(trust_request_slugs)
+        self.max_request_slugs: int = (
+            max_request_slugs
+            if max_request_slugs is not None and max_request_slugs > 0
+            else DEFAULT_MAX_REQUEST_SLUGS
+        )
         self.on_unverified: _FailureAction = (
             "block" if on_unverified == "block" else "allow"
         )
         self.on_error: _FailureAction = "block" if on_error == "block" else "allow"
         self.cache_ttl = (
             cache_ttl if cache_ttl is not None else DEFAULT_CACHE_TTL_SECONDS
+        )
+        self.max_cache_entries: int = (
+            max_cache_entries
+            if max_cache_entries is not None and max_cache_entries > 0
+            else DEFAULT_MAX_CACHE_ENTRIES
+        )
+        self._request_timeout: httpx.Timeout = httpx.Timeout(
+            request_timeout
+            if request_timeout is not None and request_timeout > 0
+            else DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            connect=DEFAULT_CONNECT_TIMEOUT_SECONDS,
         )
         self._cache: Dict[str, Tuple[float, Optional[HlidoAgentRecord]]] = {}
 
@@ -191,14 +239,49 @@ class HlidoGuardrail(CustomGuardrail):
             verdict = await self._evaluate_slug(slug)
             self._raise_on_violation(verdict)
 
+    @staticmethod
+    def _sanitize_slugs(
+        raw: Any, *, source: str, limit: Optional[int]
+    ) -> Tuple[str, ...]:
+        """Validate, de-dup (preserving order) and (optionally) cap a slug list.
+
+        Invalid slugs are dropped with a warning instead of being trusted —
+        this is the single choke point that keeps junk and injection payloads
+        out of the request URL.
+        """
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        seen: set = set()
+        cleaned: List[str] = []
+        for value in raw:
+            if not isinstance(value, str):
+                continue
+            slug = value.strip()
+            if not slug or slug in seen:
+                continue
+            if not _is_valid_slug(slug):
+                verbose_proxy_logger.warning(
+                    "Hlido guardrail: ignoring invalid %s slug %r", source, slug
+                )
+                continue
+            seen.add(slug)
+            cleaned.append(slug)
+            if limit is not None and len(cleaned) >= limit:
+                verbose_proxy_logger.warning(
+                    "Hlido guardrail: capping %s slugs at %d", source, limit
+                )
+                break
+        return tuple(cleaned)
+
     def _collect_slugs(self, data: dict) -> Tuple[str, ...]:
         request_slugs: Tuple[str, ...] = ()
-        metadata = data.get("metadata") or data.get("litellm_metadata")
-        if isinstance(metadata, dict):
-            raw = metadata.get("hlido_slugs")
-            if isinstance(raw, list):
-                request_slugs = tuple(
-                    slug for slug in raw if isinstance(slug, str) and slug.strip()
+        if self.trust_request_slugs:
+            metadata = data.get("metadata") or data.get("litellm_metadata")
+            if isinstance(metadata, dict):
+                request_slugs = self._sanitize_slugs(
+                    metadata.get("hlido_slugs"),
+                    source="request",
+                    limit=self.max_request_slugs,
                 )
         merged = self.static_slugs + tuple(
             slug for slug in request_slugs if slug not in self.static_slugs
@@ -285,19 +368,50 @@ class HlidoGuardrail(CustomGuardrail):
                     ),
                 )
 
-    async def _get_agent_record(self, slug: str) -> Optional[HlidoAgentRecord]:
+    def _cache_get(self, slug: str) -> Optional[Tuple[float, Optional[HlidoAgentRecord]]]:
         cached = self._cache.get(slug)
-        if cached is not None and cached[0] > time.monotonic():
+        if cached is None:
+            return None
+        if cached[0] <= time.monotonic():
+            # expired — drop eagerly so it does not count toward the bound
+            self._cache.pop(slug, None)
+            return None
+        return cached
+
+    def _cache_put(
+        self, slug: str, expires_at: float, record: Optional[HlidoAgentRecord]
+    ) -> None:
+        # Refresh-in-place keeps the size stable for repeat slugs.
+        if slug not in self._cache and len(self._cache) >= self.max_cache_entries:
+            self._evict_one()
+        self._cache[slug] = (expires_at, record)
+
+    def _evict_one(self) -> None:
+        now = time.monotonic()
+        # Prefer evicting an already-expired entry; otherwise the soonest-to-expire.
+        expired = [k for k, (exp, _) in self._cache.items() if exp <= now]
+        if expired:
+            for key in expired:
+                self._cache.pop(key, None)
+            return
+        oldest = min(self._cache.items(), key=lambda kv: kv[1][0])[0]
+        self._cache.pop(oldest, None)
+
+    async def _get_agent_record(self, slug: str) -> Optional[HlidoAgentRecord]:
+        cached = self._cache_get(slug)
+        if cached is not None:
             return cached[1]
 
         headers = {"Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
+        # slug is validated by _SLUG_RE upstream; quote() is belt-and-braces so a
+        # value can never break out of the path segment.
         response = await self.async_handler.get(
-            url=f"{self.api_base}/v1/agents/{slug}",
+            url=f"{self.api_base}/v1/agents/{quote(slug, safe='')}",
             headers=headers,
-            timeout=_REQUEST_TIMEOUT,
+            timeout=self._request_timeout,
         )
         if response.status_code == 404:
             record: Optional[HlidoAgentRecord] = None
@@ -310,5 +424,15 @@ class HlidoGuardrail(CustomGuardrail):
                 tier=payload.get("tier"),
                 evidence_url=payload.get("evidence_url"),
             )
-        self._cache[slug] = (time.monotonic() + self.cache_ttl, record)
+        self._cache_put(slug, time.monotonic() + self.cache_ttl, record)
         return record
+
+
+__all__ = [
+    "HlidoGuardrail",
+    "HlidoAgentRecord",
+    "TrustAllowed",
+    "TrustBlocked",
+    "TrustUnverified",
+    "TrustLookupFailed",
+]

@@ -43,6 +43,34 @@ class HlidoGuardrailConfigModelOptionalParams(BaseModel):
         default=None,
         description="Seconds to cache trust lookups per slug. Defaults to 300.",
     )
+    trust_request_slugs: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When true, the per-request 'hlido_slugs' list in request metadata "
+            "is also checked. Defaults to false so callers cannot choose their "
+            "own trust subject; only server-configured 'slugs' are verified."
+        ),
+    )
+    max_request_slugs: Optional[int] = Field(
+        default=None,
+        description=(
+            "Maximum number of caller-supplied slugs to verify per request "
+            "(only when trust_request_slugs is true). Defaults to 20."
+        ),
+    )
+    request_timeout: Optional[float] = Field(
+        default=None,
+        description=(
+            "Total timeout in seconds for each Hlido API call. Defaults to 10."
+        ),
+    )
+    max_cache_entries: Optional[int] = Field(
+        default=None,
+        description=(
+            "Maximum number of slugs held in the in-memory trust cache before "
+            "eviction. Defaults to 1024."
+        ),
+    )
 
 
 class HlidoGuardrailConfigModel(
