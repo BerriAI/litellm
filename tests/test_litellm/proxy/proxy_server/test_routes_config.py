@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from .conftest import VOLATILE_KEYS, normalize
 
 
@@ -308,6 +306,103 @@ def test_config_field_info_full_admin_sees_nested_secret(
     value = response.json()["field_value"]
     assert value["aws_web_identity_token"] == "sk-super-secret-token"
     assert value["region_name"] == "us-east-1"
+
+
+def test_config_field_info_redacts_top_level_scalar_for_view_only(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """The top-level scalar branch must also redact for a view-only admin.
+    database_url carries DB credentials and is not caught by the name masker,
+    so it is in the explicit secret set."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {"database_url": "postgresql://admin:p4ss@db:5432/litellm"}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        response = client.get(
+            "/config/field/info", params={"field_name": "database_url"}
+        )
+    assert response.status_code == 200
+    assert response.json()["field_value"] == "REDACTED"
+
+
+def test_redact_general_setting_value_recurses_list_of_dicts():
+    """The list branch of the recursor redacts secret leaves inside each dict
+    while non-secret keys survive, and a full admin gets the value untouched."""
+    from litellm.proxy import proxy_server as ps
+
+    value = [
+        {"path": "/foo", "headers": {"Authorization": "Bearer sk-x"}},
+        {"path": "/bar", "client_secret": "sk-y"},
+    ]
+    redacted = ps._redact_general_setting_value(
+        "some_list_field", value, is_full_admin=False
+    )
+    assert redacted[0]["headers"]["Authorization"] == "REDACTED"
+    assert redacted[0]["path"] == "/foo"
+    assert redacted[1]["client_secret"] == "REDACTED"
+    assert redacted[1]["path"] == "/bar"
+    assert (
+        ps._redact_general_setting_value("some_list_field", value, is_full_admin=True)
+        == value
+    )
+
+
+def test_config_list_redacts_pass_through_secret_for_view_only(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """/config/list must not leak pass_through_endpoints upstream credentials
+    to a view-only admin. pass_through_endpoints is a known secret-bearing
+    field, so a non-admin gets it redacted; a full admin still sees it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {"max_parallel_requests": 3}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {
+            "pass_through_endpoints": [
+                {
+                    "path": "/foo",
+                    "target": "https://upstream.example.com",
+                    "headers": {"Authorization": "Bearer sk-UPSTREAM-SECRET"},
+                }
+            ]
+        },
+    )
+
+    def _pass_through_value(body):
+        return next(
+            entry["field_value"]
+            for entry in body
+            if entry["field_name"] == "pass_through_endpoints"
+        )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        view_resp = client.get(
+            "/config/list", params={"config_type": "general_settings"}
+        )
+    assert view_resp.status_code == 200
+    assert "sk-UPSTREAM-SECRET" not in view_resp.text
+    assert _pass_through_value(view_resp.json()) == "REDACTED"
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        admin_resp = client.get(
+            "/config/list", params={"config_type": "general_settings"}
+        )
+    assert admin_resp.status_code == 200
+    admin_value = _pass_through_value(admin_resp.json())
+    assert admin_value[0]["headers"]["Authorization"] == "Bearer sk-UPSTREAM-SECRET"
 
 
 # ---------------------------------------------------------------------------

@@ -15050,6 +15050,18 @@ def _redact_secret_values_in_obj(value: JsonValue) -> JsonValue:
     return value
 
 
+def _redact_general_setting_value(
+    field_name: str, value: JsonValue, is_full_admin: bool
+) -> JsonValue:
+    if is_full_admin:
+        return value
+    if _is_secret_general_setting_field(field_name):
+        return "REDACTED"
+    if isinstance(value, (dict, list)):
+        return _redact_secret_values_in_obj(value)
+    return value
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -15102,14 +15114,11 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            # only a full PROXY_ADMIN sees raw secret-bearing fields; others
-            # get them redacted
-            field_value = general_settings[field_name]
-            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-                if _is_secret_general_setting_field(field_name):
-                    field_value = "REDACTED"
-                elif isinstance(field_value, (dict, list)):
-                    field_value = _redact_secret_values_in_obj(field_value)
+            field_value = _redact_general_setting_value(
+                field_name,
+                general_settings[field_name],
+                user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            )
             return ConfigFieldInfo(field_name=field_name, field_value=field_value)
         else:
             raise HTTPException(
@@ -15155,6 +15164,8 @@ async def get_config_list(
                 )
             },
         )
+
+    is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     ## get general settings from db
     db_general_settings = await ConfigRepository(prisma_client).table.find_first(
@@ -15204,7 +15215,11 @@ async def get_config_list(
                             field_name=sub_field,
                             field_type=sub_field_type.__name__,
                             field_description="",  # Add custom logic if descriptions are available
-                            field_default_value=general_settings.get(sub_field, None),
+                            field_default_value=_redact_general_setting_value(
+                                sub_field,
+                                general_settings.get(sub_field, None),
+                                is_full_admin,
+                            ),
                             stored_in_db=None,
                         )
                         for sub_field, sub_field_type in pydantic_class.__annotations__.items()
@@ -15234,7 +15249,11 @@ async def get_config_list(
                         field_name=field_name,
                         field_type=allowed_args[field_name]["type"],
                         field_description=field_info.description or "",
-                        field_value=general_settings.get(field_name, None),
+                        field_value=_redact_general_setting_value(
+                            field_name,
+                            general_settings.get(field_name, None),
+                            is_full_admin,
+                        ),
                         stored_in_db=_stored_in_db,
                         field_default_value=field_info.default,
                         nested_fields=nested_fields,
@@ -15258,7 +15277,9 @@ async def get_config_list(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=_field_value,
+                    field_value=_redact_general_setting_value(
+                        field_name, _field_value, is_full_admin
+                    ),
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
