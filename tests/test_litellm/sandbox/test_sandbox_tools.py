@@ -109,6 +109,29 @@ def test_resolve_unknown_returns_none():
     assert sandbox_tools.resolve_sandbox_tool("nope") is None
 
 
+def test_register_skips_malformed_entries_without_crashing():
+    """A single malformed entry (missing sandbox_tool_name, or not a dict) must
+    not crash registration during proxy startup/hot-reload; valid entries in the
+    same list must still register."""
+    _reset()
+    sandbox_tools.register_sandbox_tools(
+        [
+            {"litellm_params": {"sandbox_provider": "e2b"}},  # missing name
+            "not-a-dict",  # wrong type
+            {"sandbox_tool_name": "", "litellm_params": {}},  # empty name
+            {
+                "sandbox_tool_name": "good",
+                "litellm_params": {"sandbox_provider": "e2b"},
+            },
+        ]
+    )
+
+    assert sandbox_tools.resolve_sandbox_tool("good") is not None
+    assert sandbox_tools.resolve_sandbox_tool("") is None
+    assert set(sandbox_tools._SANDBOX_TOOL_REGISTRY) == {"good"}
+    _reset()
+
+
 def test_register_swaps_registry_atomically():
     """register_sandbox_tools must replace the registry in one rebind so a
     concurrent resolve never observes a half-populated or transiently empty
