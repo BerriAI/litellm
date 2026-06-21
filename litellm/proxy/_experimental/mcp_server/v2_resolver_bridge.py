@@ -12,6 +12,7 @@ This lives on the v1 side so the v2 core keeps its no-v1-imports invariant.
 
 from __future__ import annotations
 
+import base64
 import functools
 import os
 from typing import TYPE_CHECKING, Dict, Optional
@@ -146,17 +147,31 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 key_source=SharedKey(value=SecretStr(token)),
             ),
         )
-    if server.auth_type == MCPAuth.bearer_token:
+    # Static credential on the Authorization header; these differ only by scheme prefix (basic is
+    # base64(user:pass)). All reuse the api_key arm. authorization uses an empty prefix (verbatim),
+    # so test the prefix with `is not None`, not truthiness.
+    authorization_prefix = {
+        MCPAuth.bearer_token: "Bearer",
+        MCPAuth.token: "token",
+        MCPAuth.authorization: "",
+        MCPAuth.basic: "Basic",
+    }.get(server.auth_type)
+    if authorization_prefix is not None:
         token = server.authentication_token
         if not token:
-            return None  # bearer_token with no token: let v1 handle it (parity-safe)
+            return None  # static Authorization mode with no token: let v1 handle it (parity-safe)
+        value = (
+            base64.b64encode(token.encode("utf-8")).decode()
+            if server.auth_type == MCPAuth.basic
+            else token
+        )
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
             config=ApiKeyConfig(
                 header_name="Authorization",
-                value_prefix="Bearer",
-                key_source=SharedKey(value=SecretStr(token)),
+                value_prefix=authorization_prefix,
+                key_source=SharedKey(value=SecretStr(value)),
             ),
         )
     if server.auth_type == MCPAuth.aws_sigv4:

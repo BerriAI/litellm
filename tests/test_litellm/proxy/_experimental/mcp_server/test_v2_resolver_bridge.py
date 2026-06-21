@@ -5,6 +5,8 @@ headers must be byte-identical to what v1 produces, and every other mode (or any
 fall back to v1 unchanged.
 """
 
+import base64
+
 import httpx
 import pytest
 
@@ -71,20 +73,34 @@ async def test_none_attaches_no_auth(v2_on):
     assert _v1_headers(MCPAuth.none, None) == _v1_headers(MCPAuth.none, v2_value) == {}
 
 
-async def test_non_grafted_mode_defers_to_v1(v2_on):
-    # basic is not grafted yet -> v2 returns None so v1 handles it
-    assert await resolve_v2_auth_value(_server(MCPAuth.basic, "k")) is None
-
-
-async def test_bearer_token_parity(v2_on):
-    token = "up-secret"
-    server = _server(MCPAuth.bearer_token, token)
+@pytest.mark.parametrize(
+    "auth_type,token,expected",
+    [
+        (MCPAuth.bearer_token, "up-secret", {"Authorization": "Bearer up-secret"}),
+        (MCPAuth.token, "up-secret", {"Authorization": "token up-secret"}),
+        (
+            MCPAuth.authorization,
+            "Custom raw-value",
+            {"Authorization": "Custom raw-value"},
+        ),
+        (
+            MCPAuth.basic,
+            "user:pass",
+            {"Authorization": f"Basic {base64.b64encode(b'user:pass').decode()}"},
+        ),
+    ],
+)
+async def test_static_authorization_modes_parity(v2_on, auth_type, token, expected):
+    server = _server(auth_type, token)
     v2_value = await resolve_v2_auth_value(server)
-    assert v2_value == {"Authorization": f"Bearer {token}"}
+    assert v2_value == expected
     # byte-identical to v1's final upstream headers
-    assert _v1_headers(MCPAuth.bearer_token, token) == _v1_headers(
-        MCPAuth.bearer_token, v2_value
-    )
+    assert _v1_headers(auth_type, token) == _v1_headers(auth_type, v2_value) == expected
+
+
+async def test_static_auth_without_token_defers_to_v1(v2_on):
+    # A static Authorization mode with no configured token defers to v1 (parity-safe).
+    assert await resolve_v2_auth_value(_server(MCPAuth.bearer_token, None)) is None
 
 
 async def test_api_key_without_token_defers_to_v1(v2_on):
