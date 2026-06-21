@@ -5,12 +5,10 @@ A sandbox tool maps a name to a sandbox provider plus its credentials, so the
 code interpreter interceptor can resolve a tool by name to provider/key/base.
 """
 
-from typing import Optional
-
 _SANDBOX_TOOL_REGISTRY: dict[str, dict] = {}
 
 
-def _resolve_secret_value(value: Optional[str]) -> Optional[str]:
+def _resolve_secret_value(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     if value.startswith("os.environ/"):
@@ -32,7 +30,7 @@ def register_sandbox_tools(tools: list[dict]) -> None:
         }
 
 
-def resolve_sandbox_tool(name: str) -> Optional[dict]:
+def resolve_sandbox_tool(name: str) -> dict | None:
     return _SANDBOX_TOOL_REGISTRY.get(name)
 
 

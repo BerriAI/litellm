@@ -4924,7 +4924,7 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: list[str],
         fingerprint: str,
-        callback: Optional[Any] = None,
+        callback: Any | None = None,
     ) -> Any:
         patch = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:

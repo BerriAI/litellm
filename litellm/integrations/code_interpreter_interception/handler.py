@@ -9,7 +9,7 @@ captured stdout back through the typed agentic loop plan.
 import json
 import time
 import uuid
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,7 +28,7 @@ _INTERCEPTION_ACTIVE_KEY = "_code_interpreter_interception_active"
 _CACHE_TTL_SECONDS = 15 * 60
 
 
-def _resolve_sandbox_tool(sandbox_tool_name: Optional[str]) -> Optional[dict[str, Any]]:
+def _resolve_sandbox_tool(sandbox_tool_name: str | None) -> dict[str, Any] | None:
     try:
         from litellm.sandbox.sandbox_tools import resolve_sandbox_tool
     except ImportError:
@@ -51,9 +51,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     def __init__(
         self,
         enabled: bool = True,
-        enabled_providers: Optional[list[str]] = None,
-        sandbox_tool_name: Optional[str] = None,
-        sandbox_config: Optional[Any] = None,
+        enabled_providers: list[str] | None = None,
+        sandbox_tool_name: str | None = None,
+        sandbox_config: Any | None = None,
     ):
         super().__init__()
         self.enabled = enabled
@@ -61,7 +61,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self.sandbox_tool_name = sandbox_tool_name
         self.sandbox_config = sandbox_config
         self._container_cache_by_call_id: dict[
-            str, tuple[Any, Optional[dict[str, Any]], float]
+            str, tuple[Any, dict[str, Any] | None, float]
         ] = {}
 
     @classmethod
@@ -92,8 +92,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return CodeInterpreterInterceptionLogger.from_config_yaml(params)
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: dict[str, Any], call_type: Optional[CallTypes]
-    ) -> Optional[dict]:
+        self, kwargs: dict[str, Any], call_type: CallTypes | None
+    ) -> dict | None:
         if not kwargs.get("_agentic_loop_depth"):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
         if not self.enabled:
@@ -140,7 +140,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         ]
         return kwargs
 
-    def _resolve_provider(self, kwargs: dict[str, Any]) -> Optional[str]:
+    def _resolve_provider(self, kwargs: dict[str, Any]) -> str | None:
         provider = kwargs.get("custom_llm_provider")
         if provider:
             return provider
@@ -157,7 +157,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         response: Any,
         model: str,
         messages: list[dict],
-        tools: Optional[list[dict]],
+        tools: list[dict] | None,
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
@@ -292,7 +292,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return ""
 
     async def _run_tool_call(
-        self, container: Any, params: Optional[dict[str, Any]], arguments: str
+        self, container: Any, params: dict[str, Any] | None, arguments: str
     ) -> str:
         try:
             code = json.loads(arguments).get("code", "") if arguments else ""
@@ -311,8 +311,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return getattr(result, "stdout", "") or ""
 
     async def _get_or_create_container(
-        self, call_id: Optional[str]
-    ) -> tuple[Any, Optional[dict[str, Any]]]:
+        self, call_id: str | None
+    ) -> tuple[Any, dict[str, Any] | None]:
         if call_id:
             cached = self._container_cache_by_call_id.get(call_id)
             if cached is not None:
@@ -323,7 +323,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             self._container_cache_by_call_id[call_id] = (container, params, time.time())
         return container, params
 
-    async def _create_container(self) -> tuple[Any, Optional[dict[str, Any]]]:
+    async def _create_container(self) -> tuple[Any, dict[str, Any] | None]:
         if self.sandbox_config is not None:
             return await self.sandbox_config.acreate_sandbox(), None
 
@@ -342,7 +342,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return container, params
 
     async def _run_code(
-        self, container: Any, params: Optional[dict[str, Any]], code: str
+        self, container: Any, params: dict[str, Any] | None, code: str
     ) -> Any:
         if self.sandbox_config is not None:
             return await self.sandbox_config.arun_code(container=container, code=code)
@@ -358,7 +358,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         )
 
     async def _delete_container(
-        self, container: Any, params: Optional[dict[str, Any]]
+        self, container: Any, params: dict[str, Any] | None
     ) -> None:
         try:
             if self.sandbox_config is not None:
@@ -377,7 +377,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                 "CodeInterpreterInterception: failed to delete sandbox container"
             )
 
-    async def _delete_container_for_call_id(self, call_id: Optional[str]) -> None:
+    async def _delete_container_for_call_id(self, call_id: str | None) -> None:
         if not call_id:
             return
         cached = self._container_cache_by_call_id.pop(call_id, None)
@@ -444,9 +444,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             self._container_cache_by_call_id.pop(call_id, None)
             await self._delete_container(container=container, params=params)
 
-    def _resolve_call_id(
-        self, logging_obj: Any, kwargs: dict[str, Any]
-    ) -> Optional[str]:
+    def _resolve_call_id(self, logging_obj: Any, kwargs: dict[str, Any]) -> str | None:
         if logging_obj is not None:
             logging_call_id = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(logging_call_id, str) and logging_call_id:
