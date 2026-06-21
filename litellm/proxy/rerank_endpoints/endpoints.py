@@ -13,23 +13,73 @@ router = APIRouter()
 import asyncio
 
 
+
+_RERANK_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "title": "RerankRequest",
+                "required": ["model", "query", "documents"],
+                "additionalProperties": True,
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "title": "Model",
+                        "description": "Rerank model ID (e.g. 'rerank-english-v3.0'). Forwarded to the upstream provider.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "title": "Query",
+                        "description": "The search query whose relevance the documents are ranked against.",
+                    },
+                    "documents": {
+                        "type": "array",
+                        "title": "Documents",
+                        "description": "List of documents (strings or dicts) to rerank.",
+                        "items": {},
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "title": "Top N",
+                        "description": "Return only the top N ranked documents. Optional; defaults to returning all.",
+                    },
+                    "return_documents": {
+                        "type": "boolean",
+                        "title": "Return Documents",
+                        "description": "When true, include the original document text in the response. Optional.",
+                    },
+                    "max_chunks_per_doc": {
+                        "type": "integer",
+                        "title": "Max Chunks Per Doc",
+                        "description": "Maximum number of chunks to produce per document when chunking is applied. Optional.",
+                    },
+                },
+            }
+        }
+    },
+}
 @router.post(
     "/v2/rerank",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
     tags=["rerank"],
+    openapi_extra={"requestBody": _RERANK_REQUEST_BODY},
 )
 @router.post(
     "/v1/rerank",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
     tags=["rerank"],
+    openapi_extra={"requestBody": _RERANK_REQUEST_BODY},
 )
 @router.post(
     "/rerank",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
     tags=["rerank"],
+    openapi_extra={"requestBody": _RERANK_REQUEST_BODY},
 )
 async def rerank(
     request: Request,
