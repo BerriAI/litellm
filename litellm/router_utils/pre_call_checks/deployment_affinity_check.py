@@ -340,6 +340,40 @@ class DeploymentAffinityCheck(CustomLogger):
                             responses_model_id,
                         )
                         return [deployment]
+            # 1b) code_interpreter container affinity (Responses API create calls).
+            # A LiteLLM-managed container id (cntr_...) encodes the owning
+            # deployment's model_id. Reusing it in tools[].container must pin
+            # routing to that deployment, otherwise the call load-balances by
+            # model name and lands on a deployment that doesn't own the
+            # container (Azure containers are region-local -> 404). Lower
+            # priority than previous_response_id, which stays authoritative.
+            tools = request_kwargs.get("tools")
+            if isinstance(tools, list):
+                for tool in tools:
+                    if not isinstance(tool, dict):
+                        continue
+                    if tool.get("type") != "code_interpreter":
+                        continue
+                    # container is either a managed id string (cntr_...) or an
+                    # object for provisioning a new container ({"type": "auto"}),
+                    # which carries no model_id to pin -> skip non-str values.
+                    container = tool.get("container")
+                    if not isinstance(container, str):
+                        continue
+                    decoded = ResponsesAPIRequestUtils._decode_container_id(container)
+                    container_model_id = decoded.get("model_id")
+                    if container_model_id is None:
+                        continue
+                    deployment = self._find_deployment_by_model_id(
+                        healthy_deployments=typed_healthy_deployments,
+                        model_id=container_model_id,
+                    )
+                    if deployment is not None:
+                        verbose_router_logger.debug(
+                            "DeploymentAffinityCheck: code_interpreter container pinning -> deployment=%s",
+                            container_model_id,
+                        )
+                        return [deployment]
 
         stable_model_map_key = self._get_stable_model_map_key_from_deployments(
             healthy_deployments=typed_healthy_deployments
