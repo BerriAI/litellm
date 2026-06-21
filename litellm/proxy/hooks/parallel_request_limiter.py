@@ -1,26 +1,24 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, NoReturn, Optional, Tuple, Union
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
+from litellm.exceptions import RateLimitType
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
-from litellm.proxy.hooks.rate_limiter_utils import (
-    ProxyHTTPRateLimitError,
-    resolve_llm_provider_for_rate_limit,
-)
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -52,7 +50,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(print_statement)  # noqa: T201
         except Exception:
             pass
 
@@ -75,9 +73,21 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         )
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
-                # base case
-                raise self.raise_rate_limit_error(
+                # base case — at least one dimension is set to 0 (effectively
+                # disabled). Pick the most specific dimension as the
+                # rate_limit_type so dashboards can attribute the failure to
+                # the right cap. Order matters: max_parallel_requests is
+                # listed first because it's the rarest 0 in practice and the
+                # most actionable signal.
+                if max_parallel_requests == 0:
+                    triggered_type = RateLimitType.CONCURRENT_REQUESTS
+                elif tpm_limit == 0:
+                    triggered_type = RateLimitType.TOKENS
+                else:
+                    triggered_type = RateLimitType.REQUESTS
+                self.raise_rate_limit_error(
                     additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}",
+                    rate_limit_type=triggered_type,
                     requested_model=data.get("model") if data else None,
                 )
             new_val = {
@@ -100,14 +110,23 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             values_to_update_in_cache.append((request_count_api_key, new_val))
 
         else:
+            # Detect which dimension actually tripped the limit so we can
+            # surface the right rate_limit_type. Order matches the boolean
+            # condition above (concurrent → tpm → rpm) — first match wins.
+            if int(current["current_requests"]) >= max_parallel_requests:
+                triggered_type = RateLimitType.CONCURRENT_REQUESTS
+            elif current["current_tpm"] >= tpm_limit:
+                triggered_type = RateLimitType.TOKENS
+            else:
+                triggered_type = RateLimitType.REQUESTS
             requested_model = data.get("model") if data else None
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
                 requested_model
             )
-            raise ProxyHTTPRateLimitError(
-                status_code=429,
+            raise ProxyRateLimitError(
                 detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
+                rate_limit_type=triggered_type,
                 model=resolved_model,
                 llm_provider=llm_provider,
             )
@@ -135,27 +154,45 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     def raise_rate_limit_error(
         self,
         additional_details: Optional[str] = None,
+        rate_limit_type: Optional[RateLimitType] = None,
         requested_model: Optional[str] = None,
-    ) -> HTTPException:
+    ) -> NoReturn:
         """
-        Raise an HTTPException with a 429 status code and a retry-after header.
+        Raise a 429 with a retry-after header for litellm-proxy parallel-request limits.
+
+        Always raises :class:`ProxyRateLimitError` — never returns. Annotated
+        ``NoReturn`` so type-checkers know callers after this invocation are
+        unreachable. The raised exception is both a
+        :class:`litellm.RateLimitError` (so callers can catch by category) and a
+        :class:`fastapi.HTTPException` (so the FastAPI dispatcher serializes it
+        correctly with status 429 and the supplied headers).
+
+        ``rate_limit_type`` defaults to ``CONCURRENT_REQUESTS`` because every
+        existing internal caller of this helper hits the parallel-request cap
+        (the global-limit branch in ``async_pre_call_hook`` and the
+        all-zeros base case in ``check_key_in_limits``). Callers that know
+        the dimension exactly should pass it explicitly.
 
         ``requested_model`` is resolved via :func:`get_llm_provider` so the
-        raised exception carries ``llm_provider`` for downstream loggers
-        (Prometheus failure metric, observability callbacks). Falls back to
-        ``llm_provider="litellm_proxy"`` when the model is missing or
-        unparseable — see ``resolve_llm_provider_for_rate_limit``.
+        raised exception carries ``llm_provider`` (and a stripped ``model``)
+        for downstream loggers (Prometheus failure metric, observability
+        callbacks). Falls back to ``llm_provider="litellm_proxy"`` when the
+        model is missing or unparseable — see
+        :func:`resolve_llm_provider_for_rate_limit`.
         """
+        # additional_details is optional; build the detail with a None-guard
+        # so callers that pass nothing don't get the literal string "None"
+        # interpolated into the error message.
         error_message = "Max parallel request limit reached"
         if additional_details is not None:
             error_message = error_message + " " + additional_details
         resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
             requested_model
         )
-        raise ProxyHTTPRateLimitError(
-            status_code=429,
+        raise ProxyRateLimitError(
             detail=error_message,
             headers={"retry-after": str(self.time_to_next_minute())},
+            rate_limit_type=rate_limit_type or RateLimitType.CONCURRENT_REQUESTS,
             model=resolved_model,
             llm_provider=llm_provider,
         )
@@ -202,7 +239,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_end_user_id=results[5],
         )
 
-    async def async_pre_call_hook(  # noqa: PLR0915
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -248,7 +285,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 current_global_requests = 1
             # if above -> raise error
             if current_global_requests >= global_max_parallel_requests:
-                return self.raise_rate_limit_error(
+                self.raise_rate_limit_error(
                     additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}",
                     requested_model=data.get("model") if data else None,
                 )
@@ -469,9 +506,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
         return
 
-    async def async_log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -533,7 +568,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             total_tokens = 0
 
-            if isinstance(response_obj, ModelResponse):
+            if isinstance(
+                response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)
+            ):
                 total_tokens = response_obj.usage.total_tokens  # type: ignore
 
             # ------------
@@ -622,7 +659,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_user_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -655,7 +695,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_team_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -688,7 +731,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_end_user_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -721,7 +767,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=litellm_parent_otel_span,
             )
         except Exception as e:
-            self.print_verbose(e)  # noqa
+            self.print_verbose(e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:

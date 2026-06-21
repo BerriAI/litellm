@@ -21,7 +21,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Set
 
 from fastapi import (
     APIRouter,
@@ -49,6 +49,8 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
     collect_env_var_references,
+    LITELLM_MCP_SERVER_DESCRIPTION,
+    LITELLM_MCP_SERVER_NAME,
     get_server_prefix,
     parse_admin_env_vars,
 )
@@ -60,6 +62,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
+from litellm.repositories.table_repositories import (
+    MCPServerRepository,
+    MCPUserCredentialsRepository,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
@@ -85,8 +91,6 @@ def does_mcp_server_exist(
 
 
 DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
-LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 
 try:
     importlib.import_module("mcp")
@@ -761,7 +765,7 @@ if MCP_AVAILABLE:
         # Get from DB
         if prisma_client is not None:
             try:
-                mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+                mcp_servers = await MCPServerRepository(prisma_client).table.find_many()
                 for server in mcp_servers:
                     if (
                         hasattr(server, "mcp_access_groups")
@@ -879,6 +883,32 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials_list(servers)
 
+    async def _resolve_accessible_mcp_servers(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> List[LiteLLM_MCPServerTable]:
+        """The server set the dashboard grid shows (GET /v1/mcp/server, no team
+        filter), returned unredacted. Callers that surface this to a client must
+        apply their own redaction; the per-user env-var status endpoint relies on
+        the raw env_vars and only ever returns is_set booleans, never secrets.
+
+        Sharing this resolution keeps the red "missing user fields" card status
+        aligned with the cards actually rendered: an admin in view_all mode sees
+        every server even when their key carries no per-server MCP grant.
+        """
+        if (
+            _get_user_mcp_management_mode() == "view_all"
+            and not _is_restricted_virtual_key_request(user_api_key_dict)
+        ):
+            return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+
+        aggregated: Dict[str, LiteLLM_MCPServerTable] = {}
+        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
+            for server in await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                user_api_key_auth=auth_context
+            ):
+                aggregated.setdefault(server.server_id, server)
+        return list(aggregated.values())
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -950,30 +980,8 @@ if MCP_AVAILABLE:
                 sanitized_team_id
             )
         else:
-            user_mcp_management_mode = _get_user_mcp_management_mode()
-
-            if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
-                servers = (
-                    await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
-                )
-                redacted_mcp_servers = _redact_mcp_credentials_list(servers)
-            else:
-                auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
-
-                aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
-                for auth_context in auth_contexts:
-                    servers = (
-                        await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                            user_api_key_auth=auth_context
-                        )
-                    )
-                    for server in servers:
-                        if server.server_id not in aggregated_servers:
-                            aggregated_servers[server.server_id] = server
-
-                redacted_mcp_servers = _redact_mcp_credentials_list(
-                    aggregated_servers.values()
-                )
+            servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
+            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -994,10 +1002,10 @@ if MCP_AVAILABLE:
                 if getattr(s, "is_byok", False)
             ]
             if byok_server_ids:
-                cred_rows = (
-                    await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                        where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
-                    )
+                cred_rows = await MCPUserCredentialsRepository(
+                    _byok_prisma_client
+                ).table.find_many(
+                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
                 )
                 cred_set = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:
@@ -1714,11 +1722,13 @@ if MCP_AVAILABLE:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={"error": f"Access denied to MCP server {server_id}"},
                 )
-            allowed_server_ids = (
-                await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_dict
+            allowed_server_ids: Set[str] = set()
+            for auth_context in await build_effective_auth_contexts(user_api_key_dict):
+                allowed_server_ids.update(
+                    await global_mcp_server_manager.get_allowed_mcp_servers(
+                        auth_context
+                    )
                 )
-            )
             if server.server_id not in allowed_server_ids:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -2391,9 +2401,7 @@ if MCP_AVAILABLE:
         user_id = user_api_key_dict.user_id or ""
         if not user_id:
             return []
-        accessible = await get_all_mcp_servers_for_user(
-            prisma_client, user_api_key_dict
-        )
+        accessible = await _resolve_accessible_mcp_servers(user_api_key_dict)
         if not accessible:
             return []
         server_ids = [s.server_id for s in accessible]

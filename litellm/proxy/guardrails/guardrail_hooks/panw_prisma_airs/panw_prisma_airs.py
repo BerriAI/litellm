@@ -261,7 +261,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
         return ""
 
-    async def _call_panw_api(  # noqa: PLR0915
+    async def _call_panw_api(
         self,
         content: str = "",
         is_response: bool = False,
@@ -1762,7 +1762,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return rd.get("name") if ("arguments" in rd or "mcp_arguments" in rd) else None
 
     @log_guardrail_information
-    async def apply_guardrail(  # noqa: PLR0915
+    async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,

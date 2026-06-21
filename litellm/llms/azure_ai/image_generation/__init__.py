@@ -7,12 +7,14 @@ from .dall_e_2_transformation import AzureFoundryDallE2ImageGenerationConfig
 from .dall_e_3_transformation import AzureFoundryDallE3ImageGenerationConfig
 from .flux_transformation import AzureFoundryFluxImageGenerationConfig
 from .gpt_transformation import AzureFoundryGPTImageGenerationConfig
+from .mai_transformation import AzureFoundryMAIImageGenerationConfig
 
 __all__ = [
     "AzureFoundryFluxImageGenerationConfig",
     "AzureFoundryGPTImageGenerationConfig",
     "AzureFoundryDallE2ImageGenerationConfig",
     "AzureFoundryDallE3ImageGenerationConfig",
+    "AzureFoundryMAIImageGenerationConfig",
 ]
 
 
@@ -24,6 +26,8 @@ def get_azure_ai_image_generation_config(model: str) -> BaseImageGenerationConfi
         return AzureFoundryDallE2ImageGenerationConfig()
     elif "dalle3" in model:
         return AzureFoundryDallE3ImageGenerationConfig()
+    elif AzureFoundryMAIImageGenerationConfig.is_mai_model(model):
+        return AzureFoundryMAIImageGenerationConfig()
     elif "flux" in model:
         return AzureFoundryFluxImageGenerationConfig()
     else:

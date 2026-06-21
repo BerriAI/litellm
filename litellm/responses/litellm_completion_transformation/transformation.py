@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import re
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
@@ -148,7 +149,9 @@ class LiteLLMCompletionResponsesConfig:
                 # which is equivalent to "required" in OpenAI format
                 return "required"
             elif tool_choice_type == "function":
-                # function type without name - fall back to required
+                function_name = tool_choice.get("name")
+                if function_name:
+                    return {"type": "function", "function": {"name": function_name}}
                 return "required"
 
         # Return as-is for unknown formats
@@ -1553,6 +1556,20 @@ class LiteLLMCompletionResponsesConfig:
             return "completed"
 
     @staticmethod
+    def _tool_call_id_from_responses_item(
+        item_id: Optional[str], call_id: Optional[str]
+    ) -> str:
+        """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0``,
+        ``call_1``, ... that resets every response) alongside a unique ``id``
+        (``fc_...``). ``call_id`` is the canonical Responses API correlation key, so
+        prefer it; fall back to the unique ``id`` only when ``call_id`` is absent or
+        in that degenerate index form, otherwise multi-turn tool calls collide and an
+        agent cannot correlate its tool results."""
+        if call_id and re.fullmatch(r"call_\d+", call_id) is None:
+            return call_id
+        return item_id or call_id or ""
+
+    @staticmethod
     def convert_response_function_tool_call_to_chat_completion_tool_call(
         tool_call_item: Any,
         index: int = 0,
@@ -1599,7 +1616,10 @@ class LiteLLMCompletionResponsesConfig:
             function_dict["provider_specific_fields"] = provider_specific_fields
 
         tool_call_dict: Dict[str, Any] = {
-            "id": tool_call_item.call_id,
+            "id": LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(
+                getattr(tool_call_item, "id", None),
+                getattr(tool_call_item, "call_id", None),
+            ),
             "function": function_dict,
             "type": "function",
             "index": 0,

@@ -54,6 +54,8 @@ def _make_spend_counter_cache(
             side_effect=redis_increment_side_effect,
         )
         cache.redis_cache.async_delete_cache = AsyncMock()
+        cache.redis_cache.async_set_cache = AsyncMock()
+        cache.redis_cache.async_set_max = AsyncMock()
     else:
         cache.redis_cache = None
     cache.async_increment_cache = AsyncMock(return_value=redis_increment_value)
@@ -109,6 +111,272 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory(monkeypatch
         counter_key="spend:key:abc", fallback_spend=99.0
     )
     assert result == 17.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_stale_low_counter_against_db(monkeypatch):
+    """A Redis counter left stale-low by a Redis restart must not admit a key
+    whose authoritative DB spend is already over budget. With max_budget set,
+    get_current_spend re-checks the DB and returns the higher recorded spend."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=12.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc",
+        fallback_spend=12.0,
+        max_budget=10.0,
+    )
+
+    assert result == 12.0
+    assert from_db.await_count == 1
+    # the stale counter is repaired up to the authoritative DB value via a
+    # monotonic set-max so other workers read the corrected total, and a
+    # concurrent increment cannot be clobbered
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key="spend:key:abc", value=12.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_no_db_recheck_when_counter_healthy(monkeypatch):
+    """A healthy counter (at or above the caller's recorded spend) is trusted
+    without a DB read, so under-budget traffic stays off the DB path."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=5.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=99.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc",
+        fallback_spend=3.0,
+        max_budget=10.0,
+    )
+
+    assert result == 5.0
+    assert from_db.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_no_floor_without_max_budget(monkeypatch):
+    """Without max_budget the read-time DB floor is skipped: callers that only
+    read spend (alerts, soft budgets) keep the cheap counter-only behavior."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=12.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=12.0
+    )
+
+    assert result == 2.0
+    assert from_db.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floor_admits_after_reset(monkeypatch):
+    """Right after a weekly reset the counter is 0 while the per-worker cached
+    spend can still be last week's value. The DB floor reads the reset spend (0)
+    and admits, so reset keys are not over-blocked."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=0.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc",
+        fallback_spend=12.0,
+        max_budget=10.0,
+    )
+
+    assert result == 0.0
+    assert from_db.await_count == 1
+    # counter already matches the DB (reset to 0); nothing to repair, so no write
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floor_caches_db_read(monkeypatch):
+    """A persistently stale-low counter must not drive a DB read per request:
+    the authoritative spend is cached in-process and reused within the window."""
+    cache = ps.DualCache()
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.async_get_cache = AsyncMock(return_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", cache)
+    from_db = AsyncMock(return_value=12.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    first = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0
+    )
+    second = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0
+    )
+
+    assert first == 12.0
+    assert second == 12.0
+    assert from_db.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatch):
+    """End-user and tag counters have no DB row (from_db returns None). When the
+    counter is stale-low, enforcement falls back to the caller's recorded spend
+    (loaded fresh in auth) instead of trusting the stale counter."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
+
+    result = await ps.get_current_spend(
+        counter_key="spend:end_user:e1",
+        fallback_spend=20.0,
+        max_budget=10.0,
+    )
+
+    assert result == 20.0
+    # no DB row to repair against, so the shared counter is left untouched
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
+    """Per-window counters have no DB row but aggregate from spend logs. A
+    stale-low window counter is floored to (and repaired up to) the logged
+    window spend, even though the caller's fallback is 0."""
+    from datetime import datetime, timezone
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
+    wfsl = AsyncMock(return_value=15.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "window_from_spend_logs", wfsl)
+
+    counter_key = "spend:key:tok:window:7d"
+    result = await ps.get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert result == 15.0
+    assert wfsl.await_count == 1
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key=counter_key, value=15.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_rejects_when_unverifiable(monkeypatch):
+    """With fail_closed_budget_enforcement on, an admit decision backed only by a
+    per-pod fallback (Redis unreachable and DB unreadable) is rejected with 503
+    rather than admitted on an unverifiable budget."""
+    from fastapi import HTTPException
+
+    fake_cache = _make_spend_counter_cache(
+        redis_get_side_effect=RuntimeError("redis down")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await ps.get_current_spend(
+            counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
+        )
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_off_admits_when_unverifiable(monkeypatch):
+    """Default (flag off): an unverifiable read keeps the existing behavior and
+    admits using the cached fallback — no new rejection."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_side_effect=RuntimeError("redis down")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
+    )
+    assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_admits_when_redis_verified(monkeypatch):
+    """Fail-closed only rejects unverifiable reads: a value served by Redis is
+    authoritative, so an under-budget request is admitted normally."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=1.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
+    )
+    assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_allows_authoritative_fallback(monkeypatch):
+    """End-user/tag callers pass fallback_authoritative=True (their spend is
+    loaded fresh from the DB in auth), so fail-closed does not reject them even
+    when the counter path is unreadable."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_side_effect=RuntimeError("redis down")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    result = await ps.get_current_spend(
+        counter_key="spend:end_user:e1",
+        fallback_spend=1.0,
+        max_budget=10.0,
+        fallback_authoritative=True,
+    )
+    assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_strict_floors_when_fallback_also_stale(monkeypatch):
+    """Strict mode closes the both-stale gap: when the counter AND the caller's
+    cached spend are both stale-low (cheap guard would skip), strict mode still
+    re-checks the authoritative DB and enforces against it."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.00001)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+    from_db = AsyncMock(return_value=0.5)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    # fallback == current, so the default cheap guard would NOT re-check
+    result = await ps.get_current_spend(
+        counter_key="spend:team:t1",
+        fallback_spend=0.00001,
+        max_budget=0.0002,
+    )
+
+    assert result == 0.5
+    assert from_db.await_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +460,9 @@ async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set
 async def test_reconcile_budget_reservation_for_counter_update_failure_invalidates(
     monkeypatch,
 ):
-    """Reservation reconcile raising must invalidate reserved counters but
-    not propagate the exception."""
+    """Reservation reconcile raising must invalidate reserved counters, swallow
+    the exception, and return an empty set so the caller falls back to the
+    direct spend-counter increment instead of skipping it."""
     import litellm.proxy.spend_tracking.budget_reservation as br
 
     monkeypatch.setattr(
@@ -213,7 +482,7 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
-    assert result == {"spend:key:abc"}
+    assert result == set()
     assert fake_invalidate.called is True
 
 

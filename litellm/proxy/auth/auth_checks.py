@@ -61,19 +61,34 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.table_repositories import (
+    AccessGroupRepository,
+    EndUserRepository,
+    JWTKeyMappingRepository,
+    ManagedVectorStoresRepository,
+    TagRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
@@ -505,7 +520,7 @@ MODEL_DISCOVERY_ROUTES = frozenset(
 )
 
 
-async def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -711,6 +726,7 @@ async def common_checks(  # noqa: PLR0915
             user_spend = await get_current_spend(
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
+                max_budget=user_budget,
             )
             if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
@@ -957,7 +973,7 @@ async def get_default_end_user_budget(
 
     # Fetch from database
     try:
-        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+        budget_record = await BudgetRepository(prisma_client).table.find_unique(
             where={"budget_id": litellm.max_end_user_budget_id}
         )
 
@@ -1016,7 +1032,7 @@ async def get_team_member_default_budget(
         return LiteLLM_BudgetTable(**cached_budget)
 
     try:
-        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+        budget_record = await BudgetRepository(prisma_client).table.find_unique(
             where={"budget_id": budget_id}
         )
 
@@ -1113,6 +1129,8 @@ async def _check_end_user_budget(
     end_user_spend = await get_current_spend(
         counter_key=f"spend:end_user:{end_user_obj.user_id}",
         fallback_spend=end_user_obj.spend or 0.0,
+        max_budget=end_user_budget,
+        fallback_authoritative=True,
     )
     if end_user_spend > end_user_budget:
         raise litellm.BudgetExceededError(
@@ -1175,7 +1193,7 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response = await prisma_client.db.litellm_endusertable.find_unique(
+        response = await EndUserRepository(prisma_client).table.find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True, "object_permission": True},
         )
@@ -1375,7 +1393,7 @@ async def get_tag_objects_batch(
     # Batch fetch uncached tags from DB in one query
     if uncached_tags:
         try:
-            db_tags = await prisma_client.db.litellm_tagtable.find_many(
+            db_tags = await TagRepository(prisma_client).table.find_many(
                 where={"tag_name": {"in": uncached_tags}},
                 include={"litellm_budget_table": True},
             )
@@ -1469,7 +1487,7 @@ async def get_team_membership(
 
     # else, check db
     try:
-        response = await prisma_client.db.litellm_teammembership.find_unique(
+        response = await TeamMembershipRepository(prisma_client).table.find_unique(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             include={"litellm_budget_table": True},
         )
@@ -1622,7 +1640,7 @@ async def _get_fuzzy_user_object(
 
     response = None
     if sso_user_id is not None:
-        response = await prisma_client.db.litellm_usertable.find_unique(
+        response = await UserRepository(prisma_client).table.find_unique(
             where={"sso_user_id": sso_user_id},
             include={"organization_memberships": True},
         )
@@ -1630,14 +1648,14 @@ async def _get_fuzzy_user_object(
     if response is None and user_email is not None:
         # Use case-insensitive query to handle emails with different casing
         # This matches the pattern used in _check_duplicate_user_email
-        response = await prisma_client.db.litellm_usertable.find_first(
+        response = await UserRepository(prisma_client).table.find_first(
             where={"user_email": {"equals": user_email, "mode": "insensitive"}},
             include={"organization_memberships": True},
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
             asyncio.create_task(  # background task to update user with sso id
-                prisma_client.db.litellm_usertable.update(
+                UserRepository(prisma_client).table.update(
                     where={"user_id": response.user_id},
                     data={"sso_user_id": sso_user_id},
                 )
@@ -1687,7 +1705,7 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await prisma_client.db.litellm_usertable.find_unique(
+            response = await UserRepository(prisma_client).table.find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
 
@@ -1711,7 +1729,7 @@ async def get_user_object(
                 if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
 
-                response = await prisma_client.db.litellm_usertable.create(
+                response = await UserRepository(prisma_client).table.create(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
@@ -1860,7 +1878,7 @@ async def _delete_cache_key_object(
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
 ):
-    response = await prisma_client.db.litellm_teamtable.find_unique(
+    response = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
 
@@ -1882,7 +1900,7 @@ async def _get_team_db_check(
 
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
-    return await prisma_client.db.litellm_teamtable.find_unique(
+    return await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
 
@@ -2111,7 +2129,7 @@ async def get_access_object(
 
     # Not in cache - fetch from DB
     try:
-        response = await prisma_client.db.litellm_accessgrouptable.find_unique(
+        response = await AccessGroupRepository(prisma_client).table.find_unique(
             where={"access_group_id": access_group_id}
         )
 
@@ -2193,7 +2211,7 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams = await prisma_client.db.litellm_teamtable.find_many(
+        teams = await TeamRepository(prisma_client).table.find_many(
             where={"team_alias": team_alias}
         )
 
@@ -2301,7 +2319,7 @@ async def get_org_object_by_alias(
 
     # Query database by organization_alias
     try:
-        orgs = await prisma_client.db.litellm_organizationtable.find_many(
+        orgs = await OrganizationRepository(prisma_client).table.find_many(
             where={"organization_alias": org_alias}
         )
 
@@ -2526,7 +2544,7 @@ async def get_jwt_key_mapping_object(
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
-    mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
+    mapping = await JWTKeyMappingRepository(prisma_client).table.find_first(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
@@ -2659,7 +2677,7 @@ async def get_object_permission(
 
     # else, check db
     try:
-        response = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        response = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": object_permission_id}
         )
 
@@ -2715,7 +2733,7 @@ async def get_managed_vector_store_rows_by_uuids(
     if not cache_misses:
         return result
 
-    rows = await prisma_client.db.litellm_managedvectorstorestable.find_many(
+    rows = await ManagedVectorStoresRepository(prisma_client).table.find_many(
         where={"vector_store_id": {"in": cache_misses}},
         take=len(cache_misses),
     )
@@ -2790,7 +2808,7 @@ async def get_org_object(
         if include_budget_table:
             query_kwargs["include"] = {"litellm_budget_table": True}
 
-        response = await prisma_client.db.litellm_organizationtable.find_unique(
+        response = await OrganizationRepository(prisma_client).table.find_unique(
             **query_kwargs
         )
 
@@ -3139,6 +3157,98 @@ async def can_key_call_model(
                     object_type="key",
                 )
         raise
+
+
+async def can_key_call_resolved_model(
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
+) -> None:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    skip_key_model_check = valid_token.config or (
+        isinstance(valid_token.models, list)
+        and SpecialModelNames.all_team_models.value in valid_token.models
+    )
+    if not skip_key_model_check:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
+            llm_router=llm_router,
+        )
+
+    team_object: Optional[LiteLLM_TeamTableCachedObj] = None
+    team_object_from_lookup = False
+    if valid_token.team_id is not None:
+        try:
+            team_object = await get_team_object(
+                team_id=valid_token.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=valid_token.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            team_object_from_lookup = True
+        except Exception:
+            team_object = LiteLLM_TeamTableCachedObj(
+                team_id=valid_token.team_id,
+                models=valid_token.team_models,
+                blocked=valid_token.team_blocked,
+                team_alias=valid_token.team_alias,
+                metadata=valid_token.team_metadata,
+                object_permission_id=valid_token.team_object_permission_id,
+                object_permission=valid_token.team_object_permission,
+            )
+
+    if team_object is not None:
+        try:
+            await can_team_access_model(
+                model=model,
+                team_object=team_object,
+                llm_router=llm_router,
+                team_model_aliases=valid_token.team_model_aliases,
+            )
+        except ProxyException as team_denial:
+            if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                raise
+            if not await _key_access_group_grants_model(
+                model=model,
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=llm_router,
+            ):
+                raise
+
+        if valid_token.user_id is not None and team_object_from_lookup:
+            await _check_team_member_model_access(
+                model=model,
+                team_object=team_object,
+                valid_token=valid_token,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    if valid_token.project_id is not None:
+        project_object = await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if project_object is not None and len(project_object.models) > 0:
+            can_project_access_model(
+                model=model,
+                project_object=project_object,
+                llm_router=llm_router,
+            )
 
 
 def can_org_access_model(
@@ -3502,10 +3612,14 @@ async def _virtual_key_max_budget_check(
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
+        fallback_spend = valid_token.spend or 0.0
+        counter_key = f"spend:key:{valid_token.token}"
+
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend = await get_current_spend(
-            counter_key=f"spend:key:{valid_token.token}",
-            fallback_spend=valid_token.spend or 0.0,
+            counter_key=counter_key,
+            fallback_spend=fallback_spend,
+            max_budget=valid_token.max_budget,
         )
 
         ####################################
@@ -3575,6 +3689,10 @@ async def _virtual_key_multi_budget_check(
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="Key",
+            window_entity_id=valid_token.token,
+            window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
@@ -3829,6 +3947,7 @@ async def _check_team_member_budget(
             team_member_spend = await get_current_spend(
                 counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
                 fallback_spend=team_member_spend,
+                max_budget=team_member_budget,
             )
 
             if (
@@ -3914,6 +4033,7 @@ async def _team_max_budget_check(
         spend = await get_current_spend(
             counter_key=f"spend:team:{team_object.team_id}",
             fallback_spend=team_object.spend or 0.0,
+            max_budget=team_object.max_budget,
         )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
@@ -3963,6 +4083,10 @@ async def _team_multi_budget_check(
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="Team",
+            window_entity_id=team_object.team_id,
+            window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
@@ -4180,7 +4304,7 @@ async def get_project_object(
         return deserialized_project
 
     # Fetch from DB
-    project_row = await prisma_client.db.litellm_projecttable.find_unique(
+    project_row = await ProjectRepository(prisma_client).table.find_unique(
         where={"project_id": project_id},
         include={"litellm_budget_table": True},
     )
@@ -4268,6 +4392,7 @@ async def _organization_max_budget_check(
     org_spend = await get_current_spend(
         counter_key=f"spend:org:{org_id}",
         fallback_spend=org_table.spend or 0.0,
+        max_budget=org_max_budget,
     )
 
     # Check if organization spend exceeds max budget
@@ -4345,6 +4470,8 @@ async def _tag_max_budget_check(
             tag_spend = await get_current_spend(
                 counter_key=f"spend:tag:{tag_name}",
                 fallback_spend=tag_object.spend or 0.0,
+                max_budget=tag_object.litellm_budget_table.max_budget,
+                fallback_authoritative=True,
             )
             if tag_spend <= tag_object.litellm_budget_table.max_budget:
                 continue
@@ -4480,10 +4607,10 @@ async def vector_store_access_check(
     #########################################################
     # Check if the key can access the vector store
     if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": valid_token.object_permission_id},
-            )
+        key_object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.find_unique(
+            where={"object_permission_id": valid_token.object_permission_id},
         )
         if key_object_permission is not None:
             _can_object_call_vector_stores(
@@ -4494,10 +4621,10 @@ async def vector_store_access_check(
 
     # Check if the team can access the vector store
     if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": team_object.object_permission_id},
-            )
+        team_object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.find_unique(
+            where={"object_permission_id": team_object.object_permission_id},
         )
         if team_object_permission is not None:
             _can_object_call_vector_stores(

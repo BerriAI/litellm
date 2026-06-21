@@ -14,11 +14,11 @@ import os
 import re
 from typing import Any, List, Literal, Optional, Set, Tuple, Union, cast
 
+import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
-import jwt
 from jwt.api_jwk import PyJWK
 
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.user_repository import UserRepository
 
 from .auth_checks import (
     _allowed_routes_check,
@@ -1298,15 +1299,29 @@ class JWTAuthManager:
 
         # First try to get team by team_id
         if individual_team_id:
-            team_object = await get_team_object(
-                team_id=individual_team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-            )
-            return individual_team_id, team_object
+            try:
+                team_object = await get_team_object(
+                    team_id=individual_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                )
+                return individual_team_id, team_object
+            except HTTPException as e:
+                if (
+                    e.status_code != 404
+                    or not jwt_handler.litellm_jwtauth.team_claim_fallback
+                ):
+                    raise
+                # Claim doesn't map to a known team — defer to fallback.
+                verbose_proxy_logger.debug(
+                    "JWT team_id claim '%s' did not resolve to a team: %s",
+                    individual_team_id,
+                    e.detail,
+                )
+                return None, None
 
         # If no team_id found, try to resolve via team_alias_jwt_field
         team_alias = jwt_handler.get_team_alias(
@@ -1430,6 +1445,7 @@ class JWTAuthManager:
                 )
             return None, None
 
+        any_claim_team_resolved = False
         for team_id in team_ids:
             try:
                 team_object = await get_team_object(
@@ -1439,6 +1455,9 @@ class JWTAuthManager:
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+
+                if team_object is not None:
+                    any_claim_team_resolved = True
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
@@ -1477,12 +1496,17 @@ class JWTAuthManager:
         if denied_auth_enforced_pass_through_route:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
-        if requested_model:
+        if requested_model and (
+            any_claim_team_resolved
+            or not jwt_handler.litellm_jwtauth.team_claim_fallback
+        ):
+            # Claim resolved but no model access, or fallback disabled — deny.
             raise HTTPException(
                 status_code=403,
                 detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
             )
 
+        # No claim team resolved and fallback enabled — defer to fallback.
         return None, None
 
     @staticmethod
@@ -1790,7 +1814,7 @@ class JWTAuthManager:
         # Update user role
         new_role = jwt_handler.map_jwt_role_to_litellm_role(jwt_valid_token)
         if new_role and user_object.user_role != new_role.value:
-            await prisma_client.db.litellm_usertable.update(
+            await UserRepository(prisma_client).table.update(
                 where={"user_id": user_object.user_id},
                 data={"user_role": new_role.value},
             )
@@ -1930,7 +1954,7 @@ class JWTAuthManager:
             return None, None, None
 
     @staticmethod
-    async def auth_builder(  # noqa: PLR0915
+    async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
         request_data: dict,

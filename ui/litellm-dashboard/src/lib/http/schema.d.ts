@@ -436,6 +436,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/alerting/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Alerting Settings
+         * @description Return the configurable alerting param, description, and current value
+         */
+        get: operations["alerting_settings_alerting_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/anthropic/{endpoint}": {
         parameters: {
             query?: never;
@@ -1770,6 +1790,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/callback/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Callback
+         * @description Delete specific logging callback from configuration.
+         */
+        post: operations["delete_callback_config_callback_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/cost_discount_config": {
         parameters: {
             query?: never;
@@ -1851,6 +1891,83 @@ export interface paths {
         patch: operations["update_cost_margin_config_config_cost_margin_config_patch"];
         trace?: never;
     };
+    "/config/field/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Config General Settings
+         * @description Delete the db value of this field in litellm general settings. Resets it to it's initial default value on litellm.
+         */
+        post: operations["delete_config_general_settings_config_field_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/field/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Config General Settings */
+        get: operations["get_config_general_settings_config_field_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/field/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Config General Settings
+         * @description Update a specific field in litellm general settings
+         */
+        post: operations["update_config_general_settings_config_field_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Config List
+         * @description List the available fields + current values for a given type of setting (currently just 'general_settings'user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),)
+         */
+        get: operations["get_config_list_config_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/pass_through_endpoint": {
         parameters: {
             query?: never;
@@ -1919,6 +2036,64 @@ export interface paths {
          * @description Update a pass-through endpoint by ID.
          */
         post: operations["update_pass_through_endpoints_config_pass_through_endpoint__endpoint_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Config
+         * @description For Admin UI - allows admin to update config via UI.
+         *
+         *     Writes only the sections present in the request body to LiteLLM_Config rows
+         *     (one row per top-level section). Sections the caller did not send are left
+         *     untouched — this endpoint never persists pre-existing YAML values to DB as
+         *     a side effect of an unrelated update.
+         */
+        post: operations["update_config_config_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/yaml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Config Yaml Endpoint
+         * @description This is a mock endpoint, to show what you can set in config.yaml details in the Swagger UI.
+         *
+         *     Parameters:
+         *
+         *     The config.yaml object has the following attributes:
+         *     - **model_list**: *Optional[List[ModelParams]]* - A list of supported models on the server, along with model-specific configurations. ModelParams includes "model_name" (name of the model), "litellm_params" (litellm-specific parameters for the model), and "model_info" (additional info about the model such as id, mode, cost per token, etc).
+         *
+         *     - **litellm_settings**: *Optional[dict]*: Settings for the litellm module. You can specify multiple properties like "drop_params", "set_verbose", "api_base", "cache".
+         *
+         *     - **general_settings**: *Optional[ConfigGeneralSettings]*: General settings for the server like "completion_model" (default model for chat completion calls), "use_azure_key_vault" (option to load keys from azure key vault), "master_key" (key required for all calls to proxy), and others.
+         *
+         *     Please, refer to each class's description for a better understanding of the specific attributes within them.
+         *
+         *     Note: This is a mock endpoint primarily meant for demonstration purposes, and does not actually provide or change any configurations.
+         */
+        get: operations["config_yaml_endpoint_config_yaml_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2764,6 +2939,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/debug/memory/details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Memory Details
+         * @description Get detailed memory diagnostics for deep debugging.
+         *
+         *     Returns:
+         *     - worker_pid: Process ID
+         *     - process_memory: RAM usage, virtual memory, file handles, threads
+         *     - garbage_collector: GC thresholds, counts, collection history
+         *     - objects: Total tracked objects and top object types
+         *     - uncollectable: Objects that can't be garbage collected (potential leaks)
+         *     - cache_memory: Memory usage of user_api_key, router, and logging caches
+         *     - router_memory: Memory usage of router components (model_list, deployment_names, etc.)
+         *
+         *     Query Parameters:
+         *     - top_n: Number of top object types to return (default: 20)
+         *     - include_process_info: Include process-level memory info using psutil (default: true)
+         *
+         *     Example usage:
+         *     curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+         *
+         *     All memory sizes are reported in both bytes and MB.
+         */
+        get: operations["get_memory_details_debug_memory_details_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/debug/memory/gc/configure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Configure Gc Thresholds Endpoint
+         * @description Configure Python garbage collection thresholds.
+         *
+         *     Lower thresholds mean more frequent GC cycles (less memory, more CPU overhead).
+         *     Higher thresholds mean less frequent GC cycles (more memory, less CPU overhead).
+         *
+         *     Returns:
+         *     - message: Confirmation message
+         *     - previous_thresholds: Old threshold values
+         *     - new_thresholds: New threshold values
+         *     - objects_awaiting_collection: Current object count in gen-0
+         *     - tip: Hint about when next collection will occur
+         *
+         *     Query Parameters:
+         *     - generation_0: Number of allocations before gen-0 collection (default: 700)
+         *     - generation_1: Number of gen-0 collections before gen-1 collection (default: 10)
+         *     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
+         *
+         *     Example for more aggressive collection:
+         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
+         *
+         *     Example for less aggressive collection:
+         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
+         *
+         *     Monitor memory usage with GET /debug/memory/summary after changes.
+         */
+        post: operations["configure_gc_thresholds_endpoint_debug_memory_gc_configure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/debug/memory/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Memory Summary
+         * @description Get simplified memory usage summary for the proxy.
+         *
+         *     Returns:
+         *     - worker_pid: Process ID
+         *     - status: Overall health based on memory usage
+         *     - memory: Process memory usage and RAM info
+         *     - caches: Cache item counts and descriptions
+         *     - garbage_collector: GC status and pending object counts
+         *
+         *     Example usage:
+         *     curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
+         *
+         *     For detailed analysis, call GET /debug/memory/details
+         *     For cache management, use the cache management endpoints
+         */
+        get: operations["get_memory_summary_debug_memory_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/delete/allowed_ip": {
         parameters: {
             query?: never;
@@ -2849,6 +3138,312 @@ export interface paths {
          *     ```
          */
         post: operations["embeddings_embeddings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Block User
+         * @description [BETA] Reject calls with this end-user id
+         *
+         *     Parameters:
+         *     - user_ids (List[str], required): The unique `user_id`s for the users to block
+         *
+         *         (any /chat/completion call with this user={end-user-id} param, will be rejected.)
+         *
+         *         ```
+         *         curl -X POST "http://0.0.0.0:8000/user/block"
+         *         -H "Authorization: Bearer sk-1234"
+         *         -d '{
+         *         "user_ids": [<user_id>, ...]
+         *         }'
+         *         ```
+         */
+        post: operations["block_user_end_user_block_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity
+         * @description Get daily activity for specific organizations or all accessible organizations.
+         */
+        get: operations["get_customer_daily_activity_end_user_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete End User
+         * @description Delete multiple end-users.
+         *
+         *     Parameters:
+         *     - user_ids (List[str], required): The unique `user_id`s for the users to delete
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *             "user_ids" :["ishaan-jaff-5"]
+         *     }'
+         *
+         *     See below for all params
+         *     ```
+         */
+        post: operations["delete_end_user_end_user_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * End User Info
+         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         *
+         *     Parameters:
+         *     - end_user_id (str, required): The unique identifier for the end-user
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["end_user_info_end_user_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List End User
+         * @description [Admin-only] List all available customers
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_end_user_end_user_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New End User
+         * @description Allow creating a new Customer
+         *
+         *
+         *     Parameters:
+         *     - user_id: str - The unique identifier for the user.
+         *     - alias: Optional[str] - A human-friendly alias for the user.
+         *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
+         *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
+         *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
+         *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+         *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
+         *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+         *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
+         *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
+         *     - spend: Optional[float] - Specify initial spend for a given customer.
+         *     - budget_reset_at: Optional[str] - Specify the date and time when the budget should be reset.
+         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
+         *         Supported fields:
+         *         * mcp_servers: List[str] - List of allowed MCP server IDs
+         *         * mcp_access_groups: List[str] - List of MCP access group names
+         *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names (e.g., {"server_1": ["tool_a", "tool_b"]})
+         *         * vector_stores: List[str] - List of allowed vector store IDs
+         *         * agents: List[str] - List of allowed agent IDs
+         *         * agent_access_groups: List[str] - List of agent access group names
+         *         Example: {"mcp_servers": ["server_1", "server_2"], "vector_stores": ["vector_store_1"], "agents": ["agent_1"]}
+         *         IF null or {} then no object-level restrictions apply.
+         *
+         *
+         *     - Allow specifying allowed regions
+         *     - Allow specifying default model
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *             "user_id" : "ishaan-jaff-3",
+         *             "allowed_region": "eu",
+         *             "budget_id": "free_tier",
+         *             "default_model": "azure/gpt-3.5-turbo-eu"
+         *         }'
+         *
+         *     # With object permissions
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer sk-1234'         -H 'Content-Type: application/json'         -d '{
+         *             "user_id": "user_1",
+         *             "object_permission": {
+         *               "mcp_servers": ["server_1"],
+         *               "mcp_access_groups": ["public_group"],
+         *               "vector_stores": ["vector_store_1"]
+         *             }
+         *           }'
+         *
+         *         # return end-user object
+         *     ```
+         *
+         *     NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
+         */
+        post: operations["new_end_user_end_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unblock User
+         * @description [BETA] Unblock calls with this user id
+         *
+         *     Example
+         *     ```
+         *     curl -X POST "http://0.0.0.0:8000/user/unblock"
+         *     -H "Authorization: Bearer sk-1234"
+         *     -d '{
+         *     "user_ids": [<user_id>, ...]
+         *     }'
+         *     ```
+         */
+        post: operations["unblock_user_end_user_unblock_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update End User
+         * @description Example curl
+         *
+         *     Parameters:
+         *     - user_id: str
+         *     - alias: Optional[str] = None  # human-friendly alias
+         *     - blocked: bool = False  # allow/disallow requests for this end-user
+         *     - max_budget: Optional[float] = None
+         *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+         *     - allowed_model_region: Optional[AllowedModelRegion] = (
+         *         None  # require all user requests to use models in this specific region
+         *     )
+         *     - default_model: Optional[str] = (
+         *         None  # if no equivalent model in allowed region - default all requests to this model
+         *     )
+         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
+         *         Supported fields:
+         *         * mcp_servers: List[str] - List of allowed MCP server IDs
+         *         * mcp_access_groups: List[str] - List of MCP access group names
+         *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
+         *         * vector_stores: List[str] - List of allowed vector store IDs
+         *         * agents: List[str] - List of allowed agent IDs
+         *         * agent_access_groups: List[str] - List of agent access group names
+         *         Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
+         *         IF null or {} then no object-level restrictions apply.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *         "user_id": "test-litellm-user-4",
+         *         "budget_id": "paid_tier"
+         *     }'
+         *
+         *     # Updating object permissions
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *         "user_id": "user_1",
+         *         "object_permission": {
+         *           "mcp_servers": ["server_3"],
+         *           "vector_stores": ["vector_store_2", "vector_store_3"]
+         *         }
+         *       }'
+         *
+         *     See below for all params
+         *     ```
+         */
+        post: operations["update_end_user_end_user_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3004,6 +3599,28 @@ export interface paths {
          *     - `content_policy`: Fallbacks specifically for content policy violations
          */
         post: operations["create_fallback_fallback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fallback/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fallback Login
+         * @description Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
+         *     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
+         *     Example:
+         */
+        get: operations["fallback_login_fallback_login_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3296,6 +3913,44 @@ export interface paths {
         patch: operations["gemini_proxy_route_gemini__endpoint__patch"];
         trace?: never;
     };
+    "/get/allowed_ips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Allowed Ips */
+        get: operations["get_allowed_ips_get_allowed_ips_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/config/callbacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Config
+         * @description For Admin UI - allows admin to view config via UI
+         *     # return the callbacks and the env variables for the callback
+         */
+        get: operations["get_config_get_config_callbacks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/default_team_settings": {
         parameters: {
             query?: never;
@@ -3425,6 +4080,508 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get_favicon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Favicon
+         * @description Get custom favicon for the admin UI.
+         */
+        get: operations["get_favicon_get_favicon_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get_image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Image
+         * @description Get logo to show on admin UI
+         */
+        get: operations["get_image_get_image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get_logo_url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Logo Url
+         * @description Get the current logo URL from environment.
+         *
+         *     Only HTTP(S) URLs are returned — those are intended to be loaded
+         *     directly by the browser from a public/internal CDN. Local file
+         *     paths set via ``UI_LOGO_PATH`` are NOT returned: they are admin-
+         *     only filesystem details, the dashboard falls back to ``/get_image``
+         *     which serves the file only when it is a supported image. Without
+         *     this filter, the unauthenticated endpoint would disclose internal
+         *     hostnames or filesystem paths to any caller.
+         */
+        get: operations["get_logo_url_get_logo_url_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Activity
+         * @description Get number of API Requests, total tokens through proxy
+         *
+         *     {
+         *         "daily_data": [
+         *                 const chartdata = [
+         *                 {
+         *                 date: 'Jan 22',
+         *                 api_requests: 10,
+         *                 total_tokens: 2000
+         *                 },
+         *                 {
+         *                 date: 'Jan 23',
+         *                 api_requests: 10,
+         *                 total_tokens: 12
+         *                 },
+         *         ],
+         *         "sum_api_requests": 20,
+         *         "sum_total_tokens": 2012
+         *     }
+         */
+        get: operations["get_global_activity_global_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/activity/cache_hits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Activity
+         * @description Get number of cache hits, vs misses
+         *
+         *     {
+         *         "daily_data": [
+         *                 const chartdata = [
+         *                 {
+         *                     date: 'Jan 22',
+         *                     cache_hits: 10,
+         *                     llm_api_calls: 2000
+         *                 },
+         *                 {
+         *                     date: 'Jan 23',
+         *                     cache_hits: 10,
+         *                     llm_api_calls: 12
+         *                 },
+         *         ],
+         *         "sum_cache_hits": 20,
+         *         "sum_llm_api_calls": 2012
+         *     }
+         */
+        get: operations["get_global_activity_global_activity_cache_hits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/activity/exceptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Activity Exceptions
+         * @description Get number of API Requests, total tokens through proxy
+         *
+         *     {
+         *         "daily_data": [
+         *                 const chartdata = [
+         *                 {
+         *                 date: 'Jan 22',
+         *                 num_rate_limit_exceptions: 10,
+         *                 },
+         *                 {
+         *                 date: 'Jan 23',
+         *                 num_rate_limit_exceptions: 10,
+         *                 },
+         *         ],
+         *         "sum_api_exceptions": 20,
+         *     }
+         */
+        get: operations["get_global_activity_exceptions_global_activity_exceptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/activity/exceptions/deployment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Activity Exceptions Per Deployment
+         * @description Get number of 429 errors - Grouped by deployment
+         *
+         *     [
+         *         {
+         *             "deployment": "https://azure-us-east-1.openai.azure.com/",
+         *             "daily_data": [
+         *                     const chartdata = [
+         *                     {
+         *                     date: 'Jan 22',
+         *                     num_rate_limit_exceptions: 10
+         *                     },
+         *                     {
+         *                     date: 'Jan 23',
+         *                     num_rate_limit_exceptions: 12
+         *                     },
+         *             ],
+         *             "sum_num_rate_limit_exceptions": 20,
+         *
+         *         },
+         *         {
+         *             "deployment": "https://azure-us-east-1.openai.azure.com/",
+         *             "daily_data": [
+         *                     const chartdata = [
+         *                     {
+         *                     date: 'Jan 22',
+         *                     num_rate_limit_exceptions: 10,
+         *                     },
+         *                     {
+         *                     date: 'Jan 23',
+         *                     num_rate_limit_exceptions: 12
+         *                     },
+         *             ],
+         *             "sum_num_rate_limit_exceptions": 20,
+         *
+         *         },
+         *     ]
+         */
+        get: operations["get_global_activity_exceptions_per_deployment_global_activity_exceptions_deployment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/activity/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Activity Model
+         * @description Get number of API Requests, total tokens through proxy - Grouped by MODEL
+         *
+         *     [
+         *         {
+         *             "model": "gpt-4",
+         *             "daily_data": [
+         *                     const chartdata = [
+         *                     {
+         *                     date: 'Jan 22',
+         *                     api_requests: 10,
+         *                     total_tokens: 2000
+         *                     },
+         *                     {
+         *                     date: 'Jan 23',
+         *                     api_requests: 10,
+         *                     total_tokens: 12
+         *                     },
+         *             ],
+         *             "sum_api_requests": 20,
+         *             "sum_total_tokens": 2012
+         *
+         *         },
+         *         {
+         *             "model": "azure/gpt-4-turbo",
+         *             "daily_data": [
+         *                     const chartdata = [
+         *                     {
+         *                     date: 'Jan 22',
+         *                     api_requests: 10,
+         *                     total_tokens: 2000
+         *                     },
+         *                     {
+         *                     date: 'Jan 23',
+         *                     api_requests: 10,
+         *                     total_tokens: 12
+         *                     },
+         *             ],
+         *             "sum_api_requests": 20,
+         *             "sum_total_tokens": 2012
+         *
+         *         },
+         *     ]
+         */
+        get: operations["get_global_activity_model_global_activity_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/all_end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Global View All End Users
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     Use this to just get all the unique `end_users`
+         */
+        get: operations["global_view_all_end_users_global_all_end_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Global Spend
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     View total spend across all proxy keys
+         */
+        get: operations["global_spend_global_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/all_tag_names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Global Get All Tag Names */
+        get: operations["global_get_all_tag_names_global_spend_all_tag_names_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Global Spend End Users
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     Use this to get the top 'n' keys with the highest spend, ordered by spend.
+         */
+        post: operations["global_spend_end_users_global_spend_end_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Global Spend Keys
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     Use this to get the top 'n' keys with the highest spend, ordered by spend.
+         */
+        get: operations["global_spend_keys_global_spend_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Global Spend Logs
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     Use this to get global spend (spend per day for last 30d). Admin-only endpoint
+         *
+         *     More efficient implementation of /spend/logs, by creating a view over the spend logs table.
+         */
+        get: operations["global_spend_logs_global_spend_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Global Spend Models
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     Use this to get the top 'n' models with the highest spend, ordered by spend.
+         */
+        get: operations["global_spend_models_global_spend_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Spend Provider
+         * @description Get breakdown of spend per provider
+         *     [
+         *         {
+         *             "provider": "Azure OpenAI",
+         *             "spend": 20
+         *         },
+         *         {
+         *             "provider": "OpenAI",
+         *             "spend": 10
+         *         },
+         *         {
+         *             "provider": "VertexAI",
+         *             "spend": 30
+         *         }
+         *     ]
+         */
+        get: operations["get_global_spend_provider_global_spend_provider_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Global Spend Refresh
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Globally refresh spend MonthlyGlobalSpend view
+         */
+        post: operations["global_spend_refresh_global_spend_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/global/spend/report": {
         parameters: {
             query?: never;
@@ -3519,6 +4676,28 @@ export interface paths {
          *     ```
          */
         get: operations["global_view_spend_tags_global_spend_tags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/global/spend/teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Global Spend Per Team
+         * @description [BETA] This is a beta endpoint. It will change.
+         *
+         *     Use this to get daily spend, grouped by `team_id` and `date`
+         */
+        get: operations["global_spend_per_team_global_spend_teams_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4756,26 +5935,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/in_product_nudges": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get In Product Nudges
-         * @description Get in-product nudges configuration.
-         */
-        get: operations["get_in_product_nudges_in_product_nudges_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/interactions": {
         parameters: {
             query?: never;
@@ -4854,6 +6013,111 @@ export interface paths {
          *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
          */
         post: operations["cancel_interaction_interactions__interaction_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invitation/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invitation Delete
+         * @description Delete invitation link
+         *
+         *     ```
+         *     curl -X POST 'http://localhost:4000/invitation/delete'         -H 'Content-Type: application/json'         -d '{
+         *             "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
+         *         }'
+         *     ```
+         */
+        post: operations["invitation_delete_invitation_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invitation/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Invitation Info
+         * @description Allow admin to create invite links, to onboard new users to Admin UI.
+         *
+         *     ```
+         *     curl -X POST 'http://localhost:4000/invitation/new'         -H 'Content-Type: application/json'         -d '{
+         *             "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
+         *         }'
+         *     ```
+         */
+        get: operations["invitation_info_invitation_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invitation/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Invitation
+         * @description Allow admin to create invite links, to onboard new users to Admin UI.
+         *
+         *     ```
+         *     curl -X POST 'http://localhost:4000/invitation/new'         -H 'Content-Type: application/json'         -d '{
+         *             "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
+         *         }'
+         *     ```
+         */
+        post: operations["new_invitation_invitation_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invitation/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invitation Update
+         * @description Update when invitation is accepted
+         *
+         *     ```
+         *     curl -X POST 'http://localhost:4000/invitation/update'         -H 'Content-Type: application/json'         -d '{
+         *             "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
+         *             "is_accepted": True // when invitation is accepted
+         *         }'
+         *     ```
+         */
+        post: operations["invitation_update_invitation_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5700,6 +6964,23 @@ export interface paths {
         patch: operations["langfuse_proxy_route_langfuse__endpoint__patch"];
         trace?: never;
     };
+    "/lazy/warm/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Warm */
+        post: operations["warm_lazy_warm__name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/litellm/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -5711,6 +6992,23 @@ export interface paths {
         get: operations["get_ui_config_litellm__well_known_litellm_ui_config_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["login_login_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5814,6 +7112,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/memory-usage-in-mem-cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Memory Usage In Mem Cache
+         * @description 1. user_api_key_cache
+         *     2. router_cache
+         *     3. proxy_logging_cache
+         *     4. internal_usage_cache
+         */
+        get: operations["memory_usage_in_mem_cache_memory_usage_in_mem_cache_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory-usage-in-mem-cache-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Memory Usage In Mem Cache Items
+         * @description 1. user_api_key_cache
+         *     2. router_cache
+         *     3. proxy_logging_cache
+         *     4. internal_usage_cache
+         */
+        get: operations["memory_usage_in_mem_cache_items_memory_usage_in_mem_cache_items_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/milvus/{endpoint}": {
         parameters: {
             query?: never;
@@ -5886,6 +7230,58 @@ export interface paths {
         patch: operations["mistral_proxy_route_mistral__endpoint__patch"];
         trace?: never;
     };
+    "/model/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Block Model
+         * @description Block a DB-stored model deployment from serving requests.
+         *
+         *     Parameters:
+         *     - model_id: str - The model deployment id to block.
+         */
+        post: operations["block_model_model_block_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/cost_map/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Model Cost Map Source
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Returns information about where the current model cost/pricing data was loaded from.
+         *
+         *     Response fields:
+         *     - source: "local" (bundled backup) or "remote" (fetched from URL)
+         *     - url: the remote URL that was attempted (null when env-forced local)
+         *     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+         *     - fallback_reason: human-readable reason why remote failed (null on success)
+         *     - model_count: number of models in the currently loaded cost map
+         */
+        get: operations["get_model_cost_map_source_model_cost_map_source_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/delete": {
         parameters: {
             query?: never;
@@ -5922,6 +7318,11 @@ export interface paths {
          *
          *         - When litellm_model_id is passed, it will return the info for that specific model
          *         - When litellm_model_id is not passed, it will return the info for all models
+         *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+         *         - teamId: Filter to models accessible by the given team.
+         *
+         *     Each model in the list response includes `model_info.access_via_team_ids` and
+         *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
          *         Returns a dictionary containing information about each model.
@@ -5955,6 +7356,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Metrics
+         * @description View number of requests & avg latency per model on config.yaml
+         */
+        get: operations["model_metrics_model_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/metrics/exceptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Metrics Exceptions
+         * @description View number of failed requests per model on config.yaml
+         */
+        get: operations["model_metrics_exceptions_model_metrics_exceptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/metrics/slow_responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Metrics Slow Responses
+         * @description View number of hanging requests per model_group
+         */
+        get: operations["model_metrics_slow_responses_model_metrics_slow_responses_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/new": {
         parameters: {
             query?: never;
@@ -5969,6 +7430,69 @@ export interface paths {
          * @description Allows adding new models to the model list in the config.yaml
          */
         post: operations["add_new_model_model_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Settings
+         * @description Returns provider name, description, and required parameters for each provider
+         */
+        get: operations["model_settings_model_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/streaming_metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Streaming Metrics
+         * @description View time to first token for models in spend logs
+         */
+        get: operations["model_streaming_metrics_model_streaming_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unblock Model
+         * @description Unblock a DB-stored model deployment so it can serve requests again.
+         *
+         *     Parameters:
+         *     - model_id: str - The model deployment id to unblock.
+         */
+        post: operations["unblock_model_model_unblock_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6248,6 +7772,15 @@ export interface paths {
          *     - scope: Optional scope parameter. Currently only accepts "expand".
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
+         *     - healthy_only: When true, hide models whose backing deployments are all marked
+         *                     unhealthy by background health checks. Requires
+         *                     `background_health_checks: true` in general_settings; without
+         *                     health state the listing is returned unfiltered (fail open).
+         *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
+         *                     filtered, and nothing is hidden when `allowed_fails_policy` is
+         *                     configured (cooldown remains the sole exclusion mechanism).
+         *                     Hiding is presentation-only: a hidden model can still be
+         *                     called directly.
          */
         get: operations["model_list_models_get"];
         put?: never;
@@ -6274,6 +7807,10 @@ export interface paths {
          *
          *     Follows OpenAI API specification for individual model retrieval.
          *     https://platform.openai.com/docs/api-reference/models/retrieve
+         *
+         *     Query parameters mirror `/v1/models` so the same caller context (team
+         *     scoping, health filtering, paused deployments) drives both endpoints; the
+         *     listing's public id must resolve to the same internal deployment here.
          */
         get: operations["model_info_models__model_id__get"];
         put?: never;
@@ -6405,6 +7942,58 @@ export interface paths {
          *     ```
          */
         post: operations["ocr_ocr_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/onboarding/claim_token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Onboarding Link
+         * @description Special route. Allows UI link share user to update their password.
+         *
+         *     - Get the invite link
+         *     - Validate it's still 'valid'
+         *     - Check if user within initial session (prevents abuse)
+         *     - Get user from db
+         *     - Update user password
+         *
+         *     This route can only update user password.
+         */
+        post: operations["claim_onboarding_link_onboarding_claim_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/onboarding/get_token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Onboarding
+         * @description - Get the invite link
+         *     - Validate it's still 'valid'
+         *     - Return a short-lived onboarding token
+         *     - Get user from db
+         *     - Pass in user_email if set
+         */
+        get: operations["onboarding_onboarding_get_token_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7337,6 +8926,23 @@ export interface paths {
          * @description Update an organization
          */
         patch: operations["update_organization_organization_update_patch"];
+        trace?: never;
+    };
+    "/otel-spans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Otel Spans */
+        get: operations["get_otel_spans_otel_spans_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/policies": {
@@ -9012,6 +10618,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/queue/chat/completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Async Queue Request */
+        post: operations["async_queue_request_queue_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/rag/ingest": {
         parameters: {
             query?: never;
@@ -9172,6 +10795,52 @@ export interface paths {
         put?: never;
         /** Create Realtime Client Secret */
         post: operations["create_realtime_client_secret_realtime_client_secrets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reload/anthropic_beta_headers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reload Anthropic Beta Headers
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Manually reload the Anthropic beta headers configuration from the remote source.
+         *     This will fetch fresh configuration from the anthropic_beta_headers_config.json file.
+         */
+        post: operations["reload_anthropic_beta_headers_reload_anthropic_beta_headers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reload/model_cost_map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reload Model Cost Map
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Manually reload the model cost map from the remote source.
+         *     This will fetch fresh pricing data from the model_prices_and_context_window.json file.
+         */
+        post: operations["reload_model_cost_map_reload_model_cost_map_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9459,6 +11128,108 @@ export interface paths {
          * @description Get a list of available routes in the FastAPI application.
          */
         get: operations["get_routes_routes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedule/anthropic_beta_headers_reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule Anthropic Beta Headers Reload
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Schedule periodic reload of the Anthropic beta headers configuration.
+         *     This will create a background job that reloads the configuration every specified hours.
+         */
+        post: operations["schedule_anthropic_beta_headers_reload_schedule_anthropic_beta_headers_reload_post"];
+        /**
+         * Cancel Anthropic Beta Headers Reload
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Cancel the scheduled periodic reload of the Anthropic beta headers configuration.
+         */
+        delete: operations["cancel_anthropic_beta_headers_reload_schedule_anthropic_beta_headers_reload_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedule/anthropic_beta_headers_reload/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Anthropic Beta Headers Reload Status
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Get the status of the scheduled Anthropic beta headers reload job.
+         */
+        get: operations["get_anthropic_beta_headers_reload_status_schedule_anthropic_beta_headers_reload_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedule/model_cost_map_reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule Model Cost Map Reload
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Schedule periodic reload of the model cost map.
+         *     This will create a background job that reloads the model cost map every specified hours.
+         */
+        post: operations["schedule_model_cost_map_reload_schedule_model_cost_map_reload_post"];
+        /**
+         * Cancel Model Cost Map Reload
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Cancel the scheduled periodic reload of the model cost map.
+         */
+        delete: operations["cancel_model_cost_map_reload_schedule_model_cost_map_reload_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedule/model_cost_map_reload/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Model Cost Map Reload Status
+         * @description ADMIN ONLY / MASTER KEY Only Endpoint
+         *
+         *     Get the status of the scheduled model cost map reload job.
+         */
+        get: operations["get_model_cost_map_reload_status_schedule_model_cost_map_reload_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10322,6 +12093,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Spend Key Fn
+         * @description View keys created, ordered by spend.
+         *
+         *     - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every key in
+         *       the database.
+         *     - All other callers (INTERNAL_USER / INTERNAL_USER_VIEW_ONLY, etc.) are
+         *       scoped to keys they own (``user_id == caller``). A caller with no
+         *       ``user_id`` has no scope and receives an empty list rather than the
+         *       full table.
+         *
+         *     Example Request:
+         *     ```
+         *     curl -X GET "http://0.0.0.0:8000/spend/keys" -H "Authorization: Bearer sk-1234"
+         *     ```
+         */
+        get: operations["spend_key_fn_spend_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/logs": {
         parameters: {
             query?: never;
@@ -10366,6 +12169,86 @@ export interface paths {
          *     ```
          */
         get: operations["view_spend_logs_spend_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/spend/logs/session/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ui View Session Spend Logs
+         * @description Get paginated spend logs for a particular session.
+         *
+         *     Returns:
+         *         {
+         *             "data": List[LiteLLM_SpendLogs],
+         *             "total": int,
+         *             "page": int,
+         *             "page_size": int,
+         *             "total_pages": int,
+         *         }
+         */
+        get: operations["ui_view_session_spend_logs_spend_logs_session_ui_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/spend/logs/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ui View Spend Logs
+         * @description View spend logs with pagination support.
+         *     Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
+         *
+         *     Returns paginated response with data, total, page, page_size, and total_pages.
+         *
+         *     Example:
+         *     ```
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer sk-1234"
+         *     ```
+         */
+        get: operations["ui_view_spend_logs_spend_logs_ui_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/spend/logs/ui/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ui View Request Response For Request Id
+         * @description View request / response for a specific request_id
+         *
+         *     - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
+         *     - if so, it will return the request and response payload
+         */
+        get: operations["ui_view_request_response_for_request_id_spend_logs_ui__request_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10424,6 +12307,208 @@ export interface paths {
          *     ```
          */
         get: operations["view_spend_tags_spend_tags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/spend/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Spend User Fn
+         * @description View users created, ordered by spend.
+         *
+         *     - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every user, or
+         *       a specific user when ``user_id`` is supplied.
+         *     - All other callers may only read their own row. If they supply a
+         *       ``user_id`` query parameter that does not match their authenticated
+         *       ``user_id`` the request is rejected with HTTP 403; supplying their
+         *       own id (or none at all) returns just their row. A caller with no
+         *       ``user_id`` on their key has no scope and receives an empty list
+         *       rather than the full table.
+         *
+         *     Example Request:
+         *     ```
+         *     curl -X GET "http://0.0.0.0:8000/spend/users" -H "Authorization: Bearer sk-1234"
+         *     ```
+         *
+         *     View User Table row for user_id
+         *     ```
+         *     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" -H "Authorization: Bearer sk-1234"
+         *     ```
+         */
+        get: operations["spend_user_fn_spend_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Auth Callback
+         * @description Verify login
+         */
+        get: operations["auth_callback_sso_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/cli/complete/{login_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cli Sso Complete */
+        post: operations["cli_sso_complete_sso_cli_complete__login_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/cli/poll/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cli Poll Key
+         * @description CLI polling endpoint - retrieves session from cache and generates JWT.
+         *
+         *     Flow:
+         *     1. First poll (no team_id): Returns teams list without generating JWT
+         *     2. Second poll (with team_id): Generates JWT with selected team and deletes session
+         *
+         *     Args:
+         *         key_id: The CLI login session ID
+         *         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
+         */
+        get: operations["cli_poll_key_sso_cli_poll__key_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/cli/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cli Sso Start */
+        post: operations["cli_sso_start_sso_cli_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/debug/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Debug Sso Callback
+         * @description Returns the OpenID object returned by the SSO provider
+         */
+        get: operations["debug_sso_callback_sso_debug_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/debug/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Debug Sso Login
+         * @description Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
+         *     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
+         *     Example:
+         */
+        get: operations["debug_sso_login_sso_debug_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/get/ui_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ui Settings */
+        get: operations["get_ui_settings_sso_get_ui_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/key/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Google Login
+         * @description Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
+         *     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
+         *     Example:
+         */
+        get: operations["google_login_sso_key_generate_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10964,6 +13049,36 @@ export interface paths {
          *     ```
          */
         post: operations["delete_team_team_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/filter/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ui View Teams
+         * @description [PROXY-ADMIN ONLY] Filter teams based on partial match of team_id or team_alias with pagination.
+         *
+         *     Args:
+         *         user_id (Optional[str]): Partial user ID to search for
+         *         user_email (Optional[str]): Partial email to search for
+         *         page (int): Page number for pagination (starts at 1)
+         *         page_size (int): Number of items per page (max 100)
+         *         user_api_key_dict (UserAPIKeyAuth): User authentication information
+         *
+         *     Returns:
+         *         List[LiteLLM_SpendLogs]: Paginated list of matching user records
+         */
+        get: operations["ui_view_teams_team_filter_ui_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -11959,6 +14074,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/available_roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ui Get Available Role
+         * @description Endpoint used by Admin UI to show all available roles to assign a user
+         *     return {
+         *         "proxy_admin": {
+         *             "description": "Proxy Admin role",
+         *             "ui_label": "Admin"
+         *         }
+         *     }
+         */
+        get: operations["ui_get_available_role_user_available_roles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/available_users": {
         parameters: {
             query?: never;
@@ -12122,6 +14263,36 @@ export interface paths {
          *     - user_ids: List[str] - The list of user id's to be deleted.
          */
         post: operations["delete_user_user_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/filter/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ui View Users
+         * @description Filter users based on partial match of user_id or email with pagination.
+         *
+         *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
+         *     (stored in the ``litellm_uisettings`` table):
+         *
+         *     * **Flag OFF (default):** any authenticated user can search all users.
+         *     * **Flag ON:**
+         *       - Proxy admins see all users.
+         *       - Org admins see only users in their org(s).
+         *       - Team admins for an org-bound team see users in that org.
+         *       - Others receive a 403.
+         */
+        get: operations["ui_view_users_user_filter_ui_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -14383,6 +16554,11 @@ export interface paths {
          *
          *         - When litellm_model_id is passed, it will return the info for that specific model
          *         - When litellm_model_id is not passed, it will return the info for all models
+         *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+         *         - teamId: Filter to models accessible by the given team.
+         *
+         *     Each model in the list response includes `model_info.access_via_team_ids` and
+         *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
          *         Returns a dictionary containing information about each model.
@@ -14436,6 +16612,15 @@ export interface paths {
          *     - scope: Optional scope parameter. Currently only accepts "expand".
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
+         *     - healthy_only: When true, hide models whose backing deployments are all marked
+         *                     unhealthy by background health checks. Requires
+         *                     `background_health_checks: true` in general_settings; without
+         *                     health state the listing is returned unfiltered (fail open).
+         *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
+         *                     filtered, and nothing is hidden when `allowed_fails_policy` is
+         *                     configured (cooldown remains the sole exclusion mechanism).
+         *                     Hiding is presentation-only: a hidden model can still be
+         *                     called directly.
          */
         get: operations["model_list_v1_models_get"];
         put?: never;
@@ -14462,6 +16647,10 @@ export interface paths {
          *
          *     Follows OpenAI API specification for individual model retrieval.
          *     https://platform.openai.com/docs/api-reference/models/retrieve
+         *
+         *     Query parameters mirror `/v1/models` so the same caller context (team
+         *     scoping, health filtering, paused deployments) drives both endpoints; the
+         *     listing's public id must resolve to the same internal deployment here.
          */
         get: operations["model_info_v1_models__model_id__get"];
         put?: never;
@@ -16256,6 +18445,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/key/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Info Key Fn V2
+         * @description Retrieve information about a list of keys.
+         *
+         *     **New endpoint**. Currently admin only.
+         *     Parameters:
+         *         keys: Optional[list] = body parameter representing the key(s) in the request
+         *         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+         *     Returns:
+         *         Dict containing the key and its associated information
+         *
+         *     Example Curl:
+         *     ```
+         *     curl -X GET "http://0.0.0.0:4000/key/info"     -H "Authorization: Bearer sk-1234"     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
+         *     ```
+         */
+        post: operations["info_key_fn_v2_v2_key_info_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login V2 */
+        post: operations["login_v2_v2_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/model/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Info V2
+         * @description Paginated model metadata for proxy deployments (pricing, provider, team access).
+         *
+         *     Returns configured router deployments with enriched `model_info` (costs, provider,
+         *     context window, etc.). Sensitive fields such as API keys and api_base are omitted.
+         *
+         *     Query parameters:
+         *         model: Filter to a single public `model_name`.
+         *         user_models_only: When true, only return models created by the calling user.
+         *         include_team_models: When true, populate `access_via_team_ids` and `direct_access`
+         *             on each model and filter to deployments the caller can use.
+         *         page / size: Pagination controls (defaults: page=1, size=50).
+         *         search: Case-insensitive partial match on model name or team public name.
+         *         modelId: Return a single deployment by LiteLLM model id.
+         *         teamId: Filter to models with direct access or team membership for this team id.
+         *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *
+         *     Example request:
+         *     ```
+         *     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \
+         *     --header 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Example response:
+         *     ```json
+         *     {
+         *         "data": [
+         *             {
+         *                 "model_name": "gpt-4",
+         *                 "litellm_params": {"model": "openai/gpt-4.1"},
+         *                 "model_info": {
+         *                     "id": "abc123",
+         *                     "litellm_provider": "openai",
+         *                     "access_via_team_ids": ["team-1"],
+         *                     "direct_access": true
+         *                 }
+         *             }
+         *         ],
+         *         "total_count": 1,
+         *         "current_page": 1,
+         *         "total_pages": 1,
+         *         "size": 50
+         *     }
+         *     ```
+         */
+        get: operations["model_info_v2_v2_model_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/rerank": {
         parameters: {
             query?: never;
@@ -16342,6 +18642,40 @@ export interface paths {
         get: operations["user_info_v2_v2_user_info_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v3/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login V3 */
+        post: operations["login_v3_v3_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v3/login/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login V3 Exchange */
+        post: operations["login_v3_exchange_v3_login_exchange_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16750,6 +19084,52 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/vertex-ai/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Vertex Proxy Route
+         * @description Call LiteLLM proxy via Vertex AI SDK.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+         */
+        get: operations["vertex_proxy_route_vertex_ai__endpoint__get_2"];
+        /**
+         * Vertex Proxy Route
+         * @description Call LiteLLM proxy via Vertex AI SDK.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+         */
+        put: operations["vertex_proxy_route_vertex_ai__endpoint__put_2"];
+        /**
+         * Vertex Proxy Route
+         * @description Call LiteLLM proxy via Vertex AI SDK.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+         */
+        post: operations["vertex_proxy_route_vertex_ai__endpoint__post_2"];
+        /**
+         * Vertex Proxy Route
+         * @description Call LiteLLM proxy via Vertex AI SDK.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+         */
+        delete: operations["vertex_proxy_route_vertex_ai__endpoint__delete_2"];
+        options?: never;
+        head?: never;
+        /**
+         * Vertex Proxy Route
+         * @description Call LiteLLM proxy via Vertex AI SDK.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+         */
+        patch: operations["vertex_proxy_route_vertex_ai__endpoint__patch_2"];
         trace?: never;
     };
     "/vertex_ai/discovery/{endpoint}": {
@@ -17919,6 +20299,12 @@ export interface components {
             /** Tags */
             tags?: string[];
         };
+        /**
+         * AlertType
+         * @description Enum for alert types and management event types
+         * @enum {string}
+         */
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -18378,6 +20764,11 @@ export interface components {
         BlockKeyRequest: {
             /** Key */
             key: string;
+        };
+        /** BlockModelRequest */
+        BlockModelRequest: {
+            /** Model Id */
+            model_id: string;
         };
         /** BlockTeamRequest */
         BlockTeamRequest: {
@@ -18961,7 +21352,12 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        /** CallbackDelete */
+        CallbackDelete: {
+            /** Callback Name */
+            callback_name: string;
+        };
         /** CallbacksByType */
         CallbacksByType: {
             /** Failure */
@@ -19581,6 +21977,326 @@ export interface components {
             /** Regulation */
             regulation: string;
         };
+        /** ConfigFieldDelete */
+        ConfigFieldDelete: {
+            /**
+             * Config Type
+             * @constant
+             */
+            config_type: "general_settings";
+            /** Field Name */
+            field_name: string;
+        };
+        /** ConfigFieldInfo */
+        ConfigFieldInfo: {
+            /** Field Name */
+            field_name: string;
+            /** Field Value */
+            field_value: unknown;
+        };
+        /** ConfigFieldUpdate */
+        ConfigFieldUpdate: {
+            /**
+             * Config Type
+             * @constant
+             */
+            config_type: "general_settings";
+            /** Field Name */
+            field_name: string;
+            /** Field Value */
+            field_value: unknown;
+        };
+        /**
+         * ConfigGeneralSettings
+         * @description Documents all the fields supported by `general_settings` in config.yaml
+         */
+        ConfigGeneralSettings: {
+            /**
+             * Alert To Webhook Url
+             * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
+             */
+            alert_to_webhook_url?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Alert Types
+             * @description List of alerting types. By default it is all alerts
+             */
+            alert_types?: components["schemas"]["AlertType"][] | null;
+            /**
+             * Alerting
+             * @description List of alerting integrations. Today, just slack - `alerting: ['slack']`
+             */
+            alerting?: unknown[] | null;
+            /**
+             * Alerting Args
+             * @description Controllable params for slack alerting - e.g. ttl in cache.
+             */
+            alerting_args?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Alerting Threshold
+             * @description sends alerts if requests hang for 5min+
+             */
+            alerting_threshold?: number | null;
+            /**
+             * Allow Cli Sso Verification Uri Complete
+             * @description opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine
+             */
+            allow_cli_sso_verification_uri_complete?: boolean | null;
+            /**
+             * Allowed Routes
+             * @description Proxy API Endpoints you want users to be able to access
+             */
+            allowed_routes?: unknown[] | null;
+            /**
+             * Background Health Checks
+             * @description run health checks in background
+             */
+            background_health_checks?: boolean | null;
+            /**
+             * Cancel On Disconnect
+             * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
+             */
+            cancel_on_disconnect?: boolean | null;
+            /**
+             * Completion Model
+             * @description proxy level default model for all chat completion calls
+             */
+            completion_model?: string | null;
+            /**
+             * Custom Auth
+             * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
+             */
+            custom_auth?: string | null;
+            /** @description custom args for instantiating dynamodb client - e.g. billing provision */
+            database_args?: components["schemas"]["DynamoDBArgs"] | null;
+            /**
+             * Database Connect Timeout
+             * @description Prisma `connect_timeout` URL param (seconds). Bounds how long the engine waits to establish a new connection before failing. Defaults to Prisma's built-in value when unset.
+             */
+            database_connect_timeout?: number | null;
+            /**
+             * Database Connection Pool Limit
+             * @description default connection pool for prisma client connecting to postgres db
+             * @default 10
+             */
+            database_connection_pool_limit: number | null;
+            /**
+             * Database Connection Timeout
+             * @description default timeout for a connection to the database
+             * @default 60
+             */
+            database_connection_timeout: number | null;
+            /**
+             * Database Disable Prepared Statements
+             * @description Disable server-side prepared statements by setting Prisma's `pgbouncer=true` URL param. Use this for pgbouncer transaction-pooling deployments, or to prevent the 'cached plan must not change result type' error that pooled connections hit during rolling schema migrations. An explicit `pgbouncer` in `database_extra_connection_params` takes precedence.
+             */
+            database_disable_prepared_statements?: boolean | null;
+            /**
+             * Database Extra Connection Params
+             * @description Escape hatch: extra key/value pairs appended verbatim to the Prisma DATABASE_URL / DIRECT_URL query string (e.g. `sslmode`, `pgbouncer`, `statement_cache_size`). Keys here override any default LiteLLM sets.
+             */
+            database_extra_connection_params?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Database Socket Timeout
+             * @description Prisma `socket_timeout` URL param (seconds). When set, an idle/slow connection that has not produced data within this window is closed. This is the main knob for capping idle DB connections from LiteLLM.
+             */
+            database_socket_timeout?: number | null;
+            /**
+             * Database Type
+             * @description to use dynamodb instead of postgres db
+             */
+            database_type?: "dynamo_db" | null;
+            /**
+             * Database Url
+             * @description connect to a postgres db - needed for generating temporary keys + tracking spend / key
+             */
+            database_url?: string | null;
+            /**
+             * Disable Budget Reservation
+             * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
+             */
+            disable_budget_reservation?: boolean | null;
+            /**
+             * Enable Public Model Hub
+             * @description Public model hub for users to see what models they have access to, supported openai params, etc.
+             * @default false
+             */
+            enable_public_model_hub: boolean;
+            /**
+             * Forward Client Headers To Llm Api
+             * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
+             */
+            forward_client_headers_to_llm_api?: boolean | null;
+            /**
+             * Global Max Parallel Requests
+             * @description global max parallel requests to allow for a proxy instance.
+             */
+            global_max_parallel_requests?: number | null;
+            /**
+             * Health Check Concurrency
+             * @description limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap
+             */
+            health_check_concurrency?: number | null;
+            /**
+             * Health Check Interval
+             * @description background health check interval in seconds
+             * @default 300
+             */
+            health_check_interval: number;
+            /**
+             * Health Check Skip Disabled Background Models
+             * @description When true, deployments with model_info.disable_background_health_check are skipped for on-demand GET /health as well as the background health loop.
+             * @default false
+             */
+            health_check_skip_disabled_background_models: boolean;
+            /**
+             * Infer Model From Keys
+             * @description for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)
+             */
+            infer_model_from_keys?: boolean | null;
+            /** @description key manager to load keys from / decrypt keys with */
+            key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
+            /**
+             * Master Key
+             * @description require a key for all calls to proxy
+             */
+            master_key?: string | null;
+            /**
+             * Max Parallel Requests
+             * @description maximum parallel requests for each api key
+             */
+            max_parallel_requests?: number | null;
+            /**
+             * Max Request Size Mb
+             * @description max request size in MB, if a request is larger than this size it will be rejected
+             */
+            max_request_size_mb?: number | null;
+            /**
+             * Max Response Size Mb
+             * @description max response size in MB, if a response is larger than this size it will be rejected
+             */
+            max_response_size_mb?: number | null;
+            /**
+             * Maximum Spend Logs Retention Period
+             * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
+             */
+            maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Mcp Internal Ip Ranges
+             * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
+             */
+            mcp_internal_ip_ranges?: string[] | null;
+            /**
+             * Mcp Required Fields
+             * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
+             */
+            mcp_required_fields?: string[] | null;
+            /**
+             * Mcp Trusted Proxy Ranges
+             * @description CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.
+             */
+            mcp_trusted_proxy_ranges?: string[] | null;
+            /**
+             * Otel
+             * @description [BETA] OpenTelemetry support - this might change, use with caution.
+             */
+            otel?: boolean | null;
+            /**
+             * Pass Through Endpoints
+             * @description Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through
+             */
+            pass_through_endpoints?: components["schemas"]["PassThroughGenericEndpoint"][] | null;
+            /**
+             * Pass Through Request Timeout
+             * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
+             */
+            pass_through_request_timeout?: number | null;
+            /**
+             * Reject Clientside Metadata Tags
+             * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
+             */
+            reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Store Model In Db
+             * @description If True, models and config are stored in and loaded from the database. Default is False.
+             */
+            store_model_in_db?: boolean | null;
+            /**
+             * Store Prompts In Spend Logs
+             * @description If True, stores request messages and responses in spend logs. Default is False.
+             */
+            store_prompts_in_spend_logs?: boolean | null;
+            /**
+             * Supported Db Objects
+             * @description Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).
+             */
+            supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
+            /**
+             * Trusted Proxy Ranges
+             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
+             */
+            trusted_proxy_ranges?: string[] | null;
+            /**
+             * Ui Access Mode
+             * @description Control access to the Proxy UI
+             * @default all
+             */
+            ui_access_mode: ("admin_only" | "all") | null;
+            /**
+             * Use Azure Key Vault
+             * @description load keys from azure key vault
+             */
+            use_azure_key_vault?: boolean | null;
+            /**
+             * Use Google Kms
+             * @description decrypt keys with google kms
+             */
+            use_google_kms?: boolean | null;
+            /**
+             * Use Spend Logs Partitioning
+             * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
+             */
+            use_spend_logs_partitioning?: boolean | null;
+            /** User Header Mappings */
+            user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
+            /**
+             * User Header Name
+             * @description [DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.
+             */
+            user_header_name?: string | null;
+            /**
+             * User Mcp Management Mode
+             * @description Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.
+             */
+            user_mcp_management_mode?: ("restricted" | "view_all") | null;
+        };
+        /** ConfigList */
+        ConfigList: {
+            /** Field Default Value */
+            field_default_value: unknown;
+            /** Field Description */
+            field_description: string;
+            /** Field Name */
+            field_name: string;
+            /** Field Type */
+            field_type: string;
+            /** Field Value */
+            field_value: unknown;
+            /** Nested Fields */
+            nested_fields?: components["schemas"]["FieldDetail"][] | null;
+            /**
+             * Premium Field
+             * @default false
+             */
+            premium_field: boolean;
+            /** Stored In Db */
+            stored_in_db: boolean | null;
+        };
         /**
          * ConfigOverrideSettingsResponse
          * @description Response model for config override settings GET endpoints.
@@ -19605,6 +22321,34 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * ConfigYAML
+         * @description Documents all the fields supported by the config.yaml
+         */
+        ConfigYAML: {
+            /**
+             * Environment Variables
+             * @description Object to pass in additional environment variables via POST request
+             */
+            environment_variables?: {
+                [key: string]: unknown;
+            } | null;
+            general_settings?: components["schemas"]["ConfigGeneralSettings"] | null;
+            /**
+             * Litellm Settings
+             * @description litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache
+             */
+            litellm_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model List
+             * @description List of supported models on the server, with model-specific configs
+             */
+            model_list?: components["schemas"]["ModelParams"][] | null;
+            /** @description litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5 */
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
         "ConfigurableClientsideParamsCustomAuth-Input": {
@@ -20087,7 +22831,7 @@ export interface components {
         /** Deployment */
         Deployment: {
             litellm_params: components["schemas"]["LiteLLM_Params"];
-            model_info: components["schemas"]["ModelInfo"];
+            model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
             model_name: string;
         } & {
@@ -20120,6 +22864,60 @@ export interface components {
              * @constant
              */
             type: "text";
+        };
+        /** DynamoDBArgs */
+        DynamoDBArgs: {
+            /** Assume Role Aws Role Name */
+            assume_role_aws_role_name?: string | null;
+            /** Assume Role Aws Session Name */
+            assume_role_aws_session_name?: string | null;
+            /** Aws Duration Seconds */
+            aws_duration_seconds?: number | null;
+            /** Aws Policy */
+            aws_policy?: string | null;
+            /** Aws Policy Arns */
+            aws_policy_arns?: string[] | null;
+            /** Aws Provider Id */
+            aws_provider_id?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
+            /**
+             * Billing Mode
+             * @enum {string}
+             */
+            billing_mode: "PROVISIONED_THROUGHPUT" | "PAY_PER_REQUEST";
+            /**
+             * Config Table Name
+             * @default LiteLLM_Config
+             */
+            config_table_name: string;
+            /**
+             * Key Table Name
+             * @default LiteLLM_VerificationToken
+             */
+            key_table_name: string;
+            /** Read Capacity Units */
+            read_capacity_units?: number | null;
+            /** Region Name */
+            region_name: string;
+            /**
+             * Spend Table Name
+             * @default LiteLLM_SpendLogs
+             */
+            spend_table_name: string;
+            /** Ssl Verify */
+            ssl_verify?: boolean | null;
+            /**
+             * User Table Name
+             * @default LiteLLM_UserTable
+             */
+            user_table_name: string;
+            /** Write Capacity Units */
+            write_capacity_units?: number | null;
         };
         /**
          * EmailEvent
@@ -20393,6 +23191,19 @@ export interface components {
              * @description The model name
              */
             model: string;
+        };
+        /** FieldDetail */
+        FieldDetail: {
+            /** Field Default Value */
+            field_default_value?: unknown;
+            /** Field Description */
+            field_description: string;
+            /** Field Name */
+            field_name: string;
+            /** Field Type */
+            field_type: string;
+            /** Stored In Db */
+            stored_in_db: boolean | null;
         };
         /** FunctionCall */
         FunctionCall: {
@@ -20728,6 +23539,15 @@ export interface components {
              */
             team_member_permissions: string[] | null;
         };
+        /** GlobalEndUsersSpend */
+        GlobalEndUsersSpend: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Endtime */
+            endTime?: string | null;
+            /** Starttime */
+            startTime?: string | null;
+        };
         /**
          * GraySwanGuardrailConfigModelOptionalParams
          * @description Optional parameters for the Gray Swan guardrail.
@@ -20990,15 +23810,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** InProductNudgeResponse */
-        InProductNudgeResponse: {
-            /**
-             * Is Claude Code Enabled
-             * @description Whether the Claude Code nudge should be shown.
-             * @default false
-             */
-            is_claude_code_enabled: boolean;
-        };
         /** IndexCreateLiteLLMParams */
         IndexCreateLiteLLMParams: {
             /** Vector Store Index */
@@ -21039,6 +23850,62 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** InvitationClaim */
+        InvitationClaim: {
+            /** Invitation Link */
+            invitation_link: string;
+            /** Password */
+            password: string;
+            /** User Id */
+            user_id: string;
+        };
+        /** InvitationDelete */
+        InvitationDelete: {
+            /** Invitation Id */
+            invitation_id: string;
+        };
+        /** InvitationModel */
+        InvitationModel: {
+            /** Accepted At */
+            accepted_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /** Is Accepted */
+            is_accepted: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+            /** User Id */
+            user_id: string;
+        };
+        /** InvitationNew */
+        InvitationNew: {
+            /** User Id */
+            user_id: string;
+        };
+        /** InvitationUpdate */
+        InvitationUpdate: {
+            /** Invitation Id */
+            invitation_id: string;
+            /** Is Accepted */
+            is_accepted: boolean;
         };
         /** JWTKeyMappingResponse */
         JWTKeyMappingResponse: {
@@ -21093,6 +23960,11 @@ export interface components {
          * @enum {string}
          */
         KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
+        /**
+         * KeyManagementSystem
+         * @enum {string}
+         */
+        KeyManagementSystem: "google_kms" | "azure_key_vault" | "aws_secret_manager" | "google_secret_manager" | "hashicorp_vault" | "cyberark" | "local" | "aws_kms" | "custom";
         /**
          * KeyMetadata
          * @description Metadata for a key
@@ -21364,8 +24236,7 @@ export interface components {
         };
         /**
          * LiteLLM_DeletedTeamTable
-         * @description Recording of deleted teams for audit purposes. Mirrors LiteLLM_TeamTable
-         *     plus metadata captured at deletion time.
+         * @description Audit record for deleted teams; mirrors the team plus deletion metadata.
          */
         LiteLLM_DeletedTeamTable: {
             /** Access Group Ids */
@@ -21375,6 +24246,11 @@ export interface components {
              * @default []
              */
             admins: unknown[];
+            /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
             /**
              * Blocked
              * @default false
@@ -21422,6 +24298,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -21431,6 +24321,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -21454,8 +24346,7 @@ export interface components {
         };
         /**
          * LiteLLM_DeletedVerificationToken
-         * @description Recording of deleted keys for audit purposes. Mirrors LiteLLM_VerificationToken
-         *     plus metadata captured at deletion time.
+         * @description Audit record for deleted keys; mirrors the token plus deletion metadata.
          */
         LiteLLM_DeletedVerificationToken: {
             /** Access Group Ids */
@@ -21488,6 +24379,8 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: {
                 [key: string]: unknown;
@@ -21866,9 +24759,9 @@ export interface components {
             /** Id */
             id?: number | null;
             /** Model Aliases */
-            model_aliases?: {
+            model_aliases?: string | {
                 [key: string]: unknown;
-            } | string | null;
+            } | null;
             team?: components["schemas"]["LiteLLM_TeamTable"] | null;
             /** Updated By */
             updated_by: string;
@@ -21934,6 +24827,11 @@ export interface components {
             } | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: string[] | null;
             /** Object Permission Id */
             object_permission_id: string;
             /**
@@ -21949,7 +24847,7 @@ export interface components {
         };
         /**
          * LiteLLM_OrganizationMembershipTable
-         * @description This is the table that track what organizations a user belongs to and users spend within the organization
+         * @description Tracks which organizations a user belongs to and their spend within it.
          */
         LiteLLM_OrganizationMembershipTable: {
             /** Budget Id */
@@ -22005,7 +24903,17 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
-            /** Models */
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
@@ -22061,12 +24969,16 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Bedrock Project Id */
+            aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Azure Ad Token */
+            azure_ad_token?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -22083,6 +24995,10 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Priority */
+            cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Priority */
+            cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -22131,6 +25047,10 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Priority */
+            input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Priority */
+            input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -22204,6 +25124,10 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Priority */
+            output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Priority */
+            output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -22231,7 +25155,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -22256,6 +25180,12 @@ export interface components {
              * @default false
              */
             use_litellm_proxy: boolean | null;
+            /**
+             * Use Xai Oauth
+             * @description Use stored xAI OAuth credentials when no xAI API key is configured.
+             * @default false
+             */
+            use_xai_oauth: boolean | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -22286,7 +25216,7 @@ export interface components {
             /** Created At */
             created_at?: string | null;
             /** Created By */
-            created_by: string;
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -22328,7 +25258,35 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
-            updated_by: string;
+            updated_by?: string | null;
+        };
+        /** LiteLLM_ProxyModelTable */
+        LiteLLM_ProxyModelTable: {
+            /**
+             * Blocked
+             * @default false
+             */
+            blocked: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Litellm Params */
+            litellm_params: {
+                [key: string]: unknown;
+            };
+            /** Model Id */
+            model_id: string;
+            /** Model Info */
+            model_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Name */
+            model_name: string;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
         };
         /** LiteLLM_SpendLogs */
         LiteLLM_SpendLogs: {
@@ -22433,6 +25391,11 @@ export interface components {
              */
             admins: unknown[];
             /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
+            /**
              * Blocked
              * @default false
              */
@@ -22469,6 +25432,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -22478,6 +25455,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -22549,6 +25528,11 @@ export interface components {
         };
         /** LiteLLM_UserTable */
         LiteLLM_UserTable: {
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */
@@ -22557,6 +25541,8 @@ export interface components {
             created_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -22581,8 +25567,17 @@ export interface components {
              */
             models: unknown[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /**
+             * Policies
+             * @default []
+             */
+            policies: string[];
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -22592,6 +25587,8 @@ export interface components {
             spend: number;
             /** Sso User Id */
             sso_user_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
             /**
              * Teams
              * @default []
@@ -22610,8 +25607,20 @@ export interface components {
             /** User Role */
             user_role?: string | null;
         };
+        /** LiteLLM_UserTableFiltered */
+        LiteLLM_UserTableFiltered: {
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
+        };
         /** LiteLLM_UserTableWithKeyCount */
         LiteLLM_UserTableWithKeyCount: {
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */
@@ -22625,6 +25634,8 @@ export interface components {
             key_count: number;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -22649,8 +25660,17 @@ export interface components {
              */
             models: unknown[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /**
+             * Policies
+             * @default []
+             */
+            policies: string[];
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -22660,6 +25680,8 @@ export interface components {
             spend: number;
             /** Sso User Id */
             sso_user_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
             /**
              * Teams
              * @default []
@@ -22710,6 +25732,8 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: {
                 [key: string]: unknown;
@@ -23910,40 +26934,20 @@ export interface components {
             /** Tpm */
             tpm?: number | null;
         };
-        /** ModelInfo */
-        ModelInfo: {
-            /** Base Model */
-            base_model?: string | null;
-            /** Blocked */
-            blocked?: boolean | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Created By */
-            created_by?: string | null;
-            /**
-             * Db Model
-             * @default false
-             */
-            db_model: boolean;
-            /** Id */
-            id: string | null;
-            /** Team Id */
-            team_id?: string | null;
-            /** Team Public Model Name */
-            team_public_model_name?: string | null;
-            /** Tier */
-            tier?: ("free" | "paid") | null;
-            /** Updated At */
-            updated_at?: string | null;
-            /** Updated By */
-            updated_by?: string | null;
-        } & {
-            [key: string]: unknown;
-        };
         /** ModelInfoDelete */
         ModelInfoDelete: {
             /** Id */
             id: string;
+        };
+        /** ModelParams */
+        ModelParams: {
+            /** Litellm Params */
+            litellm_params: {
+                [key: string]: unknown;
+            };
+            model_info: components["schemas"]["litellm__proxy___types__ModelInfo"];
+            /** Model Name */
+            model_name: string;
         };
         /** ModelResponse */
         ModelResponse: {
@@ -24234,7 +27238,17 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
-            /** Models */
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
@@ -24339,7 +27353,7 @@ export interface components {
              */
             created_at: string;
             /** Created By */
-            created_by: string;
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -24384,7 +27398,7 @@ export interface components {
              */
             updated_at: string;
             /** Updated By */
-            updated_by: string;
+            updated_by?: string | null;
         };
         /** NewTeamRequest */
         NewTeamRequest: {
@@ -24997,6 +28011,11 @@ export interface components {
              * @description The URL to which requests for this path should be forwarded.
              */
             target: string;
+            /**
+             * Timeout
+             * @description Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).
+             */
+            timeout?: number | null;
         };
         /**
          * PassThroughGuardrailSettings
@@ -27131,6 +30150,13 @@ export interface components {
             /** Model */
             model?: string | null;
         };
+        /**
+         * SupportedDBObjectType
+         * @description Supported database object types for fine-grained DB storage control.
+         *     Use in general_settings.supported_db_objects to specify which objects to load from DB.
+         * @enum {string}
+         */
+        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides";
         /** SupportedEndpoint */
         SupportedEndpoint: {
             /** Endpoint */
@@ -27273,6 +30299,11 @@ export interface components {
              */
             admins: unknown[];
             /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
+            /**
              * Blocked
              * @default false
              */
@@ -27309,6 +30340,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -27318,6 +30363,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -27361,6 +30408,11 @@ export interface components {
              * @default []
              */
             admins: unknown[];
+            /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
             /**
              * Blocked
              * @default false
@@ -27408,6 +30460,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -27417,6 +30483,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -27574,6 +30642,11 @@ export interface components {
              * @description List of models this team member can access. Pass an empty list to remove per-member model restrictions.
              */
             allowed_models?: string[] | null;
+            /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Role */
@@ -27599,6 +30672,8 @@ export interface components {
         TeamMemberUpdateResponse: {
             /** Allowed Models */
             allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Rpm Limit */
@@ -28024,6 +31099,11 @@ export interface components {
             admin_ui_disabled: boolean;
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
+            /**
+             * Hide Default Credentials Hint
+             * @default false
+             */
+            hide_default_credentials_hint: boolean;
             /**
              * Is Control Plane
              * @default false
@@ -28900,6 +31980,8 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: {
                 [key: string]: unknown;
@@ -29118,6 +32200,19 @@ export interface components {
             user_spend?: number | null;
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
+        };
+        /**
+         * UserHeaderMapping
+         * @description Map an incoming HTTP header to a LiteLLM user role.
+         */
+        UserHeaderMapping: {
+            /** Header Name */
+            header_name: string;
+            /**
+             * Litellm User Role
+             * @enum {string}
+             */
+            litellm_user_role: "internal_user" | "customer";
         };
         /** UserInfoResponse */
         UserInfoResponse: {
@@ -29443,12 +32538,68 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** ModelInfo */
+        litellm__proxy___types__ModelInfo: {
+            /** Base Model */
+            base_model: ("gpt-4-1106-preview" | "gpt-4-32k" | "gpt-4" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo" | "text-embedding-ada-002") | null;
+            /** Id */
+            id: string | null;
+            /**
+             * Input Cost Per Token
+             * @default 0
+             */
+            input_cost_per_token: number | null;
+            /**
+             * Max Tokens
+             * @default 2048
+             */
+            max_tokens: number | null;
+            /** Mode */
+            mode: ("embedding" | "chat" | "completion") | null;
+            /**
+             * Output Cost Per Token
+             * @default 0
+             */
+            output_cost_per_token: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ModelInfo */
+        litellm__types__router__ModelInfo: {
+            /** Base Model */
+            base_model?: string | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Db Model
+             * @default false
+             */
+            db_model: boolean;
+            /** Id */
+            id: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Public Model Name */
+            team_public_model_name?: string | null;
+            /** Tier */
+            tier?: ("free" | "paid") | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** updateDeployment */
         updateDeployment: {
             /** Blocked */
             blocked?: boolean | null;
             litellm_params?: components["schemas"]["updateLiteLLMParams"] | null;
-            model_info?: components["schemas"]["ModelInfo"] | null;
+            model_info?: components["schemas"]["litellm__types__router__ModelInfo"] | null;
             /** Model Name */
             model_name?: string | null;
         };
@@ -29476,12 +32627,16 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Bedrock Project Id */
+            aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Azure Ad Token */
+            azure_ad_token?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -29498,6 +32653,10 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Priority */
+            cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Priority */
+            cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -29546,6 +32705,10 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Priority */
+            input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Priority */
+            input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -29619,6 +32782,10 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Priority */
+            output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Priority */
+            output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -29646,7 +32813,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -29671,6 +32838,12 @@ export interface components {
              * @default false
              */
             use_litellm_proxy: boolean | null;
+            /**
+             * Use Xai Oauth
+             * @description Use stored xAI OAuth credentials when no xAI API key is configured.
+             * @default false
+             */
+            use_xai_oauth: boolean | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -30116,6 +33289,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    alerting_settings_alerting_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -32526,6 +35719,39 @@ export interface operations {
             };
         };
     };
+    delete_callback_config_callback_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackDelete"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_cost_discount_config_config_cost_discount_config_get: {
         parameters: {
             query?: never;
@@ -32625,6 +35851,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_config_general_settings_config_field_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigFieldDelete"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_config_general_settings_config_field_info_get: {
+        parameters: {
+            query: {
+                field_name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigFieldInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_config_general_settings_config_field_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigFieldUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_config_list_config_list_get: {
+        parameters: {
+            query: {
+                config_type: "general_settings";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigList"][];
                 };
             };
             /** @description Validation Error */
@@ -32779,6 +36133,72 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PassThroughGenericEndpoint"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_config_config_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigYAML"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    config_yaml_endpoint_config_yaml_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigYAML"];
             };
         };
         responses: {
@@ -33823,6 +37243,102 @@ export interface operations {
             };
         };
     };
+    get_memory_details_debug_memory_details_get: {
+        parameters: {
+            query?: {
+                /** @description Number of top object types to return */
+                top_n?: number;
+                /** @description Include process memory info */
+                include_process_info?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    configure_gc_thresholds_endpoint_debug_memory_gc_configure_post: {
+        parameters: {
+            query?: {
+                /** @description Generation 0 threshold (default: 700) */
+                generation_0?: number;
+                /** @description Generation 1 threshold (default: 10) */
+                generation_1?: number;
+                /** @description Generation 2 threshold (default: 10) */
+                generation_2?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_memory_summary_debug_memory_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     delete_allowed_ip_delete_allowed_ip_post: {
         parameters: {
             query?: never;
@@ -34006,6 +37522,261 @@ export interface operations {
                      */
                     user?: string | null;
                 };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    block_user_end_user_block_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockUsers"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_end_user_daily_activity_get: {
+        parameters: {
+            query?: {
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_end_user_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_end_user_end_user_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteCustomerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    end_user_info_end_user_info_get: {
+        parameters: {
+            query: {
+                /** @description End User ID in the request parameters */
+                end_user_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_end_user_end_user_list_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    new_end_user_end_user_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewCustomerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unblock_user_end_user_unblock_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockUsers"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_end_user_end_user_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCustomerRequest"];
             };
         };
         responses: {
@@ -34551,6 +38322,26 @@ export interface operations {
             };
         };
     };
+    fallback_login_fallback_login_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_fallback_fallback__model__get: {
         parameters: {
             query?: {
@@ -35071,6 +38862,46 @@ export interface operations {
             };
         };
     };
+    get_allowed_ips_get_allowed_ips_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_config_get_config_callbacks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_default_team_settings_get_default_team_settings_get: {
         parameters: {
             query?: never;
@@ -35191,6 +39022,483 @@ export interface operations {
             };
         };
     };
+    get_favicon_get_favicon_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_image_get_image_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_logo_url_get_logo_url_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_global_activity_global_activity_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend */
+                start_date?: string | null;
+                /** @description Time till which to view spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_global_activity_global_activity_cache_hits_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend */
+                start_date?: string | null;
+                /** @description Time till which to view spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_global_activity_exceptions_global_activity_exceptions_get: {
+        parameters: {
+            query: {
+                /** @description Filter by model group */
+                model_group: string;
+                /** @description Time from which to start viewing spend */
+                start_date?: string | null;
+                /** @description Time till which to view spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_global_activity_exceptions_per_deployment_global_activity_exceptions_deployment_get: {
+        parameters: {
+            query: {
+                /** @description Filter by model group */
+                model_group: string;
+                /** @description Time from which to start viewing spend */
+                start_date?: string | null;
+                /** @description Time till which to view spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_global_activity_model_global_activity_model_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend */
+                start_date?: string | null;
+                /** @description Time till which to view spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_view_all_end_users_global_all_end_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    global_spend_global_spend_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    global_get_all_tag_names_global_spend_all_tag_names_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+        };
+    };
+    global_spend_end_users_global_spend_end_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["GlobalEndUsersSpend"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_spend_keys_global_spend_keys_get: {
+        parameters: {
+            query?: {
+                /** @description Number of keys to get. Will return Top 'n' keys. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_spend_logs_global_spend_logs_get: {
+        parameters: {
+            query?: {
+                /** @description API Key to get global spend (spend per day for last 30d). Admin-only endpoint */
+                api_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_spend_models_global_spend_models_get: {
+        parameters: {
+            query?: {
+                /** @description Number of models to get. Will return Top 'n' models. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_global_spend_provider_global_spend_provider_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend */
+                start_date?: string | null;
+                /** @description Time till which to view spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_spend_refresh_global_spend_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_global_spend_report_global_spend_report_get: {
         parameters: {
             query?: {
@@ -35287,6 +39595,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_spend_per_team_global_spend_teams_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -36259,7 +40587,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -36406,26 +40734,6 @@ export interface operations {
             };
         };
     };
-    get_in_product_nudges_in_product_nudges_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InProductNudgeResponse"];
-                };
-            };
-        };
-    };
     create_interaction_interactions_post: {
         parameters: {
             query?: never;
@@ -36526,6 +40834,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invitation_delete_invitation_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationDelete"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invitation_info_invitation_info_get: {
+        parameters: {
+            query: {
+                invitation_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    new_invitation_invitation_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationNew"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invitation_update_invitation_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationModel"];
                 };
             };
             /** @description Validation Error */
@@ -36946,7 +41384,7 @@ export interface operations {
                 page?: number;
                 /** @description Page size */
                 size?: number;
-                /** @description Filter keys by user ID. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 user_id?: string | null;
                 /** @description Filter keys by team ID */
                 team_id?: string | null;
@@ -36954,7 +41392,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
@@ -36974,6 +41412,8 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                substring_matching?: boolean;
             };
             header?: never;
             path?: never;
@@ -37380,6 +41820,37 @@ export interface operations {
             };
         };
     };
+    warm_lazy_warm__name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_ui_config_litellm__well_known_litellm_ui_config_get: {
         parameters: {
             query?: never;
@@ -37396,6 +41867,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UiDiscoveryEndpoints"];
+                };
+            };
+        };
+    };
+    login_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -37516,6 +42007,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    memory_usage_in_mem_cache_memory_usage_in_mem_cache_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    memory_usage_in_mem_cache_items_memory_usage_in_mem_cache_items_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -37830,6 +42361,62 @@ export interface operations {
             };
         };
     };
+    block_model_model_block_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_ProxyModelTable"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_cost_map_source_model_cost_map_source_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_model_model_delete_post: {
         parameters: {
             query?: never;
@@ -37867,6 +42454,115 @@ export interface operations {
         parameters: {
             query?: {
                 litellm_model_id?: string | null;
+                /** @description When true, filter to deployments the caller can use via direct access or team membership. */
+                include_team_models?: boolean | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_metrics_model_metrics_get: {
+        parameters: {
+            query?: {
+                _selected_model_group?: string | null;
+                startTime?: string | null;
+                endTime?: string | null;
+                api_key?: string | null;
+                customer?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_metrics_exceptions_model_metrics_exceptions_get: {
+        parameters: {
+            query?: {
+                _selected_model_group?: string | null;
+                startTime?: string | null;
+                endTime?: string | null;
+                api_key?: string | null;
+                customer?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_metrics_slow_responses_model_metrics_slow_responses_get: {
+        parameters: {
+            query?: {
+                _selected_model_group?: string | null;
+                startTime?: string | null;
+                endTime?: string | null;
+                api_key?: string | null;
+                customer?: string | null;
             };
             header?: never;
             path?: never;
@@ -37914,6 +42610,95 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_settings_model_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    model_streaming_metrics_model_streaming_metrics_get: {
+        parameters: {
+            query?: {
+                _selected_model_group?: string | null;
+                startTime?: string | null;
+                endTime?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unblock_model_model_unblock_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_ProxyModelTable"] | null;
                 };
             };
             /** @description Validation Error */
@@ -38102,6 +42887,7 @@ export interface operations {
                 include_metadata?: boolean | null;
                 fallback_type?: string | null;
                 scope?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -38131,7 +42917,10 @@ export interface operations {
     };
     model_info_models__model_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                team_id?: string | null;
+                healthy_only?: boolean | null;
+            };
             header?: never;
             path: {
                 model_id: string;
@@ -38289,6 +43078,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    claim_onboarding_link_onboarding_claim_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationClaim"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    onboarding_onboarding_get_token_get: {
+        parameters: {
+            query: {
+                invite_link: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -38537,7 +43390,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description RateLimitError */
+            /**
+             * @description Unified rate-limit error.
+             *
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
+             *
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
+             */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -39614,6 +44477,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
+                };
+            };
+        };
+    };
+    get_otel_spans_otel_spans_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -41189,6 +46072,37 @@ export interface operations {
             };
         };
     };
+    async_queue_request_queue_chat_completions_post: {
+        parameters: {
+            query?: {
+                model?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     rag_ingest_rag_ingest_post: {
         parameters: {
             query?: never;
@@ -41283,6 +46197,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeClientSecretResponse"];
+                };
+            };
+        };
+    };
+    reload_anthropic_beta_headers_reload_anthropic_beta_headers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    reload_model_cost_map_reload_model_cost_map_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -41550,6 +46504,148 @@ export interface operations {
         };
     };
     get_routes_routes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    schedule_anthropic_beta_headers_reload_schedule_anthropic_beta_headers_reload_post: {
+        parameters: {
+            query: {
+                hours: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_anthropic_beta_headers_reload_schedule_anthropic_beta_headers_reload_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_anthropic_beta_headers_reload_status_schedule_anthropic_beta_headers_reload_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    schedule_model_cost_map_reload_schedule_model_cost_map_reload_post: {
+        parameters: {
+            query: {
+                hours: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_model_cost_map_reload_schedule_model_cost_map_reload_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_model_cost_map_reload_status_schedule_model_cost_map_reload_status_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -42517,6 +47613,26 @@ export interface operations {
             };
         };
     };
+    spend_key_fn_spend_keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     view_spend_logs_spend_logs_get: {
         parameters: {
             query?: {
@@ -42546,6 +47662,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_view_session_spend_logs_spend_logs_session_ui_get: {
+        parameters: {
+            query: {
+                /** @description Get all spend logs for a particular session */
+                session_id: string;
+                /** @description Page number for pagination */
+                page?: number;
+                /** @description Number of items per page */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_view_spend_logs_spend_logs_ui_get: {
+        parameters: {
+            query?: {
+                /** @description Get spend logs based on api key */
+                api_key?: string | null;
+                /** @description Get spend logs based on user_id */
+                user_id?: string | null;
+                /** @description request_id to get spend logs for specific request_id */
+                request_id?: string | null;
+                /** @description Filter spend logs by team_id */
+                team_id?: string | null;
+                /** @description Filter logs with spend greater than or equal to this value */
+                min_spend?: number | null;
+                /** @description Filter logs with spend less than or equal to this value */
+                max_spend?: number | null;
+                /** @description Time from which to start viewing key spend */
+                start_date?: string | null;
+                /** @description Time till which to view key spend */
+                end_date?: string | null;
+                /** @description Page number for pagination */
+                page?: number;
+                /** @description Number of items per page */
+                page_size?: number;
+                /** @description Filter logs by status (e.g., success, failure) */
+                status_filter?: string | null;
+                /** @description Filter logs by model */
+                model?: string | null;
+                /** @description Filter logs by model ID (litellm model deployment id) */
+                model_id?: string | null;
+                /** @description Filter logs by model group */
+                model_group?: string | null;
+                /** @description Filter logs by key alias */
+                key_alias?: string | null;
+                /** @description Filter logs by end user */
+                end_user?: string | null;
+                /** @description Filter logs by error code (e.g., '404', '500') */
+                error_code?: string | null;
+                /** @description Filter logs by error message (partial string match) */
+                error_message?: string | null;
+                /** @description Sort logs by field: spend, total_tokens, startTime, endTime, request_duration_ms, model, or ttft_ms */
+                sort_by?: string;
+                /** @description Sort order: asc or desc */
+                sort_order?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_view_request_response_for_request_id_spend_logs_ui__request_id__get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing key spend */
+                start_date?: string | null;
+                /** @description Time till which to view key spend */
+                end_date?: string | null;
+            };
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -42652,6 +47910,250 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    spend_user_fn_spend_users_get: {
+        parameters: {
+            query?: {
+                /** @description Get User Table row for user_id */
+                user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    auth_callback_sso_callback_get: {
+        parameters: {
+            query?: {
+                state?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cli_sso_complete_sso_cli_complete__login_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cli_poll_key_sso_cli_poll__key_id__get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+            };
+            header?: {
+                "x-litellm-cli-poll-secret"?: string | null;
+            };
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cli_sso_start_sso_cli_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    debug_sso_callback_sso_debug_callback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    debug_sso_login_sso_debug_login_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_ui_settings_sso_get_ui_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    google_login_sso_key_generate_get: {
+        parameters: {
+            query?: {
+                source?: string | null;
+                key?: string | null;
+                existing_key?: string | null;
+                return_to?: string | null;
+                user_code?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -43257,11 +48759,51 @@ export interface operations {
             };
         };
     };
+    ui_view_teams_team_filter_ui_get: {
+        parameters: {
+            query?: {
+                /** @description Team ID in the request parameters */
+                team_id?: string | null;
+                /** @description Team alias in the request parameters */
+                team_alias?: string | null;
+                /** @description Page number for pagination */
+                page?: number;
+                /** @description Number of items per page */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_TeamTable"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     team_info_team_info_get: {
         parameters: {
             query?: {
                 /** @description Team ID in the request parameters */
                 team_id?: string;
+                /** @description Limit the number of keys returned */
+                key_limit?: number | null;
             };
             header?: never;
             path?: never;
@@ -44507,6 +50049,26 @@ export interface operations {
             };
         };
     };
+    ui_get_available_role_user_available_roles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     available_enterprise_users_user_available_users_get: {
         parameters: {
             query?: never;
@@ -44674,6 +50236,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_view_users_user_filter_ui_get: {
+        parameters: {
+            query?: {
+                /** @description User ID in the request parameters */
+                user_id?: string | null;
+                /** @description User email in the request parameters */
+                user_email?: string | null;
+                /** @description Team ID — used when a team admin searches for users to add to their team */
+                team_id?: string | null;
+                /** @description Page number for pagination */
+                page?: number;
+                /** @description Number of items per page */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_UserTableFiltered"][];
                 };
             };
             /** @description Validation Error */
@@ -48127,6 +53729,10 @@ export interface operations {
         parameters: {
             query?: {
                 litellm_model_id?: string | null;
+                /** @description When true, filter to deployments the caller can use via direct access or team membership. */
+                include_team_models?: boolean | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
             };
             header?: never;
             path?: never;
@@ -48164,6 +53770,7 @@ export interface operations {
                 include_metadata?: boolean | null;
                 fallback_type?: string | null;
                 scope?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -48193,7 +53800,10 @@ export interface operations {
     };
     model_info_v1_models__model_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                team_id?: string | null;
+                healthy_only?: boolean | null;
+            };
             header?: never;
             path: {
                 model_id: string;
@@ -50429,6 +56039,110 @@ export interface operations {
             };
         };
     };
+    info_key_fn_v2_v2_key_info_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["KeyRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_v2_v2_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    model_info_v2_v2_model_info_get: {
+        parameters: {
+            query?: {
+                /** @description Specify the model name (optional) */
+                model?: string | null;
+                /** @description Only return models added by this user */
+                user_models_only?: boolean | null;
+                /** @description Return all models across all teams user is in. */
+                include_team_models?: boolean | null;
+                debug?: boolean | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                size?: number;
+                /** @description Search model names (case-insensitive partial match) */
+                search?: string | null;
+                /** @description Search for a specific model by its unique ID */
+                modelId?: string | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
+                /** @description Field to sort by. Options: model_name, created_at, updated_at, costs, status */
+                sortBy?: string | null;
+                /** @description Sort order. Options: asc, desc */
+                sortOrder?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     rerank_v2_rerank_post: {
         parameters: {
             query?: never;
@@ -50527,6 +56241,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_v3_v3_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    login_v3_exchange_v3_login_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -51210,6 +56964,161 @@ export interface operations {
             header?: never;
             path: {
                 vector_store_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vertex_proxy_route_vertex_ai__endpoint__get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vertex_proxy_route_vertex_ai__endpoint__put_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vertex_proxy_route_vertex_ai__endpoint__post_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vertex_proxy_route_vertex_ai__endpoint__delete_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vertex_proxy_route_vertex_ai__endpoint__patch_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
             };
             cookie?: never;
         };

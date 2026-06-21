@@ -920,10 +920,15 @@ class AmazonConverseConfig(BaseConfig):
                         continue
                     value = [value]
                 optional_params["stopSequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["topP"] = value
+            if param == "temperature" or param == "top_p":
+                AnthropicConfig._apply_sampling_param(
+                    optional_params=optional_params,
+                    model=model,
+                    param=param,
+                    value=value,
+                    drop_params=drop_params,
+                    output_key="topP" if param == "top_p" else param,
+                )
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(List[OpenAIChatCompletionToolParam], value),
@@ -1221,7 +1226,9 @@ class AmazonConverseConfig(BaseConfig):
             inference_params["topK"] = inference_params.pop("top_k")
         return InferenceConfig(**inference_params)
 
-    def _handle_top_k_value(self, model: str, inference_params: dict) -> dict:
+    def _handle_top_k_value(
+        self, model: str, inference_params: dict, drop_params: bool = False
+    ) -> dict:
         base_model = BedrockModelInfo.get_base_model(model)
 
         val_top_k = None
@@ -1230,16 +1237,25 @@ class AmazonConverseConfig(BaseConfig):
         elif "top_k" in inference_params:
             val_top_k = inference_params.pop("top_k")
 
-        if val_top_k:
+        if val_top_k is not None:
             if base_model.startswith("anthropic"):
-                return {"top_k": val_top_k}
+                top_k_params: dict = {}
+                AnthropicConfig._apply_sampling_param(
+                    optional_params=top_k_params,
+                    model=model,
+                    param="top_k",
+                    value=val_top_k,
+                    drop_params=drop_params,
+                    output_key="top_k",
+                )
+                return top_k_params
             if base_model.startswith("amazon.nova"):
                 return {"inferenceConfig": {"topK": val_top_k}}
 
         return {}
 
     def _prepare_request_params(
-        self, optional_params: dict, model: str
+        self, optional_params: dict, model: str, drop_params: bool = False
     ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
@@ -1338,7 +1354,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
-            self._handle_top_k_value(model, inference_params)
+            self._handle_top_k_value(model, inference_params, drop_params)
         )
 
         # Filter out internal/MCP-related parameters that shouldn't be sent to the API
@@ -1572,6 +1588,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         messages: Optional[List[AllMessageValues]] = None,
         headers: Optional[dict] = None,
+        drop_params: bool = False,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -1618,7 +1635,7 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
-        ) = self._prepare_request_params(optional_params, model)
+        ) = self._prepare_request_params(optional_params, model, drop_params)
 
         original_tools = inference_params.pop("tools", [])
 
@@ -1649,12 +1666,14 @@ class AmazonConverseConfig(BaseConfig):
                 bedrock_tool_config["toolChoice"] = tool_choice_values
 
         data: CommonRequestObject = {
-            "additionalModelRequestFields": additional_request_params,
-            "system": system_content_blocks,
             "inferenceConfig": self._transform_inference_params(
                 inference_params=inference_params
             ),
         }
+        if additional_request_params:
+            data["additionalModelRequestFields"] = additional_request_params
+        if system_content_blocks:
+            data["system"] = system_content_blocks
 
         # Handle all config blocks
         for config_name, config_class in self.get_config_blocks().items():
@@ -1699,6 +1718,7 @@ class AmazonConverseConfig(BaseConfig):
             optional_params=optional_params,
             messages=messages,
             headers=headers,
+            drop_params=litellm_params.get("drop_params") is True,
         )
 
         bedrock_messages = (
@@ -1756,6 +1776,7 @@ class AmazonConverseConfig(BaseConfig):
             optional_params=optional_params,
             messages=messages,
             headers=headers,
+            drop_params=litellm_params.get("drop_params") is True,
         )
 
         ## TRANSFORMATION ##
@@ -2168,7 +2189,7 @@ class AmazonConverseConfig(BaseConfig):
         real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
         return real_tools if real_tools else None
 
-    def _transform_response(  # noqa: PLR0915
+    def _transform_response(
         self,
         model: str,
         response: httpx.Response,

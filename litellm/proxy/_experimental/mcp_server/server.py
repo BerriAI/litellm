@@ -47,6 +47,7 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
+    _mcp_gateway_server_name,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -269,6 +270,9 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
+        MCP_TOOL_PREFIX_SEPARATOR,
+        is_tool_name_prefixed,
+        normalize_server_name,
         split_server_prefix_from_name,
     )
 
@@ -323,10 +327,14 @@ if MCP_AVAILABLE:
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
         )
+        updates: Dict[str, Any] = {}
         merged = _mcp_gateway_initialize_instructions.get()
         if merged is not None:
-            return opts.model_copy(update={"instructions": merged})
-        return opts
+            updates["instructions"] = merged
+        scoped_server_name = _mcp_gateway_server_name.get()
+        if scoped_server_name is not None:
+            updates["server_name"] = scoped_server_name
+        return opts.model_copy(update=updates) if updates else opts
 
     ########################################################
     ############ Initialize the MCP Server #################
@@ -609,7 +617,7 @@ if MCP_AVAILABLE:
                 active_mcp_session_var.reset(_session_reset_token)
 
     @server.call_tool()
-    async def mcp_server_tool_call(  # noqa: PLR0915
+    async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
     ) -> CallToolResult:
         """
@@ -1028,7 +1036,14 @@ if MCP_AVAILABLE:
         allowed_mcp_servers: List[MCPServer],
     ) -> List[MCPServer]:
         """
-        Get the filtered MCP servers from the MCP server names
+        Get the filtered MCP servers from the MCP server names.
+
+        Fails closed when ``mcp_servers`` is explicitly provided (path- or
+        header-derived) but none of the names resolve to a server alias or
+        access group the caller can access. The previous behavior returned
+        the full ``allowed_mcp_servers`` set, which silently widened scope
+        when a client targeted ``/mcp/<unknown>/`` and made URL/header
+        namespacing appear to work when it did not.
         """
 
         filtered_server: dict[str, MCPServer] = {}
@@ -1067,6 +1082,17 @@ if MCP_AVAILABLE:
 
         if filtered_server:
             return list(filtered_server.values())
+
+        if mcp_servers is not None:
+            # Caller asked for a specific scope but nothing resolved. Fail
+            # closed so URL/header namespacing cannot silently fall back to
+            # the caller's full allowed-server set.
+            verbose_logger.debug(
+                "MCP scope filter resolved to no servers for requested names %s; "
+                "returning empty list (fail-closed).",
+                mcp_servers,
+            )
+            return []
 
         return allowed_mcp_servers
 
@@ -1544,6 +1570,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str],
+        scoped_server_endpoint: bool = False,
     ) -> AsyncIterator[None]:
         allowed = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -1565,13 +1592,24 @@ if MCP_AVAILABLE:
                 return_exceptions=True,
             )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
-        tok = _mcp_gateway_initialize_instructions.set(merged)
+        scoped_server_name = None
+        if scoped_server_endpoint and len(allowed) == 1:
+            scoped_server = allowed[0]
+            scoped_server_name = (
+                scoped_server.alias
+                or scoped_server.server_name
+                or scoped_server.name
+                or scoped_server.server_id
+            )
+        instructions_token = _mcp_gateway_initialize_instructions.set(merged)
+        server_name_token = _mcp_gateway_server_name.set(scoped_server_name)
         try:
             yield
         finally:
-            _mcp_gateway_initialize_instructions.reset(tok)
+            _mcp_gateway_initialize_instructions.reset(instructions_token)
+            _mcp_gateway_server_name.reset(server_name_token)
 
-    async def _get_tools_from_mcp_servers(  # noqa: PLR0915
+    async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
@@ -2415,7 +2453,7 @@ if MCP_AVAILABLE:
                 },
             )
 
-    async def execute_mcp_tool(  # noqa: PLR0915
+    async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
         allowed_mcp_servers: List[MCPServer],
@@ -2466,47 +2504,60 @@ if MCP_AVAILABLE:
                 None,
             )
 
-        # Resolve the actual MCP server up-front so the permission check uses
-        # the canonical server.name even when the tool name is prefixed with a
-        # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
-        # server's display name directly.
-        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-        if mcp_server is None and requested_server is not None:
-            # REST callers may pass the raw tool name (no prefix) plus a
-            # ``requested_server_id``. The mapping might only contain the
-            # prefixed form, so retry the lookup with every known prefix of
-            # the requested server before treating the tool as unresolved —
-            # otherwise the tool_server_mismatch guard below is silently
-            # bypassed.
-            for known_prefix in iter_known_server_prefixes(requested_server):
-                candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
-                    add_server_prefix_to_name(name, known_prefix)
-                )
-                if candidate is not None:
-                    mcp_server = candidate
-                    break
-        if mcp_server is not None:
-            server_name = mcp_server.name
+        name_is_prefixed = False
+        if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
+            all_registry_prefixes: Set[str] = set()
+            for registry_server in global_mcp_server_manager.get_registry().values():
+                for known_prefix in iter_known_server_prefixes(registry_server):
+                    all_registry_prefixes.add(normalize_server_name(known_prefix))
+            name_is_prefixed = is_tool_name_prefixed(
+                name, known_server_prefixes=all_registry_prefixes
+            )
 
-        # REST /mcp-rest/tools/call passes server_id — tool must belong to that server
-        if requested_server is not None:
-            if (
-                mcp_server is not None
-                and mcp_server.server_id != requested_server.server_id
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "tool_server_mismatch",
-                        "message": (
-                            f"Tool '{name}' belongs to MCP server '{mcp_server.name}' "
-                            f"but request specified server_id for '{requested_server.name}'."
-                        ),
-                    },
-                )
-            if mcp_server is None:
-                mcp_server = requested_server
-                server_name = requested_server.name
+        if requested_server is not None and not name_is_prefixed:
+            # REST callers may pass server_id with the upstream tool name (no
+            # LiteLLM prefix). The first segment is not a registered server
+            # prefix, so the whole string is the upstream tool name and may
+            # legitimately contain the separator (e.g. "text-to-speech").
+            # server_id is authoritative for routing and auth.
+            mcp_server = requested_server
+            server_name = requested_server.name
+            original_tool_name = name
+        else:
+            # Resolve from tool name (MCP JSON-RPC or prefixed REST tool names).
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if mcp_server is None and requested_server is not None:
+                for known_prefix in iter_known_server_prefixes(requested_server):
+                    candidate = (
+                        global_mcp_server_manager._get_mcp_server_from_tool_name(
+                            add_server_prefix_to_name(name, known_prefix)
+                        )
+                    )
+                    if candidate is not None:
+                        mcp_server = candidate
+                        break
+            if mcp_server is not None:
+                server_name = mcp_server.name
+
+            if requested_server is not None:
+                if (
+                    mcp_server is not None
+                    and mcp_server.server_id != requested_server.server_id
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "tool_server_mismatch",
+                            "message": (
+                                f"Tool '{name}' belongs to MCP server "
+                                f"'{mcp_server.name}' but request specified "
+                                f"server_id for '{requested_server.name}'."
+                            ),
+                        },
+                    )
+                if mcp_server is None:
+                    mcp_server = requested_server
+                    server_name = requested_server.name
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
@@ -2535,6 +2586,7 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model = f"MCP: {name}"
+            litellm_logging_obj.model_call_details["model"] = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
@@ -3409,6 +3461,8 @@ if MCP_AVAILABLE:
                     )
                     if stored_oauth_headers:
                         continue
+                    if getattr(server, "delegate_auth_to_upstream", False) is True:
+                        continue
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)
@@ -3606,7 +3660,7 @@ if MCP_AVAILABLE:
                     detail="Forbidden",
                 )
 
-    async def handle_streamable_http_mcp(  # noqa: PLR0915
+    async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
@@ -3620,6 +3674,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
             _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -3896,6 +3951,7 @@ if MCP_AVAILABLE:
                     user_api_key_auth,
                     mcp_servers,
                     _client_ip,
+                    scoped_server_endpoint=scoped_server_endpoint,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
@@ -3941,7 +3997,7 @@ if MCP_AVAILABLE:
                     ):
                         _stateful_session_locks.pop(active_request_session_id, None)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
@@ -3980,6 +4036,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -4052,10 +4109,11 @@ if MCP_AVAILABLE:
                 user_api_key_auth,
                 mcp_servers,
                 _sse_client_ip,
+                scoped_server_endpoint=scoped_server_endpoint,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
