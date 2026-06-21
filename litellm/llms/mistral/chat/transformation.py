@@ -300,7 +300,7 @@ class MistralConfig(OpenAIGPTConfig):
         return self._strip_extra_fields(messages)
 
     @staticmethod
-    def _strip_extra_fields(messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def _strip_extra_fields(messages: list[AllMessageValues]) -> list[AllMessageValues]:
         for m in messages:
             if isinstance(m, dict):
                 m.pop("metadata", None)
