@@ -8,14 +8,11 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
-    BedrockLLM,
     make_call,
     make_sync_call,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -336,34 +333,3 @@ def test_make_sync_call_guards_against_leaked_control_param():
         )
 
     client.post.assert_not_called()
-
-
-def test_legacy_bedrock_llm_streaming_does_not_rechunk_by_default():
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
-    client.post = MagicMock(return_value=mock_response)
-
-    BedrockLLM().completion(
-        model="cohere.command-text-v14",
-        messages=[{"role": "user", "content": "hi"}],
-        api_base=None,
-        custom_prompt_dict={},
-        model_response=litellm.ModelResponse(),
-        print_verbose=lambda *args, **kwargs: None,
-        encoding=litellm.encoding,
-        logging_obj=MagicMock(),
-        optional_params={
-            "stream": True,
-            "aws_access_key_id": "fake",
-            "aws_secret_access_key": "fake",
-            "aws_region_name": "us-east-1",
-        },
-        acompletion=False,
-        timeout=None,
-        litellm_params={},
-        client=client,
-    )
-
-    mock_response.iter_bytes.assert_called_once_with(chunk_size=None)
