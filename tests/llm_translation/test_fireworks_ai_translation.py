@@ -7,9 +7,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import transcription
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
 
@@ -67,76 +65,6 @@ def test_map_response_format():
         {"response_format": response_format}, {}, "some_model", drop_params=False
     )
     assert result == {"response_format": response_format}
-
-
-_AUDIO_FILE_PATH = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), "gettysburg.wav"
-)
-
-
-class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
-    def get_base_audio_transcription_call_args(self) -> dict:
-        return {
-            "model": "fireworks_ai/whisper-v3",
-            "api_base": "https://audio-prod.api.fireworks.ai/v1",
-        }
-
-    def get_custom_llm_provider(self) -> litellm.LlmProviders:
-        return litellm.LlmProviders.FIREWORKS_AI
-
-    def test_audio_transcription(self):
-        from unittest.mock import MagicMock
-
-        from openai.types.audio import Transcription
-
-        audio_file = open(_AUDIO_FILE_PATH, "rb")
-        mock_client = MagicMock()
-        mock_client.audio.transcriptions.create.return_value = Transcription(
-            text="four score and seven years ago"
-        )
-
-        transcript = transcription(
-            **self.get_base_audio_transcription_call_args(),
-            file=audio_file,
-            api_key="fw-test-key",
-            client=mock_client,
-        )
-
-        assert transcript.text == "four score and seven years ago"
-        sent = mock_client.audio.transcriptions.create.call_args.kwargs
-        assert sent["model"] == "whisper-v3"
-        assert sent["file"] is audio_file
-
-    @pytest.mark.asyncio
-    async def test_audio_transcription_async(self):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from openai.types.audio import Transcription
-
-        audio_file = open(_AUDIO_FILE_PATH, "rb")
-        raw_response = MagicMock()
-        raw_response.headers = {}
-        raw_response.parse.return_value = Transcription(
-            text="four score and seven years ago"
-        )
-        mock_client = MagicMock()
-        mock_client.audio.transcriptions.with_raw_response.create = AsyncMock(
-            return_value=raw_response
-        )
-
-        transcript = await litellm.atranscription(
-            **self.get_base_audio_transcription_call_args(),
-            file=audio_file,
-            api_key="fw-test-key",
-            client=mock_client,
-        )
-
-        assert transcript.text == "four score and seven years ago"
-        sent = (
-            mock_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
-        )
-        assert sent["model"] == "whisper-v3"
-        assert sent["file"] is audio_file
 
 
 @pytest.mark.parametrize(

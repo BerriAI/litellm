@@ -1922,9 +1922,6 @@ if TYPE_CHECKING:
     from .llms.fireworks_ai.completion.transformation import (
         FireworksAITextCompletionConfig as FireworksAITextCompletionConfig,
     )
-    from .llms.fireworks_ai.audio_transcription.transformation import (
-        FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig,
-    )
     from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
         FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig,
     )
