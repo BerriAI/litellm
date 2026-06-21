@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set, Type
 
 import httpx
 
@@ -32,6 +32,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME = "generic_guardrail_api"
 
@@ -188,6 +189,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         extra_headers: Optional[list] = None,
+        streaming_end_of_stream_only: Optional[bool] = None,
+        streaming_sampling_rate: Optional[int] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -221,6 +224,17 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             unreachable_fallback
+        )
+
+        # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
+        # via getattr(guardrail_to_apply, "streaming_*", default).
+        self.streaming_end_of_stream_only: bool = (
+            False
+            if streaming_end_of_stream_only is None
+            else streaming_end_of_stream_only
+        )
+        self.streaming_sampling_rate: int = (
+            5 if streaming_sampling_rate is None else streaming_sampling_rate
         )
 
         # Set supported event hooks
@@ -511,3 +525,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             return self._handle_guardrail_request_error(
                 e, inputs, input_type, logging_obj, is_unreachable=False
             )
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIConfigModel,
+        )
+
+        return GenericGuardrailAPIConfigModel
