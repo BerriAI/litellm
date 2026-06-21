@@ -5,9 +5,9 @@ A sandbox tool maps a name to a sandbox provider plus its credentials, so the
 code interpreter interceptor can resolve a tool by name to provider/key/base.
 """
 
-from typing import Dict, List, Optional
+from typing import Optional
 
-_SANDBOX_TOOL_REGISTRY: Dict[str, dict] = {}
+_SANDBOX_TOOL_REGISTRY: dict[str, dict] = {}
 
 
 def _resolve_secret_value(value: Optional[str]) -> Optional[str]:
@@ -20,7 +20,7 @@ def _resolve_secret_value(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def register_sandbox_tools(tools: List[dict]) -> None:
+def register_sandbox_tools(tools: list[dict]) -> None:
     for tool in tools:
         name = tool["sandbox_tool_name"]
         litellm_params = tool.get("litellm_params", {}) or {}

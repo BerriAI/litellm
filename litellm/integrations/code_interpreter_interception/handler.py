@@ -9,7 +9,7 @@ captured stdout back through the typed agentic loop plan.
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Optional, cast
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -26,7 +26,7 @@ LITELLM_CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
 _CACHE_TTL_SECONDS = 15 * 60
 
 
-def _resolve_sandbox_tool(sandbox_tool_name: Optional[str]) -> Optional[Dict[str, Any]]:
+def _resolve_sandbox_tool(sandbox_tool_name: Optional[str]) -> Optional[dict[str, Any]]:
     try:
         from litellm.sandbox.sandbox_tools import resolve_sandbox_tool
     except ImportError:
@@ -49,7 +49,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     def __init__(
         self,
         enabled: bool = True,
-        enabled_providers: Optional[List[str]] = None,
+        enabled_providers: Optional[list[str]] = None,
         sandbox_tool_name: Optional[str] = None,
         sandbox_config: Optional[Any] = None,
     ):
@@ -58,7 +58,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self.enabled_providers = enabled_providers
         self.sandbox_tool_name = sandbox_tool_name
         self.sandbox_config = sandbox_config
-        self._container_cache_by_call_id: Dict[str, Tuple[Any, float]] = {}
+        self._container_cache_by_call_id: dict[str, tuple[Any, float]] = {}
 
     @classmethod
     def from_config_yaml(
@@ -72,8 +72,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: Dict[str, Any],
-        callback_specific_params: Dict[str, Any],
+        litellm_settings: dict[str, Any],
+        callback_specific_params: dict[str, Any],
     ) -> "CodeInterpreterInterceptionLogger":
         params: CodeInterpreterInterceptionConfig = {}
         if "code_interpreter_interception_params" in litellm_settings:
@@ -88,7 +88,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return CodeInterpreterInterceptionLogger.from_config_yaml(params)
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+        self, kwargs: dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
         if not self.enabled:
             return None
@@ -133,7 +133,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         ]
         return kwargs
 
-    def _resolve_provider(self, kwargs: Dict[str, Any]) -> Optional[str]:
+    def _resolve_provider(self, kwargs: dict[str, Any]) -> Optional[str]:
         provider = kwargs.get("custom_llm_provider")
         if provider:
             return provider
@@ -149,12 +149,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self,
         response: Any,
         model: str,
-        messages: List[Dict],
-        tools: Optional[List[Dict]],
+        messages: list[dict],
+        tools: Optional[list[dict]],
         stream: bool,
         custom_llm_provider: str,
-        kwargs: Dict,
-    ) -> Tuple[bool, Dict]:
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
         if not self.enabled:
             return False, {}
 
@@ -166,18 +166,18 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: Dict,
+        tools: dict,
         model: str,
-        messages: List[Dict],
+        messages: list[dict],
         response: Any,
         anthropic_messages_provider_config: Any,
-        anthropic_messages_optional_request_params: Dict,
+        anthropic_messages_optional_request_params: dict,
         logging_obj: Any,
         stream: bool,
-        kwargs: Dict,
+        kwargs: dict,
     ) -> AgenticLoopPlan:
         self._prune_expired_cache()
-        tool_calls = cast(List[Dict[str, Any]], tools.get("tool_calls", []))
+        tool_calls = cast(list[dict[str, Any]], tools.get("tool_calls", []))
         call_id = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
         container = await self._get_or_create_container(call_id=call_id)
 
@@ -234,7 +234,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         )
 
     async def async_post_agentic_loop_response_hook(
-        self, response: Any, plan: AgenticLoopPlan, kwargs: Dict
+        self, response: Any, plan: AgenticLoopPlan, kwargs: dict
     ) -> Any:
         calls = (plan.metadata or {}).get("code_interpreter_calls") if plan else None
         if not calls:
@@ -333,14 +333,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             api_key=params.get("api_key"),
         )
 
-    def _normalize_messages(self, messages: Any) -> List[Dict[str, Any]]:
+    def _normalize_messages(self, messages: Any) -> list[dict[str, Any]]:
         if isinstance(messages, str):
             return [{"role": "user", "content": messages}]
         if isinstance(messages, list):
             return list(messages)
         return []
 
-    def _extract_code_execution_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+    def _extract_code_execution_tool_calls(self, response: Any) -> list[dict[str, Any]]:
         if isinstance(response, dict):
             output = response.get("output", [])
         else:
@@ -389,7 +389,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         }
 
     def _resolve_call_id(
-        self, logging_obj: Any, kwargs: Dict[str, Any]
+        self, logging_obj: Any, kwargs: dict[str, Any]
     ) -> Optional[str]:
         if logging_obj is not None:
             logging_call_id = getattr(logging_obj, "litellm_call_id", None)
