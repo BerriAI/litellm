@@ -1,7 +1,7 @@
 import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { KeyResponse } from "../key_team_helpers/key_list";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
@@ -107,6 +107,22 @@ const baseAuthorized = {
   isAuthorized: true,
 };
 
+const makeTeam = (overrides: Partial<Team>): Team => ({
+  team_id: "team-default",
+  team_alias: "Default Team",
+  models: [],
+  max_budget: null,
+  budget_duration: null,
+  tpm_limit: null,
+  rpm_limit: null,
+  organization_id: "",
+  created_at: "2026-01-01T00:00:00Z",
+  keys: [],
+  members_with_roles: [],
+  spend: 0,
+  ...overrides,
+});
+
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
@@ -153,10 +169,10 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
   it("renders 'Unlimited' when max_budget is null", async () => {
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: null } as any}
-        onClose={() => { }}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null } as unknown as KeyResponse}
+        onClose={() => {}}
         keyId={"test-key-id"}
-        onKeyDataUpdate={() => { }}
+        onKeyDataUpdate={() => {}}
         teams={[]}
       />,
     );
@@ -167,15 +183,15 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
 
   it("renders team budget with alias and duration when key has no own budget but team has one", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [{ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" }] as any,
+      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" })],
       setTeams: vi.fn(),
     });
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-123" } as any}
-        onClose={() => { }}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-123" } as unknown as KeyResponse}
+        onClose={() => {}}
         keyId={"test-key-id"}
-        onKeyDataUpdate={() => { }}
+        onKeyDataUpdate={() => {}}
         teams={[]}
       />,
     );
@@ -186,15 +202,15 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
 
   it("renders team budget without duration when team has no budget_duration", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [{ team_id: "team-456", team_alias: "No Duration Team", max_budget: 500, budget_duration: null }] as any,
+      teams: [makeTeam({ team_id: "team-456", team_alias: "No Duration Team", max_budget: 500 })],
       setTeams: vi.fn(),
     });
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as any}
-        onClose={() => { }}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as unknown as KeyResponse}
+        onClose={() => {}}
         keyId={"test-key-id"}
-        onKeyDataUpdate={() => { }}
+        onKeyDataUpdate={() => {}}
         teams={[]}
       />,
     );
@@ -205,15 +221,15 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
 
   it("renders 'Unlimited' when key has no budget and team also has no budget", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [{ team_id: "team-789", team_alias: "Free Team", max_budget: null, budget_duration: null }] as any,
+      teams: [makeTeam({ team_id: "team-789", team_alias: "Free Team" })],
       setTeams: vi.fn(),
     });
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-789" } as any}
-        onClose={() => { }}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-789" } as unknown as KeyResponse}
+        onClose={() => {}}
         keyId={"test-key-id"}
-        onKeyDataUpdate={() => { }}
+        onKeyDataUpdate={() => {}}
         teams={[]}
       />,
     );
@@ -222,4 +238,3 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     });
   });
 });
-
