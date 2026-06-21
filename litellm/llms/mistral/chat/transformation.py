@@ -268,6 +268,9 @@ class MistralConfig(OpenAIGPTConfig):
             m = MistralConfig._handle_tool_call_message(m)
             if MistralConfig._is_empty_assistant_message(m):
                 continue
+            # Strip reasoning_content from assistant messages — Mistral rejects it as input (extra_forbidden)
+            if m.get("role") == "assistant":
+                m.pop("reasoning_content", None)
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
