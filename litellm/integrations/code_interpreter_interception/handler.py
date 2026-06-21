@@ -8,6 +8,7 @@ captured stdout back through the typed agentic loop plan.
 
 import json
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import litellm
@@ -176,9 +177,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         call_id = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
         container = await self._get_or_create_container(call_id=call_id)
 
+        container_id = getattr(container, "id", None)
         input_list = self._normalize_messages(messages)
+        code_interpreter_calls = []
         for tool_call in tool_calls:
             arguments = tool_call.get("arguments", "")
+            code = self._parse_code(arguments)
             stdout = await self._run_tool_call(container=container, arguments=arguments)
             input_list.append(
                 {
@@ -195,6 +199,16 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                     "output": stdout,
                 }
             )
+            code_interpreter_calls.append(
+                {
+                    "id": f"ci_{uuid.uuid4().hex}",
+                    "type": "code_interpreter_call",
+                    "status": "completed",
+                    "code": code,
+                    "container_id": container_id,
+                    "outputs": None,
+                }
+            )
 
         optional_params = anthropic_messages_optional_request_params
         request_patch = AgenticLoopRequestPatch(
@@ -208,8 +222,51 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return AgenticLoopPlan(
             run_agentic_loop=True,
             request_patch=request_patch,
-            metadata={"tool_type": "code_interpreter", "call_id": call_id or ""},
+            metadata={
+                "tool_type": "code_interpreter",
+                "call_id": call_id or "",
+                "code_interpreter_calls": code_interpreter_calls,
+            },
         )
+
+    async def async_post_agentic_loop_response_hook(
+        self, response: Any, plan: AgenticLoopPlan, kwargs: Dict
+    ) -> Any:
+        calls = (plan.metadata or {}).get("code_interpreter_calls") if plan else None
+        if not calls:
+            return response
+
+        is_dict = isinstance(response, dict)
+        output = (
+            response.get("output") if is_dict else getattr(response, "output", None)
+        )
+        if not isinstance(output, list):
+            return response
+
+        def _item_type(item: Any) -> Any:
+            return (
+                item.get("type")
+                if isinstance(item, dict)
+                else getattr(item, "type", None)
+            )
+
+        insert_at = next(
+            (i for i, item in enumerate(output) if _item_type(item) == "message"),
+            len(output),
+        )
+        new_output = output[:insert_at] + list(calls) + output[insert_at:]
+        if is_dict:
+            response["output"] = new_output
+        else:
+            response.output = new_output
+        return response
+
+    @staticmethod
+    def _parse_code(arguments: str) -> str:
+        try:
+            return json.loads(arguments).get("code", "") if arguments else ""
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return ""
 
     async def _run_tool_call(self, container: Any, arguments: str) -> str:
         try:

@@ -207,3 +207,85 @@ async def test_container_reused_across_calls_same_call_id():
     assert (
         len(sandbox.create_calls) == 1
     ), "sandbox must be created once and reused across calls with the same litellm_call_id"
+
+
+@pytest.mark.asyncio
+async def test_build_plan_records_code_interpreter_call_metadata():
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    plan = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"print(40 + 2)"}',
+                }
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response=FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={"litellm_call_id": "k1"},
+    )
+
+    calls = plan.metadata["code_interpreter_calls"]
+    assert calls, "build_plan must record a code_interpreter_call for re-injection"
+    assert calls[0]["code"] == "print(40 + 2)"
+    assert calls[0]["container_id"] == "sbx_fake"
+    assert calls[0]["type"] == "code_interpreter_call"
+    assert calls[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_post_hook_injects_code_interpreter_call_matching_openai_shape():
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan
+
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    ci_item = {
+        "id": "ci_x",
+        "type": "code_interpreter_call",
+        "status": "completed",
+        "code": "print(1)",
+        "container_id": "sbx_fake",
+        "outputs": None,
+    }
+    plan = AgenticLoopPlan(
+        run_agentic_loop=True,
+        metadata={"code_interpreter_calls": [ci_item]},
+    )
+    response = FakeResponse(output=[{"type": "message", "content": []}])
+
+    out = await logger.async_post_agentic_loop_response_hook(
+        response=response, plan=plan, kwargs={}
+    )
+
+    types = [item.get("type") for item in out.output]
+    assert types == ["code_interpreter_call", "message"], (
+        "code_interpreter_call must be re-injected before the message, matching "
+        "OpenAI's native output ordering"
+    )
+    assert set(out.output[0].keys()) == {
+        "id",
+        "type",
+        "status",
+        "code",
+        "container_id",
+        "outputs",
+    }, "injected item must match OpenAI's code_interpreter_call keys exactly"
+
+
+@pytest.mark.asyncio
+async def test_post_hook_noop_without_recorded_calls():
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan
+
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    response = FakeResponse(output=[{"type": "message", "content": []}])
+    out = await logger.async_post_agentic_loop_response_hook(
+        response=response, plan=AgenticLoopPlan(run_agentic_loop=True), kwargs={}
+    )
+    assert [item.get("type") for item in out.output] == ["message"]
