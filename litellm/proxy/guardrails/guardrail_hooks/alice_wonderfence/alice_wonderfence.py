@@ -28,6 +28,7 @@ from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
 from .processing import (
     apply_verdicts,
     build_analysis_context,
+    function_definition_segments,
     tool_call_arg_segments,
     tool_definition_segments,
 )
@@ -177,7 +178,19 @@ class WonderFenceGuardrail(CustomGuardrail):
         texts = inputs.get("texts") or []
         tool_indices, tool_segments = tool_call_arg_segments(inputs)
         tool_def_paths, tool_def_segments = tool_definition_segments(inputs)
-        if not texts and not tool_segments and not tool_def_segments:
+        # Legacy top-level functions[] only exist on the request body; the
+        # translation layer does not surface them in inputs, so read request_data.
+        function_def_segments = (
+            function_definition_segments(request_data)
+            if input_type == "request"
+            else []
+        )
+        if (
+            not texts
+            and not tool_segments
+            and not tool_def_segments
+            and not function_def_segments
+        ):
             logger.debug(
                 "Alice WonderFence (apply_guardrail): nothing to scan for %s",
                 input_type,
@@ -215,12 +228,18 @@ class WonderFenceGuardrail(CustomGuardrail):
                         custom_fields=None,
                     )
 
-            segments = [*texts, *tool_segments, *tool_def_segments]
+            segments = [
+                *texts,
+                *tool_segments,
+                *tool_def_segments,
+                *function_def_segments,
+            ]
             logger.debug(
-                "Alice WonderFence (apply_guardrail): evaluating %d text + %d tool-call + %d tool-def segment(s) app_id=%s guardrail=%s input_type=%s",
+                "Alice WonderFence (apply_guardrail): evaluating %d text + %d tool-call + %d tool-def + %d function-def segment(s) app_id=%s guardrail=%s input_type=%s",
                 len(texts),
                 len(tool_segments),
                 len(tool_def_segments),
+                len(function_def_segments),
                 app_id,
                 self.guardrail_name,
                 input_type,
@@ -232,6 +251,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             )
             n_text = len(texts)
             n_tool = len(tool_segments)
+            n_tool_def = len(tool_def_segments)
             apply_verdicts(
                 inputs,
                 list(range(n_text)),
@@ -241,7 +261,10 @@ class WonderFenceGuardrail(CustomGuardrail):
                 tool_indices=tool_indices,
                 tool_verdicts=verdicts[n_text : n_text + n_tool],
                 tool_def_paths=tool_def_paths,
-                tool_def_verdicts=verdicts[n_text + n_tool :],
+                tool_def_verdicts=verdicts[
+                    n_text + n_tool : n_text + n_tool + n_tool_def
+                ],
+                function_def_verdicts=verdicts[n_text + n_tool + n_tool_def :],
             )
 
         except WonderFenceBlockedError as e:

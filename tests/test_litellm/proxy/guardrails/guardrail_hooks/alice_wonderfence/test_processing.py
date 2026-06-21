@@ -99,3 +99,38 @@ def test_tool_definition_segments_ignores_non_dict_tools_and_blank_descriptions(
 
     paths, segments = tool_definition_segments(inputs)
     assert segments == []
+
+
+# --------------- function_definition_segments (legacy functions[]) ---------------
+
+
+def test_function_definition_segments_extracts_descriptions():
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
+        function_definition_segments,
+    )
+
+    request_data = {
+        "functions": [
+            {
+                "name": "weather",
+                "description": "TOP_DESC",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string", "description": "PARAM_DESC"}
+                    },
+                },
+            },
+            "not-a-dict",
+            {"name": "f", "description": "   "},
+        ]
+    }
+    assert set(function_definition_segments(request_data)) == {"TOP_DESC", "PARAM_DESC"}
+
+
+def test_function_definition_segments_empty_when_absent():
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
+        function_definition_segments,
+    )
+
+    assert function_definition_segments({"model": "gpt-4"}) == []

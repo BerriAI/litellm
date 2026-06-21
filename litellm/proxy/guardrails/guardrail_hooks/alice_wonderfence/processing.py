@@ -125,6 +125,25 @@ def tool_definition_segments(
     return paths, segments
 
 
+def function_definition_segments(request_data: dict) -> list[str]:
+    """Description strings from the deprecated top-level ``functions[]`` request
+    parameter.
+
+    Each entry is shaped like a tool's ``function`` object
+    (``{name, description, parameters}``) and LiteLLM forwards it to providers,
+    so its descriptions are scanned. Read from ``request_data`` because the chat
+    translation layer surfaces ``tools`` but not ``functions`` in ``inputs``.
+    Detection only (BLOCK/DETECT) -- ``functions`` has no inputs write-back path,
+    so it is not masked.
+    """
+    functions = request_data.get("functions") or []
+    segments: list[str] = []
+    for fn in functions:
+        if isinstance(fn, dict):
+            segments.extend(text for _path, text in _description_strings(fn, []))
+    return segments
+
+
 def _set_by_path(root: Any, path: list[Any], value: Any) -> None:
     obj = root
     for key in path[:-1]:
@@ -190,6 +209,7 @@ def apply_verdicts(
     tool_verdicts: list[SegmentVerdict] | None = None,
     tool_def_paths: list[list[Any]] | None = None,
     tool_def_verdicts: list[SegmentVerdict] | None = None,
+    function_def_verdicts: list[SegmentVerdict] | None = None,
 ) -> GenericGuardrailAPIInputs:
     """Apply per-segment verdicts back onto request text, tool-call args, and
     tool-definition descriptions.
@@ -197,16 +217,23 @@ def apply_verdicts(
     Any BLOCK across any group raises ``WonderFenceBlockedError`` with
     detections/correlation ids aggregated across all blocked segments. Otherwise
     each MASK verdict rewrites the slot its segment came from and DETECT is
-    logged.
+    logged. ``function_def_verdicts`` (legacy ``functions[]``) are detection
+    only: BLOCK raises, anything else is logged, never masked.
     """
     tool_indices = tool_indices or []
     tool_verdicts = tool_verdicts or []
     tool_def_paths = tool_def_paths or []
     tool_def_verdicts = tool_def_verdicts or []
+    function_def_verdicts = function_def_verdicts or []
 
     blocked = [
         v
-        for v in (*verdicts, *tool_verdicts, *tool_def_verdicts)
+        for v in (
+            *verdicts,
+            *tool_verdicts,
+            *tool_def_verdicts,
+            *function_def_verdicts,
+        )
         if v.action == "BLOCK"
     ]
     if blocked:
@@ -232,5 +259,13 @@ def apply_verdicts(
         masked = _masked_value(verdict, guardrail_name, "tool definition")
         if masked is not None:
             _set_by_path(tools, path, masked)
+
+    for verdict in function_def_verdicts:
+        if verdict.action in ("MASK", "DETECT"):
+            logger.warning(
+                "Alice WonderFence (apply_guardrail): DETECT function definition guardrail=%s correlation_id=%s",
+                guardrail_name,
+                verdict.correlation_ids[0] if verdict.correlation_ids else None,
+            )
 
     return inputs

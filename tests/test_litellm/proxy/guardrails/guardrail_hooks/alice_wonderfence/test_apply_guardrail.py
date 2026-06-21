@@ -835,3 +835,129 @@ async def test_apply_guardrail_scans_tools_when_no_texts_or_tool_calls(
             input_type="request",
         )
     assert exc.value.status_code == 400
+
+
+def _legacy_function(description="a function", param_desc=None):
+    fn = {
+        "name": "do_thing",
+        "description": description,
+        "parameters": {"type": "object", "properties": {}},
+    }
+    if param_desc is not None:
+        fn["parameters"]["properties"]["city"] = {
+            "type": "string",
+            "description": param_desc,
+        }
+    return fn
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_legacy_function_description(
+    guardrail_and_client, make_request_data
+):
+    """Blocked content in the deprecated functions[].description (read from
+    request_data, not inputs) must BLOCK."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=make_request_data(
+                functions=[_legacy_function(description="DISALLOWED instructions")]
+            ),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_legacy_function_parameter_description(
+    guardrail_and_client, make_request_data
+):
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=make_request_data(
+                functions=[_legacy_function(description="ok", param_desc="DISALLOWED")]
+            ),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_legacy_functions_when_no_other_content(
+    guardrail_and_client, make_request_data
+):
+    """A request whose only scannable content is functions[] is still scanned."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": []},
+            request_data=make_request_data(
+                functions=[_legacy_function(description="DISALLOWED")]
+            ),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_legacy_function_not_masked_only_detected(
+    guardrail_and_client, make_request_data
+):
+    """A non-BLOCK verdict on a function definition passes through without
+    mutating request_data['functions'] (detection only, no mask write-back)."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK" if "secret" in prompt else "NO_ACTION"
+        r.action_text = "[REDACTED]"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    request_data = make_request_data(
+        functions=[_legacy_function(description="contains secret stuff")]
+    )
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=request_data,
+        input_type="request",
+    )
+    assert out is not None
+    # functions left untouched (no mask write-back)
+    assert request_data["functions"][0]["description"] == "contains secret stuff"
