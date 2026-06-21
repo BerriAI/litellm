@@ -4955,29 +4955,59 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
-        response = await litellm.aresponses(
-            model=patch.model or model,
-            input=patch.messages,
-            **optional_params,
-            **kwargs_for_followup,
-        )
+        try:
+            response = await litellm.aresponses(
+                model=patch.model or model,
+                input=patch.messages,
+                **optional_params,
+                **kwargs_for_followup,
+            )
 
-        if callback is not None:
-            try:
-                response = await callback.async_post_agentic_loop_response_hook(
-                    response=response, plan=plan, kwargs=kwargs
-                )
-            except Exception as e:
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in "
-                    "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
-                    _call_id,
-                    model,
-                    str(e),
+            if callback is not None:
+                try:
+                    response = await callback.async_post_agentic_loop_response_hook(
+                        response=response, plan=plan, kwargs=kwargs
+                    )
+                except Exception as e:
+                    _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+                    verbose_logger.exception(
+                        "LiteLLM.AgenticHookError: Exception in "
+                        "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
+                        _call_id,
+                        model,
+                        str(e),
+                    )
+
+            return response
+        finally:
+            if callback is not None:
+                await self._run_agentic_loop_cleanup(
+                    callback=callback,
+                    plan=plan,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    model=model,
                 )
 
-        return response
+    @staticmethod
+    async def _run_agentic_loop_cleanup(
+        callback: Any,
+        plan: AgenticLoopPlan,
+        kwargs: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        model: str,
+    ) -> None:
+        try:
+            await callback.async_agentic_loop_cleanup_hook(plan=plan, kwargs=kwargs)
+        except Exception as e:
+            _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+            verbose_logger.exception(
+                "LiteLLM.AgenticHookError: Exception in "
+                "async_agentic_loop_cleanup_hook [call_id=%s model=%s]: %s",
+                _call_id,
+                model,
+                str(e),
+            )
 
     def _wrap_responses_response_as_fake_stream(
         self,

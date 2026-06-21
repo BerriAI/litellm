@@ -606,6 +606,98 @@ async def test_post_hook_delete_is_idempotent_across_loop_levels():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_hook_deletes_sandbox():
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    plan = await _build_plan(logger, sandbox, call_id="k1")
+
+    await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
+
+    assert len(sandbox.delete_calls) == 1, (
+        "the cleanup hook must delete the sandbox so a rerun failure cannot "
+        "leak a running container"
+    )
+    assert "sbxkey1" not in logger._container_cache
+
+
+@pytest.mark.asyncio
+async def test_cleanup_hook_is_idempotent_with_post_hook():
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    plan = await _build_plan(logger, sandbox, call_id="k1")
+
+    await logger.async_post_agentic_loop_response_hook(
+        response=FakeResponse(output=[{"type": "message", "content": []}]),
+        plan=plan,
+        kwargs={},
+    )
+    await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
+
+    assert len(sandbox.delete_calls) == 1, (
+        "cleanup running in finally after the success-path post hook already "
+        "deleted the sandbox must not double-delete"
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_plan_cleans_up_sandbox_when_followup_raises():
+    """If the agentic rerun fails, _execute_responses_agentic_plan must still
+    invoke the cleanup hook so the sandbox is not left running."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.integrations.custom_logger import (
+        AgenticLoopPlan,
+        AgenticLoopRequestPatch,
+    )
+
+    cleanup_calls = []
+
+    class CleanupCallback(CustomLogger):
+        async def async_post_agentic_loop_response_hook(self, response, plan, kwargs):
+            return response
+
+        async def async_agentic_loop_cleanup_hook(self, plan, kwargs):
+            cleanup_calls.append(plan)
+
+    plan = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5", messages=[{"role": "user", "content": "x"}]
+        ),
+        metadata={"sandbox_key": "sbxkey1"},
+    )
+
+    original = litellm.aresponses
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("upstream blew up")
+
+    litellm.aresponses = _boom
+    try:
+        with pytest.raises(RuntimeError, match="upstream blew up"):
+            await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+                plan=plan,
+                model="gpt-5",
+                response_api_optional_request_params={},
+                logging_obj=FakeLogging(litellm_call_id="k1"),
+                kwargs={},
+                depth=0,
+                max_loops=3,
+                fingerprints=[],
+                fingerprint="fp",
+                callback=CleanupCallback(),
+            )
+    finally:
+        litellm.aresponses = original
+
+    assert cleanup_calls == [plan], (
+        "cleanup hook must run in finally even when the rerun raises, otherwise "
+        "the sandbox keeps running until the prune TTL"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_code_does_not_re_resolve_registry(monkeypatch):
     """Params resolved once at create time must be reused for running code, so a
     registry clear between create and run cannot turn into a create-then-fail."""

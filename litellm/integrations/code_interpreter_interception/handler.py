@@ -265,6 +265,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             },
         )
 
+    async def async_agentic_loop_cleanup_hook(
+        self, plan: AgenticLoopPlan, kwargs: dict
+    ) -> None:
+        metadata = plan.metadata or {} if plan else {}
+        await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
+
     async def async_post_agentic_loop_response_hook(
         self, response: Any, plan: AgenticLoopPlan, kwargs: dict
     ) -> Any:
