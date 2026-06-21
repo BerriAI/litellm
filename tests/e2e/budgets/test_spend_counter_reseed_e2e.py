@@ -20,6 +20,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -27,6 +28,9 @@ from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
+
+if TYPE_CHECKING:
+    import redis
 
 pytestmark = pytest.mark.e2e
 
@@ -38,7 +42,7 @@ BURST = 6
 COLD_WAIT_SECONDS = 80
 
 
-def _redis():
+def _redis() -> "redis.Redis[str]":
     import redis
 
     return redis.Redis(
@@ -50,7 +54,7 @@ def _redis():
     )
 
 
-def _spend_counter(rds, key: str) -> float | None:
+def _spend_counter(rds: "redis.Redis[str]", key: str) -> float | None:
     """The shared spend counter for `key`, or None if it is cold. The counter key is
     ``{cache namespace}:spend:key:{sha256(key)}``; matched by suffix so the configured
     namespace need not be hard-coded."""
@@ -67,8 +71,11 @@ def _chat(client: BudgetClient, key: str) -> StreamingResponse:
 
 
 def _accumulate(client: BudgetClient, key: str, count: int) -> None:
+    def one(_: int) -> StreamingResponse:
+        return _chat(client, key)
+
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda _: _chat(client, key), range(count)))
+        list(pool.map(one, range(count)))
 
 
 def _burst(client: BudgetClient, key: str, count: int) -> None:
