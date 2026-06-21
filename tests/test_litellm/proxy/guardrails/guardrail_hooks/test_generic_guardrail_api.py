@@ -1124,6 +1124,73 @@ class TestGenericGuardrailAPIStreamingConfig:
         assert guardrail.streaming_end_of_stream_only is False
         assert guardrail.streaming_sampling_rate == 3
 
+    def test_initialize_guardrail_optional_params_defaults_do_not_shadow_top_level(
+        self,
+    ):
+        """Top-level streaming knobs win when optional_params only carries siblings."""
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIOptionalParams,
+        )
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = True  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 2  # type: ignore[attr-defined]
+        # Sibling optional_params only; streaming fields stay at Pydantic default None.
+        litellm_params.optional_params = GenericGuardrailAPIOptionalParams(  # type: ignore[attr-defined]
+            additional_provider_specific_params={"tenant": "acme"},
+        )
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-mixed"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 2
+
+    def test_initialize_guardrail_explicit_optional_params_streaming_wins(self):
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIOptionalParams,
+        )
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = False  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 9  # type: ignore[attr-defined]
+        litellm_params.optional_params = GenericGuardrailAPIOptionalParams(  # type: ignore[attr-defined]
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=1,
+        )
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-nested-wins"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 1
+
 
 class TestGenericGuardrailAPIStreamingViaUnified:
     """Streaming output checks routed through UnifiedLLMGuardrails."""

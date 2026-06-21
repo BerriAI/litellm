@@ -40,21 +40,25 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
     )
 
     streaming_end_of_stream_only: Optional[bool] = Field(
-        default=False,
+        default=None,
         description=(
-            "If False (default), the guardrail runs on sampled chunks during the stream "
-            "at the cadence set by streaming_sampling_rate, and an in-flight BLOCKED "
-            "stops further chunks from streaming. If True, the guardrail runs once at "
-            "end of stream over the assembled response; lower cost and latency, but "
-            "flagged content has already streamed to the client before the terminal block."
+            "If False (default when unset), the guardrail runs on sampled chunks during "
+            "the stream at the cadence set by streaming_sampling_rate, and an in-flight "
+            "BLOCKED stops further chunks from streaming. If True, the guardrail runs "
+            "once at end of stream over the assembled response; lower cost and latency, "
+            "but flagged content has already streamed to the client before the terminal "
+            "block. Defaults are applied in GenericGuardrailAPI.__init__ when None so "
+            "unset optional_params does not shadow top-level litellm_params."
         ),
     )
 
     streaming_sampling_rate: Optional[int] = Field(
-        default=5,
+        default=None,
         description=(
             "When streaming_end_of_stream_only is False, the guardrail runs every Nth "
-            "streamed chunk. Ignored when streaming_end_of_stream_only is True."
+            "streamed chunk. Ignored when streaming_end_of_stream_only is True. "
+            "Defaults to 5 in GenericGuardrailAPI.__init__ when None so unset "
+            "optional_params does not shadow top-level litellm_params."
         ),
     )
 
