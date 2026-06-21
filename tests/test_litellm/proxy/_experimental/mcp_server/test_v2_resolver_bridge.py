@@ -72,8 +72,19 @@ async def test_none_attaches_no_auth(v2_on):
 
 
 async def test_non_grafted_mode_defers_to_v1(v2_on):
-    # bearer_token is not grafted yet -> v2 returns None so v1 handles it
-    assert await resolve_v2_auth_value(_server(MCPAuth.bearer_token, "k")) is None
+    # basic is not grafted yet -> v2 returns None so v1 handles it
+    assert await resolve_v2_auth_value(_server(MCPAuth.basic, "k")) is None
+
+
+async def test_bearer_token_parity(v2_on):
+    token = "up-secret"
+    server = _server(MCPAuth.bearer_token, token)
+    v2_value = await resolve_v2_auth_value(server)
+    assert v2_value == {"Authorization": f"Bearer {token}"}
+    # byte-identical to v1's final upstream headers
+    assert _v1_headers(MCPAuth.bearer_token, token) == _v1_headers(
+        MCPAuth.bearer_token, v2_value
+    )
 
 
 async def test_api_key_without_token_defers_to_v1(v2_on):

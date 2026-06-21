@@ -13,7 +13,7 @@ strangler scaffolding that shrinks to zero as modes migrate, then is deleted wit
 ``_create_mcp_client``) and ``_v2_connection`` (the permanent resolve()+build seam that returns a
 configured ``UpstreamConnection``). ``super()`` is reserved for what v2 does not own yet:
 unmapped/misconfigured modes, OpenAPI tools (registry, S1.8), the per-request ``mcp_auth_header``
-override/inbound-token path, and the JWT-signer guardrail.
+override path, and the JWT-signer guardrail.
 """
 
 from __future__ import annotations
@@ -66,8 +66,8 @@ class MCPServerManagerV2(MCPServerManager):
         """Whether this request falls back to v1 (super()) instead of the v2 egress path.
 
         True for what v2 does not own yet: unmapped/misconfigured modes (to_server_spec is None,
-        e.g. bearer_token), OpenAPI servers (registry, not a connection), the per-request
-        mcp_auth_header override/inbound-token path, and the JWT-signer guardrail. Temporary
+        e.g. basic/token), OpenAPI servers (registry, not a connection), the per-request
+        mcp_auth_header override path, and the JWT-signer guardrail. Temporary
         strangler scaffolding: returns True for fewer cases as modes migrate, then is deleted
         (with _create_mcp_client) once nothing is left on v1.
         """
@@ -209,6 +209,7 @@ class MCPServerManagerV2(MCPServerManager):
             user_api_key_auth,
             raw_headers=raw_headers,
             extra_headers=extra_headers,
+            subject_token=self._extract_bearer_token(None, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_list_failure(server, conn.error)
@@ -234,7 +235,11 @@ class MCPServerManagerV2(MCPServerManager):
                 server, mcp_auth_header, extra_headers, add_prefix, raw_headers
             )
         conn = await self._v2_connection(
-            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+            server,
+            None,
+            raw_headers=raw_headers,
+            extra_headers=extra_headers,
+            subject_token=self._extract_bearer_token(None, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_list_failure(server, conn.error)
@@ -260,7 +265,11 @@ class MCPServerManagerV2(MCPServerManager):
                 server, mcp_auth_header, extra_headers, add_prefix, raw_headers
             )
         conn = await self._v2_connection(
-            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+            server,
+            None,
+            raw_headers=raw_headers,
+            extra_headers=extra_headers,
+            subject_token=self._extract_bearer_token(None, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_list_failure(server, conn.error)
@@ -286,7 +295,11 @@ class MCPServerManagerV2(MCPServerManager):
                 server, mcp_auth_header, extra_headers, add_prefix, raw_headers
             )
         conn = await self._v2_connection(
-            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+            server,
+            None,
+            raw_headers=raw_headers,
+            extra_headers=extra_headers,
+            subject_token=self._extract_bearer_token(None, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_list_failure(server, conn.error)
@@ -319,6 +332,7 @@ class MCPServerManagerV2(MCPServerManager):
             raw_headers=raw_headers,
             extra_headers=extra_headers,
             raise_on_missing_env=True,
+            subject_token=self._extract_bearer_token(None, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_item_failure(server, conn.error)
@@ -353,6 +367,7 @@ class MCPServerManagerV2(MCPServerManager):
             raw_headers=raw_headers,
             extra_headers=extra_headers,
             raise_on_missing_env=True,
+            subject_token=self._extract_bearer_token(None, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_item_failure(server, conn.error)
@@ -416,6 +431,7 @@ class MCPServerManagerV2(MCPServerManager):
             raw_headers=raw_headers,
             forward_caller_headers=True,
             raise_on_missing_env=True,
+            subject_token=self._extract_bearer_token(oauth2_headers, raw_headers),
         )
         if isinstance(conn, Error):
             self._egress_item_failure(mcp_server, conn.error)

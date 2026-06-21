@@ -210,3 +210,60 @@ async def test_v2_override_calls_tool_via_upstream_connection(echo_server_url):
         user_api_key_auth=None,
     )
     assert any("echo: hi" in getattr(c, "text", "") for c in result.content)
+
+
+def _passthrough_server(url):
+    return MCPServer(
+        server_id="pt",
+        name="pt",
+        transport=MCPTransport.http,
+        url=url,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+        client_id="cid",
+        authorization_url="https://idp/auth",
+        token_url="https://idp/token",
+    )
+
+
+@pytest.mark.asyncio
+async def test_v2_passthrough_forwards_inbound_token(echo_server_url):
+    # Passthrough: the caller token is extracted and threaded as inbound_token, so the v2 call
+    # reaches the upstream (the no-auth echo server ignores the forwarded bearer and serves it).
+    manager = MCPServerManagerV2()
+    result = await manager._open_and_call_tool(
+        _passthrough_server(echo_server_url),
+        "echo",
+        {"text": "hi"},
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers={"Authorization": "Bearer caller-token"},
+        raw_headers=None,
+        hook_extra_headers=None,
+        host_progress_callback=None,
+        user_api_key_auth=None,
+    )
+    assert any("echo: hi" in getattr(c, "text", "") for c in result.content)
+
+
+@pytest.mark.asyncio
+async def test_v2_passthrough_without_token_fails_closed(echo_server_url):
+    # No caller token -> inbound_token is None -> the passthrough arm fails closed (401), surfaced
+    # as MCPUpstreamAuthError. Before the inbound-token plumbing, the token was never threaded
+    # through, so every passthrough call hit this path.
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+    manager = MCPServerManagerV2()
+    with pytest.raises(MCPUpstreamAuthError):
+        await manager._open_and_call_tool(
+            _passthrough_server(echo_server_url),
+            "echo",
+            {"text": "hi"},
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers=None,
+            hook_extra_headers=None,
+            host_progress_callback=None,
+            user_api_key_auth=None,
+        )

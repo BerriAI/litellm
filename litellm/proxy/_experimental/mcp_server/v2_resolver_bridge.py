@@ -146,6 +146,19 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 key_source=SharedKey(value=SecretStr(token)),
             ),
         )
+    if server.auth_type == MCPAuth.bearer_token:
+        token = server.authentication_token
+        if not token:
+            return None  # bearer_token with no token: let v1 handle it (parity-safe)
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=ApiKeyConfig(
+                header_name="Authorization",
+                value_prefix="Bearer",
+                key_source=SharedKey(value=SecretStr(token)),
+            ),
+        )
     if server.auth_type == MCPAuth.aws_sigv4:
         # Reuse the SigV4 config builder; the resolver's aws_sigv4 arm turns it into the botocore
         # signer (an httpx.Auth) that signs each upstream request.
