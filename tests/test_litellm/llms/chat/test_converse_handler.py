@@ -202,6 +202,27 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
 
 
+def test_make_sync_call_guards_against_leaked_control_param():
+    """The converse dispatch wrapper validates the payload right before sending,
+    so a control param that slipped into the body aborts the request instead of
+    being rejected downstream by Bedrock."""
+    client = MagicMock()
+    client.post = MagicMock()
+
+    with pytest.raises(ValueError, match="stream_chunk_size"):
+        make_sync_call(
+            client=client,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-6/converse-stream",
+            headers={},
+            data='{"messages": [], "stream_chunk_size": 2048}',
+            model="anthropic.claude-sonnet-4-6",
+            messages=[],
+            logging_obj=MagicMock(),
+        )
+
+    client.post.assert_not_called()
+
+
 def test_completion_plumbs_stream_chunk_size_through_converse():
     iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
