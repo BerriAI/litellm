@@ -146,6 +146,51 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             and (optional_params.get("thinking") or {}).get("type") == "enabled"
         )
 
+    @staticmethod
+    def _drop_unsupported_tools(optional_params: dict) -> dict:
+        """
+        DeepSeek's /chat/completions only accepts tools of type "function".
+
+        Requests bridged from /v1/responses can carry responses-API-native tool
+        types (e.g. a Codex CLI tool typed "namespace"); DeepSeek rejects the
+        whole request with `unknown variant '<type>', expected 'function'` (issue
+        #30722). Drop the unsupported entries so the function tools still go
+        through, and drop the now-dangling tool_choice/parallel_tool_calls when
+        nothing callable survives.
+        """
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return optional_params
+
+        def _is_function_tool(tool: object) -> bool:
+            return isinstance(tool, dict) and tool.get("type") == "function"
+
+        function_tools = [tool for tool in tools if _is_function_tool(tool)]
+        if len(function_tools) == len(tools):
+            return optional_params
+
+        dropped_types = sorted(
+            {
+                str(tool.get("type")) if isinstance(tool, dict) else type(tool).__name__
+                for tool in tools
+                if not _is_function_tool(tool)
+            }
+        )
+        litellm.verbose_logger.warning(
+            "DeepSeek chat completions only supports function tools; dropping "
+            "unsupported tool type(s) %s before sending the request",
+            dropped_types,
+        )
+
+        cleaned = {k: v for k, v in optional_params.items() if k != "tools"}
+        if function_tools:
+            return {**cleaned, "tools": function_tools}
+        return {
+            k: v
+            for k, v in cleaned.items()
+            if k not in ("tool_choice", "parallel_tool_calls")
+        }
+
     def transform_request(
         self,
         model: str,
@@ -163,6 +208,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         (user explicitly enabled it), preventing spurious injection on models
         like deepseek-v3.2 that support thinking as opt-in but not always-on.
         """
+        optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return super().transform_request(
@@ -185,6 +231,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Async equivalent of transform_request — applies the same reasoning_content
         fix for multi-turn thinking-mode conversations.
         """
+        optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return await super().async_transform_request(
