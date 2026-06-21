@@ -65,12 +65,19 @@ class SemanticToolFilterHook(CustomLogger):
         self,
         tools: List[Any],
         user_api_key_dict: "UserAPIKeyAuth",
+        target_format: str = "chat",
     ) -> List[Dict[str, Any]]:
         """
         Expand MCP references to actual tool definitions.
 
         Reuses LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format
         which internally does: parse -> fetch -> filter -> deduplicate -> transform
+
+        Args:
+            tools: List of tool objects which may include MCP references.
+            user_api_key_dict: User auth for access control.
+            target_format: "chat" for ChatCompletions nested ``function`` schema
+                (default), "responses" for Responses API flat schema.
         """
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
@@ -88,7 +95,9 @@ class SemanticToolFilterHook(CustomLogger):
             openai_tools,
             _,
         ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
-            user_api_key_auth=user_api_key_dict, mcp_tools_with_litellm_proxy=mcp_tools
+            user_api_key_auth=user_api_key_dict,
+            mcp_tools_with_litellm_proxy=mcp_tools,
+            target_format=target_format,  # type: ignore[arg-type]
         )
 
         # Convert Pydantic models to dicts for compatibility
@@ -172,7 +181,12 @@ class SemanticToolFilterHook(CustomLogger):
             )
 
             try:
-                expanded_tools = await self._expand_mcp_tools(tools, user_api_key_dict)
+                # Use "chat" schema (nested function key) for chat completions;
+                # Responses API endpoints expect the flat format.
+                _target_format = "responses" if call_type == "aresponses" else "chat"
+                expanded_tools = await self._expand_mcp_tools(
+                    tools, user_api_key_dict, target_format=_target_format
+                )
 
                 if not expanded_tools:
                     verbose_proxy_logger.warning(
@@ -294,11 +308,15 @@ class SemanticToolFilterHook(CustomLogger):
 
         tool_names = []
         for tool in tools:
-            name = (
-                tool.get("name", "")
-                if isinstance(tool, dict)
-                else getattr(tool, "name", "")
-            )
+            if isinstance(tool, dict):
+                # ChatCompletions format: {"type": "function", "function": {"name": ...}}
+                # Responses API format:   {"type": "function", "name": ...}
+                func = tool.get("function")
+                name = (
+                    func.get("name", "") if isinstance(func, dict) else tool.get("name", "")
+                )
+            else:
+                name = getattr(tool, "name", "")
             if name:
                 tool_names.append(name)
 

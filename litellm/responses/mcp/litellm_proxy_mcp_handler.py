@@ -392,6 +392,7 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: List[ToolParam],
         litellm_trace_id: Optional[str] = None,
+        target_format: Literal["responses", "chat"] = "responses",
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Centralized method to process MCP tools through the complete pipeline.
@@ -400,6 +401,8 @@ class LiteLLM_Proxy_MCP_Handler:
             user_api_key_auth: User authentication info for access control
             mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
             litellm_trace_id: Optional trace ID for linking list_mcp_tools spend logs to parent request
+            target_format: "chat" for ChatCompletions format (nested ``function`` key),
+                "responses" for Responses API flat format. Default: "responses".
 
         Returns:
             List of tools in OpenAI format ready to be sent to the LLM
@@ -415,7 +418,7 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-            deduplicated_mcp_tools
+            deduplicated_mcp_tools, target_format=target_format
         )
 
         return openai_tools, tool_server_map
