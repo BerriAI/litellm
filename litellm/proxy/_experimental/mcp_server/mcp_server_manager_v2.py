@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         Prompt,
         ReadResourceResult,
         Resource,
+        ResourceTemplate,
     )
     from mcp.types import Tool as MCPTool
     from pydantic import AnyUrl
@@ -269,6 +270,34 @@ class MCPServerManagerV2(MCPServerManager):
             self._egress_list_failure(server, result.error)
             return []
         return self._create_prefixed_resources(result.ok, server, add_prefix=add_prefix)
+
+    async def get_resource_templates_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[ResourceTemplate]:
+        from litellm.proxy.gateway.mcp.result import Error
+
+        if self._should_defer(server, mcp_auth_header):
+            return await super().get_resource_templates_from_server(
+                server, mcp_auth_header, extra_headers, add_prefix, raw_headers
+            )
+        conn = await self._v2_connection(
+            server, None, raw_headers=raw_headers, extra_headers=extra_headers
+        )
+        if isinstance(conn, Error):
+            self._egress_list_failure(server, conn.error)
+            return []
+        result = await conn.ok.list_resource_templates()
+        if isinstance(result, Error):
+            self._egress_list_failure(server, result.error)
+            return []
+        return self._create_prefixed_resource_templates(
+            result.ok, server, add_prefix=add_prefix
+        )
 
     async def read_resource_from_server(
         self,

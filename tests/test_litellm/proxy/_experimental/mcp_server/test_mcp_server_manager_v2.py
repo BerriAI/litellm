@@ -49,6 +49,10 @@ def _serve_echo():
     def info() -> str:
         return "echo server info"
 
+    @mcp.resource("echo://item/{item_id}")
+    def item(item_id: str) -> str:
+        return f"item {item_id}"
+
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -127,6 +131,26 @@ async def test_v2_override_lists_resources_via_upstream_connection(echo_server_u
     )
     resources = await manager.get_resources_from_server(server, add_prefix=True)
     assert len(resources) >= 1
+
+
+@pytest.mark.asyncio
+async def test_v2_override_lists_resource_templates_via_upstream_connection(
+    echo_server_url,
+):
+    # resources/templates/list path: resolve() + UpstreamConnection.list_resource_templates (v2),
+    # namespaced via the inherited _create_prefixed_resource_templates.
+    manager = MCPServerManagerV2()
+    server = MCPServer(
+        server_id="echo1",
+        name="echo1",
+        transport=MCPTransport.http,
+        url=echo_server_url,
+        auth_type=MCPAuth.none,
+    )
+    templates = await manager.get_resource_templates_from_server(
+        server, add_prefix=True
+    )
+    assert len(templates) >= 1
 
 
 @pytest.mark.asyncio

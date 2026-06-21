@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from mcp import ReadResourceResult, Resource
     from mcp.shared.message import SessionMessage
     from mcp.shared.session import ProgressFnT
-    from mcp.types import CallToolResult, GetPromptResult, Prompt
+    from mcp.types import CallToolResult, GetPromptResult, Prompt, ResourceTemplate
     from mcp.types import Tool as MCPTool
     from pydantic import AnyUrl
 
@@ -229,5 +229,13 @@ class UpstreamConnection:
     async def read_resource(self, uri: AnyUrl) -> Result[ReadResourceResult, ConnError]:
         async def op(session: ClientSession) -> ReadResourceResult:
             return await session.read_resource(uri)
+
+        return await self._run(op)
+
+    async def list_resource_templates(
+        self,
+    ) -> Result[List[ResourceTemplate], ConnError]:
+        async def op(session: ClientSession) -> List[ResourceTemplate]:
+            return (await session.list_resource_templates()).resourceTemplates
 
         return await self._run(op)
