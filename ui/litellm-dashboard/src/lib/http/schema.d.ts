@@ -515,6 +515,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Plugins
+         * @description Return registered plugins for authenticated UI callers.
+         *
+         *     plugin_key is never returned — the browser never needs it (the proxy injects
+         *     it server-side from the registry), and exposing it here would leak the
+         *     credential into React state and DevTools.  Admin key management goes through
+         *     the redacted /config/field/info path instead.
+         */
+        get: operations["list_plugins_api_plugins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/auth-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Auth Token
+         * @description Issue a short-lived, audience-scoped plugin session claim.
+         *
+         *     The claim contains {user_id, user_role, plugin, exp}.  It does NOT
+         *     contain the caller's litellm bearer token — a compromised plugin can
+         *     only learn the caller's identity, not impersonate them against the proxy.
+         *
+         *     Encrypted with a key derived from HMAC(LITELLM_SALT_KEY, plugin_name),
+         *     so each plugin holds only its own key and cannot forge claims for others.
+         *
+         *     Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
+         */
+        get: operations["plugin_auth_token_api_plugins_auth_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/apply_guardrail": {
         parameters: {
             query?: never;
@@ -8943,6 +8997,106 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/plugin-proxy/{plugin_name}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        get: operations["plugin_proxy_plugin_proxy__plugin_name___path__get"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        put: operations["plugin_proxy_plugin_proxy__plugin_name___path__put"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        post: operations["plugin_proxy_plugin_proxy__plugin_name___path__post"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        delete: operations["plugin_proxy_plugin_proxy__plugin_name___path__delete"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        options: operations["plugin_proxy_plugin_proxy__plugin_name___path__options"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        head: operations["plugin_proxy_plugin_proxy__plugin_name___path__head"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        patch: operations["plugin_proxy_plugin_proxy__plugin_name___path__patch"];
         trace?: never;
     };
     "/policies": {
@@ -22217,6 +22371,11 @@ export interface components {
              */
             pass_through_request_timeout?: number | null;
             /**
+             * Plugins
+             * @description external services registered as embeddable UI plugins
+             */
+            plugins?: components["schemas"]["PluginConfig"][] | null;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -28186,6 +28345,32 @@ export interface components {
             name: string;
         };
         /**
+         * PluginConfig
+         * @description A single external service registered as an embeddable UI plugin.
+         */
+        PluginConfig: {
+            /**
+             * Display Name
+             * @description human-readable label shown in the UI view switcher
+             */
+            display_name?: string | null;
+            /**
+             * Name
+             * @description unique plugin identifier (kebab-case)
+             */
+            name: string;
+            /**
+             * Plugin Key
+             * @description plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls
+             */
+            plugin_key?: string | null;
+            /**
+             * Url
+             * @description base URL of the plugin service
+             */
+            url: string;
+        };
+        /**
          * PluginListItem
          * @description Plugin item in list responses.
          */
@@ -33484,6 +33669,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_plugins_api_plugins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
+                };
+            };
+        };
+    };
+    plugin_auth_token_api_plugins_auth_token_get: {
+        parameters: {
+            query?: {
+                plugin_name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -44497,6 +44737,230 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
