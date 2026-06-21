@@ -107,3 +107,27 @@ def test_register_resolves_secret_from_env(monkeypatch):
 def test_resolve_unknown_returns_none():
     _reset()
     assert sandbox_tools.resolve_sandbox_tool("nope") is None
+
+
+def test_register_swaps_registry_atomically():
+    """register_sandbox_tools must replace the registry in one rebind so a
+    concurrent resolve never observes a half-populated or transiently empty
+    registry between clearing and repopulating."""
+    _reset()
+    sandbox_tools.register_sandbox_tools(
+        [{"sandbox_tool_name": "a", "litellm_params": {"sandbox_provider": "e2b"}}]
+    )
+    before = sandbox_tools._SANDBOX_TOOL_REGISTRY
+
+    sandbox_tools.register_sandbox_tools(
+        [
+            {"sandbox_tool_name": "b", "litellm_params": {"sandbox_provider": "e2b"}},
+            {"sandbox_tool_name": "c", "litellm_params": {"sandbox_provider": "e2b"}},
+        ]
+    )
+    after = sandbox_tools._SANDBOX_TOOL_REGISTRY
+
+    assert after is not before, "the registry must be replaced, not mutated in place"
+    assert set(after) == {"b", "c"}
+    assert "a" not in after
+    _reset()

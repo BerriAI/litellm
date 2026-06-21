@@ -19,15 +19,21 @@ def _resolve_secret_value(value: str | None) -> str | None:
 
 
 def register_sandbox_tools(tools: list[dict]) -> None:
-    _SANDBOX_TOOL_REGISTRY.clear()
-    for tool in tools:
-        name = tool["sandbox_tool_name"]
-        litellm_params = tool.get("litellm_params", {}) or {}
-        _SANDBOX_TOOL_REGISTRY[name] = {
-            "sandbox_provider": litellm_params.get("sandbox_provider"),
-            "api_key": _resolve_secret_value(litellm_params.get("api_key")),
-            "api_base": _resolve_secret_value(litellm_params.get("api_base")),
+    global _SANDBOX_TOOL_REGISTRY
+    _SANDBOX_TOOL_REGISTRY = {
+        tool["sandbox_tool_name"]: {
+            "sandbox_provider": (tool.get("litellm_params") or {}).get(
+                "sandbox_provider"
+            ),
+            "api_key": _resolve_secret_value(
+                (tool.get("litellm_params") or {}).get("api_key")
+            ),
+            "api_base": _resolve_secret_value(
+                (tool.get("litellm_params") or {}).get("api_base")
+            ),
         }
+        for tool in tools
+    }
 
 
 def resolve_sandbox_tool(name: str) -> dict | None:
@@ -35,4 +41,4 @@ def resolve_sandbox_tool(name: str) -> dict | None:
 
 
 def clear_sandbox_tools() -> None:
-    _SANDBOX_TOOL_REGISTRY.clear()
+    register_sandbox_tools([])
