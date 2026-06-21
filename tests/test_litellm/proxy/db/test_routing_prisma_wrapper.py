@@ -963,6 +963,74 @@ def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
     fake_module.generate_azure_postgres_auth_token.assert_called_once()
 
 
+def test_proxy_cli_azure_postgresql_auth_sets_token_database_url(monkeypatch):
+    from litellm.proxy.db.prisma_client import (
+        AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+        IAMEndpoint,
+    )
+    from litellm.proxy.proxy_cli import run_server
+
+    endpoint = IAMEndpoint(
+        host="server.postgres.database.azure.com",
+        port="5432",
+        user="managed-identity",
+        name="litellm",
+    )
+    token_url = (
+        "postgresql://managed-identity:token@"
+        "server.postgres.database.azure.com:5432/litellm"
+    )
+    mock_proxy_module = MagicMock(
+        app=MagicMock(),
+        ProxyConfig=MagicMock(),
+        KeyManagementSettings=MagicMock(),
+        save_worker_config=MagicMock(),
+    )
+
+    for key in (
+        "DATABASE_URL",
+        "DIRECT_URL",
+        "IAM_TOKEN_DB_AUTH",
+        AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
+            },
+        ),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("atexit.register"),
+        patch(
+            "litellm.proxy.db.prisma_client.get_database_auth_endpoint_from_env",
+            return_value=endpoint,
+        ) as mock_get_endpoint,
+        patch(
+            "litellm.proxy.db.prisma_client.build_database_token_auth_url",
+            return_value=token_url,
+        ) as mock_build_url,
+        patch(
+            "litellm.proxy.db.prisma_client.should_update_prisma_schema",
+            return_value=False,
+        ),
+        patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
+    ):
+        run_server.main(
+            ["--local", "--skip_server_startup", "--azure_postgresql_auth"],
+            standalone_mode=False,
+        )
+
+    assert os.environ["DATABASE_URL"].startswith(token_url)
+    assert os.environ["IAM_TOKEN_DB_AUTH"] == "True"
+    assert os.environ[AZURE_POSTGRESQL_AUTH_MARKER_ENV] == "True"
+    mock_get_endpoint.assert_called_once()
+    mock_build_url.assert_called_once_with(endpoint, azure_postgresql_auth=True)
+
+
 def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
     """Azure PostgreSQL tokens are JWTs; the wrapper should read exp so the
     existing proactive refresh loop can schedule before token expiry."""
