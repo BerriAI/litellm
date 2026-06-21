@@ -95,6 +95,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
         auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if auth_header is None:
             raise ValueError(
