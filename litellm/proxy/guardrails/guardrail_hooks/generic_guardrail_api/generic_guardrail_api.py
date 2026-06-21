@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set, Type
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set
 
 import httpx
 
@@ -527,7 +527,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             GenericGuardrailAPIConfigModel,
         )
