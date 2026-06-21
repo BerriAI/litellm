@@ -9,7 +9,6 @@ sys.path.insert(
 import litellm
 from litellm import transcription
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from base_llm_unit_tests import BaseLLMChatTest
 from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
@@ -146,11 +145,8 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
 )
 def test_document_inlining_example(disable_add_transform_inline_image_block):
     """
-    Document inlining appends ``#transform=inline`` to image/PDF URLs in the
-    outgoing request unless explicitly disabled. Assert the transform on the
-    serialized payload rather than making a live Fireworks call — the live
-    call only proved the model responded and broke whenever Fireworks rotated
-    its serverless model catalog.
+    Fireworks document inlining has been removed from the platform. LiteLLM
+    must not append ``#transform=inline`` regardless of the legacy disable flag.
     """
     from unittest.mock import patch
 
@@ -163,7 +159,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+                model="fireworks_ai/accounts/fireworks/models/minimax-m3",
                 messages=[
                     {
                         "role": "user",
@@ -182,89 +178,80 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                 client=client,
             )
-        except Exception as e:
-            print(e)
+        except Exception:
+            pass
 
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         sent_url = json_data["messages"][0]["content"][0]["image_url"]["url"]
-        if disable_add_transform_inline_image_block is True:
-            assert sent_url == pdf_url
-            assert "#transform=inline" not in sent_url
-        else:
-            assert sent_url == pdf_url + "#transform=inline"
+        assert sent_url == pdf_url
+        assert "#transform=inline" not in sent_url
 
 
 @pytest.mark.parametrize(
-    "content, model, expected_url",
+    "content, expected_url",
     [
         (
             {"image_url": "http://example.com/image.png"},
-            "gpt-4",
-            "http://example.com/image.png#transform=inline",
+            "http://example.com/image.png",
         ),
         (
             {"image_url": {"url": "http://example.com/image.png"}},
-            "gpt-4",
-            {"url": "http://example.com/image.png#transform=inline"},
+            {"url": "http://example.com/image.png"},
         ),
-        (
-            {"image_url": "http://example.com/image.png"},
-            "vision-gpt",
-            "http://example.com/image.png",
-        ),
-        # data: URLs must never have #transform=inline appended — doing so
-        # corrupts the base64 payload (fixes #23583).
-        # URI schemes are case-insensitive (RFC 3986) so check all variants.
         (
             {"image_url": "data:image/png;base64,iVBORw0KGgo="},
-            "gpt-4",
             "data:image/png;base64,iVBORw0KGgo=",
         ),
         (
             {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
-            "gpt-4",
             {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
         ),
         (
             {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
-            "gpt-4",
             "Data:image/png;base64,iVBORw0KGgo=",
         ),
     ],
 )
-def test_transform_inline(content, model, expected_url):
+def test_transform_inline_no_longer_added(content, expected_url):
+    image_block = {"type": "image_url", **content}
+    messages = [{"role": "user", "content": [image_block]}]
 
-    result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
-        content=content, model=model, disable_add_transform_inline_image_block=False
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model="accounts/fireworks/models/minimax-m3",
+        litellm_params={},
     )
+    result_image_block = result[0]["content"][0]
     if isinstance(expected_url, str):
-        assert result["image_url"] == expected_url
+        assert result_image_block["image_url"] == expected_url
     else:
-        assert result["image_url"]["url"] == expected_url["url"]
+        assert result_image_block["image_url"]["url"] == expected_url["url"]
 
 
 @pytest.mark.parametrize(
-    "model, is_disabled, expected_url",
-    [
-        ("gpt-4", True, "http://example.com/image.png"),
-        ("vision-gpt", False, "http://example.com/image.png"),
-        ("gpt-4", False, "http://example.com/image.png#transform=inline"),
-    ],
+    "is_disabled",
+    [True, False],
 )
-def test_global_disable_flag(model, is_disabled, expected_url):
-    content = {"image_url": "http://example.com/image.png"}
-    result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
-        content=content,
-        model=model,
-        disable_add_transform_inline_image_block=is_disabled,
+def test_global_disable_flag_no_longer_adds_transform_inline(is_disabled):
+    url = "http://example.com/image.png"
+    litellm.disable_add_transform_inline_image_block = is_disabled
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": url}],
+        }
+    ]
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model="accounts/fireworks/models/minimax-m3",
+        litellm_params={},
     )
-    assert result["image_url"] == expected_url
+    assert result[0]["content"][0]["image_url"] == url
     litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
 
 
 def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
-    from openai import OpenAI
     from unittest.mock import patch
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -279,7 +266,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+                model="fireworks_ai/accounts/fireworks/models/minimax-m3",
                 messages=[
                     {
                         "role": "user",
@@ -296,11 +283,10 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
                 ],
                 client=client,
             )
-        except Exception as e:
-            print(e)
+        except Exception:
+            pass
 
         mock_post.assert_called_once()
-        print(mock_post.call_args.kwargs)
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             "#transform=inline"
