@@ -933,11 +933,40 @@ async def test_apply_guardrail_scans_legacy_functions_when_no_other_content(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_legacy_function_not_masked_only_detected(
+async def test_apply_guardrail_legacy_function_detect_does_not_mutate(
     guardrail_and_client, make_request_data
 ):
-    """A non-BLOCK verdict on a function definition passes through without
-    mutating request_data['functions'] (detection only, no mask write-back)."""
+    """A DETECT verdict on a function definition logs but does not rewrite it."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "DETECT" if "watch" in prompt else "NO_ACTION"
+        r.action_text = None
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    request_data = make_request_data(
+        functions=[_legacy_function(description="watch this")]
+    )
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=request_data,
+        input_type="request",
+    )
+    assert out is not None
+    assert request_data["functions"][0]["description"] == "watch this"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_legacy_function_description_in_place(
+    guardrail_and_client, make_request_data
+):
+    """A MASK verdict on a functions[] description must be written back into
+    request_data['functions'], not left as the original unredacted text."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -953,11 +982,9 @@ async def test_apply_guardrail_legacy_function_not_masked_only_detected(
     request_data = make_request_data(
         functions=[_legacy_function(description="contains secret stuff")]
     )
-    out = await guardrail.apply_guardrail(
+    await guardrail.apply_guardrail(
         inputs={"texts": ["hi"]},
         request_data=request_data,
         input_type="request",
     )
-    assert out is not None
-    # functions left untouched (no mask write-back)
-    assert request_data["functions"][0]["description"] == "contains secret stuff"
+    assert request_data["functions"][0]["description"] == "[REDACTED]"

@@ -125,23 +125,25 @@ def tool_definition_segments(
     return paths, segments
 
 
-def function_definition_segments(request_data: dict) -> list[str]:
-    """Description strings from the deprecated top-level ``functions[]`` request
-    parameter.
+def function_definition_segments(
+    request_data: dict,
+) -> tuple[list[list[Any]], list[str]]:
+    """Description paths and texts from the deprecated ``functions[]`` parameter.
 
-    Each entry is shaped like a tool's ``function`` object
-    (``{name, description, parameters}``) and LiteLLM forwards it to providers,
-    so its descriptions are scanned. Read from ``request_data`` because the chat
-    translation layer surfaces ``tools`` but not ``functions`` in ``inputs``.
-    Detection only (BLOCK/DETECT) -- ``functions`` has no inputs write-back path,
-    so it is not masked.
+    Each entry is shaped like a tool's ``function`` object so the same
+    description walker applies. Returns ``(paths, segments)`` so MASK verdicts
+    can be written back into ``request_data["functions"]`` the same way
+    ``tool_def_paths`` are used for ``inputs["tools"]``.
     """
     functions = request_data.get("functions") or []
+    paths: list[list[Any]] = []
     segments: list[str] = []
-    for fn in functions:
+    for i, fn in enumerate(functions):
         if isinstance(fn, dict):
-            segments.extend(text for _path, text in _description_strings(fn, []))
-    return segments
+            for sub_path, text in _description_strings(fn, []):
+                paths.append([i, *sub_path])
+                segments.append(text)
+    return paths, segments
 
 
 def _set_by_path(root: Any, path: list[Any], value: Any) -> None:
@@ -209,21 +211,23 @@ def apply_verdicts(
     tool_verdicts: list[SegmentVerdict] | None = None,
     tool_def_paths: list[list[Any]] | None = None,
     tool_def_verdicts: list[SegmentVerdict] | None = None,
+    function_def_paths: list[list[Any]] | None = None,
     function_def_verdicts: list[SegmentVerdict] | None = None,
+    function_def_request_data: dict | None = None,
 ) -> GenericGuardrailAPIInputs:
-    """Apply per-segment verdicts back onto request text, tool-call args, and
-    tool-definition descriptions.
+    """Apply per-segment verdicts back onto request text, tool-call args,
+    tool-definition descriptions, and legacy function-definition descriptions.
 
     Any BLOCK across any group raises ``WonderFenceBlockedError`` with
     detections/correlation ids aggregated across all blocked segments. Otherwise
     each MASK verdict rewrites the slot its segment came from and DETECT is
-    logged. ``function_def_verdicts`` (legacy ``functions[]``) are detection
-    only: BLOCK raises, anything else is logged, never masked.
+    logged.
     """
     tool_indices = tool_indices or []
     tool_verdicts = tool_verdicts or []
     tool_def_paths = tool_def_paths or []
     tool_def_verdicts = tool_def_verdicts or []
+    function_def_paths = function_def_paths or []
     function_def_verdicts = function_def_verdicts or []
 
     blocked = [
@@ -260,12 +264,10 @@ def apply_verdicts(
         if masked is not None:
             _set_by_path(tools, path, masked)
 
-    for verdict in function_def_verdicts:
-        if verdict.action in ("MASK", "DETECT"):
-            logger.warning(
-                "Alice WonderFence (apply_guardrail): DETECT function definition guardrail=%s correlation_id=%s",
-                guardrail_name,
-                verdict.correlation_ids[0] if verdict.correlation_ids else None,
-            )
+    functions = (function_def_request_data or {}).get("functions") or []
+    for path, verdict in zip(function_def_paths, function_def_verdicts):
+        masked = _masked_value(verdict, guardrail_name, "function definition")
+        if masked is not None and functions:
+            _set_by_path(functions, path, masked)
 
     return inputs

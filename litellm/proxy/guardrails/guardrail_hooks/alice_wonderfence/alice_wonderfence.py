@@ -180,10 +180,10 @@ class WonderFenceGuardrail(CustomGuardrail):
         tool_def_paths, tool_def_segments = tool_definition_segments(inputs)
         # Legacy top-level functions[] only exist on the request body; the
         # translation layer does not surface them in inputs, so read request_data.
-        function_def_segments = (
+        function_def_paths, function_def_segments = (
             function_definition_segments(request_data)
             if input_type == "request"
-            else []
+            else ([], [])
         )
         if (
             not texts
@@ -264,7 +264,9 @@ class WonderFenceGuardrail(CustomGuardrail):
                 tool_def_verdicts=verdicts[
                     n_text + n_tool : n_text + n_tool + n_tool_def
                 ],
+                function_def_paths=function_def_paths,
                 function_def_verdicts=verdicts[n_text + n_tool + n_tool_def :],
+                function_def_request_data=request_data,
             )
 
         except WonderFenceBlockedError as e:

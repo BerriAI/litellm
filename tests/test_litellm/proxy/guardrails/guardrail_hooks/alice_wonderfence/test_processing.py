@@ -104,8 +104,9 @@ def test_tool_definition_segments_ignores_non_dict_tools_and_blank_descriptions(
 # --------------- function_definition_segments (legacy functions[]) ---------------
 
 
-def test_function_definition_segments_extracts_descriptions():
+def test_function_definition_segments_extracts_descriptions_and_paths():
     from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
+        _set_by_path,
         function_definition_segments,
     )
 
@@ -125,7 +126,13 @@ def test_function_definition_segments_extracts_descriptions():
             {"name": "f", "description": "   "},
         ]
     }
-    assert set(function_definition_segments(request_data)) == {"TOP_DESC", "PARAM_DESC"}
+    paths, segments = function_definition_segments(request_data)
+    assert set(segments) == {"TOP_DESC", "PARAM_DESC"}
+    for path, text in zip(paths, segments):
+        _set_by_path(request_data["functions"], path, f"<{text}>")
+    fn = request_data["functions"][0]
+    assert fn["description"] == "<TOP_DESC>"
+    assert fn["parameters"]["properties"]["city"]["description"] == "<PARAM_DESC>"
 
 
 def test_function_definition_segments_empty_when_absent():
@@ -133,4 +140,5 @@ def test_function_definition_segments_empty_when_absent():
         function_definition_segments,
     )
 
-    assert function_definition_segments({"model": "gpt-4"}) == []
+    paths, segs = function_definition_segments({"model": "gpt-4"})
+    assert paths == [] and segs == []
