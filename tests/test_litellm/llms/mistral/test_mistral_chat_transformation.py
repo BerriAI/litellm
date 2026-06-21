@@ -266,6 +266,7 @@ class TestMistralReasoningSupport:
                     "provider_specific_fields": {"foo": "bar"},
                     "thinking_blocks": [],
                     "cache_control": {"type": "ephemeral"},
+                    "reasoning_content": "some thinking",
                 },
             )
         ]
@@ -278,6 +279,7 @@ class TestMistralReasoningSupport:
         assert "provider_specific_fields" not in msg
         assert "thinking_blocks" not in msg
         assert "cache_control" not in msg
+        assert "reasoning_content" not in msg
 
     def test_transform_request_magistral_with_reasoning(self):
         """Test transform_request method for magistral model with reasoning."""

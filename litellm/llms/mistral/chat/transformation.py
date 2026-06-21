@@ -272,6 +272,7 @@ class MistralConfig(OpenAIGPTConfig):
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
                 m.pop("cache_control", None)
+                m.pop("reasoning_content", None)
             new_messages.append(m)
 
         if is_async:
@@ -306,6 +307,7 @@ class MistralConfig(OpenAIGPTConfig):
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
                 m.pop("cache_control", None)
+                m.pop("reasoning_content", None)
         return messages
 
     def _handle_message_with_file(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
