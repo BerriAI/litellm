@@ -36,16 +36,78 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+type DecodedAuthToken = {
+  key?: string;
+  user_id?: string;
+  user_role?: string;
+  user_email?: string;
+  login_method?: string;
+  premium_user?: boolean;
+  disabled_non_admin_personal_key_creation?: boolean;
+};
+
+type AuthSnapshot = {
+  token: string | null;
+  accessToken: string | null;
+  userID: string | null;
+  userRole: string;
+  userEmail: string | null;
+  premiumUser: boolean;
+  disabledPersonalKeyCreation: boolean;
+  showSSOBanner: boolean;
+};
+
+const EMPTY_AUTH_SNAPSHOT: AuthSnapshot = {
+  token: null,
+  accessToken: null,
+  userID: null,
+  userRole: "",
+  userEmail: null,
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: true,
+};
+
+// Derive auth state from the cookie synchronously on first render. The previous flow only
+// populated userID inside an effect gated behind an await getUiConfig() network call, so a
+// route whose own login gate didn't also wait on AuthContext could render with a valid token
+// but a still-null userID for a frame, which is what surfaced the "User ID is not set" screen.
+function readInitialAuthSnapshot(): AuthSnapshot {
+  const raw = getCookie("token");
+  if (!raw || isJwtExpired(raw)) {
+    return EMPTY_AUTH_SNAPSHOT;
+  }
+  let decoded: DecodedAuthToken;
+  try {
+    decoded = jwtDecode<DecodedAuthToken>(raw);
+  } catch {
+    return EMPTY_AUTH_SNAPSHOT;
+  }
+  return {
+    token: raw,
+    accessToken: decoded.key ?? null,
+    userID: decoded.user_id ?? null,
+    userRole: decoded.user_role ? formatUserRole(decoded.user_role) : "",
+    userEmail: decoded.user_email ?? null,
+    premiumUser: decoded.premium_user ?? false,
+    disabledPersonalKeyCreation: decoded.disabled_non_admin_personal_key_creation ?? false,
+    showSSOBanner: decoded.login_method ? decoded.login_method === "username_password" : true,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [initialAuth] = useState(readInitialAuthSnapshot);
   const [authLoading, setAuthLoading] = useState(true);
-  const [token, setToken] = useState<string | null>(null);
-  const [userID, setUserID] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState("");
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [premiumUser, setPremiumUser] = useState(false);
-  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
-  const [showSSOBanner, setShowSSOBanner] = useState(true);
+  const [token, setToken] = useState<string | null>(initialAuth.token);
+  const [userID, setUserID] = useState<string | null>(initialAuth.userID);
+  const [userRole, setUserRole] = useState(initialAuth.userRole);
+  const [userEmail, setUserEmail] = useState<string | null>(initialAuth.userEmail);
+  const [accessToken, setAccessToken] = useState<string | null>(initialAuth.accessToken);
+  const [premiumUser, setPremiumUser] = useState(initialAuth.premiumUser);
+  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(
+    initialAuth.disabledPersonalKeyCreation,
+  );
+  const [showSSOBanner, setShowSSOBanner] = useState(initialAuth.showSSOBanner);
 
   // Load runtime UI config (populates proxyBaseUrl etc.) before clearing
   // authLoading, so any consumer that builds proxy-rooted URLs from authLoading=false
