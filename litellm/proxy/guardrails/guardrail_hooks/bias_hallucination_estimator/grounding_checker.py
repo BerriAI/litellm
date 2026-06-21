@@ -16,7 +16,7 @@ class GroundingResult:
     is_grounded: bool = False
     confidence: float = 0.0
     reasoning: str = ""
-    supporting_docs: List[Dict[str, Any]] = field(default_factory=list) 
+    supporting_docs: List[Dict[str, Any]] = field(default_factory=list)
     sources_searched: List[str] = field(default_factory=list)
     missing_sources: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -107,8 +107,25 @@ class GroundingChecker:
     def _extract_verifiable_elements(claim: str) -> Dict[str, List[str]]:
         stop_words = frozenset(
             (
-                "the", "a", "an", "and", "or", "but", "in", "is", "are", "was",
-                "be", "been", "being", "have", "has", "had", "do", "does", "did",
+                "the",
+                "a",
+                "an",
+                "and",
+                "or",
+                "but",
+                "in",
+                "is",
+                "are",
+                "was",
+                "be",
+                "been",
+                "being",
+                "have",
+                "has",
+                "had",
+                "do",
+                "does",
+                "did",
             )
         )
         numbers = re.findall(r"\b\d+(?:,\d{3})*(?:\.\d+)?\s?%?|\b\d{4}\b", claim)

@@ -19,9 +19,6 @@ from .utils import clip_example, split_sentences, unique_preserve_order
 
 
 class BiasDetector:
-    def __init__(self, threshold: float = 0.5) -> None:
-        self.threshold = threshold
-
     def detect(self, text: str) -> BiasAnalysis:
         return self.detect_bias(text)
 
@@ -55,9 +52,6 @@ class BiasDetector:
 
 
 class HallucinationDetector:
-    def __init__(self, threshold: float = 0.5) -> None:
-        self.threshold = threshold
-
     def detect(self, text: str) -> HallucinationAnalysis:
         return self.detect_hallucination(text)
 

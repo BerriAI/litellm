@@ -19,7 +19,7 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_PROVIDER = "litellm_native"
+_LOG_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"examples", "unsourced_claims", "missing_citations", "fabricated_specificity"}
+)
 GuardrailEventHookInput = Union[
     str,
     Sequence[str],
@@ -79,13 +82,11 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         risk_block_threshold: float = 0.5,
         block_on_high_risk: bool = True,
         log_only: bool = False,
-        use_logprobs: bool = False,
         check_request: bool = False,
         check_response: bool = True,
         violation_message: Optional[str] = None,
         bias_weight: float = 0.4,
         hallucination_weight: float = 0.6,
-        uncertainty_weight: float = 0.0,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
         violation_message_template: Optional[str] = None,
@@ -125,19 +126,18 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         self.check_request = check_request
         self.check_response = check_response
         self.violation_message = violation_message
-        self.bias_detector = BiasDetector(threshold=bias_threshold)
-        self.hallucination_detector = HallucinationDetector(threshold=hallucination_threshold)
+        self.bias_detector = BiasDetector()
+        self.hallucination_detector = HallucinationDetector()
         self.risk_scorer = RiskScorer(
-            use_logprobs=use_logprobs,
             bias_weight=bias_weight,
             hallucination_weight=hallucination_weight,
-            uncertainty_weight=uncertainty_weight,
             bias_threshold=bias_threshold,
             hallucination_threshold=hallucination_threshold,
             flag_threshold=risk_flag_threshold,
             block_threshold=risk_block_threshold,
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -225,8 +225,18 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
             "decision": decision,
             "input_type": input_type,
             "risk_scores": [analysis.risk.model_dump(mode="json") for analysis in analyses],
-            "bias": [analysis.bias.model_dump(mode="json") for analysis in analyses],
-            "hallucination": [analysis.hallucination.model_dump(mode="json") for analysis in analyses],
+            "bias": [
+                {k: v for k, v in analysis.bias.model_dump(mode="json").items() if k not in _LOG_EXCLUDED_FIELDS}
+                for analysis in analyses
+            ],
+            "hallucination": [
+                {
+                    k: v
+                    for k, v in analysis.hallucination.model_dump(mode="json").items()
+                    if k not in _LOG_EXCLUDED_FIELDS
+                }
+                for analysis in analyses
+            ],
         }
 
     def _log_guardrail_result(
@@ -242,7 +252,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         tracing_detail = GuardrailTracingDetail(
             guardrail_id=self.guardrail_id or self.guardrail_name,
             detection_method=detection_methods,
-            risk_score=highest_risk_percentage / 10,
+            risk_score=highest_risk_percentage / 100,
             violation_categories=self._violation_categories(response_payload),
             guardrail_action=str(response_payload["decision"]),
         )

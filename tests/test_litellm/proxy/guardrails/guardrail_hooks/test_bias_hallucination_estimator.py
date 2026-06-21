@@ -1,3 +1,6 @@
+import json
+import tempfile
+import unittest.mock
 from typing import Any
 
 import pytest
@@ -8,7 +11,15 @@ from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.bias_
 )
 from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
     ContextDocumentDataSource,
+    DataSourceResult,
+    FactCheckDataSource,
     FileDataSource,
+    KnowledgeGraphDataSource,
+    URLDataSource,
+    VectorStoreDataSource,
+    _get_doc_text,
+    _keyword_search,
+    _parse_json_docs,
 )
 from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.estimator_core import (
     BiasDetector,
@@ -64,9 +75,7 @@ def test_bias_detector_detects_sweeping_generalization() -> None:
 
 
 def test_bias_detector_score_accumulates_across_patterns() -> None:
-    analysis = BiasDetector().detect(
-        "Obviously all developers must be certified. I believe it is 100% guaranteed."
-    )
+    analysis = BiasDetector().detect("Obviously all developers must be certified. I believe it is 100% guaranteed.")
 
     assert analysis.score > 0.3
     assert len(analysis.patterns_found) >= 2
@@ -172,9 +181,7 @@ def test_hallucination_detector_score_capped_at_one() -> None:
 
 
 def test_hallucination_detector_citation_indicator_clears_number_in_sentence() -> None:
-    analysis = HallucinationDetector().detect(
-        "Published in Nature journal: 85% of trials showed improvement."
-    )
+    analysis = HallucinationDetector().detect("Published in Nature journal: 85% of trials showed improvement.")
 
     assert analysis.unsourced_claims == []
 
@@ -265,9 +272,6 @@ def test_risk_scorer_custom_weights_change_overall_percentage() -> None:
 
 
 def test_risk_scorer_zero_weight_total_returns_zero_percentage() -> None:
-    # When both weights are 0 the weighted formula returns 0% — but per-score
-    # thresholds are still evaluated, so passing scores below the threshold is
-    # required to also get a "pass" recommendation.
     risk = RiskScorer(bias_weight=0.0, hallucination_weight=0.0).compute_risk(
         bias_analysis=BiasAnalysis(score=0.1),
         hallucination_analysis=HallucinationAnalysis(score=0.1),
@@ -301,6 +305,28 @@ async def test_guardrail_blocks_high_risk_response_and_logs_metadata() -> None:
     logging_entries = request_data["metadata"]["standard_logging_guardrail_information"]
     assert logging_entries[0]["guardrail_status"] == "guardrail_intervened"
     assert logging_entries[0]["guardrail_response"]["decision"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_log_payload_excludes_text_snippets() -> None:
+    guardrail = BiasHallucinationEstimatorGuardrail(
+        guardrail_name="bias-hallucination",
+        log_only=True,
+    )
+    request_data: dict[str, Any] = {}
+
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["Research shows 73% of users switch products on March 14, 2022."]},
+        request_data=request_data,
+        input_type="response",
+    )
+
+    response = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    snippet_fields = {"examples", "unsourced_claims", "missing_citations", "fabricated_specificity"}
+    for entry in response["bias"]:
+        assert not snippet_fields & entry.keys(), f"bias log entry contains snippet fields: {entry.keys()}"
+    for entry in response["hallucination"]:
+        assert not snippet_fields & entry.keys(), f"hallucination log entry contains snippet fields: {entry.keys()}"
 
 
 @pytest.mark.asyncio
@@ -438,9 +464,7 @@ async def test_guardrail_check_request_enabled_detects_bias() -> None:
 
 def test_guardrail_estimate_returns_structured_result() -> None:
     guardrail = BiasHallucinationEstimatorGuardrail(guardrail_name="bias-hallucination")
-    result = guardrail.estimate_bias_hallucination(
-        "Everyone knows this is obviously the only correct answer."
-    )
+    result = guardrail.estimate_bias_hallucination("Everyone knows this is obviously the only correct answer.")
 
     assert "bias" in result
     assert "hallucination" in result
@@ -460,6 +484,8 @@ def test_config_model_defaults_and_ui_name() -> None:
     assert config.bias_threshold == 0.5
     assert config.hallucination_threshold == 0.5
     assert config.check_response is True
+    assert config.bias_weight == 0.4
+    assert config.hallucination_weight == 0.6
     assert BiasHallucinationEstimatorConfigModel.ui_friendly_name() == "LiteLLM Bias & Hallucination Estimator"
 
 
@@ -570,9 +596,7 @@ async def test_context_document_source_finds_matching_content() -> None:
 
 @pytest.mark.asyncio
 async def test_context_document_source_no_match_returns_empty() -> None:
-    source = ContextDocumentDataSource(
-        documents=[{"text": "The company was founded in 2015."}]
-    )
+    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
 
     results = await source.search("quantum physics neutron stars")
 
@@ -603,9 +627,7 @@ async def test_grounding_checker_no_enabled_sources_returns_ungrounded() -> None
 
 @pytest.mark.asyncio
 async def test_grounding_checker_verifies_claim_from_context_docs() -> None:
-    source = ContextDocumentDataSource(
-        documents=[{"text": "The company was founded in 2015 by Jane Smith."}]
-    )
+    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015 by Jane Smith."}])
     checker = GroundingChecker(data_sources=[source], confidence_threshold=0.3)
     result = await checker.check_claim_grounding("company founded 2015")
 
@@ -616,9 +638,7 @@ async def test_grounding_checker_verifies_claim_from_context_docs() -> None:
 
 @pytest.mark.asyncio
 async def test_grounding_checker_unverifiable_claim_not_grounded() -> None:
-    source = ContextDocumentDataSource(
-        documents=[{"text": "The company was founded in 2015 by Jane Smith."}]
-    )
+    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015 by Jane Smith."}])
     checker = GroundingChecker(data_sources=[source], confidence_threshold=0.6)
     result = await checker.check_claim_grounding("quantum entanglement photon polarization")
 
@@ -627,15 +647,595 @@ async def test_grounding_checker_unverifiable_claim_not_grounded() -> None:
 
 @pytest.mark.asyncio
 async def test_grounding_checker_verify_multiple_claims() -> None:
-    source = ContextDocumentDataSource(
-        documents=[{"text": "The company was founded in 2015."}]
-    )
+    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
     checker = GroundingChecker(data_sources=[source], confidence_threshold=0.3)
-    results = await checker.verify_multiple_claims(
-        ["company founded 2015", "quantum physics neutron stars"]
-    )
+    results = await checker.verify_multiple_claims(["company founded 2015", "quantum physics neutron stars"])
 
     assert len(results) == 2
     grounded_flags = [r.is_grounded for r in results]
     assert True in grounded_flags
     assert False in grounded_flags
+
+
+# ---------------------------------------------------------------------------
+# DataSourceResult
+# ---------------------------------------------------------------------------
+
+
+def test_data_source_result_clamps_confidence_below_zero() -> None:
+    result = DataSourceResult(text="hello", source="s", confidence=-0.5)
+
+    assert result.confidence == 0.0
+
+
+def test_data_source_result_clamps_confidence_above_one() -> None:
+    result = DataSourceResult(text="hello", source="s", confidence=1.5)
+
+    assert result.confidence == 1.0
+
+
+def test_data_source_result_default_metadata_is_empty_dict() -> None:
+    result = DataSourceResult(text="hello", source="s")
+
+    assert result.metadata == {}
+
+
+def test_data_source_result_repr_contains_source_and_confidence() -> None:
+    result = DataSourceResult(text="hello", source="my_source", confidence=0.75)
+
+    assert "my_source" in repr(result)
+    assert "0.75" in repr(result)
+
+
+# ---------------------------------------------------------------------------
+# DataSource.verify_fact
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_data_source_verify_fact_returns_true_when_match_found() -> None:
+    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
+    found, text = await source.verify_fact("company founded 2015")
+
+    assert found is True
+    assert text is not None
+    assert "2015" in text
+
+
+@pytest.mark.asyncio
+async def test_data_source_verify_fact_returns_false_when_no_match() -> None:
+    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
+    found, text = await source.verify_fact("quantum entanglement photon")
+
+    assert found is False
+    assert text is None
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def test_get_doc_text_returns_string_directly() -> None:
+    assert _get_doc_text("plain string") == "plain string"
+
+
+def test_get_doc_text_extracts_text_key_from_dict() -> None:
+    assert _get_doc_text({"text": "from dict"}) == "from dict"
+
+
+def test_get_doc_text_falls_back_to_str_when_no_text_key() -> None:
+    result = _get_doc_text({"other": "value"})
+
+    assert "other" in result
+
+
+def test_parse_json_docs_wraps_non_list_in_list() -> None:
+    result = _parse_json_docs({"text": "single doc"})
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+
+
+def test_parse_json_docs_returns_list_unchanged() -> None:
+    docs = [{"text": "a"}, {"text": "b"}]
+    result = _parse_json_docs(docs)
+
+    assert result == docs
+
+
+def test_keyword_search_returns_empty_for_empty_query() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
+        _build_keyword_index,
+    )
+
+    docs = [{"text": "some content"}]
+    index = _build_keyword_index(docs)
+    results = _keyword_search("", docs, index, "src", 5)
+
+    assert results == []
+
+
+def test_keyword_search_returns_empty_when_no_docs_match() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
+        _build_keyword_index,
+    )
+
+    docs = [{"text": "apples and oranges"}]
+    index = _build_keyword_index(docs)
+    results = _keyword_search("quantum neutron", docs, index, "src", 5)
+
+    assert results == []
+
+
+def test_keyword_search_respects_limit() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
+        _build_keyword_index,
+    )
+
+    docs = [{"text": f"document about python {i}"} for i in range(10)]
+    index = _build_keyword_index(docs)
+    results = _keyword_search("python document", docs, index, "src", 3)
+
+    assert len(results) <= 3
+
+
+def test_keyword_search_scores_by_word_overlap() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
+        _build_keyword_index,
+    )
+
+    docs = [
+        {"text": "python programming language"},
+        {"text": "python snake reptile"},
+    ]
+    index = _build_keyword_index(docs)
+    results = _keyword_search("python programming", docs, index, "src", 5)
+
+    assert results[0].text == "python programming language"
+    assert results[0].confidence > results[1].confidence
+
+
+# ---------------------------------------------------------------------------
+# FileDataSource with real files
+# ---------------------------------------------------------------------------
+
+
+def test_file_data_source_loads_json_file() -> None:
+    docs = [{"text": "Paris is the capital of France."}, {"text": "Berlin is the capital of Germany."}]
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(docs, f)
+        path = f.name
+
+    source = FileDataSource(path)
+
+    assert len(source._documents) == 2
+
+
+@pytest.mark.asyncio
+async def test_file_data_source_searches_json_content() -> None:
+    docs = [{"text": "Paris is the capital of France."}, {"text": "Berlin is the capital of Germany."}]
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(docs, f)
+        path = f.name
+
+    source = FileDataSource(path)
+    results = await source.search("capital France Paris")
+
+    assert len(results) > 0
+    assert any("Paris" in r.text for r in results)
+
+
+def test_file_data_source_loads_txt_file() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write("First fact about astronomy.\nSecond fact about physics.\n")
+        path = f.name
+
+    source = FileDataSource(path)
+
+    assert len(source._documents) == 2
+
+
+def test_file_data_source_loads_csv_file() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        f.write("row one data\nrow two data\n")
+        path = f.name
+
+    source = FileDataSource(path)
+
+    assert len(source._documents) == 2
+
+
+def test_file_data_source_uses_stem_as_default_name() -> None:
+    source = FileDataSource("/some/path/my_facts.json")
+
+    assert source.name == "file_my_facts"
+
+
+def test_file_data_source_loads_json_object_not_list() -> None:
+    doc = {"text": "Single document as object."}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(doc, f)
+        path = f.name
+
+    source = FileDataSource(path)
+
+    assert len(source._documents) == 1
+
+
+# ---------------------------------------------------------------------------
+# URLDataSource
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_returns_empty_without_aiohttp() -> None:
+    source = URLDataSource(urls=["http://example.com/data.json"])
+
+    with unittest.mock.patch(
+        "litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources._AIOHTTP_AVAILABLE",
+        False,
+    ):
+        results = await source.search("any query")
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_parse_content_handles_json() -> None:
+    json_content = json.dumps([{"text": "fact one"}, {"text": "fact two"}])
+    parsed = URLDataSource._parse_content(json_content)
+
+    assert len(parsed) == 2
+    assert parsed[0] == {"text": "fact one"}  # type: ignore[comparison-overlap]
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_parse_content_handles_plain_text() -> None:
+    parsed = URLDataSource._parse_content("This is not JSON at all.")
+
+    assert len(parsed) == 1
+    assert parsed[0] == {"text": "This is not JSON at all."}  # type: ignore[comparison-overlap]
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_search_returns_cached_on_second_call() -> None:
+    source = URLDataSource(urls=[])
+    source._fetched = True
+    source._documents = [{"text": "cached document about python"}]
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
+        _build_keyword_index,
+    )
+
+    source._index = _build_keyword_index(source._documents)
+
+    results = await source.search("python")
+
+    assert len(results) == 1
+    assert "python" in results[0].text
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_concurrent_fetch_only_runs_once() -> None:
+    fetch_count = 0
+
+    async def fake_fetch_all() -> list[Any]:
+        nonlocal fetch_count
+        fetch_count += 1
+        return [{"text": "fetched document"}]
+
+    source = URLDataSource(urls=["http://example.com"])
+
+    with unittest.mock.patch.object(source, "_fetch_all", side_effect=fake_fetch_all):
+        await source.search("document")
+        await source.search("document")
+
+    assert fetch_count == 1
+
+
+# ---------------------------------------------------------------------------
+# VectorStoreDataSource
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_vector_store_data_source_returns_empty_without_client() -> None:
+    source = VectorStoreDataSource(provider="unknown_provider")
+
+    assert source.client is None
+    results = await source.search("anything")
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_vector_store_data_source_returns_empty_without_embedding_model() -> None:
+    source = VectorStoreDataSource(
+        provider="pinecone",
+        client=unittest.mock.MagicMock(),
+        embedding_model=None,
+    )
+
+    results = await source.search("query")
+
+    assert results == []
+
+
+def test_vector_store_data_source_default_name_uses_provider() -> None:
+    source = VectorStoreDataSource(provider="pinecone")
+
+    assert source.name == "vectorstore_pinecone"
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeGraphDataSource
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_graph_sparql_strips_injection_chars() -> None:
+    malicious = 'normal text"; DROP TABLE items; --'
+    query = KnowledgeGraphDataSource._build_sparql_query(malicious)
+    label_value = query.split('label "')[1].split('"')[0]
+
+    assert ";" not in label_value
+    assert '"' not in label_value
+
+
+def test_knowledge_graph_sparql_caps_at_128_chars() -> None:
+    long_input = "a" * 200
+    query = KnowledgeGraphDataSource._build_sparql_query(long_input)
+    label_value = query.split('label "')[1].split('"')[0]
+
+    assert len(label_value) <= 128
+
+
+def test_knowledge_graph_sparql_preserves_alphanumeric_and_spaces() -> None:
+    query = KnowledgeGraphDataSource._build_sparql_query("Marie Curie 1867")
+    label_value = query.split('label "')[1].split('"')[0]
+
+    assert label_value == "Marie Curie 1867"
+
+
+def test_knowledge_graph_extract_text_uses_itemlabel_first() -> None:
+    binding = {"itemLabel": {"value": "Paris"}, "label": {"value": "Other"}}
+
+    assert KnowledgeGraphDataSource._extract_text(binding) == "Paris"
+
+
+def test_knowledge_graph_extract_text_falls_back_to_result_key() -> None:
+    binding = {"result": {"value": "Some result"}}
+
+    assert KnowledgeGraphDataSource._extract_text(binding) == "Some result"
+
+
+def test_knowledge_graph_extract_text_falls_back_to_label_key() -> None:
+    binding = {"label": {"value": "A label"}}
+
+    assert KnowledgeGraphDataSource._extract_text(binding) == "A label"
+
+
+def test_knowledge_graph_extract_text_returns_empty_for_unknown_keys() -> None:
+    binding = {"unknown_key": {"value": "ignored"}}
+
+    assert KnowledgeGraphDataSource._extract_text(binding) == ""
+
+
+@pytest.mark.asyncio
+async def test_knowledge_graph_returns_empty_without_aiohttp() -> None:
+    source = KnowledgeGraphDataSource()
+
+    with unittest.mock.patch(
+        "litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources._AIOHTTP_AVAILABLE",
+        False,
+    ):
+        results = await source.search("Paris")
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# FactCheckDataSource
+# ---------------------------------------------------------------------------
+
+
+def test_fact_check_data_source_default_name_uses_provider() -> None:
+    source = FactCheckDataSource()
+
+    assert source.name == "factcheck_snopes"
+
+
+def test_fact_check_data_source_custom_name_overrides_default() -> None:
+    source = FactCheckDataSource(name="my_checker")
+
+    assert source.name == "my_checker"
+
+
+@pytest.mark.asyncio
+async def test_fact_check_data_source_search_returns_empty() -> None:
+    source = FactCheckDataSource(provider="snopes", api_key="dummy")
+    results = await source.search("any claim")
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# URLDataSource._fetch_url via aiohttp mock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_fetch_url_returns_parsed_json() -> None:
+    payload = json.dumps([{"text": "fact from url"}])
+    mock_response = unittest.mock.AsyncMock()
+    mock_response.status = 200
+    mock_response.text = unittest.mock.AsyncMock(return_value=payload)
+    mock_response.__aenter__ = unittest.mock.AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    mock_session = unittest.mock.AsyncMock()
+    mock_session.get = unittest.mock.MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = unittest.mock.AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    with unittest.mock.patch("aiohttp.ClientSession", return_value=mock_session):
+        source = URLDataSource(urls=["http://example.com/data.json"])
+        results = await source.search("fact url")
+
+    assert any("fact from url" in r.text for r in results)
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_fetch_url_handles_non_200_response() -> None:
+    mock_response = unittest.mock.AsyncMock()
+    mock_response.status = 404
+    mock_response.__aenter__ = unittest.mock.AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    mock_session = unittest.mock.AsyncMock()
+    mock_session.get = unittest.mock.MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = unittest.mock.AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    with unittest.mock.patch("aiohttp.ClientSession", return_value=mock_session):
+        source = URLDataSource(urls=["http://example.com/data.json"])
+        results = await source.search("any query")
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# VectorStoreDataSource.search with mocked client
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_vector_store_data_source_pinecone_returns_results() -> None:
+    mock_client = unittest.mock.MagicMock()
+    mock_client.query.return_value = {
+        "matches": [
+            {"metadata": {"text": "pinecone result one"}, "score": 0.9},
+            {"metadata": {"text": "pinecone result two"}, "score": 0.7},
+        ]
+    }
+    mock_model = unittest.mock.MagicMock()
+    mock_model.encode.return_value = [0.1, 0.2, 0.3]
+    source = VectorStoreDataSource(provider="pinecone", client=mock_client, embedding_model=mock_model)
+
+    results = await source.search("any query")
+
+    assert len(results) == 2
+    assert results[0].text == "pinecone result one"
+    assert results[0].confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_vector_store_data_source_weaviate_returns_results() -> None:
+    mock_client = unittest.mock.MagicMock()
+    (mock_client.query.get.return_value.with_near_vector.return_value.with_limit.return_value.do.return_value) = {
+        "data": {"Get": [{"text": "weaviate result"}]}
+    }
+    mock_model = unittest.mock.MagicMock()
+    mock_model.encode.return_value = [0.1, 0.2, 0.3]
+    source = VectorStoreDataSource(provider="weaviate", client=mock_client, embedding_model=mock_model)
+
+    results = await source.search("any query")
+
+    assert len(results) == 1
+    assert results[0].text == "weaviate result"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_data_source_embedding_list_passthrough() -> None:
+    mock_client = unittest.mock.MagicMock()
+    mock_client.query.return_value = {"matches": []}
+    mock_model = unittest.mock.MagicMock()
+    mock_model.encode.return_value = [0.5, 0.6]
+    source = VectorStoreDataSource(provider="pinecone", client=mock_client, embedding_model=mock_model)
+
+    results = await source.search("query")
+
+    assert results == []
+    mock_model.encode.assert_called_once_with("query", convert_to_tensor=False)
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeGraphDataSource.search via aiohttp mock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_knowledge_graph_returns_results_from_sparql_response() -> None:
+    sparql_response = {
+        "results": {
+            "bindings": [
+                {"itemLabel": {"value": "Paris"}},
+                {"itemLabel": {"value": "Lyon"}},
+            ]
+        }
+    }
+    mock_response = unittest.mock.AsyncMock()
+    mock_response.status = 200
+    mock_response.json = unittest.mock.AsyncMock(return_value=sparql_response)
+    mock_response.__aenter__ = unittest.mock.AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    mock_session = unittest.mock.AsyncMock()
+    mock_session.get = unittest.mock.MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = unittest.mock.AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    with unittest.mock.patch("aiohttp.ClientSession", return_value=mock_session):
+        source = KnowledgeGraphDataSource()
+        results = await source.search("French cities")
+
+    assert len(results) == 2
+    assert results[0].text == "Paris"
+    assert results[0].confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_knowledge_graph_skips_bindings_with_empty_text() -> None:
+    sparql_response = {
+        "results": {
+            "bindings": [
+                {"unknown_key": {"value": "ignored"}},
+                {"itemLabel": {"value": "Berlin"}},
+            ]
+        }
+    }
+    mock_response = unittest.mock.AsyncMock()
+    mock_response.status = 200
+    mock_response.json = unittest.mock.AsyncMock(return_value=sparql_response)
+    mock_response.__aenter__ = unittest.mock.AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    mock_session = unittest.mock.AsyncMock()
+    mock_session.get = unittest.mock.MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = unittest.mock.AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    with unittest.mock.patch("aiohttp.ClientSession", return_value=mock_session):
+        source = KnowledgeGraphDataSource()
+        results = await source.search("German cities")
+
+    assert len(results) == 1
+    assert results[0].text == "Berlin"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_graph_handles_non_200_response() -> None:
+    mock_response = unittest.mock.AsyncMock()
+    mock_response.status = 500
+    mock_response.__aenter__ = unittest.mock.AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    mock_session = unittest.mock.AsyncMock()
+    mock_session.get = unittest.mock.MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = unittest.mock.AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+
+    with unittest.mock.patch("aiohttp.ClientSession", return_value=mock_session):
+        source = KnowledgeGraphDataSource()
+        results = await source.search("query")
+
+    assert results == []

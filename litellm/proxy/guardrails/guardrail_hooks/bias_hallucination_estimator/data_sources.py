@@ -143,12 +143,15 @@ class URLDataSource(DataSource):
         self._documents: list[str | dict[str, Any]] = []
         self._index: dict[str, list[int]] = {}
         self._fetched = False
+        self._fetch_lock = asyncio.Lock()
 
     async def search(self, query: str, limit: int = 5) -> list[DataSourceResult]:
         if not self._fetched:
-            self._documents = await self._fetch_all()
-            self._index = _build_keyword_index(self._documents)
-            self._fetched = True
+            async with self._fetch_lock:
+                if not self._fetched:
+                    self._documents = await self._fetch_all()
+                    self._index = _build_keyword_index(self._documents)
+                    self._fetched = True
         return _keyword_search(query, self._documents, self._index, self.name, limit)
 
     async def _fetch_all(self) -> list[str | dict[str, Any]]:
@@ -201,12 +204,17 @@ class VectorStoreDataSource(DataSource):
         name: str = "",
         enabled: bool = True,
         priority: int = 0,
+        client: Optional[Any] = None,
+        embedding_model: Optional[Any] = None,
         **config: Any,
     ) -> None:
         super().__init__(name=name or f"vectorstore_{provider}", enabled=enabled, priority=priority)
         self.provider = provider
         self.config = config
-        self.client: Optional[Any] = self._initialize_client(provider, config)
+        self.client: Optional[Any] = client if client is not None else self._initialize_client(provider, config)
+        self.embedding_model: Optional[Any] = (
+            embedding_model if embedding_model is not None else self._load_embedding_model()
+        )
 
     @staticmethod
     def _initialize_client(provider: str, config: dict[str, Any]) -> Optional[Any]:
@@ -256,24 +264,25 @@ class VectorStoreDataSource(DataSource):
                     .do()
                 )
                 docs = response.get("data", {}).get("Get", {})
-                return [
-                    DataSourceResult(text=doc.get("text", ""), source=self.name, confidence=0.8)
-                    for doc in docs
-                ]
+                return [DataSourceResult(text=doc.get("text", ""), source=self.name, confidence=0.8) for doc in docs]
         except Exception:
             pass
         return []
 
-    async def _get_embedding(self, text: str) -> Optional[list[float]]:
+    @staticmethod
+    def _load_embedding_model() -> Optional[Any]:
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
 
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            embedding = model.encode(text, convert_to_tensor=False)
-            return embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+            return SentenceTransformer("all-MiniLM-L6-v2")
         except ImportError:
-            pass
-        return None
+            return None
+
+    async def _get_embedding(self, text: str) -> Optional[list[float]]:
+        if self.embedding_model is None:
+            return None
+        embedding = self.embedding_model.encode(text, convert_to_tensor=False)
+        return embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
 
 
 class KnowledgeGraphDataSource(DataSource):
@@ -314,7 +323,7 @@ class KnowledgeGraphDataSource(DataSource):
 
     @staticmethod
     def _build_sparql_query(query: str) -> str:
-        safe_query = query.replace('"', '\\"')
+        safe_query = re.sub(r"[^a-zA-Z0-9 \-]", "", query)[:128]
         return f"""
         SELECT ?item ?itemLabel WHERE {{
           ?item rdfs:label "{safe_query}"@en .

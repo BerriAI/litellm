@@ -97,13 +97,11 @@ class BiasHallucinationEstimatorConfigModel(GuardrailConfigModel):  # pyright: i
     risk_block_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     block_on_high_risk: bool = True
     log_only: bool = False
-    use_logprobs: bool = False
     check_request: bool = False
     check_response: bool = True
     violation_message: Optional[str] = None
     bias_weight: float = Field(default=0.4, ge=0.0)
     hallucination_weight: float = Field(default=0.6, ge=0.0)
-    uncertainty_weight: float = Field(default=0.0, ge=0.0)
 
     @staticmethod
     def ui_friendly_name() -> str:
