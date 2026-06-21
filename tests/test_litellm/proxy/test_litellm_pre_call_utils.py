@@ -726,6 +726,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_agentic_loop_depth",
         "_agentic_loop_fingerprints",
         "_code_interpreter_interception_active",
+        "_code_interpreter_interception_converted_stream",
     ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
@@ -757,6 +758,7 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "_agentic_loop_depth": 5,
         "_agentic_loop_fingerprints": ["forged"],
         "_code_interpreter_interception_active": True,
+        "_code_interpreter_interception_converted_stream": True,
     }
     sample_value = sample_values[control_field]
 
