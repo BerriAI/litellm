@@ -242,7 +242,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                     "status": "completed",
                     "code": code,
                     "container_id": container_id,
-                    "outputs": None,
+                    "outputs": ([{"type": "logs", "logs": stdout}] if stdout else []),
                 }
             )
 

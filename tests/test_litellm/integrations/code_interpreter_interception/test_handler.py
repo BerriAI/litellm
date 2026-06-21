@@ -353,6 +353,38 @@ async def test_build_plan_records_code_interpreter_call_metadata():
     assert calls[0]["container_id"] == "sbx_fake"
     assert calls[0]["type"] == "code_interpreter_call"
     assert calls[0]["status"] == "completed"
+    assert calls[0]["outputs"] == [{"type": "logs", "logs": "42"}], (
+        "outputs must be an OpenAI-shaped logs array (not None) so clients that "
+        "iterate over code_interpreter_call.outputs do not break"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_plan_outputs_empty_array_when_no_stdout():
+    """No stdout must still yield an iteration-safe empty array, never None."""
+    sandbox = FakeSandbox(stdout="")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    plan = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"pass"}',
+                }
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response=FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={"litellm_call_id": "k1", _SANDBOX_KEY: "sbxkey1"},
+    )
+
+    assert plan.metadata["code_interpreter_calls"][0]["outputs"] == []
 
 
 @pytest.mark.asyncio
@@ -366,7 +398,7 @@ async def test_post_hook_injects_code_interpreter_call_matching_openai_shape():
         "status": "completed",
         "code": "print(1)",
         "container_id": "sbx_fake",
-        "outputs": None,
+        "outputs": [{"type": "logs", "logs": "1"}],
     }
     plan = AgenticLoopPlan(
         run_agentic_loop=True,
