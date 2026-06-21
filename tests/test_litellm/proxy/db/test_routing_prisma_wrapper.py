@@ -811,6 +811,123 @@ def test_azure_postgres_workload_identity_uses_default_credential(monkeypatch):
     mock_azure_identity.ManagedIdentityCredential.assert_not_called()
 
 
+def test_azure_postgres_service_principal_uses_client_secret_credential(
+    monkeypatch,
+):
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    client_secret_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.ClientSecretCredential = MagicMock(
+        return_value=client_secret_credential
+    )
+    mock_azure_identity.DefaultAzureCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_postgres_credential(
+            azure_client_id="client-id",
+            azure_tenant_id="tenant-id",
+            azure_client_secret="client-secret",
+        )
+
+    assert credential is client_secret_credential
+    mock_azure_identity.ClientSecretCredential.assert_called_once_with(
+        client_id="client-id",
+        tenant_id="tenant-id",
+        client_secret="client-secret",
+    )
+    mock_azure_identity.DefaultAzureCredential.assert_not_called()
+    mock_azure_identity.ManagedIdentityCredential.assert_not_called()
+
+
+def test_azure_postgres_managed_identity_uses_client_id(monkeypatch):
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    managed_identity_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock(
+        return_value=managed_identity_credential
+    )
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_postgres_credential(
+            azure_client_id="managed-client-id"
+        )
+
+    assert credential is managed_identity_credential
+    mock_azure_identity.ManagedIdentityCredential.assert_called_once_with(
+        client_id="managed-client-id"
+    )
+    mock_azure_identity.ClientSecretCredential.assert_not_called()
+    mock_azure_identity.DefaultAzureCredential.assert_not_called()
+
+
+def test_generate_azure_postgres_auth_token_builds_default_credential(
+    monkeypatch,
+):
+    from litellm.proxy.auth.azure_postgres_token import (
+        AZURE_POSTGRES_SCOPE,
+        generate_azure_postgres_auth_token,
+    )
+
+    default_credential = MagicMock()
+    default_credential.get_token.return_value.token = "raw/default token"
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(
+        return_value=default_credential
+    )
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        token = generate_azure_postgres_auth_token()
+
+    assert token == "raw%2Fdefault%20token"
+    mock_azure_identity.DefaultAzureCredential.assert_called_once_with()
+    default_credential.get_token.assert_called_once_with(AZURE_POSTGRES_SCOPE)
+
+
+def test_azure_postgres_auth_requires_azure_identity(monkeypatch):
+    import builtins
+
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    real_import = builtins.__import__
+
+    def fail_azure_identity_import(name, *args, **kwargs):
+        if name == "azure.identity":
+            raise ImportError("missing azure.identity")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_azure_identity_import)
+
+    with pytest.raises(ImportError, match="azure-identity is required"):
+        _build_azure_postgres_credential()
+
+
 def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
     """Writer Azure passwordless auth reads the same DATABASE_HOST/PORT/USER/NAME
     env vars as the existing RDS IAM path, but mints an Entra token instead of
