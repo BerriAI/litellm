@@ -81,3 +81,23 @@ def test_transform_request_strips_unsupported_tools_from_body():
 
     assert [tool["type"] for tool in body["tools"]] == ["function"]
     assert body["tools"][0]["function"]["name"] == "shell"
+
+
+async def test_async_transform_request_strips_unsupported_tools_from_body():
+    config = DeepSeekChatConfig()
+    body = await config.async_transform_request(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "tools": [
+                _function_tool("shell"),
+                {"type": "namespace", "name": "container.exec"},
+            ],
+            "tool_choice": "auto",
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert [tool["type"] for tool in body["tools"]] == ["function"]
+    assert body["tools"][0]["function"]["name"] == "shell"

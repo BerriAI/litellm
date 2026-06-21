@@ -157,6 +157,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         #30722). Drop the unsupported entries so the function tools still go
         through, and drop the now-dangling tool_choice/parallel_tool_calls when
         nothing callable survives.
+
+        Only non-`function` tools are ever dropped, so a `tool_choice` that names
+        a specific function still points at a surviving tool and is left intact;
+        `tool_choice`/`parallel_tool_calls` are cleared only when no function
+        tool remains.
         """
         tools = optional_params.get("tools")
         if not isinstance(tools, list) or not tools:
