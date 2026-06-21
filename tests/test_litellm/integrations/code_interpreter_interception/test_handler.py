@@ -606,6 +606,30 @@ async def test_post_hook_delete_is_idempotent_across_loop_levels():
 
 
 @pytest.mark.asyncio
+async def test_build_plan_deletes_sandbox_when_execution_raises():
+    """If sandbox execution raises before a plan is built (e.g. E2B aborts
+    output over its cap), the cached sandbox must be deleted before re-raising,
+    otherwise a caller can leak paid containers until the prune TTL."""
+
+    class RaisingSandbox(FakeSandbox):
+        async def arun_code(self, *, container, code, **kwargs):
+            raise ValueError("output exceeded cap")
+
+    sandbox = RaisingSandbox()
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    with pytest.raises(ValueError, match="exceeded cap"):
+        await _build_plan(logger, sandbox, call_id="k1")
+
+    assert len(sandbox.create_calls) == 1, "the sandbox must have been created"
+    assert len(sandbox.delete_calls) == 1, (
+        "a build failure must delete the cached sandbox so it does not keep "
+        "running and billing"
+    )
+    assert "sbxkey1" not in logger._container_cache
+
+
+@pytest.mark.asyncio
 async def test_cleanup_hook_deletes_sandbox():
     sandbox = FakeSandbox(stdout="42")
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)

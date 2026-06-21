@@ -211,40 +211,46 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         sandbox_key = kwargs.get(_SANDBOX_KEY)
         container, params = await self._get_or_create_container(cache_key=sandbox_key)
 
-        container_id = getattr(container, "id", None)
-        input_list = self._normalize_messages(messages)
-        code_interpreter_calls = []
-        for tool_call in tool_calls:
-            arguments = tool_call.get("arguments", "")
-            code = self._parse_code(arguments)
-            stdout = await self._run_tool_call(
-                container=container, params=params, arguments=arguments
-            )
-            input_list.append(
-                {
-                    "type": "function_call",
-                    "call_id": tool_call.get("call_id"),
-                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
-                    "arguments": arguments,
-                }
-            )
-            input_list.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_call.get("call_id"),
-                    "output": stdout,
-                }
-            )
-            code_interpreter_calls.append(
-                {
-                    "id": f"ci_{uuid.uuid4().hex}",
-                    "type": "code_interpreter_call",
-                    "status": "completed",
-                    "code": code,
-                    "container_id": container_id,
-                    "outputs": ([{"type": "logs", "logs": stdout}] if stdout else []),
-                }
-            )
+        try:
+            container_id = getattr(container, "id", None)
+            input_list = self._normalize_messages(messages)
+            code_interpreter_calls = []
+            for tool_call in tool_calls:
+                arguments = tool_call.get("arguments", "")
+                code = self._parse_code(arguments)
+                stdout = await self._run_tool_call(
+                    container=container, params=params, arguments=arguments
+                )
+                input_list.append(
+                    {
+                        "type": "function_call",
+                        "call_id": tool_call.get("call_id"),
+                        "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                        "arguments": arguments,
+                    }
+                )
+                input_list.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call.get("call_id"),
+                        "output": stdout,
+                    }
+                )
+                code_interpreter_calls.append(
+                    {
+                        "id": f"ci_{uuid.uuid4().hex}",
+                        "type": "code_interpreter_call",
+                        "status": "completed",
+                        "code": code,
+                        "container_id": container_id,
+                        "outputs": (
+                            [{"type": "logs", "logs": stdout}] if stdout else []
+                        ),
+                    }
+                )
+        except Exception:
+            await self._delete_container_for_cache_key(sandbox_key)
+            raise
 
         optional_params = anthropic_messages_optional_request_params
         request_patch = AgenticLoopRequestPatch(
