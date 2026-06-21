@@ -1437,12 +1437,13 @@ class ProxyBaseLLMRequestProcessing:
                     update_response_metadata,
                 )
 
+                start_time = logging_obj.start_time or end_time
                 update_response_metadata(
                     result=response,
                     logging_obj=logging_obj,
                     model=self.data.get("model"),
                     kwargs=self.data,
-                    start_time=end_time,
+                    start_time=start_time,
                     end_time=end_time,
                 )
 
