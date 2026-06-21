@@ -70,6 +70,20 @@ class TestExtractRequestToolNames:
         }
         assert extract_request_tool_names("/v1/responses", data) == ["dmcp"]
 
+    def test_openai_responses_native_hosted_tools(self):
+        data = {
+            "tools": [
+                {"type": "code_interpreter", "container": {"type": "auto"}},
+                {"type": "web_search"},
+                {"type": "function", "name": "get_weather"},
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "code_interpreter",
+            "web_search",
+            "get_weather",
+        ]
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [
@@ -142,6 +156,31 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "get_weather" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_native_code_interpreter_blocked_when_not_allowed(self):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {"tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "code_interpreter" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_native_code_interpreter_passes_when_allowed(self):
+        token = _token(metadata={"allowed_tools": ["code_interpreter"]})
+        body = {"tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]}
+        await check_tools_allowlist(
+            request_body=body,
+            valid_token=token,
+            team_object=None,
+            route="/v1/responses",
+        )
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):
