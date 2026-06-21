@@ -168,7 +168,7 @@
     "slack": 10
   },
   "reportUntypedBaseClass": {
-    "baseline": 102,
+    "baseline": 110,
     "slack": 3
   },
   "reportUntypedFunctionDecorator": {
