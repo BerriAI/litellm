@@ -1,5 +1,6 @@
 """Tests for the v2 egress manager: factory, skeleton, and the egress override (step 6)."""
 
+import base64
 import contextlib
 import socket
 import threading
@@ -267,3 +268,119 @@ async def test_v2_passthrough_without_token_fails_closed(echo_server_url):
             host_progress_callback=None,
             user_api_key_auth=None,
         )
+
+
+# --- _v2_connection header-assembly + isolation matrix ---
+# Run the full _v2_connection seam per mode and assert the EXACT upstream headers (resolve()'s auth
+# merged with the metadata headers), so a mode can never silently attach a wrong, missing, or extra
+# header, and the caller's credentials never leak where they shouldn't.
+
+
+def _egress_server(**kwargs):
+    return MCPServer(
+        server_id="s",
+        name="s",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        **kwargs,
+    )
+
+
+def _final_headers(conn_ok):
+    # Exact upstream headers = metadata headers + what resolve()'s Auth attaches (auth wins on conflict).
+    # White-box: read the connection's resolved auth + metadata headers directly.
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import _added_headers
+
+    return {**(conn_ok._extra_headers or {}), **_added_headers(conn_ok._auth)}
+
+
+async def _connect(server, **kwargs):
+    from litellm.proxy.gateway.mcp.result import Ok
+
+    manager = MCPServerManagerV2()
+    conn = await manager._v2_connection(
+        server, kwargs.pop("user_api_key_auth", None), **kwargs
+    )
+    assert isinstance(conn, Ok), f"_v2_connection returned {conn!r}"
+    return conn.ok
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"auth_type": MCPAuth.none}, {}),
+        (
+            {"auth_type": MCPAuth.api_key, "authentication_token": "k"},
+            {"X-API-Key": "k"},
+        ),
+        (
+            {"auth_type": MCPAuth.bearer_token, "authentication_token": "k"},
+            {"Authorization": "Bearer k"},
+        ),
+        (
+            {"auth_type": MCPAuth.authorization, "authentication_token": "Raw v"},
+            {"Authorization": "Raw v"},
+        ),
+        (
+            {"auth_type": MCPAuth.token, "authentication_token": "k"},
+            {"Authorization": "token k"},
+        ),
+        (
+            {"auth_type": MCPAuth.basic, "authentication_token": "u:p"},
+            {"Authorization": f"Basic {base64.b64encode(b'u:p').decode()}"},
+        ),
+    ],
+)
+async def test_v2_connection_builds_exact_headers_per_mode(kwargs, expected):
+    conn = await _connect(_egress_server(**kwargs))
+    assert _final_headers(conn) == expected  # exact match -> no missing/extra headers
+
+
+@pytest.mark.asyncio
+async def test_v2_connection_passthrough_forwards_only_the_inbound_token():
+    conn = await _connect(
+        _passthrough_server("https://up.example/mcp"), subject_token="caller-tok"
+    )
+    assert _final_headers(conn) == {"Authorization": "Bearer caller-tok"}
+
+
+@pytest.mark.asyncio
+async def test_v2_connection_merges_static_headers_without_extras():
+    conn = await _connect(
+        _egress_server(
+            auth_type=MCPAuth.api_key,
+            authentication_token="k",
+            static_headers={"X-Custom": "v"},
+        )
+    )
+    assert _final_headers(conn) == {"X-API-Key": "k", "X-Custom": "v"}
+
+
+@pytest.mark.asyncio
+async def test_v2_connection_strips_caller_authorization_but_forwards_configured_headers():
+    # The server forwards [Authorization, X-Tenant]; Authorization is the gateway credential and must
+    # be stripped, X-Tenant forwarded, and the upstream credential comes from resolve().
+    conn = await _connect(
+        _egress_server(
+            auth_type=MCPAuth.api_key,
+            authentication_token="k",
+            extra_headers=["Authorization", "X-Tenant"],
+        ),
+        raw_headers={"Authorization": "Bearer GATEWAY-CRED", "X-Tenant": "t1"},
+        forward_caller_headers=True,
+    )
+    assert _final_headers(conn) == {"X-API-Key": "k", "X-Tenant": "t1"}
+
+
+@pytest.mark.asyncio
+async def test_v2_connection_does_not_leak_inbound_token_into_non_obo_modes():
+    # The inbound token is always put on the Subject, but a non-OBO mode (api_key) ignores it: the
+    # headers carry only the configured credential, never the caller's token (credential isolation).
+    conn = await _connect(
+        _egress_server(auth_type=MCPAuth.api_key, authentication_token="k"),
+        subject_token="LEAK-ME",
+    )
+    headers = _final_headers(conn)
+    assert headers == {"X-API-Key": "k"}
+    assert "LEAK-ME" not in str(headers)
