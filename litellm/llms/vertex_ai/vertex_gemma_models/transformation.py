@@ -189,7 +189,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client= Optional[Any] = None,
+        client= Any = None,
         timeout: Optional[Union[float, httpx.Timeout]]= None,
         encoding: Any= None,
     ):
