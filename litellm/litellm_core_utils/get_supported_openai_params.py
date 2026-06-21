@@ -191,7 +191,9 @@ def get_supported_openai_params(
         )
     elif custom_llm_provider == "sambanova":
         if request_type == "embeddings":
-            litellm.SambaNovaEmbeddingConfig().get_supported_openai_params(model=model)
+            return litellm.SambaNovaEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
         else:
             return litellm.SambanovaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nebius":
