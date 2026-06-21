@@ -51,11 +51,13 @@ class E2BSandboxConfig(BaseSandboxConfig):
         timeout: int | None = None,
         allow_internet_access: bool = True,
         api_key: str | None = None,
+        api_base: str | None = None,
         metadata: dict | None = None,
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> ContainerHandle:
         key = self.validate_environment(api_key=api_key)
+        base = api_base or E2B_API_BASE
         body = {
             "templateID": template or E2B_DEFAULT_TEMPLATE,
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
@@ -68,7 +70,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         response = cast(
             httpx.Response,
             await self._http(client).post(
-                url=f"{E2B_API_BASE}/sandboxes",
+                url=f"{base}/sandboxes",
                 headers={"X-API-Key": key, "Content-Type": "application/json"},
                 json=body,
             ),
@@ -84,6 +86,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             "envd_access_token": data.get("envdAccessToken"),
             "traffic_access_token": data.get("trafficAccessToken"),
             "api_key": key,
+            "api_base": base,
         }
         return handle
 
@@ -130,6 +133,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         *,
         container: Union[ContainerHandle, str],
         api_key: str | None = None,
+        api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> bool:
@@ -139,11 +143,12 @@ class E2BSandboxConfig(BaseSandboxConfig):
             or handle._hidden_params.get("api_key")
             or self.validate_environment()
         )
+        base = api_base or handle._hidden_params.get("api_base") or E2B_API_BASE
         try:
             response = cast(
                 httpx.Response,
                 await self._http(client).delete(
-                    url=f"{E2B_API_BASE}/sandboxes/{handle.id}",
+                    url=f"{base}/sandboxes/{handle.id}",
                     headers={"X-API-Key": key},
                 ),
             )

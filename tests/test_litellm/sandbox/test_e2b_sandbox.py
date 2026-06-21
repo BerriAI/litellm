@@ -295,3 +295,24 @@ async def test_public_lifecycle_create_run_delete():
 async def test_unsupported_provider_raises():
     with pytest.raises(ValueError):
         await litellm.acreate_sandbox(provider="not-a-provider")
+
+
+# ---------- api_base override ----------
+
+
+@pytest.mark.asyncio
+async def test_create_uses_api_base_override():
+    client = FakeHTTPClient()
+    await E2BSandboxConfig().acreate_sandbox(
+        api_base="http://my-sandbox:8080", api_key="k", client=client
+    )
+    _, url, _, _ = client.calls[0]
+    assert url == "http://my-sandbox:8080/sandboxes"
+
+
+@pytest.mark.asyncio
+async def test_create_defaults_to_e2b_api_base():
+    client = FakeHTTPClient()
+    await E2BSandboxConfig().acreate_sandbox(api_key="k", client=client)
+    _, url, _, _ = client.calls[0]
+    assert url == "https://api.e2b.app/sandboxes"
