@@ -181,6 +181,7 @@ jobs:
           - test-group: guardrails-hooks
             test-path: >-
               tests/proxy_unit_tests/test_proxy_setting_guardrails.py
+              tests/proxy_unit_tests/test_guardrail_usage_config.py
               tests/proxy_unit_tests/test_banned_keyword_list.py
               tests/proxy_unit_tests/test_unit_test_proxy_hooks.py
             workers: 4
