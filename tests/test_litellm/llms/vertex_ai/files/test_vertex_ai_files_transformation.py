@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
-    VertexAIJsonlFilesTransformation,
     _get_litellm_batch_custom_id_from_labels,
+    _openai_batch_jsonl_entry_to_vertex_wrapped_request,
     _sanitize_gcp_label_value,
 )
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
@@ -1053,12 +1053,23 @@ class TestTryTransformDoesNotMutateCallerLoggingObj:
         assert transformed["response"]["status_code"] == 200
 
 
+def _wrap_entries(openai_jsonl_content):
+    """Vertex-wrapped requests for a list of OpenAI batch entries, built via the
+    live single-entry transform that the streaming upload path uses."""
+    cfg = VertexAIFilesConfig()
+    return [
+        _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+            entry, cfg._map_openai_to_vertex_params
+        )
+        for entry in openai_jsonl_content
+    ]
+
+
 class TestVertexBatchCustomIdLabels:
     """Test custom_id handling in batch transformations"""
 
     def test_custom_id_added_to_labels_in_vertex_request(self):
         """Test that custom_id from OpenAI format is added as a label in Vertex AI format"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         openai_jsonl_content = [
             {
@@ -1073,11 +1084,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
 
         assert len(vertex_jsonl_content) == 1
         vertex_request = vertex_jsonl_content[0]
@@ -1092,7 +1099,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_long_custom_id_round_trips_across_raw_label_chunks(self):
         """Test that long custom_ids are not truncated in raw labels."""
-        transformation = VertexAIJsonlFilesTransformation()
         custom_id_a = "shared-prefix-that-is-longer-than-thirty-six-bytes-A"
         custom_id_b = "shared-prefix-that-is-longer-than-thirty-six-bytes-B"
 
@@ -1109,11 +1115,7 @@ class TestVertexBatchCustomIdLabels:
             for custom_id in (custom_id_a, custom_id_b)
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
         labels_a = vertex_jsonl_content[0]["request"]["labels"]
         labels_b = vertex_jsonl_content[1]["request"]["labels"]
 
@@ -1128,7 +1130,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_multiple_requests_each_get_their_own_label(self):
         """Test that multiple requests each get their own custom_id label"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         openai_jsonl_content = [
             {
@@ -1143,11 +1144,7 @@ class TestVertexBatchCustomIdLabels:
             for i in range(3)
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
 
         assert len(vertex_jsonl_content) == 3
 
@@ -1163,7 +1160,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_request_without_custom_id_has_no_label(self):
         """Test that requests without custom_id don't get a label"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         openai_jsonl_content = [
             {
@@ -1176,11 +1172,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
 
         # Should not have labels if no custom_id was provided
         assert "labels" not in vertex_jsonl_content[0]["request"]
@@ -1190,7 +1182,6 @@ class TestVertexBatchCustomIdLabels:
         Test the full round trip: OpenAI format -> Vertex AI format -> Vertex AI output -> OpenAI output
         Verify that custom_id is preserved through the entire flow.
         """
-        transformation = VertexAIJsonlFilesTransformation()
         config = VertexAIFilesConfig()
 
         # Step 1: Transform OpenAI input to Vertex AI format (mixed case exercises raw label)
@@ -1206,11 +1197,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_input = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_input
-            )
-        )
+        vertex_input = _wrap_entries(openai_input)
 
         # Verify both labels are GCP-safe and encoded raw preserves round-trip.
         assert (
@@ -1254,7 +1241,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_custom_id_label_sanitization(self):
         """Test that custom_id values are sanitized to meet GCP label constraints"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         # Test sanitization function
         assert _sanitize_gcp_label_value("MyRequest-1") == "myrequest-1"
@@ -1279,11 +1265,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_input = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_input
-            )
-        )
+        vertex_input = _wrap_entries(openai_input)
 
         # Verify both labels are safe for GCP labels.
         assert (

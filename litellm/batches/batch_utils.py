@@ -436,50 +436,6 @@ def _get_batch_job_total_usage_from_file_content(
     )
 
 
-def _get_models_from_batch_input_file_content(
-    file_content_dictionary: List[dict],
-) -> List[str]:
-    """Extract the distinct ``body.model`` values from a batch *input* file.
-
-    Used by the proxy's batch pre-call hook to enforce that the caller is
-    authorized for every model named inside the JSONL — not just the one
-    on the outer request — so the proxy's per-key model allowlist isn't
-    bypassed by smuggling expensive models into the batch file.
-    """
-    models: List[str] = []
-    seen: set = set()
-    for _item in file_content_dictionary:
-        body = _item.get("body") or {}
-        model = body.get("model")
-        if model and model not in seen:
-            seen.add(model)
-            models.append(model)
-    return models
-
-
-def _get_batch_job_input_file_usage(
-    file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    model_name: Optional[str] = None,
-) -> Usage:
-    """
-    Count the number of tokens in the input file
-
-    Used for batch rate limiting to count the number of tokens in the input file
-    """
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-
-    for _item in file_content_dictionary:
-        prompt_tokens += _count_entry_tokens(_item, model_name=model_name)
-
-    return Usage(
-        total_tokens=prompt_tokens + completion_tokens,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-    )
-
-
 def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
     """Token-count a ``prompt`` / ``input`` field that the OpenAI batch
     schema allows in four shapes:

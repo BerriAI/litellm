@@ -32,12 +32,11 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
-    VertexAIJsonlFilesTransformation,
     _OpenAIToVertexBatchUploadStream,
     _get_litellm_batch_custom_id_from_labels,
     _iter_openai_jsonl_entries,
     _iter_openai_jsonl_lines,
-    _stream_openai_jsonl_to_vertex,
+    _openai_batch_jsonl_entry_to_vertex_wrapped_request,
 )
 from litellm.types.llms.openai import CreateFileRequest
 
@@ -79,28 +78,21 @@ def _make_openai_jsonl_bytes(n_rows: int, padding: int = 400) -> bytes:
     return ("\n".join(rows)).encode("utf-8")
 
 
-def _legacy_vertex_jsonl_string(cfg: VertexAIFilesConfig, content: str) -> str:
-    """A list-based pipeline, reconstructed for parity comparison."""
+def _reference_vertex_jsonl_string(cfg: VertexAIFilesConfig, content: str) -> str:
+    """Row-by-row reference output built eagerly from the live single-entry
+    transform, so the streaming path can be checked against it for parity."""
     entries = [json.loads(line) for line in content.splitlines() if line.strip()]
-    vertex = cfg._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(entries)
-    return "\n".join(json.dumps(item) for item in vertex)
+    return "\n".join(
+        json.dumps(
+            _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+                entry, cfg._map_openai_to_vertex_params
+            )
+        )
+        for entry in entries
+    )
 
 
 class TestStreamingOutputParity:
-    def test_streaming_bytes_match_legacy_pipeline(self):
-        cfg = VertexAIFilesConfig()
-        raw = _make_openai_jsonl_bytes(500)
-
-        streamed, first_entry = _stream_openai_jsonl_to_vertex(
-            raw, cfg._map_openai_to_vertex_params, as_bytes=True
-        )
-        legacy = _legacy_vertex_jsonl_string(cfg, raw.decode("utf-8"))
-
-        assert isinstance(streamed, bytes)
-        assert streamed.decode("utf-8") == legacy
-        assert first_entry is not None
-        assert first_entry["custom_id"] == "request-0"
-
     def test_transform_create_file_request_returns_resumable_stream_parity(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(300)
@@ -118,7 +110,7 @@ class TestStreamingOutputParity:
         # defeat the OOM fix.
         assert isinstance(out, dict) and "resumable_chunked_upload" in out
         assert isinstance(_resumable_stream(out), BaseFileUploadStream)
-        assert _join_upload_body(out).decode("utf-8") == _legacy_vertex_jsonl_string(
+        assert _join_upload_body(out).decode("utf-8") == _reference_vertex_jsonl_string(
             cfg, raw.decode("utf-8")
         )
 
@@ -238,26 +230,6 @@ class TestStreamingLineIterator:
             next(gen)
 
 
-class TestLegacyHandlerPathStreaming:
-    def test_returns_str_with_object_name_from_first_row(self):
-        transformer = VertexAIJsonlFilesTransformation()
-        raw = _make_openai_jsonl_bytes(50)
-
-        vertex_str, object_name = (
-            transformer.transform_openai_file_content_to_vertex_ai_file_content(raw)
-        )
-
-        assert isinstance(vertex_str, str)
-        assert "gemini-2.5-flash" in object_name
-        # First line is a valid Vertex-wrapped request.
-        assert "request" in json.loads(vertex_str.splitlines()[0])
-
-    def test_empty_payload_raises(self):
-        transformer = VertexAIJsonlFilesTransformation()
-        with pytest.raises(ValueError, match="empty"):
-            transformer.transform_openai_file_content_to_vertex_ai_file_content(b"\n\n")
-
-
 class TestGetObjectNameLazyParse:
     def test_only_parses_first_row_for_model(self):
         cfg = VertexAIFilesConfig()
@@ -303,16 +275,22 @@ class TestStreamingPeakMemory:
         raw = _make_openai_jsonl_bytes(8000)
         content_str = raw.decode("utf-8")
 
-        streaming_peak = self._measure(
-            lambda: _stream_openai_jsonl_to_vertex(
-                raw, cfg._map_openai_to_vertex_params, as_bytes=True
-            )
-        )
-        list_peak = self._measure(lambda: _legacy_vertex_jsonl_string(cfg, content_str))
+        def drain_stream():
+            # Consume the upload body one row at a time, as the chunked uploader
+            # does, without accumulating it.
+            for _ in _OpenAIToVertexBatchUploadStream(
+                raw, cfg._map_openai_to_vertex_params
+            ).iter_bytes():
+                pass
 
-        # Core guard: streaming peaks at well under two-thirds of the list
-        # pipeline. Building full intermediate lists in the hot path pushes this
-        # ratio back toward 1.0 and fails the test.
+        streaming_peak = self._measure(drain_stream)
+        list_peak = self._measure(
+            lambda: _reference_vertex_jsonl_string(cfg, content_str)
+        )
+
+        # Core guard: the lazily consumed streaming body peaks well under a list
+        # pipeline that materializes every transformed row. Building full
+        # intermediate lists in the hot path pushes this ratio back toward 1.0.
         assert streaming_peak < list_peak * 0.6, (
             f"streaming peak {streaming_peak} not a clear win over list pipeline "
             f"{list_peak} (ratio {streaming_peak / list_peak:.2f})"
@@ -370,7 +348,7 @@ class TestPathSourcedStreaming:
         )
         assert isinstance(out, dict) and "resumable_chunked_upload" in out
         body = _join_upload_body(out).decode("utf-8")
-        assert body == _legacy_vertex_jsonl_string(cfg, raw.decode("utf-8"))
+        assert body == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
         lines = body.splitlines()
         assert len(lines) == n_rows, "no batch row may be dropped from a Path source"
         first_labels = json.loads(lines[0])["request"]["labels"]
@@ -530,7 +508,7 @@ class TestResumableStreamBody:
         stream = _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params)
         assert b"".join(stream.iter_bytes()).decode(
             "utf-8"
-        ) == _legacy_vertex_jsonl_string(cfg, raw.decode("utf-8"))
+        ) == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
 
     def test_stream_is_reiterable_for_retries(self):
         # A one-shot generator would make a transport retry upload an empty body;
