@@ -1348,6 +1348,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     non_admin = MagicMock(spec=UserAPIKeyAuth)
     non_admin.user_role = LitellmUserRoles.INTERNAL_USER
     non_admin.user_id = "user-mine"
+    non_admin.team_id = None
 
     filtered, total_count = await _apply_search_filter_to_models(
         all_models=[caller_team_byok, other_team_byok, public_model],
@@ -1381,6 +1382,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     admin = MagicMock(spec=UserAPIKeyAuth)
     admin.user_role = LitellmUserRoles.PROXY_ADMIN
     admin.user_id = "admin-1"
+    admin.team_id = None
 
     filtered_admin, _ = await _apply_search_filter_to_models(
         all_models=[caller_team_byok, other_team_byok, public_model],

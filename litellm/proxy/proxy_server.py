@@ -11581,9 +11581,12 @@ async def _get_caller_byok_team_scope(
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         return None
+    key_team_scope: set[str] = (
+        {user_api_key_dict.team_id} if user_api_key_dict.team_id else set()
+    )
     user_id = user_api_key_dict.user_id
     if user_id is None:
-        return set()
+        return key_team_scope
     try:
         user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_id}
@@ -11591,12 +11594,12 @@ async def _get_caller_byok_team_scope(
     except Exception:
         verbose_proxy_logger.exception(
             "Failed to look up caller teams while scoping BYOK search; "
-            "defaulting to no team access."
+            "defaulting to key team scope only."
         )
-        return set()
+        return key_team_scope
     if user_row is None:
-        return set()
-    return set(user_row.teams or [])
+        return key_team_scope
+    return key_team_scope | set(user_row.teams or [])
 
 
 def _byok_row_outside_caller_teams(
