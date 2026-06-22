@@ -2649,7 +2649,7 @@ async def test_mcp_access_group_permission_inheritance_integration():
             MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
         ) as mock_team:
             # Key has no permissions, team has servers
-            mock_key.return_value = []  # Key inherits nothing directly
+            mock_key.return_value = None  # Key declares no scope -> inherit team
             mock_team.return_value = [
                 "staff-server-1",
                 "staff-server-2",

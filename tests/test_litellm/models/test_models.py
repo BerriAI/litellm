@@ -161,6 +161,35 @@ class TestObjectPermission:
         )
         assert perm.mcp_tool_permissions == {"server1": ["tool1", "tool2"]}
 
+    @pytest.mark.parametrize(
+        "mcp_servers,scenario",
+        [
+            (None, "none_inherits_team"),
+            ([], "explicit_empty_is_zero"),
+        ],
+    )
+    def test_object_permission_mcp_servers_survive_cache_round_trip(
+        self, mcp_servers, scenario
+    ):
+        """A Redis round-trip serializes through ``model_dump(mode='json',
+        exclude_none=True)`` and re-validates the dict. ``mcp_servers`` must
+        keep the inherit (None) vs explicit-zero ([]) distinction across that
+        boundary, since the MCP permission logic branches on exactly that."""
+        from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+
+        perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="x",
+            mcp_servers=mcp_servers,
+        )
+
+        payload = CacheCodec.serialize(perm)
+        restored = CacheCodec.deserialize(
+            payload, model_type=LiteLLM_ObjectPermissionTable
+        )
+
+        assert restored is not None
+        assert restored.mcp_servers == mcp_servers, f"scenario={scenario}"
+
 
 class TestOrganization:
     def test_organization_creation(self):

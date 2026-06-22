@@ -136,6 +136,12 @@ async def handle_update_object_permission_common(
             existing_object_permissions_dict["mcp_tool_permissions"]
         )
 
+    # mcp_servers is a JSON column; serialize the list (None stays NULL = inherit).
+    if isinstance(existing_object_permissions_dict.get("mcp_servers"), list):
+        existing_object_permissions_dict["mcp_servers"] = safe_dumps(
+            existing_object_permissions_dict["mcp_servers"]
+        )
+
     #########################################################
     # Commit the update to the LiteLLM_ObjectPermissionTable
     #########################################################
@@ -184,6 +190,10 @@ async def _set_object_permission(
         clean_data["mcp_tool_permissions"] = safe_dumps(
             clean_data["mcp_tool_permissions"]
         )
+
+    # mcp_servers is a JSON column; serialize the list (None was already dropped above).
+    if isinstance(clean_data.get("mcp_servers"), list):
+        clean_data["mcp_servers"] = safe_dumps(clean_data["mcp_servers"])
 
     created_permission = await ObjectPermissionRepository(prisma_client).table.create(
         data=clean_data

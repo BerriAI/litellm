@@ -14,7 +14,10 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_ObjectPermissionTable record"""
 
     object_permission_id: str
-    mcp_servers: Optional[List[str]] = []
+    # None = inherit team scope; [] = no servers; ["id", ...] = exactly those. The
+    # default must stay None so the inherit/zero distinction survives cache
+    # round-trips (serialize drops None via exclude_none, deserialize restores it).
+    mcp_servers: Optional[List[str]] = None
     mcp_access_groups: Optional[List[str]] = []
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = []

@@ -195,7 +195,13 @@ export default function KeyInfoView({
         delete formValues.vector_stores;
       }
 
-      if (formValues.mcp_servers_and_groups !== undefined) {
+      // MCP scope is tri-state: "inherit" sends mcp_servers = null (backend inherits
+      // the team's servers), "none" sends [] (explicitly zero), and "specific" sends
+      // the selected servers/access groups/toolsets. The mode is the source of truth,
+      // so switching specific -> inherit correctly resets a previously-set scope.
+      const mcpScopeMode = formValues.mcp_scope_mode;
+      const isSpecificMcpScope = mcpScopeMode === "specific";
+      if (mcpScopeMode !== undefined) {
         const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || {
           servers: [],
           accessGroups: [],
@@ -203,18 +209,18 @@ export default function KeyInfoView({
         };
         formValues.object_permission = {
           ...currentKeyData.object_permission,
-          mcp_servers: servers || [],
-          mcp_access_groups: accessGroups || [],
-          mcp_toolsets: toolsets || [],
+          mcp_servers: isSpecificMcpScope ? servers || [] : mcpScopeMode === "none" ? [] : null,
+          mcp_access_groups: isSpecificMcpScope ? accessGroups || [] : [],
+          mcp_toolsets: isSpecificMcpScope ? toolsets || [] : [],
         };
-        // Remove mcp_servers_and_groups from the top level as it should be in object_permission
-        delete formValues.mcp_servers_and_groups;
       }
+      delete formValues.mcp_scope_mode;
+      delete formValues.mcp_servers_and_groups;
 
-      // Handle MCP tool permissions
+      // Tool permissions only apply when specific servers are chosen; clear them otherwise.
       if (formValues.mcp_tool_permissions !== undefined) {
         const mcpToolPermissions = formValues.mcp_tool_permissions || {};
-        if (Object.keys(mcpToolPermissions).length > 0) {
+        if (isSpecificMcpScope && Object.keys(mcpToolPermissions).length > 0) {
           formValues.object_permission = {
             ...formValues.object_permission,
             mcp_tool_permissions: mcpToolPermissions,
