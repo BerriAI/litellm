@@ -714,7 +714,7 @@ if MCP_AVAILABLE:
 
                         host_progress_callback = forward_progress
                         verbose_logger.debug(
-                            f"Host progressToken captured: {host_token[:8]}..."
+                            f"Host progressToken captured: {str(host_token)[:8]}..."
                         )
             except Exception as e:
                 verbose_logger.warning(f"Could not capture host progress context: {e}")
