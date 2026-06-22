@@ -3,6 +3,8 @@ import datetime
 import httpx
 
 from litellm import ModelResponse
+from litellm.llms.oci.chat.cohere import handle_cohere_stream_chunk
+from litellm.llms.oci.chat.generic import handle_generic_stream_chunk
 from litellm.llms.oci.chat.transformation import OCIChatConfig
 
 
@@ -93,4 +95,53 @@ def test_cohere_without_tool_calls_finish_reason_stop():
 def test_generic_tool_calls_report_finish_reason_tool_calls():
     result = _transform("meta.llama-3.3-70b-instruct", _generic_body_with_tool_calls())
     assert result.choices[0].message.tool_calls is not None
+    assert result.choices[0].finish_reason == "tool_calls"
+
+
+# --- streaming handlers (terminal chunk finish_reason) ---
+
+
+def _cohere_terminal_chunk() -> dict:
+    return {
+        "apiFormat": "COHERE",
+        "text": "All done.",
+        "finishReason": "COMPLETE",
+        "chatHistory": [{"role": "CHATBOT", "message": "All done."}],
+        "index": 0,
+    }
+
+
+def test_cohere_stream_terminal_chunk_reports_tool_calls_when_emitted():
+    # On the terminal chunk, OCI Cohere reports finishReason="COMPLETE" and
+    # suppresses already-streamed tool calls; finish_reason must still be
+    # "tool_calls" when tool calls were emitted earlier in the stream.
+    result = handle_cohere_stream_chunk(
+        _cohere_terminal_chunk(), prior_tool_calls_emitted=True
+    )
+    assert result.choices[0].finish_reason == "tool_calls"
+
+
+def test_cohere_stream_terminal_chunk_reports_stop_without_tool_calls():
+    result = handle_cohere_stream_chunk(
+        _cohere_terminal_chunk(), prior_tool_calls_emitted=False
+    )
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_generic_stream_chunk_with_tool_calls_reports_tool_calls():
+    chunk = {
+        "finishReason": "STOP",
+        "message": {
+            "toolCalls": [
+                {
+                    "id": "call_0",
+                    "type": "FUNCTION",
+                    "name": "get_weather",
+                    "arguments": "{}",
+                }
+            ]
+        },
+        "index": 0,
+    }
+    result = handle_generic_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "tool_calls"

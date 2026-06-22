@@ -375,6 +375,13 @@ def handle_cohere_stream_chunk(
         ]
 
     finish_reason = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    # OpenAI semantics: the terminal chunk must report finish_reason="tool_calls"
+    # when tool calls were emitted — on this chunk or earlier in the stream. OCI
+    # Cohere's terminal finishReason is "COMPLETE" (normalized to "stop"), and the
+    # terminal chunk suppresses already-emitted tool calls, so rely on
+    # prior_tool_calls_emitted as well.
+    if finish_reason is not None and (tool_calls or prior_tool_calls_emitted):
+        finish_reason = "tool_calls"
 
     return ModelResponseStream(
         choices=[

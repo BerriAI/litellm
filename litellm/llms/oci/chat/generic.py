@@ -463,6 +463,9 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     finish_reason: Optional[str] = _normalize_oci_finish_reason(
         typed_chunk.finishReason
     )
+    # OpenAI semantics: a chunk carrying tool calls reports finish_reason="tool_calls".
+    if tool_calls:
+        finish_reason = "tool_calls"
 
     return ModelResponseStream(
         choices=[
