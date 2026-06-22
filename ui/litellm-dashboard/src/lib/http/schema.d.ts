@@ -26617,8 +26617,6 @@ export interface components {
              * @enum {string}
              */
             transport: "sse" | "http" | "stdio";
-            /** Url */
-            url?: string | null;
         };
         /**
          * MCPSemanticFilterSettings
