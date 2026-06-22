@@ -2770,6 +2770,21 @@ if MCP_AVAILABLE:
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
             "litellm_logging_obj", None
         )
+        failure_request_data = dict(kwargs)
+        failure_request_data["call_type"] = CallTypes.call_mcp_tool.value
+        failure_request_data["model"] = f"MCP: {name}"
+
+        if arguments is not None:
+            original_tool_name, server_name = split_server_prefix_from_name(name)
+            metadata = failure_request_data.get("metadata")
+            metadata = metadata.copy() if isinstance(metadata, dict) else {}
+            metadata["mcp_tool_call_metadata"] = _get_standard_logging_mcp_tool_call(
+                name=original_tool_name,
+                arguments=arguments,
+                server_name=server_name,
+                session_id=_mcp_session_id_from_headers(raw_headers),
+            )
+            failure_request_data["metadata"] = metadata
 
         try:
             if arguments is None:
@@ -2820,8 +2835,21 @@ if MCP_AVAILABLE:
             from litellm.proxy.proxy_server import proxy_logging_obj
 
             if proxy_logging_obj and user_api_key_auth:
+                if litellm_logging_obj is not None:
+                    model_call_details = litellm_logging_obj.model_call_details
+                    mcp_tool_call_metadata = model_call_details.get(
+                        "mcp_tool_call_metadata"
+                    )
+                    if mcp_tool_call_metadata is not None:
+                        metadata = failure_request_data.get("metadata")
+                        metadata = metadata.copy() if isinstance(metadata, dict) else {}
+                        metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+                        failure_request_data["metadata"] = metadata
+                    failure_request_data["model"] = (
+                        model_call_details.get("model") or failure_request_data["model"]
+                    )
                 await proxy_logging_obj.post_call_failure_hook(
-                    request_data=kwargs,
+                    request_data=failure_request_data,
                     original_exception=e,
                     user_api_key_dict=user_api_key_auth,
                     route="/mcp/call_tool",
