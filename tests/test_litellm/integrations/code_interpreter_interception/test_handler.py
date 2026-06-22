@@ -229,6 +229,21 @@ async def test_pre_call_noop_on_non_responses():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_noop_on_chat_completion_without_code_interpreter_tool():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "web_search"}],
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is None
+    assert _ACTIVE_KEY not in kwargs
+    assert _SANDBOX_KEY not in kwargs
+
+
+@pytest.mark.asyncio
 async def test_should_run_detects_only_matching_function_call():
     logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
 
