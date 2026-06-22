@@ -12,12 +12,11 @@ import pytest
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
+    _SANDBOX_KEY,
 )
 from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.utils import CallTypes
-
-_ACTIVE_KEY = "_code_interpreter_interception_active"
-_SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 
 
 class FakeHandle:

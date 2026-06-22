@@ -1131,7 +1131,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
-            except Exception as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
+            except (
+                Exception
+            ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
                 if isinstance(e, OpenAIError):
                     raise e
 
