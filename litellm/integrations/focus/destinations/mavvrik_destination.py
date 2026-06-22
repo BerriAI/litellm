@@ -3,6 +3,7 @@
 Flow:
   1. GET /metrics/agent/ai/{connection_id}/upload-url → GCS signed URL
   2. PUT <signed_url> with CSV content
+  3. PATCH /metrics/agent/ai/{connection_id} → advance metricsMarker
 """
 
 from __future__ import annotations
@@ -127,8 +128,6 @@ class FocusMavvrikDestination(FocusDestination):
             timeout=30.0,
         )
         if resp.status_code == 410:
-            # Connector has been disconnected in Mavvrik — reset flag so next
-            # delivery attempt re-registers after it becomes active again.
             self._registered = False
             raise RuntimeError(
                 "Mavvrik FOCUS destination: connector is disconnected (410). "
@@ -273,13 +272,34 @@ class FocusMavvrikDestination(FocusDestination):
                 pass
             raise
 
+    async def _update_metrics_marker(self, date_epoch: int) -> None:
+        """PATCH agent endpoint to advance metricsMarker after a successful upload."""
+        resp = await self._http.client.request(
+            method="PATCH",
+            url=self._agent_url,
+            headers=self._auth_headers,
+            json={"metricsMarker": date_epoch},
+            timeout=30.0,
+        )
+        if resp.status_code == 410:
+            self._registered = False
+            raise RuntimeError(
+                "Mavvrik FOCUS destination: connector is disconnected (410). "
+                "Re-enable the connection in the Mavvrik dashboard."
+            )
+        if resp.status_code >= 400:
+            verbose_logger.warning(
+                "Mavvrik FOCUS destination: failed to update metricsMarker (%s): %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            return
+        verbose_logger.debug(
+            "Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch
+        )
+
     async def get_metrics_marker(self) -> Optional[int]:
         """Register with Mavvrik and return the current metricsMarker.
-
-        The metricsMarker is a Unix timestamp (seconds) representing the last
-        date Mavvrik has successfully ingested. Called on every scheduled run
-        so the logger can detect and catch up any dates missed due to previous
-        export failures.
 
         Always calls the Mavvrik register API — unlike deliver() which skips
         registration once _registered is True, catch-up requires a fresh
@@ -328,6 +348,7 @@ class FocusMavvrikDestination(FocusDestination):
             return
 
         date_str = time_window.start_time.strftime("%Y-%m-%d")
+        date_epoch = int(time_window.start_time.timestamp())
 
         verbose_logger.debug(
             "Mavvrik FOCUS destination: uploading %d bytes for date=%s (%s)",
@@ -339,6 +360,7 @@ class FocusMavvrikDestination(FocusDestination):
         await self._ensure_registered()
         signed_url = await self._get_signed_url(date_str)
         await self._upload_to_gcs(signed_url, content)
+        await self._update_metrics_marker(date_epoch)
 
         verbose_logger.debug(
             "Mavvrik FOCUS destination: upload complete for date=%s", date_str
