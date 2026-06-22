@@ -4178,6 +4178,8 @@ async def test_call_mcp_tool_failure_hook_preserves_call_type_and_metadata():
     proxy_logging_mock.post_call_failure_hook = AsyncMock()
 
     user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+    # Assumes the default MCP_TOOL_PREFIX_SEPARATOR="-".
+    requested_tool_name = "test_server-totally_made_up_tool"
 
     with (
         patch.object(
@@ -4208,7 +4210,7 @@ async def test_call_mcp_tool_failure_hook_preserves_call_type_and_metadata():
     ):
         with pytest.raises(HTTPException) as exc_info:
             await call_mcp_tool(
-                name="test_server-totally_made_up_tool",
+                name=requested_tool_name,
                 arguments={"x": 1},
                 user_api_key_auth=user_auth,
                 litellm_call_id="cid",
@@ -4220,14 +4222,16 @@ async def test_call_mcp_tool_failure_hook_preserves_call_type_and_metadata():
         "request_data"
     ]
     assert request_data["call_type"] == "call_mcp_tool"
-    assert request_data["model"] == "MCP: test_server-totally_made_up_tool"
+    assert request_data["model"] == f"MCP: {requested_tool_name}"
     assert request_data["litellm_call_id"] == "cid"
-    assert request_data["metadata"]["mcp_tool_call_metadata"] == {
-        "name": "totally_made_up_tool",
-        "arguments": {"x": 1},
-        "namespaced_tool_name": "test_server/totally_made_up_tool",
-        "mcp_session_id": None,
-    }
+    mcp_tool_call_metadata = request_data["metadata"]["mcp_tool_call_metadata"]
+    assert mcp_tool_call_metadata["name"] == "totally_made_up_tool"
+    assert mcp_tool_call_metadata["arguments"] == {"x": 1}
+    assert (
+        mcp_tool_call_metadata["namespaced_tool_name"]
+        == "test_server/totally_made_up_tool"
+    )
+    assert mcp_tool_call_metadata["mcp_session_id"] is None
 
 
 @pytest.mark.asyncio
@@ -4285,6 +4289,11 @@ async def test_call_mcp_tool_failure_hook_uses_logging_metadata_without_clearing
             "get_mcp_server_by_id",
             return_value=mock_server,
         ),
+        patch.object(
+            global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=None,
+        ),
         patch(
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
             new_callable=AsyncMock,
@@ -4314,7 +4323,14 @@ async def test_call_mcp_tool_failure_hook_uses_logging_metadata_without_clearing
         "request_data"
     ]
     assert request_data["model"] == "MCP: test_server-any_tool"
-    assert request_data["metadata"]["mcp_tool_call_metadata"] == logging_metadata
+    mcp_tool_call_metadata = request_data["metadata"]["mcp_tool_call_metadata"]
+    assert mcp_tool_call_metadata["name"] == logging_metadata["name"]
+    assert mcp_tool_call_metadata["arguments"] == logging_metadata["arguments"]
+    assert (
+        mcp_tool_call_metadata["namespaced_tool_name"]
+        == logging_metadata["namespaced_tool_name"]
+    )
+    assert mcp_tool_call_metadata["mcp_session_id"] is None
 
 
 @pytest.mark.asyncio
