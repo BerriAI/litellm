@@ -1076,6 +1076,142 @@ async def test_pascal_method_names_normalize_to_wire_format(
         )
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        {
+            "message": {
+                "messageId": "msg-1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "hello"}],
+            },
+            "configuration": {},
+        },
+        {
+            "message": {
+                "messageId": "msg-2",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hello"}],
+            },
+        },
+    ],
+)
+def test_build_message_send_params_accepts_wire_and_a2a_10(params):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    result = _build_message_send_params(params)
+    assert result.message.role.value == "user"
+    assert result.message.parts[0].root.text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_send_message_pascal_case_routes_to_asend_message():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    params = {
+        "message": {
+            "messageId": "msg-123",
+            "role": "ROLE_USER",
+            "parts": [{"text": "Hello"}],
+        },
+        "configuration": {},
+    }
+    mock_request = _make_request_mock("SendMessage", params)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+    captured = {}
+
+    async def capture_asend_message(request, **kwargs):
+        captured["method"] = request.method
+        captured["role"] = request.params.message.role.value
+        response = MagicMock()
+        response.model_dump.return_value = {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": {
+                "contextId": "ctx-1",
+                "kind": "message",
+                "messageId": "msg-123",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "role": "agent",
+            },
+        }
+        return response
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch(
+                "litellm.a2a_protocol.asend_message",
+                new=AsyncMock(side_effect=capture_asend_message),
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "error" not in body, f"Got error: {body}"
+    assert captured["method"] == "message/send"
+    assert captured["role"] == "user"
+    assert "message" in body["result"]
+    assert body["result"]["message"]["role"] == "ROLE_AGENT"
+
+
+def test_format_jsonrpc_response_for_a2a_v1_wraps_flat_message_result():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _format_jsonrpc_response_for_client,
+    )
+
+    wire_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {
+            "contextId": "ctx-1",
+            "kind": "message",
+            "messageId": "msg-1",
+            "parts": [{"kind": "text", "text": "hello"}],
+            "role": "agent",
+            "taskId": "task-1",
+        },
+    }
+    formatted = _format_jsonrpc_response_for_client(wire_response, is_a2a_v1=True)
+    assert "message" in formatted["result"]
+    assert formatted["result"]["message"]["role"] == "ROLE_AGENT"
+    assert formatted["result"]["message"]["parts"] == [{"text": "hello"}]
+    assert "contextId" not in formatted["result"]
+
+
+def test_format_jsonrpc_response_keeps_wire_format_for_v03_clients():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _format_jsonrpc_response_for_client,
+    )
+
+    wire_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {
+            "contextId": "ctx-1",
+            "kind": "message",
+            "messageId": "msg-1",
+            "parts": [{"kind": "text", "text": "hello"}],
+            "role": "agent",
+        },
+    }
+    assert (
+        _format_jsonrpc_response_for_client(wire_response, is_a2a_v1=False)
+        == wire_response
+    )
+
+
 @pytest.mark.asyncio
 async def test_task_method_upstream_jsonrpc_error_on_http_4xx_is_relayed():
     """When upstream returns HTTP 4xx with a JSON-RPC error body, the error body

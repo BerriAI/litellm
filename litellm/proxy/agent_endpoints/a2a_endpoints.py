@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
@@ -26,6 +27,8 @@ from litellm.types.utils import all_litellm_params
 router = APIRouter()
 
 _PASCAL_TO_WIRE: Dict[str, str] = {
+    "SendMessage": "message/send",
+    "SendStreamingMessage": "message/stream",
     "GetTask": "tasks/get",
     "ListTasks": "tasks/list",
     "CancelTask": "tasks/cancel",
@@ -36,6 +39,90 @@ _PASCAL_TO_WIRE: Dict[str, str] = {
     "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
     "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
 }
+
+
+def _build_message_send_params(params: dict) -> Any:
+    """Build MessageSendParams from wire (0.3) or A2A 1.0 JSON-RPC params."""
+    from a2a.compat.v0_3.types import MessageSendParams
+
+    try:
+        return MessageSendParams(**params)
+    except ValidationError:
+        from a2a.compat.v0_3.conversions import pb2_v10, to_compat_send_message_request
+        from google.protobuf.json_format import ParseDict, ParseError
+
+        pb = pb2_v10.SendMessageRequest()
+        try:
+            ParseDict(params, pb)
+        except ParseError as e:
+            raise ValueError(f"Invalid message/send params: {e}") from e
+        return to_compat_send_message_request(pb, "").params
+
+
+def _is_a2a_v1_request(request: Request, original_method: Optional[str]) -> bool:
+    """True when the caller is using A2A protocol 1.0 JSON-RPC."""
+    if original_method in ("SendMessage", "SendStreamingMessage"):
+        return True
+    a2a_version = request.headers.get("a2a-version", "")
+    return a2a_version.startswith("1.")
+
+
+def _to_a2a_v1_send_message_result(result: dict, request_id: Optional[Any]) -> dict:
+    """Wrap a wire-format message/task result for A2A 1.0 clients."""
+    if "message" in result or "task" in result:
+        return result
+
+    from a2a.compat.v0_3.conversions import MessageToDict, to_core_send_message_response
+    from a2a.compat.v0_3.types import (
+        Message,
+        SendMessageResponse,
+        SendMessageSuccessResponse,
+        Task,
+    )
+
+    if result.get("kind") == "message" or "messageId" in result:
+        try:
+            compat_result = Message.model_validate(result)
+        except ValidationError:
+            return result
+    elif isinstance(result.get("status"), dict) or (
+        "id" in result and "contextId" in result
+    ):
+        try:
+            compat_result = Task.model_validate(result)
+        except ValidationError:
+            return result
+    else:
+        return result
+
+    compat_response = SendMessageResponse(
+        root=SendMessageSuccessResponse(
+            id=str(request_id or ""),
+            result=compat_result,
+        )
+    )
+    return MessageToDict(
+        to_core_send_message_response(compat_response),
+        preserving_proto_field_name=False,
+    )
+
+
+def _format_jsonrpc_response_for_client(
+    content: dict,
+    *,
+    is_a2a_v1: bool,
+) -> dict:
+    """Return JSON-RPC payloads in the wire format the caller expects."""
+    if not is_a2a_v1 or content.get("error"):
+        return content
+
+    result = content.get("result")
+    if not isinstance(result, dict):
+        return content
+
+    formatted = dict(content)
+    formatted["result"] = _to_a2a_v1_send_message_result(result, content.get("id"))
+    return formatted
 
 
 def _validate_push_notification_url(url: str) -> None:
@@ -275,6 +362,7 @@ async def _handle_stream_message(
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     request_data: Optional[dict] = None,
     proxy_logging_obj: Optional[Any] = None,
+    is_a2a_v1: bool = False,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
 
@@ -304,15 +392,16 @@ async def _handle_stream_message(
 
         return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
 
-    from a2a.types import MessageSendParams, SendStreamingMessageRequest
+    from a2a.compat.v0_3.types import SendStreamingMessageRequest
 
     use_proxy_hooks = user_api_key_dict is not None and request_data is not None and proxy_logging_obj is not None
 
     async def stream_response():
         try:
+            message_send_params = _build_message_send_params(params)
             a2a_request = SendStreamingMessageRequest(
                 id=request_id,
-                params=MessageSendParams(**params),
+                params=message_send_params,
             )
             a2a_stream = asend_message_streaming(
                 request=a2a_request,
@@ -339,6 +428,10 @@ async def _handle_stream_message(
                         obj = chunk.model_dump(mode="json", exclude_none=True)
                     else:
                         obj = chunk
+                    if isinstance(obj, dict):
+                        obj = _format_jsonrpc_response_for_client(
+                            obj, is_a2a_v1=is_a2a_v1
+                        )
                     return json.dumps(obj) + "\n"
 
                 def _ndjson_error(proxy_exc: Any) -> str:
@@ -372,9 +465,14 @@ async def _handle_stream_message(
             else:
                 async for chunk in a2a_stream:
                     if hasattr(chunk, "model_dump"):
-                        yield (json.dumps(chunk.model_dump(mode="json", exclude_none=True)) + "\n")
+                        obj = chunk.model_dump(mode="json", exclude_none=True)
                     else:
-                        yield json.dumps(chunk) + "\n"
+                        obj = chunk
+                    if isinstance(obj, dict):
+                        obj = _format_jsonrpc_response_for_client(
+                            obj, is_a2a_v1=is_a2a_v1
+                        )
+                    yield json.dumps(obj) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
             if (
@@ -527,8 +625,10 @@ async def invoke_agent_a2a(
             return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
 
         request_id: Optional[Any] = body.get("id")
-        method: Optional[str] = body.get("method")
+        original_method: Optional[str] = body.get("method")
+        method: Optional[str] = original_method
         params = body.get("params", {})
+        is_a2a_v1 = _is_a2a_v1_request(request, original_method)
 
         if method:
             method = _PASCAL_TO_WIRE.get(method, method)
@@ -691,11 +791,16 @@ async def invoke_agent_a2a(
                     "Server error: 'a2a' package not installed. Please install 'a2a-sdk'.",
                     500,
                 )
-            from a2a.types import MessageSendParams, SendMessageRequest
+            from a2a.compat.v0_3.types import SendMessageRequest
+
+            try:
+                message_send_params = _build_message_send_params(params)
+            except (ValidationError, ValueError) as e:
+                return _jsonrpc_error(request_id, -32602, f"Invalid params: {e}")
 
             a2a_request = SendMessageRequest(
                 id=request_id if request_id is not None else "",
-                params=MessageSendParams(**params),
+                params=message_send_params,
             )
             # Defer spend-log until after post_call_success_hook so guardrail
             # results written by the unified_guardrail hook are captured.
@@ -724,10 +829,13 @@ async def invoke_agent_a2a(
                     _enqueue_fn()
 
             return JSONResponse(
-                content=(
-                    response.model_dump(mode="json", exclude_none=True)  # type: ignore
-                    if hasattr(response, "model_dump")
-                    else response
+                content=_format_jsonrpc_response_for_client(
+                    (
+                        response.model_dump(mode="json", exclude_none=True)  # type: ignore
+                        if hasattr(response, "model_dump")
+                        else response
+                    ),
+                    is_a2a_v1=is_a2a_v1,
                 )
             )
 
@@ -744,6 +852,7 @@ async def invoke_agent_a2a(
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
+                is_a2a_v1=is_a2a_v1,
             )
         elif method in {
             "tasks/get",

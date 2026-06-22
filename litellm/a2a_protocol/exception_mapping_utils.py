@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.card_resolver import (
-    fix_agent_card_url,
     is_localhost_or_internal_url,
+    set_agent_card_url,
 )
 from litellm.a2a_protocol.exceptions import (
     A2AAgentCardError,
@@ -20,17 +20,18 @@ from litellm.a2a_protocol.exceptions import (
 from litellm.constants import CONNECTION_ERROR_PATTERNS
 
 if TYPE_CHECKING:
-    from a2a.client import A2AClient as A2AClientType
+    from a2a.client import Client as A2AClientType
 
 
-# Runtime import
-A2A_SDK_AVAILABLE = False
 try:
-    from a2a.client import A2AClient as _A2AClient  # type: ignore[no-redef]
+    from a2a.client import Client, ClientConfig, create_client
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
-    _A2AClient = None  # type: ignore[assignment, misc]
+    A2A_SDK_AVAILABLE = False
+    Client = None  # type: ignore[misc, assignment]
+    ClientConfig = None  # type: ignore[misc, assignment]
+    create_client = None  # type: ignore[misc, assignment]
 
 
 class A2AExceptionCheckers:
@@ -156,7 +157,7 @@ def map_a2a_exception(
     )
 
 
-def handle_a2a_localhost_retry(
+async def handle_a2a_localhost_retry(
     error: A2ALocalhostURLError,
     agent_card: Any,
     a2a_client: "A2AClientType",
@@ -180,8 +181,11 @@ def handle_a2a_localhost_retry(
     Raises:
         ImportError: If the A2A SDK is not installed
     """
-    if not A2A_SDK_AVAILABLE or _A2AClient is None:
-        raise ImportError("A2A SDK is required for localhost retry handling. Install it with: pip install a2a")
+    if not A2A_SDK_AVAILABLE:
+        raise ImportError(
+            "A2A SDK is required for localhost retry handling. "
+            "Install it with: pip install a2a-sdk"
+        )
 
     request_type = "streaming " if is_streaming else ""
     verbose_logger.warning(
@@ -191,10 +195,31 @@ def handle_a2a_localhost_retry(
     )
 
     # Fix the agent card URL
-    fix_agent_card_url(agent_card, error.base_url)
+    set_agent_card_url(agent_card, error.base_url)
 
-    # Create a new client with the fixed agent card (transport caches URL)
-    return _A2AClient(
-        httpx_client=a2a_client._transport.httpx_client,  # type: ignore[union-attr]
-        agent_card=agent_card,
+    httpx_client = None
+    transport = getattr(a2a_client, "_transport", None)
+    if transport is not None:
+        httpx_client = getattr(transport, "httpx_client", None) or getattr(
+            transport, "_httpx_client", None
+        )
+    if httpx_client is None:
+        config = getattr(a2a_client, "_config", None)
+        if config is not None:
+            httpx_client = getattr(config, "httpx_client", None)
+    if httpx_client is None:
+        transport_client = getattr(a2a_client, "_transport", None)
+        httpx_client = getattr(transport_client, "client", None)
+
+    if httpx_client is None:
+        raise RuntimeError(
+            "Could not recover httpx client while retrying A2A localhost URL fix."
+        )
+
+    return await create_client(
+        agent_card,
+        client_config=ClientConfig(
+            httpx_client=httpx_client,
+            streaming=is_streaming,
+        ),
     )
