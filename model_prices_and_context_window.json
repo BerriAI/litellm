@@ -1652,7 +1652,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -1681,7 +1681,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -1710,7 +1710,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -1739,7 +1739,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -1768,7 +1768,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -1797,7 +1797,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -2470,7 +2470,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -10240,7 +10240,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -18988,6 +18988,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true
@@ -28207,7 +28208,7 @@
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "source": "https://openrouter.ai/anthropic/claude-sonnet-4.6",
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -28245,7 +28246,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -30280,6 +30281,7 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_output_config": true
     },
@@ -30288,6 +30290,7 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_output_config": true
     },
@@ -33501,7 +33504,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -34990,7 +34993,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -42560,7 +42563,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -43034,6 +43037,7 @@
     "cache_read_input_token_cost": 0.0000003,
     "litellm_provider": "snowflake",
     "mode": "chat",
+    "supports_assistant_prefill": false,
     "supports_function_calling": true,
     "supports_vision": true,
     "supports_prompt_caching": true,

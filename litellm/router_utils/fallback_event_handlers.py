@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -15,6 +16,153 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+MID_STREAM_CONTINUATION_SYSTEM_PROMPT = "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: "
+
+FallbackEntry = str | dict[str, list[str]]
+
+
+def _prefill_explicitly_unsupported(model: str) -> bool:
+    """True only when the model registry explicitly marks the model as NOT
+    supporting assistant prefill (``supports_assistant_prefill: false``).
+
+    Absent/unknown capability returns False so models without registry data keep
+    the legacy prefill behavior — only models that would reject the prefill with
+    a 400 anyway are routed to the user-message continuation.
+    """
+    try:
+        from litellm.utils import get_model_info
+
+        model_info = get_model_info(model=model)
+        return model_info.get("supports_assistant_prefill") is False
+    except Exception:
+        return False
+
+
+def _resolve_dict_fallback_targets(
+    model_group: str, fallbacks: list[FallbackEntry]
+) -> tuple[str, ...]:
+    """Dict-format fallback targets configured for this group, mirroring
+    get_fallback_model_group's exact > stripped > wildcard priority. It iterates
+    directly rather than calling that helper because the helper pops string
+    entries mid-iteration, which skips the following entry and can drop a dict
+    target when a bare string precedes it in the list.
+
+    Within each tier this matches the helper's pick: exact match breaks on the
+    first hit (first wins), while stripped and wildcard hits keep overwriting
+    without a break (last wins). Mirroring last-wins for those tiers keeps the
+    capability scan aligned with the target the runtime fallback hop will
+    actually call.
+    """
+    dict_entries = tuple(
+        (key, entry[key])
+        for entry in fallbacks
+        if isinstance(entry, dict) and entry
+        for key in (next(iter(entry)),)
+    )
+    exact = next((t for k, t in dict_entries if k == model_group), None)
+    if exact is not None:
+        return tuple(exact)
+    stripped_matches = tuple(
+        t
+        for k, t in dict_entries
+        if _check_stripped_model_group(model_group=model_group, fallback_key=k)
+    )
+    if stripped_matches:
+        return tuple(stripped_matches[-1])
+    wildcard_matches = tuple(t for k, t in dict_entries if k == "*")
+    if wildcard_matches:
+        return tuple(wildcard_matches[-1])
+    return ()
+
+
+def _candidate_model_groups(
+    model_group: str | None, fallbacks: list[FallbackEntry] | None
+) -> tuple[str, ...]:
+    """Every model group the reused continuation messages can reach for this hop:
+    the primary group plus its fallback targets. Bare-string fallback entries are
+    generic fallbacks tried for every group; dict-format entries are resolved for
+    this group. Both formats (and mixed lists) are collected directly so a
+    prefill-rejecting target anywhere in the list is never missed.
+    """
+    if model_group is None:
+        return ()
+    if not fallbacks:
+        return (model_group,)
+    bare_strings = tuple(f for f in fallbacks if isinstance(f, str))
+    dict_targets = _resolve_dict_fallback_targets(model_group, fallbacks)
+    return (model_group, *bare_strings, *dict_targets)
+
+
+def _resolved_registry_model(
+    model_group: str,
+    resolve_underlying_model: Callable[[str], str | None] | None,
+) -> str | None:
+    if resolve_underlying_model is None:
+        return None
+    try:
+        return resolve_underlying_model(model_group)
+    except Exception:
+        return None
+
+
+def build_mid_stream_continuation_messages(
+    messages: list[Any],
+    generated_content: str,
+    model_group: str | None,
+    fallbacks: list[Any] | None = None,
+    resolve_underlying_model: Callable[[str], str | None] | None = None,
+) -> list[Any]:
+    """Build the message list a mid-stream fallback uses to resume an interrupted stream.
+
+    By default the partial response is appended as a prefixed assistant message,
+    so the fallback model continues the text exactly where the stream died.
+
+    Anthropic removed assistant prefill starting with Claude Sonnet 4.6 / Opus 4.6 —
+    a prefilled assistant message returns a 400 error, which made every mid-stream
+    fallback for those models fail deterministically. For models the registry
+    explicitly marks as not supporting prefill, the partial response is quoted in
+    a trailing USER message instead — the continuation pattern Anthropic's
+    migration guide documents:
+    https://platform.claude.com/docs/en/about-claude/models/migration-guide
+
+    The same continuation messages are sent to every deployment the fallback
+    chain tries, so the safe pattern engages when the primary model OR any
+    configured fallback target is explicitly marked as not supporting prefill.
+    Router model-group names are often custom aliases absent from the registry,
+    so ``resolve_underlying_model`` maps each candidate group to the deployment
+    model the registry actually keys on.
+    """
+    groups = _candidate_model_groups(model_group, fallbacks)
+    models_to_check = frozenset(
+        model
+        for group in groups
+        for model in (group, _resolved_registry_model(group, resolve_underlying_model))
+        if model is not None
+    )
+    if any(_prefill_explicitly_unsupported(model) for model in models_to_check):
+        return messages + [
+            {
+                "role": "user",
+                "content": (
+                    "Your previous response was interrupted and ended with:\n"
+                    f"{generated_content}\n"
+                    "Continue from where you left off. Do not repeat the content already generated."
+                ),
+            }
+        ]
+    return messages + [
+        {
+            "role": "system",
+            "content": MID_STREAM_CONTINUATION_SYSTEM_PROMPT,
+        },
+        {
+            "role": "assistant",
+            "content": generated_content,
+            "prefix": True,
+        },
+    ]
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
