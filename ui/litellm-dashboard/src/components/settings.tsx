@@ -39,8 +39,14 @@ import {
   setCallbacksCall,
 } from "./networking";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
-import { AlertingObject, CredentialAccess } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
+import {
+  AlertingObject,
+  CredentialAccess,
+  ResolvedScope,
+} from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
 import AccessControlFields from "./logging_credentials/AccessControlFields";
 import {
@@ -261,12 +267,49 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   // OTEL trace destinations are credentials tagged credential_type=logging; they share
   // the one Active Logging Callbacks table as rows alongside config callbacks.
   const { data: credentialData, refetch: refetchCredentials } = useCredentials();
+  const { data: teamsData } = useTeams();
+  const { data: orgsData } = useOrganizations();
   const [editAccessFor, setEditAccessFor] = useState<{ name: string; access?: CredentialAccess } | null>(null);
   // access for the destination branch of the unified Add modal
   const [addAccess, setAddAccess] = useState<CredentialAccess>({});
   const addingDestination = selectedCallback != null && LOGGING_BACKEND_IDS.has(selectedCallback);
   const addingDestinationFields =
     LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedCallback)?.fields ?? [];
+
+  const teamAlias = (id: string): string => {
+    const t = (teamsData ?? []).find((team) => team.team_id === id);
+    return t?.team_alias || id;
+  };
+  const orgAlias = (id: string): string => {
+    const o = (orgsData ?? []).find((org) => org.organization_id === id);
+    return o?.organization_alias || id;
+  };
+
+  // For each destination, the Scope column reflects BOTH directions:
+  //  (a) destination-side credential_info.access (global/teams/orgs on the credential)
+  //  (b) identity-side metadata.logging_exporters on each team/org that lists this destination
+  // The resolver unions them at request time; the column unions them at render time.
+  const resolveScope = (destinationName: string, access?: CredentialAccess): ResolvedScope => {
+    const teams = new Set<string>();
+    const orgs = new Set<string>();
+    let global = access?.global === true;
+    for (const teamId of access?.teams ?? []) teams.add(teamAlias(teamId));
+    for (const orgId of access?.orgs ?? []) orgs.add(orgAlias(orgId));
+    for (const team of teamsData ?? []) {
+      const teamMetadata = (team as { metadata?: Record<string, unknown> | null }).metadata;
+      const exporters = teamMetadata?.logging_exporters;
+      if (Array.isArray(exporters) && exporters.includes(destinationName)) {
+        teams.add(team.team_alias || team.team_id);
+      }
+    }
+    for (const org of orgsData ?? []) {
+      const exporters = (org.metadata as Record<string, unknown> | null | undefined)?.logging_exporters;
+      if (Array.isArray(exporters) && exporters.includes(destinationName)) {
+        orgs.add(org.organization_alias || org.organization_id);
+      }
+    }
+    return { global, teams: Array.from(teams), orgs: Array.from(orgs) };
+  };
 
   const destinationRows: AlertingObject[] = (credentialData?.credentials ?? [])
     .filter((c) => c.credential_info?.credential_type === "logging")
@@ -278,6 +321,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         ? `${backendLabel(c.credential_info?.description)} · ${c.credential_info.host}`
         : backendLabel(c.credential_info?.description),
       access: c.credential_info?.access,
+      resolvedScope: resolveScope(c.credential_name, c.credential_info?.access),
     }));
 
   const handleDeleteDestination = async (name: string) => {

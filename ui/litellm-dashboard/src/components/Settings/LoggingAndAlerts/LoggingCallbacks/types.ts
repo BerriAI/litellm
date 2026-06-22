@@ -14,12 +14,23 @@ export interface AlertingObject {
   credentialName?: string;
   destinationLabel?: string;
   access?: CredentialAccess;
+  // The union of identities that route to this destination, resolved at render
+  // time from both directions (destination-side credential_info.access AND
+  // identity-side metadata.logging_exporters). Display labels only -- ids are
+  // not surfaced here. global=true bypasses the lists.
+  resolvedScope?: ResolvedScope;
 }
 
 export interface CredentialAccess {
   global?: boolean;
   teams?: string[];
   orgs?: string[];
+}
+
+export interface ResolvedScope {
+  global: boolean;
+  teams: string[];
+  orgs: string[];
 }
 
 export interface AlertingVariables {

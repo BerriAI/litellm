@@ -1,6 +1,6 @@
 import { Button } from "@tremor/react";
 import type { TableProps } from "antd";
-import { Table } from "antd";
+import { Table, Tag } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
 import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
@@ -25,15 +25,36 @@ type LoggingCallbacksProps = {
 
 const isDestination = (record: AlertingObject): boolean => record.credentialName != null;
 
-const accessSummary = (record: AlertingObject): string => {
-  const access = record.access;
-  if (!access) return "—";
-  if (access.global) return "Global";
-  const parts = [
-    access.teams?.length ? `${access.teams.length} team${access.teams.length > 1 ? "s" : ""}` : null,
-    access.orgs?.length ? `${access.orgs.length} org${access.orgs.length > 1 ? "s" : ""}` : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(" · ") : "—";
+const SCOPE_BADGES_LIMIT = 4;
+
+// Renders the union of identities that route to this destination, with each team/org
+// labeled by its alias. Global supersedes everything. Pulls from record.resolvedScope
+// (computed at the page level from BOTH directions: destination-side access AND
+// identity-side metadata.logging_exporters).
+const ScopeCell: React.FC<{ record: AlertingObject }> = ({ record }) => {
+  const scope = record.resolvedScope;
+  if (!scope || (!scope.global && scope.teams.length === 0 && scope.orgs.length === 0)) {
+    return <span className="text-gray-400">—</span>;
+  }
+  if (scope.global) {
+    return <Tag color="blue">Global</Tag>;
+  }
+  const items = [
+    ...scope.teams.map((label) => ({ kind: "team" as const, label })),
+    ...scope.orgs.map((label) => ({ kind: "org" as const, label })),
+  ];
+  const shown = items.slice(0, SCOPE_BADGES_LIMIT);
+  const remainder = items.length - shown.length;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {shown.map((item, i) => (
+        <Tag key={`${item.kind}-${item.label}-${i}`} color={item.kind === "team" ? "blue" : "geekblue"}>
+          {item.kind}: {item.label}
+        </Tag>
+      ))}
+      {remainder > 0 && <Tag>+{remainder} more</Tag>}
+    </div>
+  );
 };
 
 type CallbackRow = AlertingObject & {
@@ -102,12 +123,8 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700">Scope</span>,
       key: "access",
       render: (_: unknown, record: CallbackRow) =>
-        isDestination(record) ? (
-          <span className="text-sm text-gray-700">{accessSummary(record)}</span>
-        ) : (
-          <span className="text-gray-400">—</span>
-        ),
-      width: 160,
+        isDestination(record) ? <ScopeCell record={record} /> : <span className="text-gray-400">—</span>,
+      width: 280,
     },
     {
       title: <span className="font-medium text-gray-700 text-right w-full block">Actions</span>,

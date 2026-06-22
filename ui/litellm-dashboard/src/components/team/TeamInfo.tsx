@@ -41,6 +41,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
@@ -234,6 +235,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }, [selectedModelsInForm, teamData, userModels]);
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+
+  // Destinations whose credential_info.access targets this team (or its org, or
+  // global). Rendered alongside the team's own metadata.logging_exporters so the
+  // Logging Exporters card reflects BOTH routing directions, matching the
+  // resolver's union at request time.
+  const { data: scopedCredentialsData } = useCredentials();
+  const scopedExportersForTeam = useMemo<string[]>(() => {
+    const orgId = teamData?.team_info?.organization_id ?? null;
+    return (scopedCredentialsData?.credentials ?? [])
+      .filter((c) => c.credential_info?.credential_type === "logging")
+      .filter((c) => {
+        const access = c.credential_info?.access;
+        if (!access) return false;
+        if (access.global === true) return true;
+        if (Array.isArray(access.teams) && access.teams.includes(teamId)) return true;
+        return Array.isArray(access.orgs) && orgId != null && access.orgs.includes(orgId);
+      })
+      .map((c) => c.credential_name);
+  }, [scopedCredentialsData?.credentials, teamId, teamData?.team_info?.organization_id]);
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -869,6 +889,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   loggingExporters={
                     Array.isArray(info.metadata?.logging_exporters) ? info.metadata.logging_exporters : []
                   }
+                  scopedExporters={scopedExportersForTeam}
                   disabledCallbacks={[]}
                   variant="card"
                 />
@@ -1658,6 +1679,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       loggingExporters={
                         Array.isArray(info.metadata?.logging_exporters) ? info.metadata.logging_exporters : []
                       }
+                      scopedExporters={scopedExportersForTeam}
                       disabledCallbacks={[]}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"
