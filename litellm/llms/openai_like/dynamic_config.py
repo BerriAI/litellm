@@ -69,9 +69,55 @@ def create_config_class(provider: SimpleProviderConfig):
                 resolved_base = provider.base_url
 
             # Resolve API key
-            resolved_key = api_key or get_secret_str(provider.api_key_env)
+            resolved_key = api_key or (
+                get_secret_str(provider.api_key_env) if provider.api_key_env else None
+            )
 
             return resolved_base, resolved_key
+
+        def validate_environment(
+            self,
+            headers: dict,
+            model: str,
+            messages: List[AllMessageValues],
+            optional_params: dict,
+            litellm_params: dict,
+            api_key: Optional[str] = None,
+            api_base: Optional[str] = None,
+        ) -> dict:
+            """Inject auth; for oauth2_client_credentials fetch+cache a bearer token,
+            otherwise defer to the OpenAI-compatible base (api_key -> Bearer)."""
+            if provider.auth != "oauth2_client_credentials":
+                return super().validate_environment(
+                    headers=headers,
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    api_key=api_key,
+                    api_base=api_base,
+                )
+
+            from .oauth_authenticator import get_client_credentials_token
+
+            def _oauth_param(key: str, env_var: str) -> Optional[str]:
+                value = litellm_params.get(key)
+                if isinstance(value, str) and value:
+                    return value
+                return get_secret_str(env_var)
+
+            token = get_client_credentials_token(
+                token_url=_oauth_param("oauth_token_url", "CUSTOM_OAUTH_TOKEN_URL"),
+                client_id=_oauth_param("oauth_client_id", "CUSTOM_OAUTH_CLIENT_ID"),
+                client_secret=_oauth_param(
+                    "oauth_client_secret", "CUSTOM_OAUTH_CLIENT_SECRET"
+                ),
+                scope=_oauth_param("oauth_scope", "CUSTOM_OAUTH_SCOPE"),
+            )
+            headers["Authorization"] = f"Bearer {token}"
+            if "content-type" not in headers and "Content-Type" not in headers:
+                headers["Content-Type"] = "application/json"
+            return headers
 
         def get_complete_url(
             self,
