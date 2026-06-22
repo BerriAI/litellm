@@ -1983,6 +1983,7 @@ if TYPE_CHECKING:
         GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig,
     )
     from .llms.chatgpt.chat.transformation import ChatGPTConfig as ChatGPTConfig
+    from .llms.claude_max.chat.transformation import ClaudeMaxConfig as ClaudeMaxConfig
     from .llms.chatgpt.responses.transformation import (
         ChatGPTResponsesAPIConfig as ChatGPTResponsesAPIConfig,
     )

@@ -8482,6 +8482,8 @@ class ProviderConfigManager:
             LlmProviders.COMPACTIFAI: (lambda: litellm.CompactifAIChatConfig(), False),
             LlmProviders.GITHUB_COPILOT: (lambda: litellm.GithubCopilotConfig(), False),
             LlmProviders.CHATGPT: (lambda: litellm.ChatGPTConfig(), False),
+            LlmProviders.CLAUDE_MAX: (lambda: litellm.ClaudeMaxConfig(), False),
+            LlmProviders.ANTIGRAVITY2: (lambda: litellm.Antigravity2Config(), False),
             LlmProviders.GIGACHAT: (lambda: litellm.GigaChatConfig(), False),
             LlmProviders.RAGFLOW: (lambda: litellm.RAGFlowConfig(), False),
             LlmProviders.CUSTOM: (lambda: litellm.OpenAILikeChatConfig(), False),
