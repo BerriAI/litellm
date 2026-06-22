@@ -135,15 +135,21 @@ class CohereRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> RerankResponse:
         """
         Transform Cohere rerank response
 
         No transformation required, litellm follows cohere API response format
         """
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         try:
             raw_response_json = raw_response.json()
         except Exception:

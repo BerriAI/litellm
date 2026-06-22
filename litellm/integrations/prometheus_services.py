@@ -190,8 +190,10 @@ class PrometheusServicesLogger:
         counter,
         labels: str,
         amount: float,
-        additional_labels: Optional[List[str]] = [],
+        additional_labels: Optional[List[str]] = None,
     ):
+        if additional_labels is None:
+            additional_labels = []
         assert isinstance(counter, self.Counter)
 
         if additional_labels:

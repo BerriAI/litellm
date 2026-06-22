@@ -22,8 +22,11 @@ else:
 
 class VectorStoreIndexRegistry:
     def __init__(
-        self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = []
+        self,
+        vector_store_indexes: Optional[List[LiteLLM_ManagedVectorStoreIndex]] = None,
     ):
+        if vector_store_indexes is None:
+            vector_store_indexes = []
         self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = (
             vector_store_indexes
         )
@@ -106,7 +109,11 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] = []):
+    def __init__(
+        self, vector_stores: Optional[List[LiteLLM_ManagedVectorStore]] = None
+    ):
+        if vector_stores is None:
+            vector_stores = []
         self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores
         self.vector_store_ids_to_vector_store_map: Dict[
             str, LiteLLM_ManagedVectorStore
@@ -421,11 +428,15 @@ class VectorStoreRegistry:
         return vector_stores_to_run
 
     def _get_vector_store_ids_from_tool_calls(
-        self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
+        self,
+        tools: Optional[List[Dict]] = None,
+        vector_store_ids: Optional[List[str]] = None,
     ) -> List[str]:
         """
         Returns the vector store ids from the tool calls
         """
+        if vector_store_ids is None:
+            vector_store_ids = []
         if tools:
             for tool in tools:
                 if "vector_store_ids" in tool:

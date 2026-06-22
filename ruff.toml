@@ -1,5 +1,5 @@
 lint.ignore = ["F405", "E402", "E501", "F403"]
-lint.extend-select = ["E501", "PLR0915", "T20"]
+lint.extend-select = ["B006", "E501", "PLR0915", "T20"]
 line-length = 120
 exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 

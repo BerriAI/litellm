@@ -129,11 +129,13 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
         data["stream"] = True
         completion_stream = await make_call(
             client=client,
@@ -173,10 +175,12 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         optional_params: dict,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         json_mode: bool = False,
     ) -> ModelResponse:
+        if headers is None:
+            headers = {}
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
 
@@ -230,7 +234,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         logging_obj,
         optional_params: dict,
         acompletion=None,
-        litellm_params: dict = {},
+        litellm_params: Optional[dict] = None,
         logger_fn=None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -241,6 +245,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
         fake_stream: bool = False,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         custom_endpoint = custom_endpoint or optional_params.pop(
             "custom_endpoint", None
         )

@@ -293,13 +293,15 @@ class GoogleBatchEmbeddings(VertexLLM):
         model_response: EmbeddingResponse,
         input: GeminiEmbeddingInput,
         timeout: Optional[Union[float, httpx.Timeout]],
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
         use_embed_content: bool = False,
         api_key: Optional[str] = None,
         optional_params: Optional[dict] = None,
         logging_obj: Optional[Any] = None,
     ) -> EmbeddingResponse:
+        if headers is None:
+            headers = {}
         if client is None:
             _params = {}
             if timeout is not None:

@@ -1094,7 +1094,7 @@ def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
     prompt="",
-    messages: List = [],
+    messages: Optional[List] = None,
     completion="",
     total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
     call_type: Optional[CallTypesLiteral] = None,
@@ -1146,6 +1146,8 @@ def completion_cost(  # noqa: PLR0915
         - For certain models containing "togethercomputer" in the name, prices are based on the model size.
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
+    if messages is None:
+        messages = []
     try:
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 

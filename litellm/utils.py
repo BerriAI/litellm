@@ -2248,7 +2248,7 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
 
 def decode(
     model="",
-    tokens: List[int] = [],
+    tokens: Optional[List[int]] = None,
     custom_tokenizer: Optional[dict] = None,
     skip_special_tokens: bool = True,
 ):
@@ -2260,6 +2260,8 @@ def decode(
             LiteLLM round-trip behavior by omitting special tokens by default.
             Set to False to inspect decoded BOS/EOS tokens.
     """
+    if tokens is None:
+        tokens = []
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "huggingface_tokenizer":
         if skip_special_tokens:
@@ -6933,10 +6935,10 @@ def _calculate_retry_after(
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict = {},
+    roles: Optional[dict] = None,
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
-    tokenizer_config: dict = {},
+    tokenizer_config: Optional[dict] = None,
 ):
     """
     Register a prompt template to follow your custom format for a given model
@@ -6973,6 +6975,10 @@ def register_prompt_template(
     )
     ```
     """
+    if roles is None:
+        roles = {}
+    if tokenizer_config is None:
+        tokenizer_config = {}
     complete_model = model
     potential_models = [complete_model]
     try:

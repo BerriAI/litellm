@@ -76,7 +76,7 @@ def _prepare_azure_extra_body(
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[dict] = {},
+    hyperparameters: Optional[dict] = None,
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -90,6 +90,8 @@ async def acreate_fine_tuning_job(
     Async: Creates and executes a batch from an uploaded file of request
 
     """
+    if hyperparameters is None:
+        hyperparameters = {}
     verbose_logger.debug(
         "inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs
     )
@@ -157,7 +159,7 @@ def _resolve_fine_tuning_timeout(
 def create_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[dict] = {},
+    hyperparameters: Optional[dict] = None,
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -173,6 +175,8 @@ def create_fine_tuning_job(
     Response includes details of the enqueued job including job status and the name of the fine-tuned models once complete
 
     """
+    if hyperparameters is None:
+        hyperparameters = {}
     try:
         _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)

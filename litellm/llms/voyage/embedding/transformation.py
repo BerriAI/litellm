@@ -15,8 +15,10 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: Optional[Union[dict, httpx.Headers]] = None,
     ):
+        if headers is None:
+            headers = {}
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(
@@ -117,10 +119,16 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> EmbeddingResponse:
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         try:
             raw_response_json = raw_response.json()
         except Exception:

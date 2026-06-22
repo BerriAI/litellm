@@ -98,11 +98,13 @@ def handle_messages_with_content_list_to_str_conversion(
 
 
 def strip_name_from_message(
-    message: AllMessageValues, allowed_name_roles: List[str] = ["user"]
+    message: AllMessageValues, allowed_name_roles: Optional[List[str]] = None
 ) -> AllMessageValues:
     """
     Removes 'name' from message
     """
+    if allowed_name_roles is None:
+        allowed_name_roles = ["user"]
     msg_copy = message.copy()
     if msg_copy.get("role") not in allowed_name_roles:
         msg_copy.pop("name", None)  # type: ignore
@@ -110,11 +112,13 @@ def strip_name_from_message(
 
 
 def strip_name_from_messages(
-    messages: List[AllMessageValues], allowed_name_roles: List[str] = ["user"]
+    messages: List[AllMessageValues], allowed_name_roles: Optional[List[str]] = None
 ) -> List[AllMessageValues]:
     """
     Removes 'name' from messages
     """
+    if allowed_name_roles is None:
+        allowed_name_roles = ["user"]
     new_messages = []
     for message in messages:
         msg_role = message.get("role")

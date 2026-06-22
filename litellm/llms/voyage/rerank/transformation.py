@@ -82,10 +82,16 @@ class VoyageRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
-        request_data: Dict = {},
-        optional_params: Dict = {},
-        litellm_params: Dict = {},
+        request_data: Optional[Dict] = None,
+        optional_params: Optional[Dict] = None,
+        litellm_params: Optional[Dict] = None,
     ) -> RerankResponse:
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         if raw_response.status_code != 200:
             raise VoyageError(
                 message=raw_response.text, status_code=raw_response.status_code

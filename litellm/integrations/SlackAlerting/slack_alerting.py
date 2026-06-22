@@ -63,16 +63,20 @@ class SlackAlerting(CustomBatchLogger):
         alerting_threshold: Optional[
             float
         ] = None,  # threshold for slow / hanging llm responses (in seconds)
-        alerting: Optional[List] = [],
+        alerting: Optional[List] = None,
         alert_types: List[AlertType] = DEFAULT_ALERT_TYPES,
         alert_to_webhook_url: Optional[
             Dict[AlertType, Union[List[str], str]]
         ] = None,  # if user wants to separate alerts to diff channels
-        alerting_args={},
+        alerting_args=None,
         default_webhook_url: Optional[str] = None,
         alert_type_config: Optional[Dict[str, dict]] = None,
         **kwargs,
     ):
+        if alerting is None:
+            alerting = []
+        if alerting_args is None:
+            alerting_args = {}
         if alerting_threshold is None:
             alerting_threshold = 300
         self.alerting_threshold = alerting_threshold
