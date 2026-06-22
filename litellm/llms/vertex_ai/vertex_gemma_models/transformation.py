@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -138,7 +139,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         acompletion: bool,
         litellm_params: dict,
         logger_fn: Optional[Callable] = None,
-        client: Optional[httpx.Client] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
@@ -158,7 +159,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                client= client,
+                client=client,
                 timeout=timeout,
                 encoding=encoding,
             )
@@ -173,7 +174,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                client= client,
+                client=client,
                 timeout=timeout,
                 encoding=encoding,
             )
@@ -189,12 +190,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client: Any = None,
-        timeout: Optional[Union[float, httpx.Timeout]]= None,
-        encoding: Any= None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        encoding: Any = None,
     ):
         """Synchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
@@ -226,17 +226,17 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        if client is None or isinstance(client, (httpx.AsyncClient, AsyncHTTPHandler)):
+        if client is None or not isinstance(client, HTTPHandler):
             http_handler = HTTPHandler(concurrent_limit=1)
-        elif isinstance(client, httpx.Client):
-            http_handler = HTTPHandler(client=client)
-        elif isinstance(client, HTTPHandler):
-            http_handler = client
         else:
-            raise BaseLLMException(
-                status_code=400,
-                message=f"Invalid sync client type: {type(client)}. Expected HTTPHandler or httpx.Client.",
-            )
+            http_handler = client
+
+        response = http_handler.post(
+            url=api_base,
+            headers=headers,
+            json=request_data,
+            timeout=timeout,
+        )
 
         if response.status_code != 200:
             raise BaseLLMException(
@@ -286,16 +286,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client: Optional[Any]= None,
-        timeout: Optional[Union[float, httpx.Timeout]]= None,
-        encoding: Any= None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        encoding: Any = None,
     ):
         """Asynchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import (
-            AsyncHTTPHandler,
-            HTTPHandler,
-            get_async_httpx_client,
-        )
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.utils import LlmProviders
         from litellm.utils import convert_to_model_response_object
 
@@ -328,18 +324,13 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        if client is None or isinstance(client, (httpx.Client, HTTPHandler)):
+        if client is None or not isinstance(client, AsyncHTTPHandler):
             http_handler = get_async_httpx_client(
                 llm_provider=LlmProviders.VERTEX_AI,
             )
-        elif isinstance(client, (httpx.AsyncClient, AsyncHTTPHandler)):
-            http_handler = client
         else:
-            raise BaseLLMException(
-                status_code=400,
-                message=f"Invalid async client type: {type(client)}. Expected AsyncHTTPHandler or httpx.AsyncClient.",
-            )
-            
+            http_handler = client
+
         response = await http_handler.post(
             url=api_base,
             headers=headers,
