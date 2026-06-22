@@ -22,7 +22,6 @@ import traceback
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
-from dataclasses import dataclass
 from functools import partial
 from typing import (
     TYPE_CHECKING,
@@ -119,6 +118,10 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.main import (
+    _CompletionDispatchContext,
+    _CompletionDispatchResult,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -1083,47 +1086,6 @@ def _build_custom_pricing_entry(
                 entry.setdefault(key, model_info[key])
 
     return entry
-
-
-@dataclass(frozen=True, slots=True)
-class _CompletionDispatchContext:
-    _azure_detection_model: str
-    acompletion: bool
-    api_base: Optional[str]
-    api_key: Optional[str]
-    api_version: Optional[str]
-    client: Any
-    custom_llm_provider: str
-    custom_prompt_dict: dict
-    extra_headers: Optional[dict]
-    headers: dict
-    hf_model_name: Optional[str]
-    kwargs: dict
-    litellm_params: dict
-    logger_fn: Optional[Callable]
-    logging: LiteLLMLoggingObj
-    max_retries: Optional[int]
-    max_tokens: Optional[int]
-    messages: list
-    metadata: Optional[dict]
-    model: str
-    model_response: ModelResponse
-    optional_params: dict
-    organization: Optional[str]
-    provider_config: Optional[BaseConfig]
-    shared_session: Optional["ClientSession"]
-    stream: Optional[bool]
-    temperature: Optional[float]
-    text_completion: bool
-    timeout: Optional[Union[float, str, httpx.Timeout]]
-    top_p: Optional[float]
-
-
-_CompletionDispatchResult = Union[
-    Coroutine[Any, Any, Union[ModelResponse, CustomStreamWrapper]],
-    ModelResponse,
-    CustomStreamWrapper,
-]
 
 
 def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
