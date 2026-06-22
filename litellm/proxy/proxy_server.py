@@ -419,6 +419,10 @@ from litellm.proxy.management_endpoints.workflow_management_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.memory.memory_endpoints import router as memory_router
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
+    register_plugins_from_config,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -4502,6 +4506,8 @@ class ProxyConfig:
             load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
             ### ALERTING ###
             self._load_alerting_settings(general_settings=general_settings)
+            ### PLUGINS ###
+            register_plugins_from_config(general_settings)
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
@@ -4772,6 +4778,11 @@ class ProxyConfig:
         search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(
             config
         )
+
+        ## SANDBOX TOOLS SETTINGS
+        from litellm.sandbox.sandbox_tools import register_sandbox_tools
+
+        register_sandbox_tools(config.get("sandbox_tools") or [])
 
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
@@ -5662,6 +5673,10 @@ class ProxyConfig:
                 alert_to_webhook_url=general_settings["alert_to_webhook_url"],
                 llm_router=llm_router,
             )
+
+        if _general_settings is not None and "plugins" in _general_settings:
+            general_settings["plugins"] = _general_settings["plugins"]
+            register_plugins_from_config(general_settings)
 
     async def _reschedule_spend_log_cleanup_job(self):
         """
@@ -14931,6 +14946,41 @@ async def update_config(
 Keep it more precise, to prevent overwrite other values unintentially
 """
 
+_PLUGIN_KEY_REDACTED = "***"
+
+
+def _preserve_redacted_plugin_keys(incoming: object, existing: object) -> object:
+    """Restore real plugin_key values the client never sees.
+
+    /config/field/info redacts every plugin_key to ``"***"``, so an admin
+    editing a plugin posts that placeholder (or a blank, when the UI clears the
+    field) straight back. Treat a blank or redacted plugin_key as "keep the
+    stored credential" by sourcing it from the existing config; only a real,
+    non-redacted value replaces it, and a blank with no stored key drops the
+    field entirely instead of persisting the placeholder.
+    """
+    if not isinstance(incoming, list):
+        return incoming
+
+    stored_keys = {
+        p["name"]: p["plugin_key"]
+        for p in (existing if isinstance(existing, list) else [])
+        if isinstance(p, dict) and p.get("name") and p.get("plugin_key")
+    }
+
+    def resolve(plugin: object) -> object:
+        if not isinstance(plugin, dict):
+            return plugin
+        key = plugin.get("plugin_key")
+        if key not in (None, "", _PLUGIN_KEY_REDACTED):
+            return plugin
+        name = plugin.get("name")
+        if name in stored_keys:
+            return {**plugin, "plugin_key": stored_keys[name]}
+        return {k: v for k, v in plugin.items() if k != "plugin_key"}
+
+    return [resolve(p) for p in incoming]
+
 
 @router.post(
     "/config/field/update",
@@ -14997,7 +15047,13 @@ async def update_config_general_settings(
 
     ## update db
 
-    general_settings[data.field_name] = data.field_value
+    field_value = data.field_value
+    if data.field_name == "plugins":
+        field_value = _preserve_redacted_plugin_keys(
+            field_value, general_settings.get("plugins")
+        )
+
+    general_settings[data.field_name] = field_value
 
     response = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
@@ -15007,6 +15063,9 @@ async def update_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
+
+    if data.field_name == "plugins":
+        register_plugins_from_config(general_settings)
 
     return response
 
@@ -15063,9 +15122,19 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            return ConfigFieldInfo(
-                field_name=field_name, field_value=general_settings[field_name]
-            )
+            field_value = general_settings[field_name]
+            # Redact plugin_key from plugin configs so the shared credential
+            # is never returned even to admin-viewer callers.
+            if field_name == "plugins" and isinstance(field_value, list):
+                field_value = [
+                    (
+                        {k: ("***" if k == "plugin_key" else v) for k, v in p.items()}
+                        if isinstance(p, dict)
+                        else p
+                    )
+                    for p in field_value
+                ]
+            return ConfigFieldInfo(field_name=field_name, field_value=field_value)
         else:
             raise HTTPException(
                 status_code=400,
@@ -16387,6 +16456,7 @@ app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
+app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
