@@ -133,8 +133,15 @@ model_list:
   # realtime models
   - model_name: openai-realtime
     litellm_params:
-      model: openai/realtime-2
+      model: openai/gpt-realtime
       api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
+
+  - model_name: gemini-realtime
+    litellm_params:
+      model: gemini/gemini-2.0-flash-live-001
+      api_key: os.environ/GEMINI_API_KEY
     model_info:
       mode: realtime
 
