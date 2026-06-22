@@ -19,7 +19,10 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
@@ -48,7 +51,9 @@ GuardrailEventHookInput = Union[
     Sequence[str],
     Mode,
 ]
-NormalizedGuardrailEventHook = Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
+NormalizedGuardrailEventHook = Union[
+    GuardrailEventHooks, List[GuardrailEventHooks], Mode
+]
 
 
 class FunctionLike(Protocol):
@@ -103,7 +108,8 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
             ],
-            event_hook=self._normalize_event_hook(event_hook) or GuardrailEventHooks.post_call,
+            event_hook=self._normalize_event_hook(event_hook)
+            or GuardrailEventHooks.post_call,
             default_on=default_on,
             mask_request_content=mask_request_content,
             mask_response_content=mask_response_content,
@@ -154,9 +160,13 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
             return inputs
 
         analyses = tuple(self._analyze_text(text=text) for text in texts)
-        highest_risk = max(analyses, key=lambda analysis: analysis.risk.overall_risk_percentage)
+        highest_risk = max(
+            analyses, key=lambda analysis: analysis.risk.overall_risk_percentage
+        )
         decision = self._decision(highest_risk.risk.recommendation)
-        status: GuardrailStatus = "guardrail_intervened" if decision == "blocked" else "success"
+        status: GuardrailStatus = (
+            "guardrail_intervened" if decision == "blocked" else "success"
+        )
         response_payload = self._build_response_payload(
             analyses=analyses,
             decision=decision,
@@ -224,9 +234,15 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         return {
             "decision": decision,
             "input_type": input_type,
-            "risk_scores": [analysis.risk.model_dump(mode="json") for analysis in analyses],
+            "risk_scores": [
+                analysis.risk.model_dump(mode="json") for analysis in analyses
+            ],
             "bias": [
-                {k: v for k, v in analysis.bias.model_dump(mode="json").items() if k not in _LOG_EXCLUDED_FIELDS}
+                {
+                    k: v
+                    for k, v in analysis.bias.model_dump(mode="json").items()
+                    if k not in _LOG_EXCLUDED_FIELDS
+                }
                 for analysis in analyses
             ],
             "hallucination": [
@@ -269,7 +285,9 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
 
     @staticmethod
     def _detection_methods(response_payload: Dict[str, object]) -> Optional[str]:
-        categories = BiasHallucinationEstimatorGuardrail._violation_categories(response_payload)
+        categories = BiasHallucinationEstimatorGuardrail._violation_categories(
+            response_payload
+        )
         if not categories:
             return None
         return "regex,keyword"
@@ -284,7 +302,9 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
             dict.fromkeys(
                 issue.split(":", 1)[0]
                 for risk_score in typed_risk_scores
-                for issue in BiasHallucinationEstimatorGuardrail._detected_issues(risk_score)
+                for issue in BiasHallucinationEstimatorGuardrail._detected_issues(
+                    risk_score
+                )
             )
         )
 
@@ -329,7 +349,9 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         tool_call_texts = tuple(
             text
             for tool_call in inputs.get("tool_calls", [])
-            for text in (BiasHallucinationEstimatorGuardrail._tool_call_text(tool_call),)
+            for text in (
+                BiasHallucinationEstimatorGuardrail._tool_call_text(tool_call),
+            )
             if text
         )
         return texts + tool_call_texts

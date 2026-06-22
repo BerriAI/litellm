@@ -89,8 +89,7 @@ FABRICATED_SPECIFICITY_PATTERNS: Tuple[PatternRule, ...] = (
     PatternRule(
         name="overly_precise_number",
         pattern=re.compile(
-            r"\b(?:exactly|precisely)\s+\d+(?:,\d{3})*(?:\.\d+)?\b|"
-            r"\b\d+\.\d{3,}\b",
+            r"\b(?:exactly|precisely)\s+\d+(?:,\d{3})*(?:\.\d+)?\b|" r"\b\d+\.\d{3,}\b",
             re.IGNORECASE,
         ),
         score=0.24,

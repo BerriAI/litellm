@@ -8,7 +8,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigM
 class BiasAnalysis(BaseModel):
     """Model representing the result of a bias analysis."""
 
-    bias_detected: bool = Field(default=False, description="Indicates if bias was detected in the text")
+    bias_detected: bool = Field(
+        default=False, description="Indicates if bias was detected in the text"
+    )
     score: float = Field(
         default=0.0,
         ge=0.0,
@@ -80,7 +82,9 @@ class UncertaintyAnalysis(BaseModel):
 class RiskScore(BaseModel):
     """Model representing the overall risk score combining bias and hallucination."""
 
-    overall_risk_percentage: int = Field(default=0, ge=0, le=100, description="Overall risk percentage (0-100)")
+    overall_risk_percentage: int = Field(
+        default=0, ge=0, le=100, description="Overall risk percentage (0-100)"
+    )
     bias_score: float = Field(default=0.0, ge=0.0, le=1.0)
     hallucination_score: float = Field(default=0.0, ge=0.0, le=1.0)
     uncertainty_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -88,7 +92,9 @@ class RiskScore(BaseModel):
     recommendation: Literal["pass", "flag", "block"] = Field(default="pass")
 
 
-class BiasHallucinationEstimatorConfigModel(GuardrailConfigModel):  # pyright: ignore[reportMissingTypeArgument]
+class BiasHallucinationEstimatorConfigModel(
+    GuardrailConfigModel
+):  # pyright: ignore[reportMissingTypeArgument]
     """Configuration schema for the native bias and hallucination estimator."""
 
     bias_threshold: float = Field(default=0.5, ge=0.0, le=1.0)

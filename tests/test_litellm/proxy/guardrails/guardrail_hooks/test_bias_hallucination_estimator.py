@@ -43,7 +43,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator
     HallucinationAnalysis,
 )
 
-
 # ---------------------------------------------------------------------------
 # BiasDetector
 # ---------------------------------------------------------------------------
@@ -61,7 +60,9 @@ def test_bias_detector_detects_dogmatic_language() -> None:
 
 
 def test_bias_detector_detects_opinion_as_fact() -> None:
-    analysis = BiasDetector().detect("I believe this should be mandatory for all developers.")
+    analysis = BiasDetector().detect(
+        "I believe this should be mandatory for all developers."
+    )
 
     assert analysis.bias_detected is True
     assert "opinion_as_fact" in analysis.patterns_found
@@ -75,7 +76,9 @@ def test_bias_detector_detects_sweeping_generalization() -> None:
 
 
 def test_bias_detector_score_accumulates_across_patterns() -> None:
-    analysis = BiasDetector().detect("Obviously all developers must be certified. I believe it is 100% guaranteed.")
+    analysis = BiasDetector().detect(
+        "Obviously all developers must be certified. I believe it is 100% guaranteed."
+    )
 
     assert analysis.score > 0.3
     assert len(analysis.patterns_found) >= 2
@@ -83,7 +86,9 @@ def test_bias_detector_score_accumulates_across_patterns() -> None:
 
 
 def test_bias_detector_does_not_flag_neutral_text() -> None:
-    analysis = BiasDetector().detect("The timeout defaults to ten seconds and can be configured per request.")
+    analysis = BiasDetector().detect(
+        "The timeout defaults to ten seconds and can be configured per request."
+    )
 
     assert analysis.bias_detected is False
     assert analysis.score == 0
@@ -120,8 +125,12 @@ def test_bias_detector_neutral_text_reasoning() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_hallucination_detector_detects_unsourced_statistics_and_citation_gaps() -> None:
-    analysis = HallucinationDetector().detect("Research shows 73% of users switch products on March 14, 2022.")
+def test_hallucination_detector_detects_unsourced_statistics_and_citation_gaps() -> (
+    None
+):
+    analysis = HallucinationDetector().detect(
+        "Research shows 73% of users switch products on March 14, 2022."
+    )
 
     assert analysis.hallucination_detected is True
     assert analysis.score >= 0.5
@@ -141,14 +150,18 @@ def test_hallucination_detector_allows_sourced_statistics() -> None:
 
 
 def test_hallucination_detector_detects_vague_authority() -> None:
-    analysis = HallucinationDetector().detect("It is widely known that this approach is superior.")
+    analysis = HallucinationDetector().detect(
+        "It is widely known that this approach is superior."
+    )
 
     assert "missing_citations" in analysis.patterns_found
     assert analysis.hallucination_detected is True
 
 
 def test_hallucination_detector_detects_overly_precise_number() -> None:
-    analysis = HallucinationDetector().detect("The system processed exactly 1,234 requests last month.")
+    analysis = HallucinationDetector().detect(
+        "The system processed exactly 1,234 requests last month."
+    )
 
     assert "fabricated_specificity" in analysis.patterns_found
 
@@ -181,7 +194,9 @@ def test_hallucination_detector_score_capped_at_one() -> None:
 
 
 def test_hallucination_detector_citation_indicator_clears_number_in_sentence() -> None:
-    analysis = HallucinationDetector().detect("Published in Nature journal: 85% of trials showed improvement.")
+    analysis = HallucinationDetector().detect(
+        "Published in Nature journal: 85% of trials showed improvement."
+    )
 
     assert analysis.unsourced_claims == []
 
@@ -235,7 +250,9 @@ def test_risk_scorer_passes_low_risk() -> None:
 
 def test_risk_scorer_blocks_on_high_bias_score_alone() -> None:
     risk = RiskScorer(bias_threshold=0.4).compute_risk(
-        bias_analysis=BiasAnalysis(bias_detected=True, score=0.5, patterns_found=["overconfidence"]),
+        bias_analysis=BiasAnalysis(
+            bias_detected=True, score=0.5, patterns_found=["overconfidence"]
+        ),
         hallucination_analysis=HallucinationAnalysis(score=0.0),
     )
 
@@ -246,10 +263,14 @@ def test_risk_scorer_blocks_on_high_bias_score_alone() -> None:
 def test_risk_scorer_detected_issues_prefix_by_type() -> None:
     risk = RiskScorer().compute_risk(
         bias_analysis=BiasAnalysis(
-            bias_detected=True, score=0.6, patterns_found=["dogmatic_language", "overconfidence"]
+            bias_detected=True,
+            score=0.6,
+            patterns_found=["dogmatic_language", "overconfidence"],
         ),
         hallucination_analysis=HallucinationAnalysis(
-            hallucination_detected=True, score=0.6, patterns_found=["unsourced_statistics"]
+            hallucination_detected=True,
+            score=0.6,
+            patterns_found=["unsourced_statistics"],
         ),
     )
 
@@ -263,12 +284,18 @@ def test_risk_scorer_custom_weights_change_overall_percentage() -> None:
         bias_analysis=BiasAnalysis(score=0.5),
         hallucination_analysis=HallucinationAnalysis(score=0.0),
     )
-    hallucination_only = RiskScorer(bias_weight=0.0, hallucination_weight=1.0).compute_risk(
+    hallucination_only = RiskScorer(
+        bias_weight=0.0, hallucination_weight=1.0
+    ).compute_risk(
         bias_analysis=BiasAnalysis(score=0.0),
         hallucination_analysis=HallucinationAnalysis(score=0.5),
     )
 
-    assert bias_only.overall_risk_percentage == hallucination_only.overall_risk_percentage == 50
+    assert (
+        bias_only.overall_risk_percentage
+        == hallucination_only.overall_risk_percentage
+        == 50
+    )
 
 
 def test_risk_scorer_zero_weight_total_returns_zero_percentage() -> None:
@@ -296,7 +323,11 @@ async def test_guardrail_blocks_high_risk_response_and_logs_metadata() -> None:
 
     with pytest.raises(GuardrailRaisedException) as exc:
         await guardrail.apply_guardrail(
-            inputs={"texts": ["Research shows 73% of users switch products on March 14, 2022."]},
+            inputs={
+                "texts": [
+                    "Research shows 73% of users switch products on March 14, 2022."
+                ]
+            },
             request_data=request_data,
             input_type="response",
         )
@@ -316,17 +347,30 @@ async def test_guardrail_log_payload_excludes_text_snippets() -> None:
     request_data: dict[str, Any] = {}
 
     await guardrail.apply_guardrail(
-        inputs={"texts": ["Research shows 73% of users switch products on March 14, 2022."]},
+        inputs={
+            "texts": ["Research shows 73% of users switch products on March 14, 2022."]
+        },
         request_data=request_data,
         input_type="response",
     )
 
-    response = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
-    snippet_fields = {"examples", "unsourced_claims", "missing_citations", "fabricated_specificity"}
+    response = request_data["metadata"]["standard_logging_guardrail_information"][0][
+        "guardrail_response"
+    ]
+    snippet_fields = {
+        "examples",
+        "unsourced_claims",
+        "missing_citations",
+        "fabricated_specificity",
+    }
     for entry in response["bias"]:
-        assert not snippet_fields & entry.keys(), f"bias log entry contains snippet fields: {entry.keys()}"
+        assert (
+            not snippet_fields & entry.keys()
+        ), f"bias log entry contains snippet fields: {entry.keys()}"
     for entry in response["hallucination"]:
-        assert not snippet_fields & entry.keys(), f"hallucination log entry contains snippet fields: {entry.keys()}"
+        assert (
+            not snippet_fields & entry.keys()
+        ), f"hallucination log entry contains snippet fields: {entry.keys()}"
 
 
 @pytest.mark.asyncio
@@ -339,7 +383,9 @@ async def test_guardrail_log_only_flags_without_blocking() -> None:
     request_data: dict[str, Any] = {}
 
     result = await guardrail.apply_guardrail(
-        inputs={"texts": ["Research shows 73% of users switch products on March 14, 2022."]},
+        inputs={
+            "texts": ["Research shows 73% of users switch products on March 14, 2022."]
+        },
         request_data=request_data,
         input_type="response",
     )
@@ -377,7 +423,11 @@ async def test_guardrail_passes_low_risk_text() -> None:
     request_data: dict[str, Any] = {}
 
     result = await guardrail.apply_guardrail(
-        inputs={"texts": ["The timeout defaults to ten seconds and can be changed in configuration."]},
+        inputs={
+            "texts": [
+                "The timeout defaults to ten seconds and can be changed in configuration."
+            ]
+        },
         request_data=request_data,
         input_type="response",
     )
@@ -396,7 +446,11 @@ async def test_guardrail_respects_custom_violation_message() -> None:
 
     with pytest.raises(GuardrailRaisedException) as exc:
         await guardrail.apply_guardrail(
-            inputs={"texts": ["Research shows 73% of users switch products on March 14, 2022."]},
+            inputs={
+                "texts": [
+                    "Research shows 73% of users switch products on March 14, 2022."
+                ]
+            },
             request_data={},
             input_type="response",
         )
@@ -456,7 +510,11 @@ async def test_guardrail_check_request_enabled_detects_bias() -> None:
 
     with pytest.raises(GuardrailRaisedException):
         await guardrail.apply_guardrail(
-            inputs={"texts": ["Research shows 73% of users switch products on March 14, 2022."]},
+            inputs={
+                "texts": [
+                    "Research shows 73% of users switch products on March 14, 2022."
+                ]
+            },
             request_data={},
             input_type="request",
         )
@@ -464,7 +522,9 @@ async def test_guardrail_check_request_enabled_detects_bias() -> None:
 
 def test_guardrail_estimate_returns_structured_result() -> None:
     guardrail = BiasHallucinationEstimatorGuardrail(guardrail_name="bias-hallucination")
-    result = guardrail.estimate_bias_hallucination("Everyone knows this is obviously the only correct answer.")
+    result = guardrail.estimate_bias_hallucination(
+        "Everyone knows this is obviously the only correct answer."
+    )
 
     assert "bias" in result
     assert "hallucination" in result
@@ -486,7 +546,10 @@ def test_config_model_defaults_and_ui_name() -> None:
     assert config.check_response is True
     assert config.bias_weight == 0.4
     assert config.hallucination_weight == 0.6
-    assert BiasHallucinationEstimatorConfigModel.ui_friendly_name() == "LiteLLM Bias & Hallucination Estimator"
+    assert (
+        BiasHallucinationEstimatorConfigModel.ui_friendly_name()
+        == "LiteLLM Bias & Hallucination Estimator"
+    )
 
 
 def test_config_model_rejects_out_of_range_threshold() -> None:
@@ -596,7 +659,9 @@ async def test_context_document_source_finds_matching_content() -> None:
 
 @pytest.mark.asyncio
 async def test_context_document_source_no_match_returns_empty() -> None:
-    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015."}]
+    )
 
     results = await source.search("quantum physics neutron stars")
 
@@ -627,7 +692,9 @@ async def test_grounding_checker_no_enabled_sources_returns_ungrounded() -> None
 
 @pytest.mark.asyncio
 async def test_grounding_checker_verifies_claim_from_context_docs() -> None:
-    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015 by Jane Smith."}])
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015 by Jane Smith."}]
+    )
     checker = GroundingChecker(data_sources=[source], confidence_threshold=0.3)
     result = await checker.check_claim_grounding("company founded 2015")
 
@@ -638,18 +705,26 @@ async def test_grounding_checker_verifies_claim_from_context_docs() -> None:
 
 @pytest.mark.asyncio
 async def test_grounding_checker_unverifiable_claim_not_grounded() -> None:
-    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015 by Jane Smith."}])
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015 by Jane Smith."}]
+    )
     checker = GroundingChecker(data_sources=[source], confidence_threshold=0.6)
-    result = await checker.check_claim_grounding("quantum entanglement photon polarization")
+    result = await checker.check_claim_grounding(
+        "quantum entanglement photon polarization"
+    )
 
     assert result.is_grounded is False
 
 
 @pytest.mark.asyncio
 async def test_grounding_checker_verify_multiple_claims() -> None:
-    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015."}]
+    )
     checker = GroundingChecker(data_sources=[source], confidence_threshold=0.3)
-    results = await checker.verify_multiple_claims(["company founded 2015", "quantum physics neutron stars"])
+    results = await checker.verify_multiple_claims(
+        ["company founded 2015", "quantum physics neutron stars"]
+    )
 
     assert len(results) == 2
     grounded_flags = [r.is_grounded for r in results]
@@ -694,7 +769,9 @@ def test_data_source_result_repr_contains_source_and_confidence() -> None:
 
 @pytest.mark.asyncio
 async def test_data_source_verify_fact_returns_true_when_match_found() -> None:
-    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015."}]
+    )
     found, text = await source.verify_fact("company founded 2015")
 
     assert found is True
@@ -704,7 +781,9 @@ async def test_data_source_verify_fact_returns_true_when_match_found() -> None:
 
 @pytest.mark.asyncio
 async def test_data_source_verify_fact_returns_false_when_no_match() -> None:
-    source = ContextDocumentDataSource(documents=[{"text": "The company was founded in 2015."}])
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015."}]
+    )
     found, text = await source.verify_fact("quantum entanglement photon")
 
     assert found is False
@@ -802,7 +881,10 @@ def test_keyword_search_scores_by_word_overlap() -> None:
 
 
 def test_file_data_source_loads_json_file() -> None:
-    docs = [{"text": "Paris is the capital of France."}, {"text": "Berlin is the capital of Germany."}]
+    docs = [
+        {"text": "Paris is the capital of France."},
+        {"text": "Berlin is the capital of Germany."},
+    ]
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(docs, f)
         path = f.name
@@ -814,7 +896,10 @@ def test_file_data_source_loads_json_file() -> None:
 
 @pytest.mark.asyncio
 async def test_file_data_source_searches_json_content() -> None:
-    docs = [{"text": "Paris is the capital of France."}, {"text": "Berlin is the capital of Germany."}]
+    docs = [
+        {"text": "Paris is the capital of France."},
+        {"text": "Berlin is the capital of Germany."},
+    ]
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(docs, f)
         path = f.name
@@ -1119,7 +1204,9 @@ async def test_vector_store_data_source_pinecone_returns_results() -> None:
     }
     mock_model = unittest.mock.MagicMock()
     mock_model.encode.return_value = [0.1, 0.2, 0.3]
-    source = VectorStoreDataSource(provider="pinecone", client=mock_client, embedding_model=mock_model)
+    source = VectorStoreDataSource(
+        provider="pinecone", client=mock_client, embedding_model=mock_model
+    )
 
     results = await source.search("any query")
 
@@ -1131,12 +1218,14 @@ async def test_vector_store_data_source_pinecone_returns_results() -> None:
 @pytest.mark.asyncio
 async def test_vector_store_data_source_weaviate_returns_results() -> None:
     mock_client = unittest.mock.MagicMock()
-    (mock_client.query.get.return_value.with_near_vector.return_value.with_limit.return_value.do.return_value) = {
-        "data": {"Get": [{"text": "weaviate result"}]}
-    }
+    (
+        mock_client.query.get.return_value.with_near_vector.return_value.with_limit.return_value.do.return_value
+    ) = {"data": {"Get": [{"text": "weaviate result"}]}}
     mock_model = unittest.mock.MagicMock()
     mock_model.encode.return_value = [0.1, 0.2, 0.3]
-    source = VectorStoreDataSource(provider="weaviate", client=mock_client, embedding_model=mock_model)
+    source = VectorStoreDataSource(
+        provider="weaviate", client=mock_client, embedding_model=mock_model
+    )
 
     results = await source.search("any query")
 
@@ -1150,7 +1239,9 @@ async def test_vector_store_data_source_embedding_list_passthrough() -> None:
     mock_client.query.return_value = {"matches": []}
     mock_model = unittest.mock.MagicMock()
     mock_model.encode.return_value = [0.5, 0.6]
-    source = VectorStoreDataSource(provider="pinecone", client=mock_client, embedding_model=mock_model)
+    source = VectorStoreDataSource(
+        provider="pinecone", client=mock_client, embedding_model=mock_model
+    )
 
     results = await source.search("query")
 
@@ -1239,3 +1330,231 @@ async def test_knowledge_graph_handles_non_200_response() -> None:
         results = await source.search("query")
 
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# initialize_guardrail (__init__.py coverage)
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_guardrail_wires_up_guardrail_from_litellm_params() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="bias_hallucination_estimator",
+        mode="post_call",
+    )
+    guardrail: Guardrail = {
+        "guardrail_name": "test-guardrail",
+        "litellm_params": litellm_params,
+        "guardrail_id": "grd-001",
+    }
+
+    instance = initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
+
+    assert isinstance(instance, BiasHallucinationEstimatorGuardrail)
+    assert instance.guardrail_id == "grd-001"
+    assert instance.bias_threshold == 0.5
+    assert instance.hallucination_threshold == 0.5
+
+
+def test_initialize_guardrail_uses_custom_thresholds() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="bias_hallucination_estimator",
+        mode="post_call",
+        bias_threshold=0.3,
+        hallucination_threshold=0.4,
+        block_on_high_risk=False,
+        log_only=True,
+    )
+    guardrail: Guardrail = {
+        "guardrail_name": "custom-guardrail",
+        "litellm_params": litellm_params,
+    }
+
+    instance = initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
+
+    assert instance.bias_threshold == 0.3
+    assert instance.hallucination_threshold == 0.4
+    assert instance.block_on_high_risk is False
+    assert instance.log_only is True
+
+
+# ---------------------------------------------------------------------------
+# BiasHallucinationEstimatorGuardrail — uncovered static branches
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_event_hook_with_mode_returns_mode() -> None:
+    from litellm.types.guardrails import Mode
+
+    mode = Mode(tags={}, default=None)
+    result = BiasHallucinationEstimatorGuardrail._normalize_event_hook(mode)
+
+    assert result == mode
+
+
+def test_normalize_event_hook_with_list_returns_list_of_hooks() -> None:
+    result = BiasHallucinationEstimatorGuardrail._normalize_event_hook(
+        ["pre_call", "post_call"]
+    )
+
+    assert isinstance(result, list)
+    assert GuardrailEventHooks.pre_call in result
+    assert GuardrailEventHooks.post_call in result
+
+
+def test_detected_issues_returns_empty_for_non_dict() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.bias_hallucination_estimator import (
+        BiasHallucinationEstimatorGuardrail,
+    )
+
+    assert BiasHallucinationEstimatorGuardrail._detected_issues("not a dict") == ()
+
+
+def test_detected_issues_returns_empty_when_detected_issues_not_list() -> None:
+    assert (
+        BiasHallucinationEstimatorGuardrail._detected_issues(
+            {"detected_issues": "not a list"}
+        )
+        == ()
+    )
+
+
+def test_violation_categories_returns_empty_when_risk_scores_not_list() -> None:
+    assert (
+        BiasHallucinationEstimatorGuardrail._violation_categories(
+            {"risk_scores": "bad"}
+        )
+        == []
+    )
+
+
+def test_tool_call_text_returns_none_for_dict_without_function() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.bias_hallucination_estimator import (
+        BiasHallucinationEstimatorGuardrail,
+    )
+
+    assert BiasHallucinationEstimatorGuardrail._tool_call_text({"other": "key"}) is None
+
+
+def test_tool_call_text_returns_none_for_object_without_function_attr() -> None:
+    assert BiasHallucinationEstimatorGuardrail._tool_call_text(object()) is None
+
+
+def test_tool_call_text_handles_protocol_object() -> None:
+    class FakeFunction:
+        name = "my_tool"
+        arguments = '{"x": 1}'
+
+    class FakeToolCall:
+        function = FakeFunction()
+
+    result = BiasHallucinationEstimatorGuardrail._tool_call_text(FakeToolCall())
+
+    assert result == 'my_tool {"x": 1}'
+
+
+def test_string_value_returns_empty_for_none() -> None:
+    assert BiasHallucinationEstimatorGuardrail._string_value(None) == ""
+
+
+def test_string_value_converts_non_string() -> None:
+    assert BiasHallucinationEstimatorGuardrail._string_value(42) == "42"
+
+
+def test_get_config_model_returns_config_class() -> None:
+    result = BiasHallucinationEstimatorGuardrail.get_config_model()
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# GroundingChecker — uncovered branches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grounding_checker_no_verifiable_elements_returns_ungrounded() -> None:
+    source = ContextDocumentDataSource(documents=[{"text": "some content"}])
+    checker = GroundingChecker(data_sources=[source])
+    result = await checker.check_claim_grounding("a an the and or")
+
+    assert result.is_grounded is False
+    assert "verifiable" in result.reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_grounding_checker_source_failure_returns_ungrounded() -> None:
+    source = ContextDocumentDataSource(documents=[{"text": "company founded 2015"}])
+    source.name = "failing_source"
+
+    async def always_fails(query: str, limit: int = 5) -> list[Any]:
+        raise RuntimeError("connection refused")
+
+    source.search = always_fails  # type: ignore[method-assign]
+    checker = GroundingChecker(data_sources=[source], confidence_threshold=0.3)
+    result = await checker.check_claim_grounding("company founded 2015")
+
+    assert result.is_grounded is False
+
+
+@pytest.mark.asyncio
+async def test_grounding_checker_partial_match_below_threshold_is_not_grounded() -> (
+    None
+):
+    source = ContextDocumentDataSource(
+        documents=[{"text": "The company was founded in 2015 by Jane Smith."}]
+    )
+    checker = GroundingChecker(data_sources=[source], confidence_threshold=0.99)
+    # 2 of 5 query words match → base confidence 0.4; boosted still well below 0.99
+    result = await checker.check_claim_grounding(
+        "company founded quantum photon neutron"
+    )
+
+    assert result.is_grounded is False
+    assert "confidence" in result.reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_grounding_checker_timeout_returns_empty_not_error() -> None:
+    import asyncio as _asyncio
+
+    source = ContextDocumentDataSource(documents=[{"text": "anything"}])
+
+    async def slow_search(query: str, limit: int = 5) -> list[Any]:
+        await _asyncio.sleep(10)
+        return []
+
+    source.search = slow_search  # type: ignore[method-assign]
+    checker = GroundingChecker(
+        data_sources=[source], confidence_threshold=0.3, timeout_per_source=0.01
+    )
+    result = await checker.check_claim_grounding("company founded 2015")
+
+    assert result.is_grounded is False
+
+
+# ---------------------------------------------------------------------------
+# FileDataSource — exception path (corrupt file)
+# ---------------------------------------------------------------------------
+
+
+def test_file_data_source_corrupt_json_returns_empty() -> None:
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write("{ this is not valid json }")
+        path = f.name
+
+    source = FileDataSource(path)
+
+    assert source._documents == []

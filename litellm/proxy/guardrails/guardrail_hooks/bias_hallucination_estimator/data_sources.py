@@ -25,7 +25,9 @@ class DataSourceResult:
         self.metadata = metadata or {}
 
     def __repr__(self) -> str:
-        return f"DataSourceResult(source={self.source}, confidence={self.confidence:.2f})"
+        return (
+            f"DataSourceResult(source={self.source}, confidence={self.confidence:.2f})"
+        )
 
 
 class DataSource(ABC):
@@ -82,7 +84,9 @@ def _keyword_search(
         text = _get_doc_text(doc)
         matching = len(set(re.findall(r"\b\w+\b", text.lower())) & query_words)
         score = matching / len(query_words)
-        scored.append((score, DataSourceResult(text=text, source=source_name, confidence=score)))
+        scored.append(
+            (score, DataSourceResult(text=text, source=source_name, confidence=score))
+        )
     scored.sort(reverse=True, key=lambda x: x[0])
     return [result for _, result in scored[:limit]]
 
@@ -101,7 +105,11 @@ class FileDataSource(DataSource):
         enabled: bool = True,
         priority: int = 0,
     ) -> None:
-        super().__init__(name=name or f"file_{Path(file_path).stem}", enabled=enabled, priority=priority)
+        super().__init__(
+            name=name or f"file_{Path(file_path).stem}",
+            enabled=enabled,
+            priority=priority,
+        )
         self.file_path = file_path
         self._documents: list[str | dict[str, Any]] = self._load_documents(file_path)
         self._index: dict[str, list[int]] = _build_keyword_index(self._documents)
@@ -114,10 +122,15 @@ class FileDataSource(DataSource):
                 return []
             if path.suffix == ".json":
                 with open(path) as f:
-                    return cast(list[str | dict[str, Any]], _parse_json_docs(json.load(f)))
+                    return cast(
+                        list[str | dict[str, Any]], _parse_json_docs(json.load(f))
+                    )
             if path.suffix in {".csv", ".txt"}:
                 with open(path) as f:
-                    return cast(list[str | dict[str, Any]], [{"text": line.strip()} for line in f if line.strip()])
+                    return cast(
+                        list[str | dict[str, Any]],
+                        [{"text": line.strip()} for line in f if line.strip()],
+                    )
         except Exception:
             pass
         return []
@@ -157,7 +170,9 @@ class URLDataSource(DataSource):
     async def _fetch_all(self) -> list[str | dict[str, Any]]:
         if not _AIOHTTP_AVAILABLE:
             return []
-        results = await asyncio.gather(*[self._fetch_url(u) for u in self.urls], return_exceptions=True)
+        results = await asyncio.gather(
+            *[self._fetch_url(u) for u in self.urls], return_exceptions=True
+        )
         return [doc for batch in results if isinstance(batch, list) for doc in batch]
 
     async def _fetch_url(self, url: str) -> list[str | dict[str, Any]]:
@@ -165,7 +180,9 @@ class URLDataSource(DataSource):
             import aiohttp  # type: ignore[import-untyped]
 
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.timeout)) as response:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=self.timeout)
+                ) as response:
                     if response.status == 200:
                         content = await response.text()
                         return self._parse_content(content)
@@ -176,7 +193,9 @@ class URLDataSource(DataSource):
     @staticmethod
     def _parse_content(content: str) -> list[str | dict[str, Any]]:
         try:
-            return cast(list[str | dict[str, Any]], _parse_json_docs(json.loads(content)))
+            return cast(
+                list[str | dict[str, Any]], _parse_json_docs(json.loads(content))
+            )
         except json.JSONDecodeError:
             return cast(list[str | dict[str, Any]], [{"text": content}])
 
@@ -190,7 +209,9 @@ class ContextDocumentDataSource(DataSource):
         priority: int = 100,
     ) -> None:
         super().__init__(name=name, enabled=enabled, priority=priority)
-        self._documents: list[str | dict[str, Any]] = cast(list[str | dict[str, Any]], documents)
+        self._documents: list[str | dict[str, Any]] = cast(
+            list[str | dict[str, Any]], documents
+        )
         self._index = _build_keyword_index(self._documents)
 
     async def search(self, query: str, limit: int = 5) -> list[DataSourceResult]:
@@ -208,12 +229,18 @@ class VectorStoreDataSource(DataSource):
         embedding_model: Optional[Any] = None,
         **config: Any,
     ) -> None:
-        super().__init__(name=name or f"vectorstore_{provider}", enabled=enabled, priority=priority)
+        super().__init__(
+            name=name or f"vectorstore_{provider}", enabled=enabled, priority=priority
+        )
         self.provider = provider
         self.config = config
-        self.client: Optional[Any] = client if client is not None else self._initialize_client(provider, config)
+        self.client: Optional[Any] = (
+            client if client is not None else self._initialize_client(provider, config)
+        )
         self.embedding_model: Optional[Any] = (
-            embedding_model if embedding_model is not None else self._load_embedding_model()
+            embedding_model
+            if embedding_model is not None
+            else self._load_embedding_model()
         )
 
     @staticmethod
@@ -247,7 +274,9 @@ class VectorStoreDataSource(DataSource):
             if not embedding:
                 return []
             if self.provider == "pinecone":
-                results = self.client.query(embedding, top_k=limit, include_metadata=True)
+                results = self.client.query(
+                    embedding, top_k=limit, include_metadata=True
+                )
                 return [
                     DataSourceResult(
                         text=match.get("metadata", {}).get("text", ""),
@@ -264,7 +293,12 @@ class VectorStoreDataSource(DataSource):
                     .do()
                 )
                 docs = response.get("data", {}).get("Get", {})
-                return [DataSourceResult(text=doc.get("text", ""), source=self.name, confidence=0.8) for doc in docs]
+                return [
+                    DataSourceResult(
+                        text=doc.get("text", ""), source=self.name, confidence=0.8
+                    )
+                    for doc in docs
+                ]
         except Exception:
             pass
         return []
@@ -312,8 +346,12 @@ class KnowledgeGraphDataSource(DataSource):
                     if response.status == 200:
                         data = await response.json()
                         return [
-                            DataSourceResult(text=text, source=self.name, confidence=0.9)
-                            for binding in data.get("results", {}).get("bindings", [])[:limit]
+                            DataSourceResult(
+                                text=text, source=self.name, confidence=0.9
+                            )
+                            for binding in data.get("results", {}).get("bindings", [])[
+                                :limit
+                            ]
                             for text in (self._extract_text(binding),)
                             if text
                         ]
@@ -350,10 +388,14 @@ class FactCheckDataSource(DataSource):
         api_key: Optional[str] = None,
         **config: Any,
     ) -> None:
-        super().__init__(name=name or f"factcheck_{provider}", enabled=enabled, priority=priority)
+        super().__init__(
+            name=name or f"factcheck_{provider}", enabled=enabled, priority=priority
+        )
         self.provider = provider
         self.api_key = api_key
         self.config = config
 
-    async def search(self, query: str, limit: int = 5) -> list[DataSourceResult]:  # noqa: ARG002
+    async def search(
+        self, query: str, limit: int = 5
+    ) -> list[DataSourceResult]:  # noqa: ARG002
         return []

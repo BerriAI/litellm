@@ -64,7 +64,11 @@ class RiskScorer:
         if total_weight <= 0:
             return 0.0
         return min(
-            (bias_score * self.bias_weight + hallucination_score * self.hallucination_weight) / total_weight,
+            (
+                bias_score * self.bias_weight
+                + hallucination_score * self.hallucination_weight
+            )
+            / total_weight,
             1.0,
         )
 

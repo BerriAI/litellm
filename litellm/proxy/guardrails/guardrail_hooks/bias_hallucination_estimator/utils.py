@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Iterable, Tuple
 
-
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -11,7 +10,11 @@ def split_sentences(text: str) -> Tuple[str, ...]:
     normalized_text = " ".join(text.split())
     if not normalized_text:
         return ()
-    return tuple(sentence.strip() for sentence in SENTENCE_SPLIT_PATTERN.split(normalized_text) if sentence.strip())
+    return tuple(
+        sentence.strip()
+        for sentence in SENTENCE_SPLIT_PATTERN.split(normalized_text)
+        if sentence.strip()
+    )
 
 
 def clip_example(text: str, max_length: int = 160) -> str:
