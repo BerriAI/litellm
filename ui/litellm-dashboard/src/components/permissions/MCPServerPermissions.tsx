@@ -4,8 +4,7 @@ import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/
 import { Tooltip } from "antd";
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
-
-const NO_MCP_SERVERS_SENTINEL = "no-mcp-servers";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];

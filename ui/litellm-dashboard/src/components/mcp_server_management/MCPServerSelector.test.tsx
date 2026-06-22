@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import MCPServerSelector from "./MCPServerSelector";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: vi.fn(),
@@ -44,8 +45,6 @@ const mockUseMCPServers = vi.mocked(useMCPServers);
 const mockUseMCPAccessGroups = vi.mocked(useMCPAccessGroups);
 const mockUseMCPToolsets = vi.mocked(useMCPToolsets);
 
-const NO_MCP_SERVERS_VALUE = "no-mcp-servers";
-
 describe("MCPServerSelector no-mcp-servers option", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -66,7 +65,7 @@ describe("MCPServerSelector no-mcp-servers option", () => {
     renderWithProviders(
       <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: [], accessGroups: [] }} />,
     );
-    expect(optionByValue(NO_MCP_SERVERS_VALUE)).toBeUndefined();
+    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)).toBeUndefined();
   });
 
   it("emits an exclusive sentinel when No MCP Servers is selected", async () => {
@@ -79,11 +78,11 @@ describe("MCPServerSelector no-mcp-servers option", () => {
         value={{ servers: ["srv-1"], accessGroups: [] }}
       />,
     );
-    expect(optionByValue(NO_MCP_SERVERS_VALUE)).toBeDefined();
+    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)).toBeDefined();
 
-    await userEvent.selectOptions(screen.getByTestId("mcp-select"), [NO_MCP_SERVERS_VALUE]);
+    await userEvent.selectOptions(screen.getByTestId("mcp-select"), [NO_MCP_SERVERS_SENTINEL]);
 
-    expect(onChange).toHaveBeenCalledWith({ servers: [NO_MCP_SERVERS_VALUE], accessGroups: [], toolsets: [] });
+    expect(onChange).toHaveBeenCalledWith({ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
   });
 
   it("disables real server options while the sentinel is selected", () => {
@@ -92,10 +91,10 @@ describe("MCPServerSelector no-mcp-servers option", () => {
         accessToken="tok"
         allowNoMcpServers
         onChange={vi.fn()}
-        value={{ servers: [NO_MCP_SERVERS_VALUE], accessGroups: [] }}
+        value={{ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [] }}
       />,
     );
     expect(optionByValue("srv-1")?.disabled).toBe(true);
-    expect(optionByValue(NO_MCP_SERVERS_VALUE)?.disabled).toBe(false);
+    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)?.disabled).toBe(false);
   });
 });
