@@ -29,7 +29,14 @@ from batch_client import (
     is_model_access_denied,
     is_result_access_denied,
 )
-from capabilities import CAPABILITIES, Capability, raw_id_matches_provider
+from capabilities import (
+    BATCH_ID_SHAPE,
+    CAPABILITIES,
+    FILE_ID_SHAPE,
+    Capability,
+    matches_id_shape,
+    raw_id_matches_provider,
+)
 from e2e_http import (
     FileUploadForm,
     Result,
@@ -122,6 +129,9 @@ def test_batch_lifecycle(
         upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key)
     ).id
     resources.defer(lambda: client.delete_file(file_id, key=key, provider=provider))
+    assert matches_id_shape(
+        FILE_ID_SHAPE[cap.scenario], file_id
+    ), f"{cap.id}: file id {file_id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
 
     created = create_for_scenario(client, cap, file_id, key)
     require_successful_call(created)
@@ -132,6 +142,9 @@ def test_batch_lifecycle(
 
     assert batch.id, f"create returned no batch id (body={created.body[:200]})"
     assert batch.status in NON_TERMINAL, f"unexpected initial status {batch.status!r}"
+    assert matches_id_shape(
+        BATCH_ID_SHAPE[cap.scenario], batch.id
+    ), f"{cap.id}: batch id {batch.id!r} is not a {BATCH_ID_SHAPE[cap.scenario]} id"
     if cap.scenario == "provider_fallback":
         assert raw_id_matches_provider(
             cap.provider, batch.id

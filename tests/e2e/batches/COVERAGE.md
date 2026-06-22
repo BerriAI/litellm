@@ -26,20 +26,23 @@ points at a real Anthropic batch.
 
 ## Routing scenarios (per `litellm/proxy/batches_endpoints/endpoints.py`)
 
-Each create-capable provider runs all four:
+Each create-capable provider runs all four. The test asserts the returned file id
+and batch id carry the shape that scenario must produce (`matches_id_shape`):
 
-| Scenario | How the batch is routed | Routing assertion |
-|----------|-------------------------|-------------------|
-| `encoded` | upload with `?model=` -> model-encoded file id -> create with just that id | create succeeds against the provider's model (id is re-encoded, not provider-shaped) |
-| `unified` | upload with `target_model_names=` -> unified managed file id -> create with that id | create succeeds against the provider's model |
-| `model_param` | raw file (provider-fallback upload) -> create with `model` in the body | create succeeds against the provider's model |
-| `provider_fallback` | raw file -> `POST /{provider}/v1/batches`, env creds, no model | raw batch id matches the provider's native shape (`raw_id_matches_provider`) |
+| Scenario | How the batch is routed | File id | Batch id |
+|----------|-------------------------|---------|----------|
+| `encoded` | upload with `?model=` -> model-encoded file id -> create with just that id | model-encoded | model-encoded |
+| `unified` | upload with `target_model_names=` -> unified managed file id -> create with that id | managed | managed |
+| `model_param` | raw file (provider-fallback upload) -> create with `model` in the body | raw | model-encoded |
+| `provider_fallback` | raw file -> `POST /{provider}/v1/batches`, env creds, no model | raw | raw (native provider shape) |
 
-For the three encoded scenarios the proxy re-encodes the returned batch id, so the id
-itself is not provider-discriminating; the load-bearing signal is that create
-succeeds against that provider's own model (a misroute to the wrong provider fails
-because the file id / model do not belong there). Only `provider_fallback` returns a
-raw id whose shape we can assert directly.
+"managed" ids base64-decode to a `litellm_proxy` marker; "model-encoded" ids keep the
+provider prefix and base64-encode `litellm:<id>;model,<model>`; "raw" ids are the
+provider's native ids. Asserting these catches a proxy that returns a raw id where it
+should manage it, or vice versa. On top of the id shape, a misroute to the wrong
+provider also fails create (the file id / model do not belong there), and the
+`provider_fallback` raw batch id is additionally checked against the provider's native
+shape (`raw_id_matches_provider`).
 
 ## Key model restriction
 

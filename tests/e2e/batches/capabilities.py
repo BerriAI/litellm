@@ -9,10 +9,13 @@ a provider does not support (Bedrock: no cancel, no list) are gated per row.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Literal
 
 Scenario = Literal["encoded", "unified", "model_param", "provider_fallback"]
+
+IdShape = Literal["managed", "model_encoded", "raw"]
 
 SCENARIOS: tuple[Scenario, ...] = (
     "encoded",
@@ -84,3 +87,48 @@ def raw_id_matches_provider(provider: str, batch_id: str) -> bool:
     if provider == "bedrock":
         return batch_id.startswith("arn:aws")
     return True
+
+
+FILE_ID_SHAPE: dict[Scenario, IdShape] = {
+    "encoded": "model_encoded",
+    "unified": "managed",
+    "model_param": "raw",
+    "provider_fallback": "raw",
+}
+
+BATCH_ID_SHAPE: dict[Scenario, IdShape] = {
+    "encoded": "model_encoded",
+    "unified": "managed",
+    "model_param": "model_encoded",
+    "provider_fallback": "raw",
+}
+
+
+def _b64_decode(value: str) -> str:
+    padded = value + "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded).decode()
+    except Exception:
+        return ""
+
+
+def is_managed_id(id_str: str) -> bool:
+    """A litellm managed unified file/batch id base64-decodes to a litellm_proxy marker."""
+    return _b64_decode(id_str).startswith("litellm_proxy")
+
+
+def is_model_encoded_id(id_str: str) -> bool:
+    """A model-encoded id keeps the provider prefix and base64-encodes litellm:<id>;model,<m>."""
+    for prefix in ("file-", "batch_"):
+        if id_str.startswith(prefix):
+            decoded = _b64_decode(id_str[len(prefix) :])
+            return decoded.startswith("litellm:") and ";model," in decoded
+    return False
+
+
+def matches_id_shape(shape: IdShape, id_str: str) -> bool:
+    if shape == "managed":
+        return is_managed_id(id_str)
+    if shape == "model_encoded":
+        return is_model_encoded_id(id_str)
+    return not is_managed_id(id_str) and not is_model_encoded_id(id_str)
