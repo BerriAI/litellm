@@ -8211,16 +8211,25 @@ def convert_list_message_to_dict(messages: List):
     return new_messages
 
 
+VALID_MESSAGE_ROLES = {"system", "user", "assistant", "tool", "function", "developer"}
+
+
 def validate_and_fix_openai_messages(messages: List):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
-    Handles missing role for assistant messages.
+    Handles missing role for assistant messages and rejects invalid roles.
     """
     new_messages = []
-    for message in messages:
+    for idx, message in enumerate(messages):
         if not message.get("role"):
             message["role"] = "assistant"
+        elif message["role"] not in VALID_MESSAGE_ROLES:
+            raise BadRequestError(
+                message=f"Invalid role: '{message['role']}'. Supported roles are: {sorted(VALID_MESSAGE_ROLES)}",
+                model="",
+                llm_provider="",
+            )
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
