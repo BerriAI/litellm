@@ -168,6 +168,16 @@ def _hash_cli_sso_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
+def _resolve_ui_session_max_budget(user_max_budget: Optional[float]) -> Optional[float]:
+    """
+    Session credentials use the user's configured max_budget when set;
+    otherwise fall back to the default UI/CLI session cap.
+    """
+    if user_max_budget is not None:
+        return user_max_budget
+    return litellm.max_ui_session_budget
+
+
 def _normalize_cli_sso_user_code(user_code: str) -> str:
     return "".join(ch for ch in user_code.upper() if ch.isalnum())
 
@@ -2124,6 +2134,7 @@ async def _complete_cli_sso_callback_session(
         "user_id": cast(str, user_info.user_id),
         "user_role": user_info.user_role,
         "models": user_info.models if hasattr(user_info, "models") else [],
+        "max_budget": user_info.max_budget,
         "user_email": user_email,
         "teams": teams,
         "team_details": team_details,
@@ -2325,7 +2336,9 @@ async def cli_poll_key(
                 user_id=user_id,
                 user_role=session_data["user_role"],
                 models=session_data.get("models", []),
-                max_budget=litellm.max_ui_session_budget,
+                max_budget=_resolve_ui_session_max_budget(
+                    session_data.get("max_budget")
+                ),
             )
 
             # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
@@ -3345,6 +3358,9 @@ class SSOAuthenticationHandler:
         )
 
         default_ui_key_values.update(user_defined_values)
+        default_ui_key_values["key_max_budget"] = _resolve_ui_session_max_budget(
+            user_info.max_budget if user_info is not None else None
+        )
         default_ui_key_values["request_type"] = "key"
         response = await generate_key_helper_fn(
             **default_ui_key_values,  # type: ignore
@@ -3395,7 +3411,9 @@ class SSOAuthenticationHandler:
                     user_id=user_defined_values["user_id"],
                     user_role=user_defined_values["user_role"] or user_role,
                     models=[],
-                    max_budget=litellm.max_ui_session_budget,
+                    max_budget=_resolve_ui_session_max_budget(
+                        user_info.max_budget if user_info is not None else None
+                    ),
                 )
             if _user_info is None:
                 raise HTTPException(

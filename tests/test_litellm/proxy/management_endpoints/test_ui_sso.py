@@ -1445,6 +1445,21 @@ class TestCLISSOCallbackFunction:
 class TestCLIPollingFunction:
     """Test the cli_poll_key function specifically"""
 
+    def test_resolve_ui_session_max_budget_prefers_user_budget(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _resolve_ui_session_max_budget,
+        )
+
+        assert _resolve_ui_session_max_budget(500.0) == 500.0
+
+    def test_resolve_ui_session_max_budget_falls_back_to_session_cap(self):
+        import litellm
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _resolve_ui_session_max_budget,
+        )
+
+        assert _resolve_ui_session_max_budget(None) == litellm.max_ui_session_budget
+
     def test_cli_poll_key_validation_invalid_format(self):
         """Test CLI polling key format validation"""
         # Test key format validation logic
@@ -2900,9 +2915,54 @@ class TestCLIKeyRegenerationFlow:
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
             assert jwt_call_args.kwargs["team_alias"] == "Team B"
+            assert (
+                jwt_call_args.kwargs["user_info"].max_budget
+                == litellm.max_ui_session_budget
+            )
 
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cli_poll_key_uses_user_max_budget_for_jwt(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        session_key = "cli-session-user-budget"
+        session_data = {
+            "user_id": "test-user-budget",
+            "user_role": "internal_user",
+            "teams": ["team-a"],
+            "team_details": [{"team_id": "team-a", "team_alias": "Team A"}],
+            "models": ["gpt-4"],
+            "max_budget": 500.0,
+            "user_email": "budget@example.com",
+        }
+
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": session_data,
+        }
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value="jwt-token",
+            ) as mock_get_jwt,
+        ):
+            await cli_poll_key(
+                key_id=session_key,
+                team_id="team-a",
+                x_litellm_cli_poll_secret="poll-secret",
+            )
+
+            assert mock_get_jwt.call_args.kwargs["user_info"].max_budget == 500.0
 
 
 class TestGetAppRolesFromIdToken:

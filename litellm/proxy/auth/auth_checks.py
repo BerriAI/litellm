@@ -2391,11 +2391,16 @@ class ExperimentalUIJWTToken:
         # Format the expiration time as ISO 8601 string
         expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
 
+        session_max_budget = (
+            user_info.max_budget
+            if user_info.max_budget is not None
+            else litellm.max_ui_session_budget
+        )
         valid_token = UserAPIKeyAuth(
             token="ui-token",
             key_name="ui-token",
             key_alias="ui-token",
-            max_budget=litellm.max_ui_session_budget,
+            max_budget=session_max_budget,
             rpm_limit=100,  # allow user to have a conversation on test key pane of UI
             expires=expires,
             user_id=user_info.user_id,
@@ -2448,11 +2453,16 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
+        session_max_budget = (
+            user_info.max_budget
+            if user_info.max_budget is not None
+            else litellm.max_ui_session_budget
+        )
         valid_token = UserAPIKeyAuth(
             token=CLI_JWT_TOKEN_NAME,
             key_name=CLI_JWT_TOKEN_NAME,
             key_alias=CLI_JWT_TOKEN_NAME,
-            max_budget=litellm.max_ui_session_budget,
+            max_budget=session_max_budget,
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,

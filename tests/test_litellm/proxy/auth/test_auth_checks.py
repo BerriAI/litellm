@@ -116,7 +116,7 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert token_data["user_id"] == "test_user"
     assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
     assert token_data["models"] == ["gpt-3.5-turbo"]
-    assert token_data["max_budget"] == litellm.max_ui_session_budget
+    assert token_data["max_budget"] == valid_sso_user_defined_values.max_budget
 
     # Verify expiration time is set and valid (Experimental UI uses fixed 10-min expiry)
     assert "expires" in token_data
@@ -215,7 +215,7 @@ def test_get_key_object_from_ui_hash_key_valid(
     assert key_object.user_id == "test_user"
     assert key_object.user_role == LitellmUserRoles.PROXY_ADMIN
     assert key_object.models == ["gpt-3.5-turbo"]
-    assert key_object.max_budget == litellm.max_ui_session_budget
+    assert key_object.max_budget == valid_sso_user_defined_values.max_budget
 
 
 def test_get_key_object_from_ui_hash_key_invalid():
@@ -422,7 +422,7 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     assert token_data["user_id"] == "test_user"
     assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
     assert token_data["models"] == ["gpt-3.5-turbo"]
-    assert token_data["max_budget"] == litellm.max_ui_session_budget
+    assert token_data["max_budget"] == valid_sso_user_defined_values.max_budget
 
     # Verify expiration time is set to 24 hours (default)
     assert "expires" in token_data
@@ -430,6 +430,22 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     assert expires > get_utc_datetime()
     assert expires <= get_utc_datetime() + timedelta(hours=24, minutes=1)
     assert expires >= get_utc_datetime() + timedelta(hours=23, minutes=59)
+
+
+def test_get_cli_jwt_auth_token_falls_back_to_session_cap_without_user_budget(
+    valid_sso_user_defined_values,
+):
+    user_without_budget = valid_sso_user_defined_values.model_copy(
+        update={"max_budget": None}
+    )
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_without_budget)
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    assert token_data["max_budget"] == litellm.max_ui_session_budget
 
 
 def test_get_cli_jwt_auth_token_custom_expiration(
