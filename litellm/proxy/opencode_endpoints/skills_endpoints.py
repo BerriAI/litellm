@@ -1,5 +1,4 @@
 import re
-from typing import Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 
@@ -15,7 +14,7 @@ AGENT_SKILLS_PATHS = ("/.well-known/agent-skills", "/.well-known/skills")
 _MAX_SKILLS = 1000
 
 
-def _opencode_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
+def _opencode_config_enabled(skills_gateway_config: dict | None) -> bool:
     if not isinstance(skills_gateway_config, dict):
         return False
     opencode_config = skills_gateway_config.get("opencode", {})
@@ -26,7 +25,7 @@ def _opencode_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
     )
 
 
-def _agent_skills_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
+def _agent_skills_config_enabled(skills_gateway_config: dict | None) -> bool:
     if not isinstance(skills_gateway_config, dict):
         return False
     agent_skills_config = skills_gateway_config.get("agent_skills", {})
@@ -37,7 +36,7 @@ def _agent_skills_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
     )
 
 
-def _opencode_path(skills_gateway_config: Optional[dict]) -> str:
+def _opencode_path(skills_gateway_config: dict | None) -> str:
     if not isinstance(skills_gateway_config, dict):
         return OPENCODE_SKILLS_DEFAULT_PATH
     opencode_config = skills_gateway_config.get("opencode", {})
@@ -74,7 +73,7 @@ def _slug(value: str) -> str:
     return slug or "litellm-skill"
 
 
-def _one_line(value: Optional[str]) -> str:
+def _one_line(value: str | None) -> str:
     if not value:
         return ""
     return " ".join(str(value).split())
@@ -94,7 +93,7 @@ def _generated_skill_md(skill: LiteLLM_SkillsTable) -> bytes:
     ).encode("utf-8")
 
 
-def _skill_files(skill: LiteLLM_SkillsTable) -> Dict[str, bytes]:
+def _skill_files(skill: LiteLLM_SkillsTable) -> dict[str, bytes]:
     files = SkillPromptInjectionHandler().extract_all_files(skill)
     if "SKILL.md" not in files:
         files["SKILL.md"] = _generated_skill_md(skill)
@@ -103,7 +102,7 @@ def _skill_files(skill: LiteLLM_SkillsTable) -> Dict[str, bytes]:
 
 async def _enabled_skills(
     user_api_key_dict: UserAPIKeyAuth,
-) -> List[LiteLLM_SkillsTable]:
+) -> list[LiteLLM_SkillsTable]:
     skills = await LiteLLMSkillsHandler.list_skills(
         limit=_MAX_SKILLS,
         offset=0,
@@ -112,7 +111,7 @@ async def _enabled_skills(
     return [skill for skill in skills if _skill_enabled(skill)]
 
 
-def _sorted_files(files: Dict[str, bytes]) -> List[str]:
+def _sorted_files(files: dict[str, bytes]) -> list[str]:
     return sorted(files)
 
 
@@ -200,7 +199,7 @@ def _add_route(app: FastAPI, path: str, endpoint):
 
 def initialize_opencode_skills_endpoint(
     app: FastAPI,
-    skills_gateway_config: Optional[dict],
+    skills_gateway_config: dict | None,
 ) -> None:
     if not _opencode_config_enabled(skills_gateway_config):
         return
@@ -213,7 +212,7 @@ def initialize_opencode_skills_endpoint(
 
 def initialize_agent_skills_endpoint(
     app: FastAPI,
-    skills_gateway_config: Optional[dict],
+    skills_gateway_config: dict | None,
 ) -> None:
     if not _agent_skills_config_enabled(skills_gateway_config):
         return
