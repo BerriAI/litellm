@@ -12,6 +12,16 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy.auth.auth_method import AuthMethod
+from litellm.proxy.auth.resolvers.models import (
+    EndUserIdentity,
+    OrganizationIdentity,
+    Principal,
+    PrincipalType,
+    ProjectIdentity,
+    TeamIdentity,
+    UserIdentity,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -1875,6 +1885,189 @@ def test_add_user_api_key_auth_to_request_metadata():
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
 
 
+def _key_with_legacy_identity() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-test-key-123",
+        key_alias="test-key-alias",
+        user_id="key-user",
+        user_email="key-user@example.com",
+        team_id="key-team",
+        team_alias="key-team-alias",
+        org_id="key-org",
+        organization_alias="key-org-alias",
+        project_id="key-project",
+        project_alias="key-project-alias",
+        end_user_id="key-end-user",
+        request_route="/chat/completions",
+    )
+
+
+def test_add_user_api_key_auth_to_request_metadata_sources_identity_from_principal():
+    """
+    When a resolved Principal is present, the logged identity metadata must follow
+    the Principal, not the key object, so logs and spend attribution stay consistent
+    with caller identity resolved at the auth seam
+    """
+    data = {"litellm_metadata": {}}
+    user_api_key_dict = _key_with_legacy_identity()
+
+    principal = Principal(
+        principal_type=PrincipalType.HUMAN,
+        subject="principal-subject",
+        auth_method=AuthMethod.API_KEY,
+        user=UserIdentity(id="principal-user", email="principal-user@example.com"),
+        organization=OrganizationIdentity(
+            id="principal-org", name="principal-org-alias"
+        ),
+        teams=[
+            TeamIdentity(id="principal-team", name="principal-team-alias"),
+            TeamIdentity(id="principal-team-2", name="principal-team-alias-2"),
+        ],
+        project=ProjectIdentity(id="principal-project", name="principal-project-alias"),
+        end_user=EndUserIdentity(id="principal-end-user"),
+    )
+
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+        principal=principal,
+    )
+    metadata = result["litellm_metadata"]
+
+    assert metadata["user_api_key_user_id"] == "principal-user"
+    assert metadata["user_api_key_user_email"] == "principal-user@example.com"
+    assert metadata["user_api_key_team_id"] == "principal-team"
+    assert metadata["user_api_key_team_alias"] == "principal-team-alias"
+    assert metadata["user_api_key_org_id"] == "principal-org"
+    assert metadata["user_api_key_org_alias"] == "principal-org-alias"
+    assert metadata["user_api_key_project_id"] == "principal-project"
+    assert metadata["user_api_key_project_alias"] == "principal-project-alias"
+    assert metadata["user_api_key_end_user_id"] == "principal-end-user"
+
+    # Non-identity fields still come from the key object
+    assert metadata["user_api_key_hash"] == "hashed-test-key-123"
+    assert metadata["user_api_key_alias"] == "test-key-alias"
+    assert metadata["user_api_key"] == "hashed-test-key-123"
+
+
+def test_add_user_api_key_auth_to_request_metadata_falls_back_to_key_without_principal():
+    """
+    With no resolved Principal, identity metadata must come from the key object,
+    byte-for-byte the legacy behavior
+    """
+    data = {"litellm_metadata": {}}
+    user_api_key_dict = _key_with_legacy_identity()
+
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+        principal=None,
+    )
+    metadata = result["litellm_metadata"]
+
+    assert metadata["user_api_key_user_id"] == "key-user"
+    assert metadata["user_api_key_user_email"] == "key-user@example.com"
+    assert metadata["user_api_key_team_id"] == "key-team"
+    assert metadata["user_api_key_team_alias"] == "key-team-alias"
+    assert metadata["user_api_key_org_id"] == "key-org"
+    assert metadata["user_api_key_org_alias"] == "key-org-alias"
+    assert metadata["user_api_key_project_id"] == "key-project"
+    assert metadata["user_api_key_project_alias"] == "key-project-alias"
+    assert metadata["user_api_key_end_user_id"] == "key-end-user"
+
+
+def test_add_user_api_key_auth_to_request_metadata_falls_back_per_field():
+    """
+    With a Principal present but a sub-model absent, that single identity field must
+    fall back to the key object's value rather than dropping to None, so a present
+    Principal can never regress an id the key actually carried
+    """
+    data = {"litellm_metadata": {}}
+    user_api_key_dict = _key_with_legacy_identity()
+
+    principal = Principal(
+        principal_type=PrincipalType.HUMAN,
+        subject="principal-subject",
+        auth_method=AuthMethod.API_KEY,
+        user=None,
+        organization=OrganizationIdentity(
+            id="principal-org", name="principal-org-alias"
+        ),
+        teams=[],
+        project=None,
+        end_user=None,
+    )
+
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+        principal=principal,
+    )
+    metadata = result["litellm_metadata"]
+
+    # Present Principal sub-model wins
+    assert metadata["user_api_key_org_id"] == "principal-org"
+    assert metadata["user_api_key_org_alias"] == "principal-org-alias"
+
+    # Absent Principal sub-models fall back to the key, not None
+    assert metadata["user_api_key_user_id"] == "key-user"
+    assert metadata["user_api_key_user_email"] == "key-user@example.com"
+    assert metadata["user_api_key_team_id"] == "key-team"
+    assert metadata["user_api_key_team_alias"] == "key-team-alias"
+    assert metadata["user_api_key_project_id"] == "key-project"
+    assert metadata["user_api_key_project_alias"] == "key-project-alias"
+    assert metadata["user_api_key_end_user_id"] == "key-end-user"
+
+
+def test_add_headers_to_llm_call_sources_identity_from_principal(monkeypatch):
+    """
+    Forwarded x-litellm-* identity headers must follow the resolved Principal when one
+    is present, so provider-facing headers do not diverge from the principal-sourced
+    logs
+    """
+    monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
+
+    user_api_key_dict = _key_with_legacy_identity()
+    principal = Principal(
+        principal_type=PrincipalType.HUMAN,
+        subject="principal-subject",
+        auth_method=AuthMethod.API_KEY,
+        user=UserIdentity(id="principal-user", email="principal-user@example.com"),
+        organization=OrganizationIdentity(
+            id="principal-org", name="principal-org-alias"
+        ),
+        teams=[TeamIdentity(id="principal-team", name="principal-team-alias")],
+    )
+
+    headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+        {}, user_api_key_dict, principal=principal
+    )
+
+    assert headers["x-litellm-user_api_key_user_id"] == "principal-user"
+    assert headers["x-litellm-user_api_key_team_id"] == "principal-team"
+    assert headers["x-litellm-user_api_key_org_id"] == "principal-org"
+
+
+def test_add_headers_to_llm_call_falls_back_to_key_without_principal(monkeypatch):
+    """
+    With no resolved Principal, forwarded identity headers come from the key object
+    """
+    monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
+
+    user_api_key_dict = _key_with_legacy_identity()
+
+    headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+        {}, user_api_key_dict, principal=None
+    )
+
+    assert headers["x-litellm-user_api_key_user_id"] == "key-user"
+    assert headers["x-litellm-user_api_key_team_id"] == "key-team"
+    assert headers["x-litellm-user_api_key_org_id"] == "key-org"
+
+
 @pytest.mark.parametrize(
     "data, model_group_settings, expected_headers_added",
     [
@@ -1974,7 +2167,9 @@ def test_add_headers_to_llm_call_by_model_group(
 
             if expected_headers_added:
                 # Verify that add_headers_to_llm_call was called
-                mock_add_headers.assert_called_once_with(headers, user_api_key_dict)
+                mock_add_headers.assert_called_once_with(
+                    headers, user_api_key_dict, None
+                )
                 # Verify that headers were added to the data
                 assert "headers" in result
                 assert result["headers"] == expected_returned_headers
@@ -2022,7 +2217,7 @@ def test_add_headers_to_llm_call_by_model_group_empty_headers_returned():
             )
 
             # Verify that add_headers_to_llm_call was called
-            mock_add_headers.assert_called_once_with(headers, user_api_key_dict)
+            mock_add_headers.assert_called_once_with(headers, user_api_key_dict, None)
 
             # Verify that no headers were added since returned headers were empty
             assert "headers" not in result
@@ -2070,7 +2265,7 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
             )
 
             # Verify that add_headers_to_llm_call was called
-            mock_add_headers.assert_called_once_with(headers, user_api_key_dict)
+            mock_add_headers.assert_called_once_with(headers, user_api_key_dict, None)
 
             # Verify that headers were overwritten
             assert "headers" in result

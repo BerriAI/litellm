@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.resolvers.models import Principal
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -827,7 +828,9 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def add_headers_to_llm_call(
-        headers: dict, user_api_key_dict: UserAPIKeyAuth
+        headers: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        principal: Optional[Principal] = None,
     ) -> dict:
         """
         Add headers to the LLM call
@@ -841,7 +844,8 @@ class LiteLLMProxyRequestSetup:
         if litellm.add_user_information_to_llm_headers is True:
             litellm_logging_metadata_headers = (
                 LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-                    user_api_key_dict=user_api_key_dict
+                    user_api_key_dict=user_api_key_dict,
+                    principal=principal,
                 )
             )
             for k, v in litellm_logging_metadata_headers.items():
@@ -861,7 +865,10 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def add_headers_to_llm_call_by_model_group(
-        data: dict, headers: dict, user_api_key_dict: UserAPIKeyAuth
+        data: dict,
+        headers: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        principal: Optional[Principal] = None,
     ) -> dict:
         """
         Add headers to the LLM call by model group
@@ -885,7 +892,7 @@ class LiteLLMProxyRequestSetup:
             )  # handles aliases, wildcards, etc.
         ):
             _headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
-                headers, user_api_key_dict
+                headers, user_api_key_dict, principal
             )
             if _headers != {}:
                 data["headers"] = _headers
@@ -1008,21 +1015,66 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
+        principal: Optional[Principal] = None,
     ) -> StandardLoggingUserAPIKeyMetadata:
+        if principal is None:
+            user_id = user_api_key_dict.user_id
+            user_email = user_api_key_dict.user_email
+            team_id = user_api_key_dict.team_id
+            team_alias = user_api_key_dict.team_alias
+            org_id = user_api_key_dict.org_id
+            org_alias = user_api_key_dict.organization_alias
+            project_id = user_api_key_dict.project_id
+            project_alias = user_api_key_dict.project_alias
+            end_user_id = user_api_key_dict.end_user_id
+        else:
+            first_team = principal.teams[0] if principal.teams else None
+            user_id = principal.user.id if principal.user else user_api_key_dict.user_id
+            user_email = (
+                principal.user.email if principal.user else user_api_key_dict.user_email
+            )
+            team_id = first_team.id if first_team else user_api_key_dict.team_id
+            team_alias = first_team.name if first_team else user_api_key_dict.team_alias
+            org_id = (
+                principal.organization.id
+                if principal.organization
+                else user_api_key_dict.org_id
+            )
+            org_alias = (
+                principal.organization.name
+                if principal.organization
+                else user_api_key_dict.organization_alias
+            )
+            project_id = (
+                principal.project.id
+                if principal.project
+                else user_api_key_dict.project_id
+            )
+            project_alias = (
+                principal.project.name
+                if principal.project
+                else user_api_key_dict.project_alias
+            )
+            end_user_id = (
+                principal.end_user.id
+                if principal.end_user
+                else user_api_key_dict.end_user_id
+            )
+
         user_api_key_logged_metadata = StandardLoggingUserAPIKeyMetadata(
             user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
             user_api_key_alias=user_api_key_dict.key_alias,
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
-            user_api_key_team_id=user_api_key_dict.team_id,
-            user_api_key_project_id=user_api_key_dict.project_id,
-            user_api_key_project_alias=user_api_key_dict.project_alias,
-            user_api_key_user_id=user_api_key_dict.user_id,
-            user_api_key_org_id=user_api_key_dict.org_id,
-            user_api_key_org_alias=user_api_key_dict.organization_alias,
-            user_api_key_team_alias=user_api_key_dict.team_alias,
-            user_api_key_end_user_id=user_api_key_dict.end_user_id,
-            user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_team_id=team_id,
+            user_api_key_project_id=project_id,
+            user_api_key_project_alias=project_alias,
+            user_api_key_user_id=user_id,
+            user_api_key_org_id=org_id,
+            user_api_key_org_alias=org_alias,
+            user_api_key_team_alias=team_alias,
+            user_api_key_end_user_id=end_user_id,
+            user_api_key_user_email=user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
                 user_api_key_dict.budget_reset_at.isoformat()
@@ -1038,13 +1090,15 @@ class LiteLLMProxyRequestSetup:
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         _metadata_variable_name: str,
+        principal: Optional[Principal] = None,
     ) -> dict:
         """
         Adds the `UserAPIKeyAuth` object to the request metadata.
         """
         user_api_key_logged_metadata = (
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-                user_api_key_dict=user_api_key_dict
+                user_api_key_dict=user_api_key_dict,
+                principal=principal,
             )
         )
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
@@ -1477,7 +1531,10 @@ async def add_litellm_data_to_request(
 
     # check for forwardable headers
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
-        data=data, headers=_headers, user_api_key_dict=user_api_key_dict
+        data=data,
+        headers=_headers,
+        user_api_key_dict=user_api_key_dict,
+        principal=getattr(request.state, "principal", None),
     )
 
     user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
@@ -1623,6 +1680,7 @@ async def add_litellm_data_to_request(
         data=data,
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name=_metadata_variable_name,
+        principal=getattr(request.state, "principal", None),
     )
     data[_metadata_variable_name]["litellm_api_version"] = version
 
