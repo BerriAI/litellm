@@ -47,11 +47,21 @@ Presigning is pure-local botocore (no network round-trip), works identically for
 the sync and async paths, and uses the official SDK rather than hand-rolled
 signing. Verified that a botocore presigned URL survives the handler's
 `params.update(extract_query_params(url))` re-parsing with the `X-Amz-Signature`,
-`X-Amz-Credential`, and full query string preserved byte-for-byte. Path-style
-addressing against a regional endpoint produces
-`https://s3.{region}.amazonaws.com/{bucket}/{key}?...`, matching the URL shape
-that `transform_create_file_request` already builds and avoiding the 307 redirect
-that breaks SigV4 for non-`us-east-1` buckets.
+`X-Amz-Credential`, and full query string preserved byte-for-byte.
+
+The boto3 S3 client is built with `Config(signature_version="s3v4",
+s3={"addressing_style": "path"})` and NO explicit `endpoint_url`. `s3v4` is
+required because botocore's default emits deprecated SigV2 query params.
+Omitting `endpoint_url` lets botocore derive the correct host per partition
+from `region_name` — `s3.{region}.amazonaws.com` for standard regions,
+`s3.{region}.amazonaws.com.cn` for China, and the GovCloud/ISO hosts for those
+partitions — while staying regional (avoids the `us-east-1` 307 redirect that
+breaks SigV4). A hardcoded regional endpoint string would misroute China and
+GovCloud. STS/role credentials flow through as `X-Amz-Security-Token`.
+`ExpiresIn` is 300s: the URL is consumed synchronously and is logged by the
+handler as `api_base`, so a short window bounds replay of a leaked URL. All
+verified across us-west-2, us-east-1, eu-central-1, ap-southeast-2, cn-north-1,
+and us-gov-west-1.
 
 Alternatives rejected:
 - Signing request headers in the config: the handler computes headers via
@@ -121,10 +131,10 @@ def transform_file_content_response(self, raw_response, logging_obj, litellm_par
 `transform_create_file_request` uses (`s3_region_name` from litellm_params or
 optional_params, then `_get_aws_region_name`), resolves credentials via
 `get_credentials`, and calls botocore `generate_presigned_url("get_object", ...)`
-with `Config(signature_version="s3v4", s3={"addressing_style": "path"})` against
-a regional endpoint. Credentials are read out of `litellm_params` and passed as
-typed arguments into `get_credentials` so no `Any`/`dict` leaks into the signing
-call.
+with `Config(signature_version="s3v4", s3={"addressing_style": "path"})` and no
+explicit `endpoint_url` (botocore derives the correct per-partition host).
+Credentials are read out of `litellm_params` and passed as typed arguments into
+`get_credentials` so no `Any`/`dict` leaks into the signing call.
 
 ### `litellm/llms/bedrock/files/handler.py`
 
@@ -160,6 +170,11 @@ logic exercised:
 2. Region precedence: `s3_region_name` wins over `aws_region_name`; the chosen
    region appears in the presigned `X-Amz-Credential` scope. (create_file parity;
    prime mutation target.)
+2a. Partition correctness: a `cn-north-1` region presigns against
+   `s3.cn-north-1.amazonaws.com.cn` (guards against re-introducing a hardcoded
+   `amazonaws.com` endpoint).
+2b. Signature version: the URL carries `X-Amz-Algorithm=AWS4-HMAC-SHA256` and no
+   SigV2 `Signature`/`AWSAccessKeyId` params (guards the `s3v4` config).
 3. A base64-encoded unified file_id is decoded to its underlying `s3://` URI and
    presigned correctly.
 4. Security: file_id bucket != configured bucket raises `ValueError`; an

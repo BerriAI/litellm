@@ -268,6 +268,23 @@ class TestBedrockFilesContentRetrieval:
         assert "/eu-central-1/s3/aws4_request" in credential
         assert urlsplit(url).netloc == "s3.eu-central-1.amazonaws.com"
 
+    def test_china_partition_uses_correct_endpoint_suffix(self):
+        url, _ = self._request(
+            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            {"s3_bucket_name": "safe-bucket", "aws_region_name": "cn-north-1"},
+        )
+        assert urlsplit(url).netloc == "s3.cn-north-1.amazonaws.com.cn"
+        assert "X-Amz-Signature" in parse_qs(urlsplit(url).query)
+
+    def test_uses_sigv4_not_deprecated_sigv2(self):
+        url, _ = self._request(
+            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            {"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"},
+        )
+        query = parse_qs(urlsplit(url).query)
+        assert query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+        assert "Signature" not in query and "AWSAccessKeyId" not in query
+
     def test_unified_file_id_is_decoded_and_presigned(self):
         file_id = _encode_unified_file_id(
             "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out"
@@ -357,7 +374,6 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
             aws_secret_access_key=credentials.secret_key,
             aws_session_token=credentials.token,
             region_name=region,
-            endpoint_url=f"https://s3.{region}.amazonaws.com",
             config=Config(
                 signature_version="s3v4", s3={"addressing_style": "path"}
             ),
@@ -367,7 +383,7 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
         return s3_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": bucket_name, "Key": object_key},
-            ExpiresIn=3600,
+            ExpiresIn=300,
         )
 
     def transform_file_content_request(
@@ -405,12 +421,17 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
         return HttpxBinaryResponseContent(response=raw_response)
 ```
 
-Note: `validate_managed_cloud_file_id` returns the *raw* (not URL-encoded) object key, which is what `generate_presigned_url` expects — botocore URL-encodes the key itself. Do not pre-encode.
+Notes:
+- `validate_managed_cloud_file_id` returns the *raw* (not URL-encoded) object key, which is what `generate_presigned_url` expects — botocore URL-encodes the key itself (verified with keys containing spaces and unicode). Do not pre-encode.
+- Do NOT pass `endpoint_url`. Letting botocore derive the endpoint from `region_name` produces the correct host for every partition — `s3.{region}.amazonaws.com` for standard regions, `s3.{region}.amazonaws.com.cn` for China, GovCloud/ISO hosts for those partitions — while still being regional (avoids the `us-east-1` 307 redirect that breaks SigV4). A hardcoded `f"https://s3.{region}.amazonaws.com"` would send China/GovCloud requests to the wrong host. Verified across us-west-2, us-east-1, eu-central-1, ap-southeast-2, cn-north-1, us-gov-west-1.
+- `signature_version="s3v4"` is required, not cosmetic: botocore's default with no config emits deprecated SigV2 query params (`AWSAccessKeyId`/`Signature`/`Expires`). Verified.
+- `ExpiresIn=300`: the URL is consumed synchronously within the same request, and the generic handler logs it as `api_base` in `pre_call`, so a short expiry bounds the window in which a leaked-from-logs URL could be replayed.
+- STS/role credentials (`aws_session_token`) are carried into the presigned URL as `X-Amz-Security-Token`. Verified.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesContentRetrieval -v`
-Expected: PASS (6 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Format, lint, commit**
 
@@ -816,6 +837,8 @@ Show the before (500 on `main`) and after (bytes returned) for step 5.
 - Remove unreachable `files/main.py` branch -> Task 5. Covered.
 - Raw S3 bytes (no OpenAI transform) -> Task 2 Step 3 (`transform_file_content_response` returns response as-is) + test in Task 2. Covered.
 - Region precedence (s3_region_name wins) -> Task 2 test `test_s3_region_name_wins_over_aws_region_name`. Covered.
+- Partition correctness (China/GovCloud endpoint) -> Task 2 test `test_china_partition_uses_correct_endpoint_suffix`. Covered.
+- SigV4 not SigV2 -> Task 2 test `test_uses_sigv4_not_deprecated_sigv2`. Covered.
 - Security (bucket confusion, unmanaged prefix, traversal) -> Tasks 1, 2, 4 tests. Covered.
 - Wiring no longer raises -> Task 3. Covered.
 - Proof of fix (full batch e2e) -> Proof of Fix section. Covered.
