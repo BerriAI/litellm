@@ -611,6 +611,8 @@ async def authorize(
         if lookup_name
         else None
     )
+    if mcp_server is None and lookup_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_id(lookup_name)
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
@@ -673,6 +675,8 @@ async def token_endpoint(
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
         lookup_name, client_ip=client_ip
     )
+    if mcp_server is None and lookup_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_id(lookup_name)
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
@@ -991,6 +995,10 @@ async def _build_oauth_protected_resource_response(
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
+        if mcp_server is None:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                mcp_server_name
+            )
 
     # Build resource URL based on the pattern
     if mcp_server_name:
@@ -1144,6 +1152,10 @@ def _build_oauth_authorization_server_response(
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
+        if mcp_server is None:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                mcp_server_name
+            )
 
     return {
         "issuer": request_base_url,  # point to your proxy
@@ -1310,6 +1322,10 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
         mcp_server_name, client_ip=client_ip
     )
+    if mcp_server is None:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+            mcp_server_name
+        )
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(
