@@ -441,6 +441,25 @@ def test_vertex_ai_empty_content():
     assert reasoning_content is None
 
 
+def test_vertex_ai_null_text_part_is_ignored():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = cast(
+        List[HttpxPartType],
+        [
+            {"text": None},
+            {"text": "Generated image"},
+        ],
+    )
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content == "Generated image"
+    assert reasoning_content is None
+
+
 @pytest.mark.parametrize(
     "usage_metadata, inclusive, expected_usage",
     [
