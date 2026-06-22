@@ -148,22 +148,50 @@ class CloudflareChatConfig(BaseConfig):
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         completion_response = raw_response.json()
+        result = completion_response.get("result", {})
 
-        # Support both "response" and "response_text" keys (newer models like Nemotron use "response_text")
-        result = completion_response["result"]
-        model_response.choices[0].message.content = result.get("response") if result.get("response") is not None else result.get("response_text", "")  # type: ignore
+        # Reasoning-capable Workers AI models (e.g. @cf/google/gemma-4-26b-a4b-it)
+        # return an OpenAI-style choices block and leave the flat "response" field
+        # empty, putting chain-of-thought in choices[0].message.reasoning. Read the
+        # choices block first, then fall back to legacy "response"/"response_text"
+        # (newer models like Nemotron use "response_text").
+        message = {}
+        choices = result.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
 
-        prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-        )
+        content = message.get("content")
+        if not content:
+            content = result.get("response")
+        if not content:
+            content = result.get("response_text", "")
+        model_response.choices[0].message.content = content  # type: ignore
+
+        reasoning = message.get("reasoning") or message.get("reasoning_content")
+        if reasoning:
+            model_response.choices[0].message.reasoning_content = reasoning  # type: ignore
 
         model_response.created = int(time.time())
         model_response.model = "cloudflare/" + model
+
+        # Prefer Cloudflare's own usage; estimate any field it omits so we never
+        # silently report zero tokens. Reasoning models always return usage; the
+        # legacy text shape may not.
+        usage_block = result.get("usage") or {}
+        prompt_tokens = usage_block.get("prompt_tokens")
+        if not prompt_tokens:
+            prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
+        completion_tokens = usage_block.get("completion_tokens")
+        if not completion_tokens:
+            completion_tokens = len(encoding.encode(content or ""))
+        total_tokens = usage_block.get("total_tokens") or (
+            prompt_tokens + completion_tokens
+        )
+
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            total_tokens=total_tokens,
         )
         setattr(model_response, "usage", usage)
         return model_response
@@ -205,6 +233,32 @@ class CloudflareChatResponseIterator(BaseModelResponseIterator):
                 text = chunk["response"]
             elif "response_text" in chunk and chunk["response_text"] is not None:
                 text = chunk["response_text"]
+            else:
+                # OpenAI-style stream (reasoning + newer models): text and
+                # chain-of-thought arrive on choices[0].delta.
+                choices = chunk.get("choices") or []
+                if choices and isinstance(choices[0], dict):
+                    index = int(choices[0].get("index", index))
+                    delta = choices[0].get("delta") or {}
+                    text = delta.get("content") or ""
+                    reasoning = delta.get("reasoning") or delta.get(
+                        "reasoning_content"
+                    )
+                    if reasoning:
+                        provider_specific_fields = {"reasoning_content": reasoning}
+                    finish_reason = choices[0].get("finish_reason") or ""
+                    is_finished = bool(finish_reason)
+
+            usage_block = chunk.get("usage")
+            if usage_block:
+                prompt_tokens = usage_block.get("prompt_tokens", 0)
+                completion_tokens = usage_block.get("completion_tokens", 0)
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=usage_block.get("total_tokens")
+                    or (prompt_tokens + completion_tokens),
+                )
 
             returned_chunk = GenericStreamingChunk(
                 text=text,
