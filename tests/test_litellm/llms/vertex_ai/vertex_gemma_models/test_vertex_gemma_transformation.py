@@ -20,6 +20,47 @@ def _reset_litellm_http_client_cache():
     in_memory_llm_clients_cache.flush_cache()
 
 
+def _make_gemma_vertex_response(
+    content="ok",
+    response_id="chatcmpl-test",
+    total_tokens=114,
+):
+    """Build a minimal but valid Vertex Gemma `predictions` response body."""
+    return {
+        "deployedModelId": "1207280419999999999",
+        "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1222199011122",
+        "modelDisplayName": "gemma-3-12b-it-1222199011122",
+        "modelVersionId": "1",
+        "predictions": {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": content,
+                        "reasoning_content": None,
+                        "role": "assistant",
+                        "tool_calls": [],
+                    },
+                    "stop_reason": None,
+                }
+            ],
+            "created": 1759863903,
+            "id": response_id,
+            "model": "google/gemma-3-12b-it",
+            "object": "chat.completion",
+            "prompt_logprobs": None,
+            "usage": {
+                "completion_tokens": 100,
+                "prompt_tokens": 14,
+                "prompt_tokens_details": None,
+                "total_tokens": total_tokens,
+            },
+        },
+    }
+
+
 class TestVertexGemmaCompletion:
     """Test completion flow for Vertex AI Gemma models using litellm.acompletion()"""
 
@@ -553,3 +594,121 @@ class TestVertexGemmaCompletion:
         assert instance["@requestFormat"] == "chatCompletions"
         assert "context_management" not in instance
         assert instance.get("max_tokens") == 32
+
+    def test_sync_completion_makes_http_call(self):
+        """
+        Regression test for the synchronous path.
+
+        A refactor once dropped the `response = http_handler.post(...)` line,
+        so every sync Vertex Gemma call raised
+        `NameError: name 'response' is not defined` before any response
+        handling could run. This drives the real sync code path through
+        litellm.completion() and asserts a fully parsed response comes back,
+        which only happens if the HTTP call is actually issued.
+        """
+        vertex_response = _make_gemma_vertex_response(
+            content="Machine learning is a field of AI.",
+            response_id="chatcmpl-sync-regression",
+        )
+
+        with (
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.transformation.HTTPHandler"
+            ) as mock_handler_cls,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = vertex_response
+            mock_client.post = Mock(return_value=mock_response)
+            mock_handler_cls.return_value = mock_client
+
+            response = litellm.completion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "What is machine learning?"}],
+                max_tokens=100,
+                api_base="https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+            )
+
+            # The HTTP call must have been made exactly once
+            mock_client.post.assert_called_once()
+            call_args = mock_client.post.call_args
+            assert call_args.kwargs["url"].endswith(":predict")
+            instance = call_args.kwargs["json"]["instances"][0]
+            assert instance["@requestFormat"] == "chatCompletions"
+
+            # And the response must be parsed from what the endpoint returned
+            assert response.id == "chatcmpl-sync-regression"
+            assert response.model == "gemma-3-12b-it-1222199011122"
+            assert (
+                response.choices[0].message.content
+                == "Machine learning is a field of AI."
+            )
+            assert response.usage.total_tokens == 114
+
+    def test_sync_completion_uses_provided_client(self):
+        """A caller-supplied sync HTTPHandler must be routed through, not replaced."""
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        vertex_response = _make_gemma_vertex_response(content="hi from sync client")
+
+        custom_client = Mock(spec=HTTPHandler)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = vertex_response
+        custom_client.post = Mock(return_value=mock_response)
+
+        with patch(
+            "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+            return_value=("fake-access-token", "PROJECT_ID"),
+        ):
+            response = litellm.completion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "Test"}],
+                api_base="https://test.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+                client=custom_client,
+            )
+
+        custom_client.post.assert_called_once()
+        assert response.choices[0].message.content == "hi from sync client"
+
+    @pytest.mark.asyncio
+    async def test_acompletion_uses_provided_async_client(self):
+        """
+        A caller-supplied AsyncHTTPHandler must flow through the public API and
+        be used. This also guards the entry-point `client` type accepting async
+        clients, not just sync ones.
+        """
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        vertex_response = _make_gemma_vertex_response(content="hi from async client")
+
+        custom_client = Mock(spec=AsyncHTTPHandler)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = vertex_response
+        custom_client.post = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+            return_value=("fake-access-token", "PROJECT_ID"),
+        ):
+            response = await litellm.acompletion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "Test"}],
+                api_base="https://test.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+                client=custom_client,
+            )
+
+        custom_client.post.assert_awaited_once()
+        assert response.choices[0].message.content == "hi from async client"
