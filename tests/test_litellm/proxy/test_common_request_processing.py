@@ -3246,6 +3246,50 @@ class TestStreamingClientDisconnectLogging:
         assert "client_disconnected" not in request_data["metadata"]
 
     @pytest.mark.asyncio
+    async def test_finalize_releases_upstream_before_partial_billing(self, monkeypatch):
+        """The upstream provider connection must be released before the partial
+        billing dispatch runs, so slow success-logging callbacks cannot keep the
+        provider stream held open on a client disconnect."""
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            MagicMock(),
+        )
+
+        order = []
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"metadata": {}, "litellm_params": {}}
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.dispatch_success_handlers = AsyncMock(
+            side_effect=lambda *a, **k: order.append("bill")
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_response = MagicMock()
+        mock_response.chunks = ["chunk-1"]
+        mock_response.aclose = AsyncMock(side_effect=lambda: order.append("aclose"))
+        request_data = {
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+            "litellm_logging_obj": logging_obj,
+        }
+
+        with patch.object(litellm, "stream_chunk_builder", return_value=MagicMock()):
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=mock_request,
+                request_data=request_data,
+                response=mock_response,
+            )
+
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        assert order == ["aclose", "bill"]
+
+    @pytest.mark.asyncio
     async def test_async_streaming_data_generator_records_499_on_early_aclose(
         self, monkeypatch
     ):

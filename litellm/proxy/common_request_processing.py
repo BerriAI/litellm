@@ -2467,10 +2467,6 @@ class ProxyBaseLLMRequestProcessing:
                 )
             if recorded_client_disconnect:
                 ProxyLogging._fire_deferred_stream_logging(request_data)
-                await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
-                    response,
-                    request_data,
-                )
 
             if hasattr(response, "aclose"):
                 try:
@@ -2480,6 +2476,12 @@ class ProxyBaseLLMRequestProcessing:
                         "async_streaming_data_generator: error closing response stream: %s",
                         e,
                     )
+
+            if recorded_client_disconnect:
+                await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
+                    response,
+                    request_data,
+                )
 
     @staticmethod
     async def _bill_partial_stream_on_disconnect(
@@ -2523,9 +2525,8 @@ class ProxyBaseLLMRequestProcessing:
         # then logging). Mirror that here so a cancelled guarded stream is not
         # logged unguarded.
         #
-        # Best-effort: a logging/callback failure must not escape, or it would
-        # exit the shielded cleanup before response.aclose() and leak the
-        # upstream connection.
+        # Best-effort: a logging or callback failure here must not propagate out
+        # of the shielded cleanup.
         deferred_complete = getattr(logging_obj, "_on_deferred_stream_complete", None)
         try:
             if deferred_complete is not None:
