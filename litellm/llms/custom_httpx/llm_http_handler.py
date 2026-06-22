@@ -143,6 +143,7 @@ from .http_handler import get_shared_realtime_ssl_context
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.types.llms.openai_evals import (
@@ -5121,8 +5122,8 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: List[str],
         fingerprint: str,
-        callback: Optional[Any] = None,
-    ) -> Any:
+        callback: Optional["CustomLogger"] = None,
+    ) -> object:
         patch = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
@@ -5542,7 +5543,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _should_wrap_chat_completion_response_as_fake_stream(
-        kwargs: Dict, logging_obj: Any
+        kwargs: dict[str, Any], logging_obj: "LiteLLMLoggingObj"
     ) -> bool:
         if kwargs.get("_agentic_loop_depth"):
             return False
@@ -5561,7 +5562,7 @@ class BaseLLMHTTPHandler:
         )
 
     @staticmethod
-    def _wrap_chat_completion_response_as_fake_stream(response: Any) -> Any:
+    def _wrap_chat_completion_response_as_fake_stream(response: object) -> object:
         if getattr(response, "object", None) == "chat.completion.chunk":
             return response
         if not hasattr(response, "choices"):
@@ -5570,7 +5571,7 @@ class BaseLLMHTTPHandler:
             convert_model_response_to_streaming,
         )
 
-        return convert_model_response_to_streaming(response)
+        return convert_model_response_to_streaming(cast(ModelResponse, response))
 
     def _handle_error(
         self,

@@ -233,7 +233,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_should_run_chat_completion_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -344,9 +344,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
+        response: object,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: object,
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:
@@ -427,7 +427,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             and not k.startswith("_code_interpreter_interception_")
         }
 
-    def _get_followup_tools(self, tools: Any, call_type: CallTypes | None) -> Any:
+    def _get_followup_tools(self, tools: object, call_type: CallTypes | None) -> object:
         if not isinstance(tools, list):
             return tools
         return [
@@ -617,7 +617,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         ]
 
     def _extract_chat_completion_code_execution_tool_calls(
-        self, response: Any
+        self, response: object
     ) -> list[dict[str, Any]]:
         choices = (
             response.get("choices", [])
@@ -653,7 +653,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     @staticmethod
     def _normalize_chat_completion_tool_call(
-        tool_call: Any,
+        tool_call: object,
     ) -> dict[str, Any] | None:
         tool_id = (
             tool_call.get("id")
