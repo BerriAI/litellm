@@ -14,7 +14,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlencode
 
 import pytest
@@ -24,6 +24,8 @@ from websockets.sync.connection import Connection
 
 from e2e_config import PROXY_BASE_URL
 from e2e_gateway import Gateway, build_gateway
+
+_M = TypeVar("_M", bound=BaseModel)
 
 
 def _ws_base_url() -> str:
@@ -185,9 +187,9 @@ def events_of_type(
     return tuple(e for e in events if e.type == event_type)
 
 
-def parse_last[M: BaseModel](
-    events: tuple[ReceivedEvent, ...], event_type: str, model: type[M]
-) -> M | None:
+def parse_last(
+    events: tuple[ReceivedEvent, ...], event_type: str, model: type[_M]
+) -> _M | None:
     matches = events_of_type(events, event_type)
     return model.model_validate_json(matches[-1].payload) if matches else None
 
