@@ -57,8 +57,10 @@ class LangfuseMapper:
         "langfuse.observation.model.parameters": lambda d: json_if(
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
-        "langfuse.observation.input": lambda d: serialize_messages(d.messages_in),
-        "langfuse.observation.output": lambda d: serialize_messages(output_messages(d)),
+        "langfuse.observation.input": lambda d: serialize_messages(d.span_messages_in),
+        "langfuse.observation.output": lambda d: serialize_messages(
+            output_messages(d.span_choices_out)
+        ),
         "langfuse.observation.usage_details": lambda d: json_if(
             collect(LangfuseMapper._USAGE_FIELDS, d.usage)
         ),

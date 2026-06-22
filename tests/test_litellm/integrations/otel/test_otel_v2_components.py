@@ -268,6 +268,67 @@ def test_genai_mapper_omits_messages_when_content_not_captured():
     assert GenAI.OUTPUT_MESSAGES not in attrs
 
 
+def _captured_llm_call(content_on_span=True):
+    return LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model="gpt-4o-2024",
+        response_id="resp_1",
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=("stop",),
+        error=None,
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id="c1"),
+        messages_in=(
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "What's the weather?"},
+        ),
+        choices_out=(
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Sunny."},
+            },
+        ),
+        content_on_span=content_on_span,
+    )
+
+
+def test_genai_mapper_withholds_span_content_when_event_only():
+    """``content_on_span=False`` (the ``event_only`` mode) keeps retained bodies
+    off the span attributes even though they're present for the event path."""
+    attrs = GenAIMapper().map(_captured_llm_call(content_on_span=False))
+    assert GenAI.INPUT_MESSAGES not in attrs
+    assert GenAI.OUTPUT_MESSAGES not in attrs
+
+
+def test_llm_message_events_carry_role_and_content():
+    from litellm.integrations.otel.model.events import llm_message_events
+
+    events = llm_message_events(_captured_llm_call())
+    names = [name for name, _ in events]
+    assert names == ["gen_ai.system.message", "gen_ai.user.message", "gen_ai.choice"]
+
+    by_name = {name: attrs for name, attrs in events}
+    assert by_name["gen_ai.system.message"]["role"] == "system"
+    assert by_name["gen_ai.system.message"]["content"] == "Be concise."
+    assert by_name["gen_ai.user.message"]["content"] == "What's the weather?"
+    choice = by_name["gen_ai.choice"]
+    assert choice["index"] == 0
+    assert choice["finish_reason"] == "stop"
+    assert choice["role"] == "assistant"
+    assert choice["content"] == "Sunny."
+    assert choice[GenAI.PROVIDER_NAME] == "openai"
+
+
+def test_llm_message_events_empty_without_bodies():
+    from litellm.integrations.otel.model.events import llm_message_events
+
+    assert llm_message_events(_full_llm_call()) == ()
+
+
 def test_genai_mapper_cost_breakdown():
     from litellm.integrations.otel.model.semconv import LiteLLM
 

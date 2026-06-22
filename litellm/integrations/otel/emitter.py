@@ -10,6 +10,7 @@ from opentelemetry.trace.status import Status, StatusCode
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
+from litellm.integrations.otel.model.events import llm_message_events
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -165,6 +166,14 @@ class SpanEmitter:
         for mapper in self._mappers:
             for key, value in mapper.map(data).items():
                 span.set_attribute(key, value)
+        # The event half of ``capture_message_content`` (``event_only`` /
+        # ``span_and_event``): record prompt/response bodies as span events so
+        # they reach the configured trace exporter even when content is kept off
+        # the span attributes (``event_only``). Span-attribute content is the
+        # mappers' job above and is gated separately by ``content_on_span``.
+        if self._config.capture_event_content and isinstance(data, LLMCallSpanData):
+            for name, attributes in llm_message_events(data):
+                span.add_event(name, attributes)
         error = (
             data.error
             if isinstance(

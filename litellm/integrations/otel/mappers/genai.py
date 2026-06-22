@@ -52,8 +52,10 @@ class GenAIMapper:
             else None
         ),
         GenAI.REQUEST_SEED: lambda d: d.request_params.seed,
-        GenAI.INPUT_MESSAGES: lambda d: serialize_messages(d.messages_in),
-        GenAI.OUTPUT_MESSAGES: lambda d: serialize_messages(output_messages(d)),
+        GenAI.INPUT_MESSAGES: lambda d: serialize_messages(d.span_messages_in),
+        GenAI.OUTPUT_MESSAGES: lambda d: serialize_messages(
+            output_messages(d.span_choices_out)
+        ),
         GenAI.RESPONSE_MODEL: lambda d: d.response_model,
         GenAI.RESPONSE_ID: lambda d: d.response_id,
         GenAI.RESPONSE_FINISH_REASONS: lambda d: (

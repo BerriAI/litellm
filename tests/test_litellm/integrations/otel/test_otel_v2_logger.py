@@ -239,6 +239,98 @@ def test_idempotent_on_repeat_callback():
 
 
 # --------------------------------------------------------------------------- #
+#  Message-content capture modes (issue #30956)
+# --------------------------------------------------------------------------- #
+
+
+def _logger_for_mode(mode):
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        capture_message_content=mode,
+    )
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
+
+
+def _content_payload():
+    return _payload(
+        messages=[
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "What's the capital of France?"},
+        ],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Paris."},
+                }
+            ],
+        },
+    )
+
+
+def _emit_content_span(mode):
+    logger, exporter = _logger_for_mode(mode)
+    _emit_llm(logger, _kwargs(_content_payload()))
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+def test_span_and_event_emits_both_attributes_and_events():
+    """Regression for #30956: ``span_and_event`` must put message content on the
+    span attributes AND emit semantic events. Before the fix, only the span
+    attributes were produced and no events were emitted."""
+    span = _emit_content_span("span_and_event")
+    attrs = dict(span.attributes or {})
+
+    assert "What's the capital of France?" in attrs[GenAI.INPUT_MESSAGES]
+    assert "Paris." in attrs[GenAI.OUTPUT_MESSAGES]
+
+    events = {e.name: dict(e.attributes or {}) for e in span.events}
+    assert set(events) == {
+        "gen_ai.system.message",
+        "gen_ai.user.message",
+        "gen_ai.choice",
+    }
+    assert events["gen_ai.user.message"]["content"] == "What's the capital of France?"
+    assert events["gen_ai.choice"]["content"] == "Paris."
+    assert events["gen_ai.choice"]["finish_reason"] == "stop"
+
+
+def test_event_only_emits_events_without_span_content():
+    """Regression for #30956: ``event_only`` must still capture content — as
+    events — instead of dropping it. Before the fix this mode produced neither
+    span attributes nor events, so the content was lost entirely."""
+    span = _emit_content_span("event_only")
+    attrs = dict(span.attributes or {})
+
+    assert GenAI.INPUT_MESSAGES not in attrs
+    assert GenAI.OUTPUT_MESSAGES not in attrs
+
+    events = {e.name for e in span.events}
+    assert events == {"gen_ai.system.message", "gen_ai.user.message", "gen_ai.choice"}
+
+
+def test_span_only_emits_no_message_events():
+    span = _emit_content_span("span_only")
+    attrs = dict(span.attributes or {})
+    assert GenAI.INPUT_MESSAGES in attrs
+    assert [e for e in span.events if e.name.startswith("gen_ai.")] == []
+
+
+def test_no_content_emits_neither_attributes_nor_events():
+    span = _emit_content_span("no_content")
+    attrs = dict(span.attributes or {})
+    assert GenAI.INPUT_MESSAGES not in attrs
+    assert GenAI.OUTPUT_MESSAGES not in attrs
+    assert [e for e in span.events if e.name.startswith("gen_ai.")] == []
+
+
+# --------------------------------------------------------------------------- #
 #  MCP tool-call spans
 # --------------------------------------------------------------------------- #
 

@@ -288,6 +288,30 @@ class OpenTelemetryV2Config(BaseSettings):
             CaptureMessageContent.SPAN_AND_EVENT,
         )
 
+    @property
+    def capture_event_content(self) -> bool:
+        """Whether prompt/response content may be emitted as span events.
+
+        The event half of the OTel ``ContentCapturingMode`` contract: under
+        ``event_only`` and ``span_and_event`` the message bodies are recorded as
+        ``gen_ai.*`` events on the LLM-call span, complementing (or, for
+        ``event_only``, standing in for) the ``gen_ai.input.messages`` /
+        ``gen_ai.output.messages`` span attributes that ``capture_span_content``
+        governs. Defaults off, like its span counterpart.
+        """
+        return self.capture_message_content in (
+            CaptureMessageContent.EVENT_ONLY,
+            CaptureMessageContent.SPAN_AND_EVENT,
+        )
+
+    @property
+    def capture_content(self) -> bool:
+        """Whether message bodies are retained at all — as span attributes, span
+        events, or both. The payload parser keeps the raw prompt/response only
+        when this is true, so a request can never force content past either sink
+        while every capture mode is off."""
+        return self.capture_span_content or self.capture_event_content
+
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
