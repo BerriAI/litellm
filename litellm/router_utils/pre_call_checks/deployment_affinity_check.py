@@ -351,7 +351,12 @@ class DeploymentAffinityCheck(CustomLogger):
             # routing to that deployment, otherwise the call load-balances by
             # model name and lands on a deployment that doesn't own the
             # container (Azure containers are region-local -> 404). Lower
-            # priority than previous_response_id, which stays authoritative.
+            # priority than previous_response_id, which stays authoritative
+            # while its owning deployment is healthy.
+            # Reached when previous_response_id is absent, or when its owning
+            # deployment is unhealthy and the branch above fell through. Pinning
+            # to the container's deployment here is intentional -- the next-best
+            # routing signal, better than routing blindly by model name.
             tools = request_kwargs.get("tools")
             if isinstance(tools, list):
                 for tool in tools:
