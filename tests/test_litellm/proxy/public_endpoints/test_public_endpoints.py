@@ -819,3 +819,44 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
     assert response.status_code == 200
     assert response.json() == []
     app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_does_not_expose_upstream_url():
+    """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
+    upstream url must never appear in its response even when the server has one."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    secret_url = "https://internal-only.example.com/mcp"
+    server = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        url=secret_url,
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [server]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    assert all("url" not in item for item in data)
+    assert secret_url not in response.text
+    app.dependency_overrides.clear()
