@@ -1239,6 +1239,27 @@ class LiteLLMProxyRequestSetup:
         return tags
 
     @staticmethod
+    def pre_seed_litellm_metadata_for_route(
+        request_data: dict,
+        route: str,
+    ) -> None:
+        """Pre-seed ``litellm_metadata`` for routes that track tags there.
+
+        Routes in ``LITELLM_METADATA_ROUTES`` (e.g. Bedrock, ``/v1/messages``,
+        responses, batches, files) store request-scoped tag metadata in
+        ``litellm_metadata`` rather than the provider-facing ``metadata``
+        field. ``get_metadata_variable_name_from_kwargs`` picks the target
+        based on whether ``litellm_metadata`` is present, so it must be
+        seeded BEFORE any tag merge runs; otherwise header tags from
+        ``apply_client_tag_policy_pre_auth`` land in ``metadata`` while
+        key tags from ``apply_key_tags_pre_auth`` and the read in
+        ``_tag_max_budget_check`` resolve to ``litellm_metadata``, leaving
+        header tags invisible to per-tag budget enforcement.
+        """
+        if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
+            request_data.setdefault("litellm_metadata", {})
+
+    @staticmethod
     def apply_key_tags_pre_auth(
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,

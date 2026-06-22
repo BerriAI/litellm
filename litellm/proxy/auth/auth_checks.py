@@ -697,20 +697,12 @@ async def common_checks(
             )
 
         if valid_token is not None:
-            from litellm.proxy.litellm_pre_call_utils import (
-                LITELLM_METADATA_ROUTES,
-                LiteLLMProxyRequestSetup,
-            )
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-            # GH#30629: routes in LITELLM_METADATA_ROUTES track tags in
-            # litellm_metadata, but that field isn't seeded until the pre-call
-            # phase runs after auth. Pre-seed it here so apply_key_tags_pre_auth
-            # writes tags into litellm_metadata instead of leaking them into the
-            # provider-facing metadata field
-            if any(
-                metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES
-            ):
-                request_body.setdefault("litellm_metadata", {})
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+                request_data=request_body,
+                route=route,
+            )
 
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
