@@ -2977,6 +2977,10 @@ class SpecialModelNames(enum.Enum):
     no_default_models = "no-default-models"
 
 
+class SpecialMCPServerNames(enum.Enum):
+    no_mcp_servers = "no-mcp-servers"
+
+
 class SpecialProxyStrings(enum.Enum):
     default_user_id = "default_user_id"  # global proxy admin
 

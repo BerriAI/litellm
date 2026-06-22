@@ -16,9 +16,11 @@ interface MCPServerSelectorProps {
   placeholder?: string;
   disabled?: boolean;
   teamId?: string | null;
+  allowNoMcpServers?: boolean;
 }
 
 const TOOLSET_PREFIX = "toolset:";
+const NO_MCP_SERVERS_VALUE = "no-mcp-servers";
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   onChange,
@@ -28,6 +30,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   placeholder = "Select MCP servers",
   disabled = false,
   teamId,
+  allowNoMcpServers = false,
 }) => {
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
@@ -77,8 +80,15 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     ...(value?.toolsets || []).map((id) => `${TOOLSET_PREFIX}${id}`),
   ];
 
+  const hasNoMcpServersSelected = allowNoMcpServers && selectedValues.includes(NO_MCP_SERVERS_VALUE);
+
   // Handle selection
   const handleChange = (selected: string[]) => {
+    // "No MCP Servers" is exclusive: picking it clears everything else.
+    if (allowNoMcpServers && selected.includes(NO_MCP_SERVERS_VALUE)) {
+      onChange({ servers: [NO_MCP_SERVERS_VALUE], accessGroups: [], toolsets: [] });
+      return;
+    }
     const toolsetsSelected = selected
       .filter((v) => v.startsWith(TOOLSET_PREFIX))
       .map((v) => v.slice(TOOLSET_PREFIX.length));
@@ -102,12 +112,21 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         style={{ width: "100%" }}
         disabled={disabled}
         filterOption={(input, option) => {
+          if (option?.value === NO_MCP_SERVERS_VALUE) return true;
           const searchText = options.find((opt) => opt.value === option?.value)?.searchText || "";
           return searchText.toLowerCase().includes(input.toLowerCase());
         }}
       >
+        {allowNoMcpServers && (
+          <Select.Option key={NO_MCP_SERVERS_VALUE} value={NO_MCP_SERVERS_VALUE} label="No MCP Servers">
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ flex: 1 }}>No MCP Servers</span>
+              <span style={{ color: "#8c8c8c", fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>Block all</span>
+            </div>
+          </Select.Option>
+        )}
         {options.map((opt) => (
-          <Select.Option key={opt.value} value={opt.value} label={opt.label}>
+          <Select.Option key={opt.value} value={opt.value} label={opt.label} disabled={hasNoMcpServersSelected}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span
                 style={{
