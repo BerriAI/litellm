@@ -83,6 +83,9 @@ _KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {
 # ``speechConfig`` on ``setup`` with a 1007 invalid-argument error, so it is
 # stripped in ``_finalize_gemini_live_setup``.
 _GEMINI_NATIVE_AUDIO_MODEL_MARKER = "native-audio"
+# Live preview models (e.g. ``gemini-3.1-flash-live-preview``) also reject
+# TEXT-only ``responseModalities`` and require AUDIO output.
+_GEMINI_FLASH_LIVE_MODEL_MARKER = "flash-live"
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -102,6 +105,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # tool-call or normal turns whose token usage is recorded as zero,
         # bypassing spend and budget accounting.
         self._pending_usage_metadata: Optional[dict] = None
+        # After a tool-call ``response.done``, Gemini Live can emit a bare
+        # ``turnComplete`` (with ``usageMetadata`` but no model content) as
+        # soon as the client sends ``toolResponse``, before the model's
+        # follow-up answer stream starts. Suppress that orphan ``response.done``
+        # until the next model turn emits ``response.created``.
+        self._suppress_bare_turn_complete_done_after_tool_call: bool = False
 
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
@@ -416,15 +425,42 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return normalized
 
     @staticmethod
+    def _is_audio_only_live_model(model: str) -> bool:
+        """True for Gemini Live models that reject TEXT-only responseModalities."""
+        model_lower = model.lower()
+        return (
+            _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model_lower
+            or _GEMINI_FLASH_LIVE_MODEL_MARKER in model_lower
+        )
+
+    @staticmethod
+    def _coerce_response_modalities(model: str, modalities: List[Any]) -> List[str]:
+        """Map unsupported TEXT responseModalities to AUDIO for audio-only Live models."""
+        normalized = [
+            modality.upper() if isinstance(modality, str) else str(modality).upper()
+            for modality in modalities
+        ]
+        if not GeminiRealtimeConfig._is_audio_only_live_model(model):
+            return normalized
+        if "TEXT" not in normalized:
+            return normalized
+        without_text = [modality for modality in normalized if modality != "TEXT"]
+        return without_text if without_text else ["AUDIO"]
+
+    @staticmethod
     def _finalize_gemini_live_setup(
         model: str, setup: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Drop fields Gemini Live native-audio rejects on ``setup``."""
-        if _GEMINI_NATIVE_AUDIO_MODEL_MARKER not in model.lower():
-            return setup
         generation_config = setup.get("generationConfig")
         if isinstance(generation_config, dict):
-            generation_config.pop("speechConfig", None)
+            modalities = generation_config.get("responseModalities")
+            if isinstance(modalities, list):
+                generation_config["responseModalities"] = (
+                    GeminiRealtimeConfig._coerce_response_modalities(model, modalities)
+                )
+            if _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model.lower():
+                generation_config.pop("speechConfig", None)
         return setup
 
     def _handle_session_update(
@@ -608,7 +644,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
 
         # Build Gemini toolResponse format
-        function_response: dict[str, Any] = {"response": output_dict}
+        function_response: Dict[str, Any] = {"response": output_dict}
         if self._include_function_response_id() and call_id:
             function_response["id"] = call_id
         if function_name:
@@ -800,6 +836,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         _max_output_tokens = generation_config.get("maxOutputTokens")
 
         response_items: List[OpenAIRealtimeEvents] = []
+        self._suppress_bare_turn_complete_done_after_tool_call = False
 
         ## - return response.created
         response_created = OpenAIRealtimeStreamResponseBaseObject(
@@ -1044,6 +1081,27 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         buffered = self._pending_usage_metadata
         self._pending_usage_metadata = None
         return buffered
+
+    def _should_suppress_bare_turn_complete_done(
+        self,
+        *,
+        current_response_id: Optional[str],
+        current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]],
+        current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]],
+        returned_message: List[OpenAIRealtimeEvents],
+    ) -> bool:
+        """Return True when a ``turnComplete`` would emit an empty ``response.done`` that
+        precedes the model's post-tool answer stream."""
+        if not self._suppress_bare_turn_complete_done_after_tool_call:
+            return False
+        if current_response_id is not None:
+            return False
+        if current_item_chunks or current_delta_chunks:
+            return False
+        return not any(
+            event.get("type") == "response.output_audio_transcript.delta"
+            for event in returned_message
+        )
 
     def transform_tool_call_events(
         self,
@@ -1766,11 +1824,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         int, tool_call_max_output_tokens
                     )
                 returned_message.append(tool_call_done_event)
+                self._suppress_bare_turn_complete_done_after_tool_call = True
                 # Reset IDs so the next model turn (after tool results) starts a
                 # fresh response with its own response.created preamble.
                 current_output_item_id = None
                 current_response_id = None
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
+                if self._should_suppress_bare_turn_complete_done(
+                    current_response_id=current_response_id,
+                    current_item_chunks=current_item_chunks,
+                    current_delta_chunks=current_delta_chunks,
+                    returned_message=returned_message,
+                ):
+                    standalone_usage_metadata = json_message.get("usageMetadata")
+                    if isinstance(standalone_usage_metadata, dict):
+                        self._pending_usage_metadata = standalone_usage_metadata
+                    continue
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
                     current_response_id=current_response_id,
@@ -1779,6 +1848,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     output_items=None,
                 )
                 returned_message.append(transformed_response_done_event)
+                self._suppress_bare_turn_complete_done_after_tool_call = False
                 # Reset IDs so a subsequent turn (e.g. a `toolCall` arriving in
                 # a later WebSocket frame after `turnComplete`) starts a fresh
                 # response with its own `response.created` preamble instead of
