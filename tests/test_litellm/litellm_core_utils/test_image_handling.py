@@ -7,6 +7,7 @@ import litellm
 from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_url_to_base64,
     convert_url_to_base64,
 )
 
@@ -233,6 +234,17 @@ def test_data_url_is_returned_unchanged_without_fetch(monkeypatch):
     data_url = "data:image/png;base64,iVBORw0KGgo="
 
     assert convert_url_to_base64(data_url) == data_url
+
+
+@pytest.mark.asyncio
+async def test_async_data_url_is_returned_unchanged_when_downloads_disabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
+
+    data_url = "data:image/png;base64,iVBORw0KGgo="
+
+    assert await async_convert_url_to_base64(data_url) == data_url
 
 
 def test_image_size_limit_disabled(monkeypatch):
