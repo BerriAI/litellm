@@ -78,6 +78,25 @@ def _patch_common(monkeypatch, *, metrics, detail_unique=None):
     )
 
 
+def _register_real_config_guardrail(monkeypatch, *, guardrail_id, name, guardrail_info):
+    from litellm.proxy.guardrails import guardrail_registry
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    handler = guardrail_registry.InMemoryGuardrailHandler()
+    handler.initialize_guardrail(
+        guardrail=Guardrail(
+            guardrail_id=guardrail_id,
+            guardrail_name=name,
+            litellm_params=LitellmParams(
+                guardrail="bedrock", mode="pre_call", default_on=False
+            ),
+            guardrail_info=guardrail_info,
+        ),
+        source="config",
+    )
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", handler)
+
+
 @pytest.mark.asyncio
 async def test_usage_overview_uses_provider_for_config_guardrails(monkeypatch):
     _patch_common(
@@ -200,3 +219,91 @@ def test_get_guardrail_litellm_params_handles_model_dump_and_missing():
     }
 
     assert usage_endpoints._get_guardrail_litellm_params(SimpleNamespace()) == {}
+
+
+@pytest.mark.asyncio
+async def test_usage_detail_surfaces_guardrail_info_through_real_handler(monkeypatch):
+    """End-to-end through the real in-memory handler (no mocking of
+    _get_config_loaded_guardrails): description, type and provider must come
+    from the config guardrail's persisted guardrail_info / litellm_params."""
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(prisma_client=object()),
+    )
+    monkeypatch.setattr(
+        usage_endpoints, "GuardrailsRepository", _repo(_Table(rows=[], unique=None))
+    )
+    monkeypatch.setattr(
+        usage_endpoints,
+        "DailyGuardrailMetricsRepository",
+        _repo(_Table(rows=[_metric(guardrail_id="bedrock-guard")])),
+    )
+    _register_real_config_guardrail(
+        monkeypatch,
+        guardrail_id="bedrock-guard-uuid",
+        name="bedrock-guard",
+        guardrail_info={"description": "blocks PII", "type": "bedrock"},
+    )
+
+    response = await usage_endpoints.guardrails_usage_detail(
+        guardrail_id="bedrock-guard",
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.guardrail_name == "bedrock-guard"
+    assert response.description == "blocks PII"
+    assert response.type == "bedrock"
+    assert response.provider == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_usage_logs_resolves_config_guardrail_by_uuid(monkeypatch):
+    """A config guardrail queried by UUID has no DB row, so the logs endpoint
+    must fall back to the in-memory list and add its logical name to the
+    SpendLogs index filter; otherwise the logs tab is always empty."""
+    captured = {}
+
+    class _IndexTable:
+        async def find_many(self, *args, **kwargs):
+            captured["where"] = kwargs.get("where")
+            return []
+
+        async def count(self, *args, **kwargs):
+            return 0
+
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(prisma_client=object()),
+    )
+    monkeypatch.setattr(
+        usage_endpoints, "GuardrailsRepository", _repo(_Table(rows=[], unique=None))
+    )
+    monkeypatch.setattr(
+        usage_endpoints,
+        "SpendLogGuardrailIndexRepository",
+        _repo(_IndexTable()),
+    )
+    _register_real_config_guardrail(
+        monkeypatch,
+        guardrail_id="bedrock-guard-uuid",
+        name="bedrock-guard",
+        guardrail_info={"description": "blocks PII"},
+    )
+
+    response = await usage_endpoints.guardrails_usage_logs(
+        guardrail_id="bedrock-guard-uuid",
+        policy_id=None,
+        page=1,
+        page_size=50,
+        action=None,
+        start_date=None,
+        end_date=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.total == 0
+    assert captured["where"]["guardrail_id"] == {
+        "in": ["bedrock-guard-uuid", "bedrock-guard"]
+    }

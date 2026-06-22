@@ -155,9 +155,9 @@ def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
 
 
 def _get_guardrail_dict_field(g: Any, field_name: str) -> Any:
-    return getattr(g, field_name, None) or (
-        g.get(field_name) if isinstance(g, dict) else None
-    )
+    if isinstance(g, dict):
+        return g.get(field_name)
+    return getattr(g, field_name, None)
 
 
 def _get_guardrail_litellm_params(g: Any) -> dict[str, Any]:
@@ -177,16 +177,12 @@ def _get_guardrail_info(g: Any) -> dict[str, Any]:
 def _get_config_loaded_guardrails() -> list[Any]:
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
-    config_guardrails: list[Any] = []
-    for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails():
-        guardrail_id = guardrail.get("guardrail_id")
-        if (
-            guardrail_id is not None
-            and IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail_id) != "config"
-        ):
-            continue
-        config_guardrails.append(guardrail)
-    return config_guardrails
+    return [
+        guardrail
+        for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
+        if IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail.get("guardrail_id") or "")
+        == "config"
+    ]
 
 
 def _find_config_loaded_guardrail(guardrail_id_or_name: str) -> Optional[Any]:
@@ -636,9 +632,9 @@ async def guardrails_usage_logs(
         if guardrail_id:
             guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_id": guardrail_id}
-            )
+            ) or _find_config_loaded_guardrail(guardrail_id)
             if guardrail:
-                logical_name = getattr(guardrail, "guardrail_name", None)
+                logical_name = _get_guardrail_dict_field(guardrail, "guardrail_name")
                 if logical_name and logical_name not in effective_guardrail_ids:
                     effective_guardrail_ids.append(logical_name)
 

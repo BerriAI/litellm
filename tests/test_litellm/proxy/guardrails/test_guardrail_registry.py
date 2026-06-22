@@ -166,6 +166,32 @@ def test_initialize_guardrail_early_return_updates_source_marker():
     assert handler.get_source("collide") == "db"
 
 
+def test_initialize_guardrail_preserves_guardrail_info():
+    """
+    guardrail_info from the config must survive into IN_MEMORY_GUARDRAILS so
+    downstream consumers (e.g. the usage dashboard) can read the description and
+    type. Dropping it makes those fields silently empty for config guardrails.
+    """
+    handler = InMemoryGuardrailHandler()
+    g = Guardrail(
+        guardrail_id="with-info",
+        guardrail_name="bedrock",
+        litellm_params=LitellmParams(
+            guardrail="bedrock", mode="pre_call", default_on=False
+        ),
+        guardrail_info={"description": "blocks PII", "type": "bedrock"},
+    )
+
+    handler.initialize_guardrail(guardrail=g, source="config")
+
+    stored = handler.get_guardrail_by_id("with-info")
+    assert stored is not None
+    assert stored.get("guardrail_info") == {
+        "description": "blocks PII",
+        "type": "bedrock",
+    }
+
+
 def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     """
     sync_guardrail_from_db must enforce source='db' even when params are
