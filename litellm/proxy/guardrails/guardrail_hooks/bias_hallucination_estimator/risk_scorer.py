@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
     BiasAnalysis,
@@ -32,7 +32,7 @@ class RiskScorer:
         self,
         bias_analysis: BiasAnalysis,
         hallucination_analysis: HallucinationAnalysis,
-        uncertainty_analysis: Optional[UncertaintyAnalysis] = None,
+        uncertainty_analysis: UncertaintyAnalysis | None = None,
     ) -> RiskScore:
         overall_risk = self._weighted_score(
             bias_score=bias_analysis.score,
@@ -94,8 +94,8 @@ class RiskScorer:
         *,
         bias_analysis: BiasAnalysis,
         hallucination_analysis: HallucinationAnalysis,
-        uncertainty_analysis: Optional[UncertaintyAnalysis],
-    ) -> List[str]:
+        uncertainty_analysis: UncertaintyAnalysis | None,
+    ) -> list[str]:
         uncertainty_issues: tuple[str, ...] = (
             tuple(f"uncertainty:{p}" for p in uncertainty_analysis.patterns_found)
             if uncertainty_analysis and uncertainty_analysis.uncertainty_detected

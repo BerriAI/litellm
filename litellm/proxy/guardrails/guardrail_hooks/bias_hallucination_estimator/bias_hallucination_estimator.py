@@ -4,14 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
-    Dict,
-    List,
     Literal,
     Mapping,
-    Optional,
     Protocol,
     Sequence,
-    Tuple,
     Union,
     cast,
 )
@@ -52,12 +48,12 @@ GuardrailEventHookInput = Union[
     Mode,
 ]
 NormalizedGuardrailEventHook = Union[
-    GuardrailEventHooks, List[GuardrailEventHooks], Mode
+    GuardrailEventHooks, list[GuardrailEventHooks], Mode
 ]
 
 
 class FunctionLike(Protocol):
-    name: Optional[str]
+    name: str | None
     arguments: str
 
 
@@ -77,9 +73,9 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
     def __init__(
         self,
         *,
-        guardrail_name: Optional[str] = None,
-        guardrail_id: Optional[str] = None,
-        event_hook: Optional[GuardrailEventHookInput] = None,
+        guardrail_name: str | None = None,
+        guardrail_id: str | None = None,
+        event_hook: GuardrailEventHookInput | None = None,
         default_on: bool = False,
         bias_threshold: float = 0.5,
         hallucination_threshold: float = 0.5,
@@ -89,17 +85,17 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         log_only: bool = False,
         check_request: bool = False,
         check_response: bool = True,
-        violation_message: Optional[str] = None,
+        violation_message: str | None = None,
         bias_weight: float = 0.4,
         hallucination_weight: float = 0.6,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
-        violation_message_template: Optional[str] = None,
-        end_session_after_n_fails: Optional[int] = None,
-        on_violation: Optional[str] = None,
-        realtime_violation_message: Optional[str] = None,
-        on_sensitive_data: Optional[str] = None,
-        sensitive_data_route_to_model: Optional[str] = None,
+        violation_message_template: str | None = None,
+        end_session_after_n_fails: int | None = None,
+        on_violation: str | None = None,
+        realtime_violation_message: str | None = None,
+        on_sensitive_data: str | None = None,
+        sensitive_data_route_to_model: str | None = None,
         sticky_session_routing: bool = True,
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
@@ -147,9 +143,9 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: Dict[str, object],
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         if not self._should_check(input_type):
             return inputs
@@ -190,7 +186,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
 
         return inputs
 
-    def estimate_bias_hallucination(self, text: str) -> Dict[str, object]:
+    def estimate_bias_hallucination(self, text: str) -> dict[str, object]:
         analysis = self._analyze_text(text=text)
         return {
             "bias": analysis.bias.model_dump(mode="json"),
@@ -227,10 +223,10 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
     def _build_response_payload(
         self,
         *,
-        analyses: Tuple[TextRiskAnalysis, ...],
+        analyses: tuple[TextRiskAnalysis, ...],
         decision: str,
         input_type: Literal["request", "response"],
-    ) -> Dict[str, object]:
+    ) -> dict[str, object]:
         return {
             "decision": decision,
             "input_type": input_type,
@@ -258,8 +254,8 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
     def _log_guardrail_result(
         self,
         *,
-        request_data: Dict[str, object],
-        response_payload: Dict[str, object],
+        request_data: dict[str, object],
+        response_payload: dict[str, object],
         status: GuardrailStatus,
         start_time: datetime,
         highest_risk_percentage: int,
@@ -284,7 +280,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _detection_methods(response_payload: Dict[str, object]) -> Optional[str]:
+    def _detection_methods(response_payload: dict[str, object]) -> str | None:
         categories = BiasHallucinationEstimatorGuardrail._violation_categories(
             response_payload
         )
@@ -293,11 +289,11 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         return "regex,keyword"
 
     @staticmethod
-    def _violation_categories(response_payload: Dict[str, object]) -> List[str]:
+    def _violation_categories(response_payload: dict[str, object]) -> list[str]:
         risk_scores = response_payload.get("risk_scores")
         if not isinstance(risk_scores, list):
             return []
-        typed_risk_scores = cast(List[object], risk_scores)
+        typed_risk_scores = cast(list[object], risk_scores)
         return list(
             dict.fromkeys(
                 issue.split(":", 1)[0]
@@ -309,20 +305,20 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _detected_issues(risk_score: object) -> Tuple[str, ...]:
+    def _detected_issues(risk_score: object) -> tuple[str, ...]:
         if not isinstance(risk_score, dict):
             return ()
-        typed_risk_score = cast(Dict[str, object], risk_score)
+        typed_risk_score = cast(dict[str, object], risk_score)
         detected_issues = typed_risk_score.get("detected_issues")
         if not isinstance(detected_issues, list):
             return ()
-        typed_issues = cast(List[object], detected_issues)
+        typed_issues = cast(list[object], detected_issues)
         return tuple(issue for issue in typed_issues if isinstance(issue, str))
 
     @staticmethod
     def _normalize_event_hook(
-        event_hook: Optional[GuardrailEventHookInput],
-    ) -> Optional[NormalizedGuardrailEventHook]:
+        event_hook: GuardrailEventHookInput | None,
+    ) -> NormalizedGuardrailEventHook | None:
         if event_hook is None:
             return None
         if isinstance(event_hook, Mode):
@@ -344,7 +340,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _extract_texts(inputs: GenericGuardrailAPIInputs) -> Tuple[str, ...]:
+    def _extract_texts(inputs: GenericGuardrailAPIInputs) -> tuple[str, ...]:
         texts = tuple(text for text in inputs.get("texts", []) if text)
         tool_call_texts = tuple(
             text
@@ -357,7 +353,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         return texts + tool_call_texts
 
     @staticmethod
-    def _tool_call_text(tool_call: object) -> Optional[str]:
+    def _tool_call_text(tool_call: object) -> str | None:
         if isinstance(tool_call, dict):
             tool_call_dict = cast(Mapping[str, object], tool_call)
             function = tool_call_dict.get("function")
@@ -388,7 +384,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         return str(value)
 
     @staticmethod
-    def get_config_model() -> Optional[type[GuardrailConfigModel[BaseModel]]]:
+    def get_config_model() -> type[GuardrailConfigModel[BaseModel]] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
             BiasHallucinationEstimatorConfigModel,
         )

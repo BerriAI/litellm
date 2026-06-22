@@ -6,7 +6,7 @@ import re
 from abc import ABC, abstractmethod
 from importlib.util import find_spec as _find_spec
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 _AIOHTTP_AVAILABLE: bool = _find_spec("aiohttp") is not None
 
@@ -17,7 +17,7 @@ class DataSourceResult:
         text: str,
         source: str,
         confidence: float = 0.8,
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self.text = text
         self.source = source
@@ -37,10 +37,11 @@ class DataSource(ABC):
         self.priority = priority
 
     @abstractmethod
-    async def search(self, query: str, limit: int = 5) -> list[DataSourceResult]:
-        pass
+    async def search(
+        self, query: str, limit: int = 5
+    ) -> list[DataSourceResult]: ...  # pragma: no cover
 
-    async def verify_fact(self, claim: str) -> tuple[bool, Optional[str]]:
+    async def verify_fact(self, claim: str) -> tuple[bool, str | None]:
         results = await self.search(claim, limit=1)
         if results:
             return True, results[0].text
@@ -91,7 +92,7 @@ def _keyword_search(
     return [result for _, result in scored[:limit]]
 
 
-def _parse_json_docs(raw: Any) -> list[dict[str, Any]]:
+def _parse_json_docs(raw: object) -> list[dict[str, Any]]:
     if isinstance(raw, list):
         return cast(list[dict[str, Any]], raw)
     return [cast(dict[str, Any], raw)]
@@ -225,26 +226,26 @@ class VectorStoreDataSource(DataSource):
         name: str = "",
         enabled: bool = True,
         priority: int = 0,
-        client: Optional[Any] = None,
-        embedding_model: Optional[Any] = None,
-        **config: Any,
+        client: object | None = None,
+        embedding_model: object | None = None,
+        **config: str,
     ) -> None:
         super().__init__(
             name=name or f"vectorstore_{provider}", enabled=enabled, priority=priority
         )
         self.provider = provider
         self.config = config
-        self.client: Optional[Any] = (
+        self.client: object | None = (
             client if client is not None else self._initialize_client(provider, config)
         )
-        self.embedding_model: Optional[Any] = (
+        self.embedding_model: object | None = (
             embedding_model
             if embedding_model is not None
             else self._load_embedding_model()
         )
 
     @staticmethod
-    def _initialize_client(provider: str, config: dict[str, Any]) -> Optional[Any]:
+    def _initialize_client(provider: str, config: dict[str, str]) -> object | None:
         if provider == "pinecone":
             try:
                 import pinecone  # type: ignore[import-untyped]
@@ -304,7 +305,7 @@ class VectorStoreDataSource(DataSource):
         return []
 
     @staticmethod
-    def _load_embedding_model() -> Optional[Any]:
+    def _load_embedding_model() -> object | None:
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
 
@@ -312,7 +313,7 @@ class VectorStoreDataSource(DataSource):
         except ImportError:
             return None
 
-    async def _get_embedding(self, text: str) -> Optional[list[float]]:
+    async def _get_embedding(self, text: str) -> list[float] | None:
         if self.embedding_model is None:
             return None
         embedding = self.embedding_model.encode(text, convert_to_tensor=False)
@@ -385,8 +386,8 @@ class FactCheckDataSource(DataSource):
         name: str = "",
         enabled: bool = True,
         priority: int = 0,
-        api_key: Optional[str] = None,
-        **config: Any,
+        api_key: str | None = None,
+        **config: str,
     ) -> None:
         super().__init__(
             name=name or f"factcheck_{provider}", enabled=enabled, priority=priority

@@ -1558,3 +1558,221 @@ def test_file_data_source_corrupt_json_returns_empty() -> None:
     source = FileDataSource(path)
 
     assert source._documents == []
+
+
+# ---------------------------------------------------------------------------
+# DataSource.verify_fact — base class helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_data_source_verify_fact_returns_true_when_result_found() -> None:
+    source = ContextDocumentDataSource(
+        documents=[{"text": "Python was created by Guido van Rossum."}]
+    )
+    found, text = await source.verify_fact("Python created Guido")
+    assert found is True
+    assert text is not None
+    assert "Python" in text
+
+
+@pytest.mark.asyncio
+async def test_data_source_verify_fact_returns_false_when_no_result() -> None:
+    source = ContextDocumentDataSource(documents=[])
+    found, text = await source.verify_fact("anything")
+    assert found is False
+    assert text is None
+
+
+# ---------------------------------------------------------------------------
+# _keyword_search — empty query_words branch
+# ---------------------------------------------------------------------------
+
+
+def test_keyword_search_returns_empty_for_non_word_query() -> None:
+    documents: list[str | dict[str, Any]] = [{"text": "hello world"}]
+    index = {"hello": [0], "world": [0]}
+    result = _keyword_search("!!!", documents, index, "src", 5)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# URLDataSource._fetch_url — exception path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_url_data_source_fetch_url_handles_exception() -> None:
+    source = URLDataSource(urls=["http://example.com"])
+
+    async def boom(*_args: object, **_kwargs: object) -> Any:
+        raise RuntimeError("network error")
+
+    with unittest.mock.patch("aiohttp.ClientSession.get", side_effect=boom):
+        import sys
+
+        sys.modules.setdefault("aiohttp", unittest.mock.MagicMock())
+        result = await source._fetch_url("http://example.com")
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# VectorStoreDataSource — _initialize_client provider paths
+# ---------------------------------------------------------------------------
+
+
+def test_vector_store_initialize_client_pinecone_returns_index() -> None:
+    mock_index = object()
+    mock_pinecone = unittest.mock.MagicMock()
+    mock_pinecone.Index.return_value = mock_index
+
+    with unittest.mock.patch.dict(
+        __import__("sys").modules, {"pinecone": mock_pinecone}
+    ):
+        client = VectorStoreDataSource._initialize_client(
+            "pinecone", {"api_key": "k", "index_name": "idx"}
+        )
+
+    assert client is mock_index
+
+
+def test_vector_store_initialize_client_pinecone_no_credentials_returns_none() -> None:
+    mock_pinecone = unittest.mock.MagicMock()
+    with unittest.mock.patch.dict(
+        __import__("sys").modules, {"pinecone": mock_pinecone}
+    ):
+        client = VectorStoreDataSource._initialize_client("pinecone", {})
+
+    assert client is None
+
+
+def test_vector_store_initialize_client_weaviate_returns_client() -> None:
+    mock_client_obj = object()
+    mock_weaviate = unittest.mock.MagicMock()
+    mock_weaviate.Client.return_value = mock_client_obj
+
+    with unittest.mock.patch.dict(
+        __import__("sys").modules, {"weaviate": mock_weaviate}
+    ):
+        client = VectorStoreDataSource._initialize_client(
+            "weaviate", {"url": "http://localhost:8080"}
+        )
+
+    assert client is mock_client_obj
+
+
+def test_vector_store_initialize_client_weaviate_no_url_returns_none() -> None:
+    mock_weaviate = unittest.mock.MagicMock()
+    with unittest.mock.patch.dict(
+        __import__("sys").modules, {"weaviate": mock_weaviate}
+    ):
+        client = VectorStoreDataSource._initialize_client("weaviate", {})
+
+    assert client is None
+
+
+def test_vector_store_initialize_client_weaviate_import_error_returns_none() -> None:
+    import sys
+
+    saved = sys.modules.pop("weaviate", None)
+    try:
+        with unittest.mock.patch.dict(sys.modules, {"weaviate": None}):  # type: ignore[dict-item]
+            client = VectorStoreDataSource._initialize_client(
+                "weaviate", {"url": "http://localhost:8080"}
+            )
+        assert client is None
+    finally:
+        if saved is not None:
+            sys.modules["weaviate"] = saved
+
+
+# ---------------------------------------------------------------------------
+# VectorStoreDataSource — _load_embedding_model
+# ---------------------------------------------------------------------------
+
+
+def test_vector_store_load_embedding_model_returns_transformer() -> None:
+    mock_model = object()
+    mock_st = unittest.mock.MagicMock()
+    mock_st.SentenceTransformer.return_value = mock_model
+
+    with unittest.mock.patch.dict(
+        __import__("sys").modules, {"sentence_transformers": mock_st}
+    ):
+        model = VectorStoreDataSource._load_embedding_model()
+
+    assert model is mock_model
+
+
+# ---------------------------------------------------------------------------
+# VectorStoreDataSource.search — exception path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_vector_store_search_exception_returns_empty() -> None:
+    mock_client = unittest.mock.MagicMock()
+    mock_client.query.side_effect = RuntimeError("pinecone unavailable")
+    mock_model = unittest.mock.MagicMock()
+    mock_model.encode.return_value = [0.1, 0.2, 0.3]
+
+    source = VectorStoreDataSource(
+        provider="pinecone", client=mock_client, embedding_model=mock_model
+    )
+    results = await source.search("test query")
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeGraphDataSource.search — exception path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_knowledge_graph_search_exception_returns_empty() -> None:
+    import sys
+
+    mock_aiohttp = unittest.mock.MagicMock()
+    mock_session = unittest.mock.AsyncMock()
+    mock_session.__aenter__ = unittest.mock.AsyncMock(
+        side_effect=RuntimeError("connection error")
+    )
+    mock_aiohttp.ClientSession.return_value = mock_session
+
+    with unittest.mock.patch.dict(sys.modules, {"aiohttp": mock_aiohttp}):
+        source = KnowledgeGraphDataSource()
+        with unittest.mock.patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources._AIOHTTP_AVAILABLE",
+            True,
+        ):
+            results = await source.search("test")
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# GroundingChecker._boost_confidence — entity match branch (line 164)
+# ---------------------------------------------------------------------------
+
+
+def test_boost_confidence_entity_match_increases_score() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.grounding_checker import (
+        GroundingChecker,
+    )
+
+    result = DataSourceResult(
+        text="Albert Einstein published the theory of relativity.",
+        source="test",
+        confidence=0.5,
+    )
+    claim_elements = {
+        "numbers": [],
+        "dates": [],
+        "entities": ["Albert Einstein"],
+        "keywords": ["theory", "relativity"],
+    }
+    boosted = GroundingChecker._boost_confidence(result, claim_elements)
+
+    assert boosted > 0.5

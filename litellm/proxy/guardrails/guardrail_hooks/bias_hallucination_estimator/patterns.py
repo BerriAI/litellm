@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Pattern, Tuple
+from typing import Pattern
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +12,7 @@ class PatternRule:
     score: float
 
 
-BIAS_PATTERNS: Tuple[PatternRule, ...] = (
+BIAS_PATTERNS: tuple[PatternRule, ...] = (
     PatternRule(
         name="dogmatic_language",
         pattern=re.compile(
@@ -63,7 +63,7 @@ UNSOURCED_STATISTIC_PATTERN = PatternRule(
 )
 
 
-CITATION_GAP_PATTERNS: Tuple[PatternRule, ...] = (
+CITATION_GAP_PATTERNS: tuple[PatternRule, ...] = (
     PatternRule(
         name="unnamed_research",
         pattern=re.compile(
@@ -85,7 +85,7 @@ CITATION_GAP_PATTERNS: Tuple[PatternRule, ...] = (
 )
 
 
-FABRICATED_SPECIFICITY_PATTERNS: Tuple[PatternRule, ...] = (
+FABRICATED_SPECIFICITY_PATTERNS: tuple[PatternRule, ...] = (
     PatternRule(
         name="overly_precise_number",
         pattern=re.compile(

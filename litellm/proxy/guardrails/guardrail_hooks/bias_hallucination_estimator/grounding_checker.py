@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
 from litellm._logging import verbose_logger
 
@@ -16,15 +16,15 @@ class GroundingResult:
     is_grounded: bool = False
     confidence: float = 0.0
     reasoning: str = ""
-    supporting_docs: List[Dict[str, Any]] = field(default_factory=list)
-    sources_searched: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    supporting_docs: list[dict[str, Any]] = field(default_factory=list)
+    sources_searched: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class GroundingChecker:
     def __init__(
         self,
-        data_sources: List[DataSource],
+        data_sources: list[DataSource],
         confidence_threshold: float = 0.6,
         timeout_per_source: float = 5.0,
     ) -> None:
@@ -52,8 +52,8 @@ class GroundingChecker:
             *[self._search_source_safe(source, claim) for source in enabled_sources],
         )
 
-        supporting_docs: List[Dict[str, Any]] = []
-        sources_searched: List[str] = [ds.name for ds in enabled_sources]
+        supporting_docs: list[dict[str, Any]] = []
+        sources_searched: list[str] = [ds.name for ds in enabled_sources]
         max_confidence = 0.0
 
         for items in raw_results:
@@ -86,14 +86,14 @@ class GroundingChecker:
             reasoning=reasoning,
         )
 
-    async def verify_multiple_claims(self, claims: List[str]) -> List[GroundingResult]:
+    async def verify_multiple_claims(self, claims: list[str]) -> list[GroundingResult]:
         return list(
             await asyncio.gather(*[self.check_claim_grounding(c) for c in claims])
         )
 
     async def _search_source_safe(
         self, source: DataSource, claim: str
-    ) -> List[DataSourceResult]:
+    ) -> list[DataSourceResult]:
         try:
             return await asyncio.wait_for(
                 source.search(claim, limit=3), timeout=self.timeout_per_source
@@ -108,7 +108,7 @@ class GroundingChecker:
             return []
 
     @staticmethod
-    def _extract_verifiable_elements(claim: str) -> Dict[str, List[str]]:
+    def _extract_verifiable_elements(claim: str) -> dict[str, list[str]]:
         stop_words = frozenset(
             (
                 "the",
@@ -149,7 +149,7 @@ class GroundingChecker:
 
     @staticmethod
     def _boost_confidence(
-        result: DataSourceResult, claim_elements: Dict[str, List[str]]
+        result: DataSourceResult, claim_elements: dict[str, list[str]]
     ) -> float:
         boost = 0.0
         result_numbers = set(

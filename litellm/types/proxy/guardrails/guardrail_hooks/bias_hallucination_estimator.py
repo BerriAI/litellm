@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,11 +17,11 @@ class BiasAnalysis(BaseModel):
         le=1.0,
         description="Score representing the level of bias detected",
     )
-    patterns_found: List[str] = Field(
+    patterns_found: list[str] = Field(
         default_factory=list,
         description="List of patterns or phrases that indicate bias in the text",
     )
-    examples: List[str] = Field(
+    examples: list[str] = Field(
         default_factory=list,
         description="Examples of text segments that were identified as biased",
     )
@@ -44,17 +44,17 @@ class HallucinationAnalysis(BaseModel):
         le=1.0,
         description="Score representing the level of hallucination risk detected",
     )
-    patterns_found: List[str] = Field(
+    patterns_found: list[str] = Field(
         default_factory=list,
         description="List of patterns or phrases that indicate hallucination risk",
     )
-    examples: List[str] = Field(
+    examples: list[str] = Field(
         default_factory=list,
         description="Examples of text segments that were identified as risky",
     )
-    unsourced_claims: List[str] = Field(default_factory=list)
-    fabricated_specificity: List[str] = Field(default_factory=list)
-    missing_citations: List[str] = Field(default_factory=list)
+    unsourced_claims: list[str] = Field(default_factory=list)
+    fabricated_specificity: list[str] = Field(default_factory=list)
+    missing_citations: list[str] = Field(default_factory=list)
     reasoning: str = Field(
         default="",
         description="Explanation of the reasoning behind the hallucination risk score",
@@ -74,8 +74,8 @@ class UncertaintyAnalysis(BaseModel):
         le=1.0,
         description="Score representing the level of uncertainty detected based on logprobs",
     )
-    patterns_found: List[str] = Field(default_factory=list)
-    examples: List[str] = Field(default_factory=list)
+    patterns_found: list[str] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
     reasoning: str = Field(default="")
 
 
@@ -88,7 +88,7 @@ class RiskScore(BaseModel):
     bias_score: float = Field(default=0.0, ge=0.0, le=1.0)
     hallucination_score: float = Field(default=0.0, ge=0.0, le=1.0)
     uncertainty_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    detected_issues: List[str] = Field(default_factory=list)
+    detected_issues: list[str] = Field(default_factory=list)
     recommendation: Literal["pass", "flag", "block"] = Field(default="pass")
 
 
@@ -105,7 +105,7 @@ class BiasHallucinationEstimatorConfigModel(
     log_only: bool = False
     check_request: bool = False
     check_response: bool = True
-    violation_message: Optional[str] = None
+    violation_message: str | None = None
     bias_weight: float = Field(default=0.4, ge=0.0)
     hallucination_weight: float = Field(default=0.6, ge=0.0)
 

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, Tuple
+from typing import Iterable
 
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
 
 
-def split_sentences(text: str) -> Tuple[str, ...]:
+def split_sentences(text: str) -> tuple[str, ...]:
     normalized_text = " ".join(text.split())
     if not normalized_text:
         return ()
@@ -24,5 +24,5 @@ def clip_example(text: str, max_length: int = 160) -> str:
     return f"{normalized_text[: max_length - 3]}..."
 
 
-def unique_preserve_order(values: Iterable[str]) -> Tuple[str, ...]:
+def unique_preserve_order(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))

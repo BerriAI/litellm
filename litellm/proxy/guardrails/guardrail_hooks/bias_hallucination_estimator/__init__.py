@@ -12,8 +12,8 @@ if TYPE_CHECKING:
 
 
 def initialize_guardrail(
-    litellm_params: "LitellmParams",
-    guardrail: "Guardrail",
+    litellm_params: LitellmParams,
+    guardrail: Guardrail,
 ) -> BiasHallucinationEstimatorGuardrail:
     guardrail_id = guardrail["guardrail_id"] if "guardrail_id" in guardrail else None
     callback = BiasHallucinationEstimatorGuardrail(

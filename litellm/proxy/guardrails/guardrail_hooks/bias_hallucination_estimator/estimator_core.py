@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Tuple
 
 from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
     BiasAnalysis,
@@ -38,8 +37,8 @@ class BiasDetector:
 
     @staticmethod
     def _match_patterns(
-        text: str, patterns: Tuple[PatternRule, ...]
-    ) -> Tuple[Tuple[str, str, float], ...]:
+        text: str, patterns: tuple[PatternRule, ...]
+    ) -> tuple[tuple[str, str, float], ...]:
         return tuple(
             (rule.name, clip_example(match.group(0)), rule.score)
             for rule in patterns
@@ -47,7 +46,7 @@ class BiasDetector:
         )
 
     @staticmethod
-    def _build_reasoning(patterns_found: Tuple[str, ...]) -> str:
+    def _build_reasoning(patterns_found: tuple[str, ...]) -> str:
         if not patterns_found:
             return "No bias indicators found."
         return f"Detected bias indicators: {', '.join(patterns_found)}."
@@ -92,7 +91,7 @@ class HallucinationDetector:
         )
 
     @staticmethod
-    def _find_unsourced_statistics(sentences: Tuple[str, ...]) -> Tuple[str, ...]:
+    def _find_unsourced_statistics(sentences: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(
             clip_example(sentence)
             for sentence in sentences
@@ -102,8 +101,8 @@ class HallucinationDetector:
 
     @staticmethod
     def _find_rule_matches(
-        text: str, rules: Tuple[PatternRule, ...]
-    ) -> Tuple[str, ...]:
+        text: str, rules: tuple[PatternRule, ...]
+    ) -> tuple[str, ...]:
         return unique_preserve_order(
             clip_example(match.group(0))
             for rule in rules
@@ -116,7 +115,7 @@ class HallucinationDetector:
         has_unsourced_claims: bool,
         has_missing_citations: bool,
         has_fabricated_specificity: bool,
-    ) -> Tuple[str, ...]:
+    ) -> tuple[str, ...]:
         return tuple(
             pattern_name
             for pattern_name, detected in (
@@ -130,9 +129,9 @@ class HallucinationDetector:
     @staticmethod
     def _score(
         *,
-        unsourced_claims: Tuple[str, ...],
-        missing_citations: Tuple[str, ...],
-        fabricated_specificity: Tuple[str, ...],
+        unsourced_claims: tuple[str, ...],
+        missing_citations: tuple[str, ...],
+        fabricated_specificity: tuple[str, ...],
     ) -> float:
         unsourced_score = min(len(unsourced_claims) * 0.32, 0.64)
         citation_score = min(len(missing_citations) * 0.3, 0.6)
@@ -140,7 +139,7 @@ class HallucinationDetector:
         return min(unsourced_score + citation_score + specificity_score, 1.0)
 
     @staticmethod
-    def _build_reasoning(patterns_found: Tuple[str, ...]) -> str:
+    def _build_reasoning(patterns_found: tuple[str, ...]) -> str:
         if not patterns_found:
             return "No hallucination risk indicators found."
         return f"Detected hallucination risk indicators: {', '.join(patterns_found)}."
