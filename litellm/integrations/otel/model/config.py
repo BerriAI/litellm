@@ -127,10 +127,6 @@ class OpenTelemetryV2Config(BaseSettings):
         default=False,
         validation_alias=AliasChoices("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"),
     )
-    enable_events: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS"),
-    )
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
         validation_alias=AliasChoices(
