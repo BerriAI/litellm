@@ -25,3 +25,18 @@ def test_get_complete_url_encodes_model_path_segment():
             optional_params={},
             litellm_params={},
         )
+
+
+def test_validate_environment_sets_json_content_type():
+    config = CloudflareChatConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="@cf/meta/llama-2-7b-chat-int8",
+        messages=[{"role": "user", "content": "ping"}],
+        optional_params={},
+        litellm_params={},
+        api_key="cf-key",
+    )
+
+    assert headers["content-type"] == "application/json"

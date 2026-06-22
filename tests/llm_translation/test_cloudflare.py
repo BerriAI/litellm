@@ -35,6 +35,24 @@ def _chat_response() -> Dict[str, Any]:
     }
 
 
+def _chat_choices_response() -> Dict[str, Any]:
+    return {
+        "result": {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I am a large language model created to assist you.",
+                    }
+                }
+            ],
+        },
+        "success": True,
+        "errors": [],
+        "messages": [],
+    }
+
+
 def _streaming_chunks() -> list[str]:
     return [
         json.dumps({"response": "I am"}),
@@ -73,6 +91,41 @@ def test_completion_cloudflare(sync_mode):
             response = asyncio.run(
                 acompletion(
                     model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                    messages=messages,
+                    max_tokens=15,
+                    api_base=FAKE_API_BASE,
+                    api_key=FAKE_API_KEY,
+                )
+            )
+            mock_post.assert_called_once()
+
+    assert response is not None
+    assert response.choices[0].message.content is not None
+    assert "language model" in response.choices[0].message.content.lower()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+def test_completion_cloudflare_choices_response(sync_mode):
+    messages = [{"role": "user", "content": "what llm are you"}]
+    mock_resp = _make_mock_response(_chat_choices_response())
+
+    if sync_mode:
+        with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+            response = completion(
+                model="cloudflare/@cf/openai/gpt-oss-20b",
+                messages=messages,
+                max_tokens=15,
+                api_base=FAKE_API_BASE,
+                api_key=FAKE_API_KEY,
+            )
+            mock_post.assert_called_once()
+    else:
+        with patch.object(
+            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
+        ) as mock_post:
+            response = asyncio.run(
+                acompletion(
+                    model="cloudflare/@cf/openai/gpt-oss-20b",
                     messages=messages,
                     max_tokens=15,
                     api_base=FAKE_API_BASE,
