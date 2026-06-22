@@ -12,12 +12,11 @@ environment); once it is configured, a protocol failure is a hard failure. See
 REALTIME_COVERAGE_MATRIX.md.
 """
 
-from dataclasses import dataclass
-
 import pytest
 from pydantic import BaseModel
 
 from realtime_client import (
+    PROVIDERS,
     ConversationItemCreate,
     FunctionCallArgumentsDone,
     FunctionCallOutputItem,
@@ -25,33 +24,20 @@ from realtime_client import (
     JsonSchema,
     JsonSchemaProperty,
     RealtimeClient,
+    RealtimeProvider,
     ResponseCreate,
     ResponseDone,
     SessionConfig,
     SessionUpdate,
     function_call_item,
     parse_last,
+    skip_if_unconfigured,
     transcript,
     user_message,
 )
 
 pytestmark = pytest.mark.e2e
 
-
-@dataclass(frozen=True, slots=True)
-class RealtimeProvider:
-    id: str
-    model: str
-
-
-PROVIDERS = (
-    RealtimeProvider("openai", "openai-realtime"),
-    RealtimeProvider("azure", "azure-realtime"),
-    RealtimeProvider("gemini", "gemini-realtime"),
-    RealtimeProvider("vertex_ai", "vertex-realtime"),
-    RealtimeProvider("bedrock", "bedrock-realtime"),
-    RealtimeProvider("xai", "xai-realtime"),
-)
 PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
 
 WEATHER_TOOL = FunctionTool(
@@ -72,13 +58,6 @@ class WeatherResult(BaseModel):
     temperature_f: int
 
 
-def _skip_if_unconfigured(
-    provider: RealtimeProvider, configured: frozenset[str]
-) -> None:
-    if provider.model not in configured:
-        pytest.skip(f"{provider.model} not configured on proxy")
-
-
 @pytest.mark.parametrize("provider", PROVIDER_PARAMS)
 def test_text_conversation(
     client: RealtimeClient,
@@ -86,7 +65,7 @@ def test_text_conversation(
     configured_models: frozenset[str],
     provider: RealtimeProvider,
 ) -> None:
-    _skip_if_unconfigured(provider, configured_models)
+    skip_if_unconfigured(provider, configured_models)
 
     with client.connect(key=scoped_key, model=provider.model) as session:
         created = session.collect_until("session.created", timeout=20)
@@ -123,7 +102,7 @@ def test_tool_call_round_trip(
     configured_models: frozenset[str],
     provider: RealtimeProvider,
 ) -> None:
-    _skip_if_unconfigured(provider, configured_models)
+    skip_if_unconfigured(provider, configured_models)
 
     with client.connect(key=scoped_key, model=provider.model) as session:
         session.collect_until("session.created", timeout=20)

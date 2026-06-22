@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
@@ -29,6 +30,33 @@ def _ws_base_url() -> str:
         if PROXY_BASE_URL.startswith(scheme):
             return ws_scheme + PROXY_BASE_URL[len(scheme) :]
     return PROXY_BASE_URL
+
+
+def realtime_ws_url(model: str) -> str:
+    return f"{_ws_base_url()}/v1/realtime?{urlencode({'model': model})}"
+
+
+@dataclass(frozen=True, slots=True)
+class RealtimeProvider:
+    id: str
+    model: str
+
+
+PROVIDERS = (
+    RealtimeProvider("openai", "openai-realtime"),
+    RealtimeProvider("azure", "azure-realtime"),
+    RealtimeProvider("gemini", "gemini-realtime"),
+    RealtimeProvider("vertex_ai", "vertex-realtime"),
+    RealtimeProvider("bedrock", "bedrock-realtime"),
+    RealtimeProvider("xai", "xai-realtime"),
+)
+
+
+def skip_if_unconfigured(
+    provider: RealtimeProvider, configured: frozenset[str]
+) -> None:
+    if provider.model not in configured:
+        pytest.skip(f"{provider.model} not configured on proxy")
 
 
 # ---- sent events -------------------------------------------------------
@@ -217,9 +245,8 @@ class RealtimeClient:
     def connect(
         self, *, key: str, model: str, timeout: float = 15.0
     ) -> Generator[RealtimeSession, None, None]:
-        url = f"{_ws_base_url()}/v1/realtime?{urlencode({'model': model})}"
         with connect(
-            url,
+            realtime_ws_url(model),
             additional_headers={"Authorization": f"Bearer {key}"},
             open_timeout=timeout,
         ) as connection:

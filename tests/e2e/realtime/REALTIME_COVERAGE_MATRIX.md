@@ -19,6 +19,13 @@ a matching `function_call` output item, the test sends a `function_call_output`
 back, and the follow-up response incorporates the result (the temperature 72
 appears).
 
+`test_realtime_pipecat_e2e` is a realism layer that drives the same providers
+through pipecat's GA `OpenAIRealtimeLLMService` (base_url pointed at the proxy)
+rather than speaking the protocol by hand. Its assertions are coarse (the tool
+callback fired, assistant text was produced); the raw-websocket suite is the
+source of truth. It skips unless `pipecat-ai` is installed
+(`uv pip install "pipecat-ai[openai]"`).
+
 ## Provider status
 
 | provider | model alias | status |
