@@ -18,7 +18,10 @@ from unittest.mock import MagicMock, patch
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.main import search
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import (
+    VectorStoreIndexRegistry,
+    VectorStoreRegistry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -187,3 +190,37 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+def test_registries_do_not_share_mutable_default_state():
+    """Regression test for the mutable-default-argument (B006) shared-state bug.
+
+    ``VectorStoreIndexRegistry`` and ``VectorStoreRegistry`` used a mutable list
+    literal as a constructor default (``= []``), so every instance created
+    without an explicit list shared the *same* list object. Mutating one
+    default-constructed registry therefore leaked into all the others. Each
+    instance must now own a fresh, independent list.
+    """
+    # VectorStoreIndexRegistry: default-constructed instances must not share a list.
+    idx_reg_1 = VectorStoreIndexRegistry()
+    idx_reg_2 = VectorStoreIndexRegistry()
+    assert idx_reg_1.vector_store_indexes is not idx_reg_2.vector_store_indexes
+    assert idx_reg_1.vector_store_indexes == []
+    assert idx_reg_2.vector_store_indexes == []
+
+    # VectorStoreRegistry: adding to one default-constructed registry must not
+    # affect another (it would, with a shared default list, before the fix).
+    reg_1 = VectorStoreRegistry()
+    reg_2 = VectorStoreRegistry()
+    assert reg_1.vector_stores is not reg_2.vector_stores
+
+    store = LiteLLM_ManagedVectorStore(
+        vector_store_id="vs_isolation_1",
+        custom_llm_provider="openai",
+        vector_store_name="isolation_store",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    reg_1.add_vector_store_to_registry(store)
+    assert len(reg_1.vector_stores) == 1
+    assert reg_2.vector_stores == []

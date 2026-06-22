@@ -964,10 +964,12 @@ class Logging(LiteLLMLoggingBaseClass):
             masked_api_base = api_base
         return str(masked_api_base)
 
-    def _pre_call(self, input, api_key, model=None, additional_args={}):
+    def _pre_call(self, input, api_key, model=None, additional_args=None):
         """
         Common helper function across the sync + async pre-call function
         """
+        if additional_args is None:
+            additional_args = {}
 
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
@@ -981,7 +983,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_masked_api_base(additional_args.get("api_base", ""))
         )
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+    def pre_call(
+        self, input, api_key, model=None, additional_args=None
+    ):  # noqa: PLR0915
+        if additional_args is None:
+            additional_args = {}
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -1225,8 +1231,10 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
     def post_call(
-        self, original_response, input=None, api_key=None, additional_args={}
+        self, original_response, input=None, api_key=None, additional_args=None
     ):
+        if additional_args is None:
+            additional_args = {}
         # Log the exact result from the LLM API, for streaming - log the type of response received
         litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
@@ -3719,7 +3727,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
-    custom_logger_init_args: Optional[dict] = {},
+    custom_logger_init_args: Optional[dict] = None,
 ) -> Optional[CustomLogger]:
     """
     Initialize a custom logger compatible class

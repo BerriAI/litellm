@@ -28,8 +28,10 @@ def completion(
     logger_fn=None,
     default_max_tokens_to_sample=None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    headers={},
+    headers=None,
 ):
+    if headers is None:
+        headers = {}
     headers = nlp_config.validate_environment(
         api_key=api_key,
         headers=headers,

@@ -121,12 +121,16 @@ class SagemakerChatHandler(BaseAWSLLM):
         optional_params: dict,
         litellm_params: dict,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        custom_prompt_dict={},
+        custom_prompt_dict=None,
         logger_fn=None,
         acompletion: bool = False,
-        headers: dict = {},
+        headers: Optional[dict] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
+        if custom_prompt_dict is None:
+            custom_prompt_dict = {}
+        if headers is None:
+            headers = {}
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)
         inference_params = deepcopy(optional_params)

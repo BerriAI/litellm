@@ -3744,7 +3744,7 @@ class PrismaClient:
     async def update_data(  # noqa: PLR0915
         self,
         token: Optional[str] = None,
-        data: dict = {},
+        data: Optional[dict] = None,
         data_list: Optional[List] = None,
         user_id: Optional[str] = None,
         team_id: Optional[str] = None,
@@ -3758,6 +3758,8 @@ class PrismaClient:
         """
         Update existing data
         """
+        if data is None:
+            data = {}
         verbose_proxy_logger.debug(
             f"PrismaClient: update_data, table_name: {table_name}"
         )

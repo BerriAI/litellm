@@ -147,11 +147,13 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         optional_params: Dict,
         voice: Optional[Union[str, Dict]] = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
+        kwargs: Optional[Dict] = None,
     ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI parameters to AWS Polly parameters
         """
+        if kwargs is None:
+            kwargs = {}
         mapped_params = {}
 
         # Map voice - support both native Polly voices and OpenAI voice mappings

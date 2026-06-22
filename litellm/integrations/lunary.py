@@ -95,7 +95,7 @@ class LunaryLogger:
         run_id,
         model,
         print_verbose,
-        extra={},
+        extra=None,
         input=None,
         user_id=None,
         response_obj=None,
@@ -103,6 +103,8 @@ class LunaryLogger:
         end_time=datetime.now(timezone.utc),
         error=None,
     ):
+        if extra is None:
+            extra = {}
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 

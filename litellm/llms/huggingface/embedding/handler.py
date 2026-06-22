@@ -331,8 +331,10 @@ class HuggingFaceEmbedding(BaseLLM):
         timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
         aembedding: Optional[bool] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        headers={},
+        headers=None,
     ) -> EmbeddingResponse:
+        if headers is None:
+            headers = {}
         super().embedding()
         headers = config.validate_environment(
             api_key=api_key,

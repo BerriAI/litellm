@@ -2,7 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -20,8 +20,10 @@ class A2AError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Dict[str, Any] = {},
+        headers: Optional[Dict[str, Any]] = None,
     ):
+        if headers is None:
+            headers = {}
         super().__init__(
             status_code=status_code,
             message=message,

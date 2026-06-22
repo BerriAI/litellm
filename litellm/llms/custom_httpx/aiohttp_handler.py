@@ -334,9 +334,11 @@ class BaseLLMAIOHTTPHandler:
         stream: Optional[bool] = False,
         fake_stream: bool = False,
         api_key: Optional[str] = None,
-        headers: Optional[dict] = {},
+        headers: Optional[dict] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler, ClientSession]] = None,
     ):
+        if headers is None:
+            headers = {}
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )

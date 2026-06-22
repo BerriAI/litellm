@@ -3336,9 +3336,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate
     duration: Optional[str] = None,
-    models: list = [],
-    aliases: dict = {},
-    config: dict = {},
+    models: Optional[list] = None,
+    aliases: Optional[dict] = None,
+    config: Optional[dict] = None,
     spend: float = 0.0,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: Optional[str] = None,
@@ -3360,15 +3360,15 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
-    metadata: Optional[dict] = {},
+    metadata: Optional[dict] = None,
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
-    allowed_cache_controls: Optional[list] = [],
-    permissions: Optional[dict] = {},
-    model_max_budget: Optional[dict] = {},
+    allowed_cache_controls: Optional[list] = None,
+    permissions: Optional[dict] = None,
+    model_max_budget: Optional[dict] = None,
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
@@ -3393,6 +3393,20 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     access_group_ids: Optional[list] = None,
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
+    if models is None:
+        models = []
+    if aliases is None:
+        aliases = {}
+    if config is None:
+        config = {}
+    if metadata is None:
+        metadata = {}
+    if allowed_cache_controls is None:
+        allowed_cache_controls = []
+    if permissions is None:
+        permissions = {}
+    if model_max_budget is None:
+        model_max_budget = {}
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:

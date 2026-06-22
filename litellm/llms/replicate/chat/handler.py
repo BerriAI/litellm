@@ -140,11 +140,15 @@ def completion(
     logging_obj,
     api_key,
     encoding,
-    custom_prompt_dict={},
+    custom_prompt_dict=None,
     logger_fn=None,
     acompletion=None,
-    headers={},
+    headers=None,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
+    if custom_prompt_dict is None:
+        custom_prompt_dict = {}
+    if headers is None:
+        headers = {}
     headers = replicate_config.validate_environment(
         api_key=api_key,
         headers=headers,

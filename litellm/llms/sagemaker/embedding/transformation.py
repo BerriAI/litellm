@@ -90,13 +90,19 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         model_response: "EmbeddingResponse",
         logging_obj: Any,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> "EmbeddingResponse":
         """
         Transform embedding response for Hugging Face models on SageMaker
         """
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         try:
             response_data = raw_response.json()
         except Exception as e:

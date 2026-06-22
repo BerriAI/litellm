@@ -394,7 +394,7 @@ class AsyncCompletions:
 async def acompletion(  # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: Optional[List] = None,
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
     timeout: Optional[Union[float, int]] = None,
@@ -486,6 +486,8 @@ async def acompletion(  # noqa: PLR0915
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
+    if messages is None:
+        messages = []
     fallbacks = kwargs.get("fallbacks", None)
     mock_timeout = kwargs.get("mock_timeout", None)
 
@@ -1085,7 +1087,7 @@ def _build_custom_pricing_entry(
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: Optional[List] = None,
     timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
@@ -1180,6 +1182,8 @@ def completion(  # type: ignore # noqa: PLR0915
         - It supports various optional parameters for customizing the completion behavior.
         - If 'mock_response' is provided, a mock completion response is returned for testing or debugging.
     """
+    if messages is None:
+        messages = []
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
@@ -4717,7 +4721,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 @overload
 def embedding(
     model,
-    input=[],
+    input=None,
     # Optional params
     dimensions: Optional[int] = None,
     encoding_format: Optional[str] = None,
@@ -4735,7 +4739,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]: 
+) -> Coroutine[Any, Any, EmbeddingResponse]:
     ...
 
 
@@ -4743,7 +4747,7 @@ def embedding(
 @overload
 def embedding(
     model,
-    input=[],
+    input=None,
     # Optional params
     dimensions: Optional[int] = None,
     encoding_format: Optional[str] = None,
@@ -4770,7 +4774,7 @@ def embedding(
 @client
 def embedding(  # noqa: PLR0915
     model,
-    input=[],
+    input=None,
     # Optional params
     dimensions: Optional[int] = None,
     encoding_format: Optional[str] = None,
@@ -4812,6 +4816,8 @@ def embedding(  # noqa: PLR0915
     Raises:
     - exception_type: If an exception occurs during the API call.
     """
+    if input is None:
+        input = []
     azure = kwargs.get("azure", None)
     client = kwargs.pop("client", None)
     shared_session = kwargs.get("shared_session", None)

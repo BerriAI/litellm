@@ -626,13 +626,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         acompletion: bool = False,
         logger_fn=None,
         headers: Optional[dict] = None,
-        custom_prompt_dict: dict = {},
+        custom_prompt_dict: Optional[dict] = None,
         client=None,
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
         shared_session: Optional["ClientSession"] = None,
     ):
+        if custom_prompt_dict is None:
+            custom_prompt_dict = {}
         super().completion(shared_session=shared_session)
         try:
             fake_stream: bool = False
