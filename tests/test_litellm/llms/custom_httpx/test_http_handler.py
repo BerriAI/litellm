@@ -1,5 +1,4 @@
 import asyncio
-import io
 import os
 import pathlib
 import ssl
@@ -851,3 +850,232 @@ async def test_async_get_forwards_per_request_timeout():
         }
     finally:
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_base_llm_aiohttp_handler_accepts_ssl_verify():
+    """
+    Regression for #30778: ``BaseLLMAIOHTTPHandler.__init__`` must accept an
+    ``ssl_verify`` argument and forward it to the lazily-created
+    ``AsyncHTTPHandler._create_aiohttp_transport`` so the transport picks up
+    the caller's SSL setting (False to disable, etc.) instead of inheriting
+    aiohttp's default SSL context on plain http:// URLs.
+    """
+    from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+    captured = {}
+
+    def fake_create_aiohttp_transport(ssl_verify=None, **kwargs):
+        captured["ssl_verify"] = ssl_verify
+        return MagicMock()
+
+    original = AsyncHTTPHandler._create_aiohttp_transport
+    AsyncHTTPHandler._create_aiohttp_transport = staticmethod(
+        fake_create_aiohttp_transport
+    )
+    try:
+        handler = BaseLLMAIOHTTPHandler(ssl_verify=False)
+        # The constructor should have stored the value.
+        assert handler.ssl_verify is False
+        # Force lazy transport creation.
+        handler._get_or_create_transport()
+        assert captured["ssl_verify"] is False
+    finally:
+        AsyncHTTPHandler._create_aiohttp_transport = original
+
+
+@pytest.mark.asyncio
+async def test_async_handler_retry_forwards_ssl_verify():
+    """
+    Regression for #30778: the ``ConnectError``/``RemoteProtocolError`` retry
+    path on ``AsyncHTTPHandler.post/put/patch/delete`` must forward
+    ``ssl_verify`` to the new ``create_client`` call. Previously the retry
+    silently re-enabled SSL verification (the default) and broke callers
+    relying on ``ssl_verify=False`` for plain-http services like Ollama.
+    """
+    handler = AsyncHTTPHandler(ssl_verify=False)
+    # Sanity: the stored value matches what was passed in.
+    assert handler._ssl_verify is False
+
+    captured_ssl_verify = {}
+
+    def fake_create_client(
+        *, timeout, event_hooks, ssl_verify=None, shared_session=None
+    ):
+        captured_ssl_verify["value"] = ssl_verify
+        # Return a real httpx client with a MockTransport so the post() body
+        # can still execute the retry path without touching the network.
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, request=req, json={"ok": True})
+            )
+        )
+
+    handler.create_client = fake_create_client  # type: ignore[assignment]
+
+    # Force the first send to raise ConnectError so we hit the retry branch.
+    call_count = {"n": 0}
+
+    def maybe_fail(req):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise httpx.ConnectError("boom", request=req)
+        return httpx.Response(200, request=req, json={"ok": True})
+
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(maybe_fail))
+    try:
+        await handler.post(
+            "http://example.invalid/post",
+            json={"x": 1},
+        )
+        # The retry path should have invoked create_client with the stored
+        # ssl_verify, NOT the default None/True.
+        assert captured_ssl_verify["value"] is False
+    finally:
+        await handler.client.aclose()
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["put", "patch", "delete"])
+async def test_async_handler_retry_forwards_ssl_verify_for_put_patch_delete(verb):
+    """
+    Companion to ``test_async_handler_retry_forwards_ssl_verify`` for the
+    other verb methods. ``put``, ``patch`` and ``delete`` all share the same
+    ``ConnectError``/``RemoteProtocolError`` retry block and must also
+    forward the stored ``ssl_verify`` value.
+    """
+    handler = AsyncHTTPHandler(ssl_verify=False)
+    assert handler._ssl_verify is False
+
+    captured_ssl_verify = {}
+
+    def fake_create_client(
+        *, timeout, event_hooks, ssl_verify=None, shared_session=None
+    ):
+        captured_ssl_verify["value"] = ssl_verify
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, request=req, json={"ok": True})
+            )
+        )
+
+    handler.create_client = fake_create_client  # type: ignore[assignment]
+
+    call_count = {"n": 0}
+
+    def maybe_fail(req):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise httpx.ConnectError("boom", request=req)
+        return httpx.Response(200, request=req, json={"ok": True})
+
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(maybe_fail))
+    try:
+        method = getattr(handler, verb)
+        await method(
+            "http://example.invalid/resource",
+            json={"x": 1},
+        )
+        assert (
+            captured_ssl_verify["value"] is False
+        ), f"{verb} retry path did not forward ssl_verify=False to create_client"
+    finally:
+        await handler.client.aclose()
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_create_aiohttp_transport_accepts_string_ssl_verify():
+    """
+    Regression for #30778 (followup): ``_create_aiohttp_transport`` must
+    accept a CA bundle path string for ``ssl_verify`` and forward it through
+    to ``TCPConnector(ssl=...)`` instead of silently dropping it.
+
+    Before the fix, callers passing ``ssl_verify="/etc/ssl/certs/ca.pem"``
+    had their path ignored — the connector was built without ``ssl=`` set,
+    so aiohttp fell back to its default SSL context and the caller's CA
+    bundle was never trusted. The connector's ``ssl`` parameter must be
+    an ``SSLContext``, ``bool``, or ``Fingerprint`` — a bare path string
+    is rejected by aiohttp, so the helper builds an SSLContext via
+    ``ssl.create_default_context(cafile=...)``.
+    """
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    ca_path = str(pathlib.Path(certifi.where()).resolve())
+
+    try:
+        transport = AsyncHTTPHandler._create_aiohttp_transport(ssl_verify=ca_path)
+        try:
+            client_session = transport._get_valid_client_session()
+            assert isinstance(client_session, ClientSession)
+            connector = client_session.connector
+            assert isinstance(connector, TCPConnector)
+            # The connector must carry an SSLContext that trusts the CA bundle.
+            # It cannot be the raw path string (aiohttp's TCPConnector only
+            # accepts SSLContext, bool, or Fingerprint).
+            assert isinstance(connector._ssl, ssl.SSLContext), (
+                f"expected connector._ssl to be an SSLContext built from the "
+                f"CA bundle path, got {type(connector._ssl).__name__}"
+            )
+            # The transport must also stash the original CA bundle path for
+            # per-request override so externally-provided sessions can honor
+            # the caller's CA bundle on a per-request basis.
+            assert transport._ssl_verify == ca_path
+        finally:
+            await transport.aclose()
+    finally:
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_base_llm_aiohttp_handler_forwards_ssl_to_external_session():
+    """
+    Regression for #30778 (followup): ``BaseLLMAIOHTTPHandler._make_common_async_call``
+    must forward ``ssl_verify`` as a per-request ``ssl=`` kwarg to
+    ``async_client_session.post`` when a caller supplies an external
+    ``ClientSession`` (e.g. via the ``client`` argument on ``async_completion``).
+
+    Before the fix, the connector-level SSL setting only applied to sessions
+    built lazily by ``_create_client_session_with_transport``. Externally
+    provided sessions skipped the connector entirely, so callers passing
+    ``ssl_verify=False`` still got the default SSL verification on the wire.
+    """
+    from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+    handler = BaseLLMAIOHTTPHandler(ssl_verify=False)
+    assert handler.ssl_verify is False
+
+    captured_kwargs = {}
+
+    class _CapturingSession:
+        async def post(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            response = MagicMock()
+            response.ok = True
+            return response
+
+    fake_session = _CapturingSession()
+
+    # Stub provider_config — we only need ``max_retry_on_unprocessable_entity_error``
+    # and ``get_error_class`` for ``_make_common_async_call`` to operate.
+    provider_config = MagicMock()
+    provider_config.max_retry_on_unprocessable_entity_error = 1
+    provider_config.get_error_class.side_effect = RuntimeError
+
+    await handler._make_common_async_call(
+        async_client_session=fake_session,  # type: ignore[arg-type]
+        provider_config=provider_config,
+        api_base="http://example.invalid/post",
+        headers={},
+        data={"x": 1},
+        timeout=1.0,
+        litellm_params={},
+    )
+
+    assert "ssl" in captured_kwargs, (
+        "_make_common_async_call must forward ssl_verify=False as ssl= kwarg "
+        "when a caller-supplied ClientSession is used"
+    )
+    assert captured_kwargs["ssl"] is False
