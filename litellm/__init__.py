@@ -477,6 +477,12 @@ prometheus_emit_stream_label: bool = False
 # are ready to split 429s by source (vendor vs. litellm) and dimension
 # (RPM/TPM/concurrent/budget).
 prometheus_emit_rate_limit_labels: bool = False
+# Opt-in: emit the `model_group` label on the deployment-level metrics
+# (litellm_deployment_state / _tpm_limit / _rpm_limit / _cooled_down /
+# _latency_per_output_token). Off by default so each metric's historical label
+# set is preserved across upgrade; enable once downstream dashboards / recording
+# rules account for the added label dimension.
+prometheus_emit_deployment_model_group_label: bool = False
 prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0

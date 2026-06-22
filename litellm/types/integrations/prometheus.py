@@ -788,6 +788,24 @@ class PrometheusMetricLabels:
                 if label not in default_labels and label not in custom_labels:
                     custom_labels.append(label)
 
+        # Conditionally add model_group to the deployment-level metrics. Off by
+        # default so each metric's historical label set is preserved across
+        # upgrade; enable via ``litellm.prometheus_emit_deployment_model_group_label``
+        # once downstream dashboards / recording rules account for the new label.
+        _model_group_deployment_metrics = {
+            "litellm_deployment_state",
+            "litellm_deployment_tpm_limit",
+            "litellm_deployment_rpm_limit",
+            "litellm_deployment_cooled_down",
+            "litellm_deployment_latency_per_output_token",
+        }
+        if (
+            label_name in _model_group_deployment_metrics
+            and litellm.prometheus_emit_deployment_model_group_label is True
+            and UserAPIKeyLabelNames.MODEL_GROUP.value not in default_labels
+        ):
+            custom_labels.append(UserAPIKeyLabelNames.MODEL_GROUP.value)
+
         if label_name in PrometheusMetricLabels._org_label_metrics:
             for label in [
                 UserAPIKeyLabelNames.ORG_ID.value,

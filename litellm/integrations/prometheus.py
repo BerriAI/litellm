@@ -2379,6 +2379,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider or "",
+                    model_group=model_group,
                 )
             _deployment_label_ctx = PrometheusLabelFactoryContext(enum_values)
             if exception is not None:
@@ -2414,6 +2415,7 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         llm_provider: Optional[str],
+        model_group: Optional[str] = None,
     ):
         """
         Set the deployment TPM and RPM limits metrics
@@ -2428,6 +2430,7 @@ class PrometheusLogger(CustomLogger):
                 ),
                 enum_values=UserAPIKeyLabelValues(
                     litellm_model_name=litellm_model_name,
+                    model_group=model_group,
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
@@ -2442,6 +2445,7 @@ class PrometheusLogger(CustomLogger):
                 ),
                 enum_values=UserAPIKeyLabelValues(
                     litellm_model_name=litellm_model_name,
+                    model_group=model_group,
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
@@ -2572,6 +2576,7 @@ class PrometheusLogger(CustomLogger):
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             _metadata = get_litellm_metadata_from_kwargs(request_kwargs)
             litellm_model_name = request_kwargs.get("model", None)
+            model_group = standard_logging_payload.get("model_group")
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}
             model_id = _model_info.get("id", None)
@@ -2584,6 +2589,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     llm_provider=llm_provider,
+                    model_group=model_group,
                 )
 
             remaining_requests: Optional[int] = None
@@ -2652,6 +2658,7 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id or "",
                 api_base=api_base or "",
                 api_provider=llm_provider or "",
+                model_group=model_group,
             )
 
             PrometheusLogger._inc_labeled_counter(
@@ -3040,6 +3047,7 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         api_provider: str,
+        model_group: Optional[str] = None,
     ):
         """
         Set the deployment state.
@@ -3051,6 +3059,7 @@ class PrometheusLogger(CustomLogger):
             ),
             enum_values=UserAPIKeyLabelValues(
                 litellm_model_name=litellm_model_name,
+                model_group=model_group,
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=api_provider,
@@ -3064,9 +3073,10 @@ class PrometheusLogger(CustomLogger):
         model_id: str,
         api_base: str,
         api_provider: str,
+        model_group: Optional[str] = None,
     ):
         self.set_litellm_deployment_state(
-            0, litellm_model_name, model_id, api_base, api_provider
+            0, litellm_model_name, model_id, api_base, api_provider, model_group
         )
 
     def set_deployment_partial_outage(
@@ -3075,9 +3085,10 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         api_provider: str,
+        model_group: Optional[str] = None,
     ):
         self.set_litellm_deployment_state(
-            1, litellm_model_name, model_id, api_base, api_provider
+            1, litellm_model_name, model_id, api_base, api_provider, model_group
         )
 
     def set_deployment_complete_outage(
@@ -3086,9 +3097,10 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         api_provider: str,
+        model_group: Optional[str] = None,
     ):
         self.set_litellm_deployment_state(
-            2, litellm_model_name, model_id, api_base, api_provider
+            2, litellm_model_name, model_id, api_base, api_provider, model_group
         )
 
     def increment_deployment_cooled_down(
@@ -3098,17 +3110,25 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
         exception_status: str,
+        model_group: Optional[str] = None,
     ):
         """
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
-        self.litellm_deployment_cooled_down.labels(
-            _sanitize_prometheus_label_value(litellm_model_name),
-            _sanitize_prometheus_label_value(model_id),
-            _sanitize_prometheus_label_value(api_base),
-            _sanitize_prometheus_label_value(api_provider),
-            _sanitize_prometheus_label_value(exception_status),
-        ).inc()
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_deployment_cooled_down"
+            ),
+            enum_values=UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name,
+                model_group=model_group,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=api_provider,
+                exception_status=exception_status,
+            ),
+        )
+        self.litellm_deployment_cooled_down.labels(**_labels).inc()
 
     def increment_callback_logging_failure(
         self,
