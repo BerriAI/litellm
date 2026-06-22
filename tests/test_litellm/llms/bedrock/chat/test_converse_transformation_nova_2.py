@@ -222,6 +222,24 @@ class TestNova2ParameterMapping:
         assert result["reasoningConfig"]["type"] == "enabled"
         assert result["reasoningConfig"]["maxReasoningEffort"] == "high"
 
+    @pytest.mark.parametrize("region", ["global", "jp", "au", "us-gov"])
+    def test_nova_2_cross_region_variant_mapping(self, region):
+        """Cross-region inference profiles beyond us/eu/apac must still map reasoning_effort to reasoningConfig."""
+        config = AmazonConverseConfig()
+
+        model = f"{region}.amazon.nova-2-lite-v1:0"
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+        assert "reasoningConfig" in result
+        assert result["reasoningConfig"]["type"] == "enabled"
+        assert result["reasoningConfig"]["maxReasoningEffort"] == "high"
+        assert "thinking" not in result
+
     def test_nova_2_with_other_params(self):
         """Test that Nova 2 reasoning works alongside other parameters."""
         config = AmazonConverseConfig()
@@ -306,6 +324,17 @@ class TestNova15SupportedParameters:
         assert "reasoning_effort" in supported_params
 
         # Verify thinking is NOT in supported params
+        assert "thinking" not in supported_params
+
+    @pytest.mark.parametrize("region", ["global", "jp", "au", "us-gov"])
+    def test_nova_2_cross_region_variant_supported_params(self, region):
+        """Cross-region inference profiles beyond us/eu/apac must still report reasoning_effort, not thinking."""
+        config = AmazonConverseConfig()
+
+        model = f"{region}.amazon.nova-2-lite-v1:0"
+        supported_params = config.get_supported_openai_params(model)
+
+        assert "reasoning_effort" in supported_params
         assert "thinking" not in supported_params
 
     def test_nova_2_has_standard_params(self):

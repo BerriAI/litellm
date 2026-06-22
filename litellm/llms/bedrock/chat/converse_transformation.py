@@ -77,6 +77,7 @@ from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
     get_anthropic_beta_from_headers,
+    get_bedrock_cross_region_inference_regions,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
@@ -321,10 +322,10 @@ class AmazonConverseConfig(BaseConfig):
                 model_without_region = model_without_region[len(routing_prefix) :]
                 break
 
-        # Remove regional prefix if present (us., eu., apac.)
-        for prefix in ["us.", "eu.", "apac."]:
-            if model_without_region.startswith(prefix):
-                model_without_region = model_without_region[len(prefix) :]
+        # Remove cross-region inference prefix if present (us., eu., apac., global., jp., ...)
+        for region in get_bedrock_cross_region_inference_regions():
+            if model_without_region.startswith(f"{region}."):
+                model_without_region = model_without_region[len(region) + 1 :]
                 break
 
         # Check if the model is a Nova 2 model (matches nova-2-lite, nova-2-pro, etc.)
