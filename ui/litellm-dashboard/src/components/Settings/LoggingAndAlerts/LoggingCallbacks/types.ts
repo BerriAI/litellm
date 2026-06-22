@@ -8,6 +8,18 @@ export interface AlertingObject {
   // every row to render as "Success".
   type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
+  // Present only on rows backed by a logging credential (an OTEL trace
+  // destination). Config-callback rows leave these unset, which is how the table
+  // tells the two apart.
+  credentialName?: string;
+  destinationLabel?: string;
+  access?: CredentialAccess;
+}
+
+export interface CredentialAccess {
+  global?: boolean;
+  teams?: string[];
+  orgs?: string[];
 }
 
 export interface AlertingVariables {

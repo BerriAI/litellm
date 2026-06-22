@@ -1,6 +1,6 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, cast
 
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import OtelDestinationParams, StandardCallbackDynamicParams
 
 
 def _is_env_reference(value: object) -> bool:
@@ -107,5 +107,16 @@ def initialize_standard_callback_dynamic_params(
                         param, _param_value, source="metadata"
                     )
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
+
+        # Admin-owned OTEL v2 destinations, resolved server-side by the proxy from the
+        # exporters assigned to the request's identity chain and stamped onto top-level
+        # kwargs (the proxy strips any client-supplied value first). Read from top-level
+        # only, never from request metadata, and never via _supported_callback_params,
+        # so a request body/metadata cannot set or select a trace destination.
+        otel_destinations = kwargs.get("otel_destinations")
+        if isinstance(otel_destinations, list):
+            standard_callback_dynamic_params["otel_destinations"] = cast(
+                "list[OtelDestinationParams]", otel_destinations
+            )
 
     return standard_callback_dynamic_params

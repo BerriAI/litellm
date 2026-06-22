@@ -19,7 +19,21 @@ type LoggingCallbacksProps = {
   onTest?: (callback: AlertingObject) => void | Promise<void>;
   onEdit?: (callback: AlertingObject) => void;
   onDelete?: (callback: AlertingObject) => void;
+  onEditAccess?: (callback: AlertingObject) => void;
   onAdd?: () => void;
+};
+
+const isDestination = (record: AlertingObject): boolean => record.credentialName != null;
+
+const accessSummary = (record: AlertingObject): string => {
+  const access = record.access;
+  if (!access) return "—";
+  if (access.global) return "Global";
+  const parts = [
+    access.teams?.length ? `${access.teams.length} team${access.teams.length > 1 ? "s" : ""}` : null,
+    access.orgs?.length ? `${access.orgs.length} org${access.orgs.length > 1 ? "s" : ""}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "—";
 };
 
 type CallbackRow = AlertingObject & {
@@ -39,6 +53,7 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   onTest = () => {},
   onEdit = () => {},
   onDelete = () => {},
+  onEditAccess = () => {},
   onAdd = () => {},
 }) => {
   const columns: TableProps<CallbackRow>["columns"] = [
@@ -49,13 +64,21 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       render: (_: string, record: CallbackRow) => {
         const id = record.name;
         const displayName = availableCallbacks[id]?.ui_callback_name || id;
-        return <div className="font-medium text-gray-800">{displayName}</div>;
+        return (
+          <div>
+            <div className="font-medium text-gray-800">{displayName}</div>
+            {record.destinationLabel && <div className="text-xs text-gray-500">{record.destinationLabel}</div>}
+          </div>
+        );
       },
     },
     {
       title: <span className="font-medium text-gray-700">Mode</span>,
       key: "mode",
       render: (_: unknown, record: CallbackRow) => {
+        // Destination rows fan out on every span, so the success/failure split
+        // does not apply -- only config callbacks carry a mode.
+        if (isDestination(record)) return <span className="text-gray-400">—</span>;
         // Backend sends `type` (success | failure); legacy in-memory rows
         // from add-callback flow set `mode`. Read both so newly-added rows
         // and server-fetched rows both render correctly.
@@ -73,20 +96,62 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
           </span>
         );
       },
-      width: 240,
+      width: 200,
+    },
+    {
+      title: <span className="font-medium text-gray-700">Scope</span>,
+      key: "access",
+      render: (_: unknown, record: CallbackRow) =>
+        isDestination(record) ? (
+          <span className="text-sm text-gray-700">{accessSummary(record)}</span>
+        ) : (
+          <span className="text-gray-400">—</span>
+        ),
+      width: 160,
     },
     {
       title: <span className="font-medium text-gray-700 text-right w-full block">Actions</span>,
       key: "actions",
       align: "right",
-      render: (_: unknown, record: CallbackRow) => (
-        <div className="flex justify-end gap-2">
-          <TableIconActionButton variant="Test" tooltipText="Test Callback" onClick={() => onTest(record)} />
-          <TableIconActionButton variant="Edit" tooltipText="Edit Callback" onClick={() => onEdit(record)} />
-          <TableIconActionButton variant="Delete" tooltipText="Delete Callback" onClick={() => onDelete(record)} />
-        </div>
-      ),
-      width: 240,
+      render: (_: unknown, record: CallbackRow) =>
+        isDestination(record) ? (
+          <div className="flex justify-end gap-2">
+            <TableIconActionButton
+              variant="Edit"
+              tooltipText="Edit scope"
+              dataTestId="edit-access"
+              onClick={() => onEditAccess(record)}
+            />
+            <TableIconActionButton
+              variant="Delete"
+              tooltipText="Delete destination"
+              dataTestId="delete-destination"
+              onClick={() => onDelete(record)}
+            />
+          </div>
+        ) : (
+          <div className="flex justify-end gap-2">
+            <TableIconActionButton
+              variant="Test"
+              tooltipText="Test Callback"
+              dataTestId="test-callback"
+              onClick={() => onTest(record)}
+            />
+            <TableIconActionButton
+              variant="Edit"
+              tooltipText="Edit Callback"
+              dataTestId="edit-callback"
+              onClick={() => onEdit(record)}
+            />
+            <TableIconActionButton
+              variant="Delete"
+              tooltipText="Delete Callback"
+              dataTestId="delete-callback"
+              onClick={() => onDelete(record)}
+            />
+          </div>
+        ),
+      width: 200,
     },
   ];
   return (

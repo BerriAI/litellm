@@ -1465,6 +1465,11 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            validate_logging_exporter_assignment,
+        )
+
+        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
@@ -2510,6 +2515,11 @@ async def update_key_fn(
     }'
     ```
     """
+    from litellm.proxy.management_endpoints.logging_exporter_validation import (
+        validate_logging_exporter_assignment,
+    )
+
+    validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
     from litellm.proxy.proxy_server import (
         llm_router,
         premium_user,

@@ -167,6 +167,17 @@ class OpenTelemetryV2(CustomLogger):
         if getattr(proxy_server, "open_telemetry_logger", None) is None:
             setattr(proxy_server, "open_telemetry_logger", self)
 
+    def _destinations_for_backend(self, call: "LLMCallEvent") -> tuple:
+        """The call's admin-resolved destinations that belong to THIS logger's backend.
+
+        A request fans out across whatever exporters its identity chain is assigned;
+        each logger exports only the destinations tagged with its own callback_name,
+        so each backend's span keeps its own attribute vocabulary.
+        """
+        return tuple(
+            d for d in call.otel_destinations if d.callback_name == self.callback_name
+        )
+
     # ====================================================================== #
     #  LLM-call callbacks — the span is opened at the ``pre_call`` boundary and
     #  closed here. See ``log_pre_api_call``.
@@ -215,7 +226,7 @@ class OpenTelemetryV2(CustomLogger):
                 parent_context=parent_context,
                 start_time_ns=start_time_ns,
                 tracer=self._tenant_tracers.tracer_for(
-                    self.tracer, call.dynamic_params
+                    self.tracer, self._destinations_for_backend(call)
                 ),
             )
         self._open_llm_calls[call_id] = _LLMCallSpan(
@@ -353,7 +364,9 @@ class OpenTelemetryV2(CustomLogger):
             parent_context=parent_ctx,
             start_time_ns=carrier.start_time_ns,
             end_time_ns=end_time_ns,
-            tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
+            tracer=self._tenant_tracers.tracer_for(
+                self.tracer, self._destinations_for_backend(call)
+            ),
         )
 
     # ====================================================================== #

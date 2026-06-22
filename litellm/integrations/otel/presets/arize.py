@@ -10,7 +10,6 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 class _ArizeSettings(BaseSettings):
@@ -65,16 +64,3 @@ def _arize_headers(arize_cfg) -> str | None:
         # credentials are configured.
         return _ArizeSettings().otlp_traces_headers
     return ",".join(pieces)
-
-
-def arize_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
-    """Per-request Arize OTLP headers from team/key dynamic params."""
-    headers: dict[str, str] = {}
-    # ``arize_space_key`` is the suggested param and wins over ``arize_space_id``.
-    space = params.get("arize_space_key") or params.get("arize_space_id")
-    if space:
-        headers["arize-space-id"] = space
-    api_key = params.get("arize_api_key")
-    if api_key:
-        headers["api_key"] = api_key
-    return headers

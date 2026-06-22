@@ -3037,6 +3037,20 @@ OPENAI_RESPONSE_HEADERS = [
 ]
 
 
+class OtelDestinationParams(TypedDict, total=False):
+    """A resolved, admin-owned OTLP destination carried server-side only.
+
+    Populated by the proxy from the exporters assigned to a request's identity
+    chain; never read from a request body or metadata. The v2 logger validates and
+    exports through it. ``callback_name`` is the OTEL backend this destination
+    belongs to, so fan-out routes each destination to the right backend's logger.
+    """
+
+    callback_name: str
+    endpoint: str
+    headers: Dict[str, str]
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: Optional[str]
@@ -3083,6 +3097,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
+
+    # Admin-owned OTEL v2 destinations, resolved server-side from the exporters
+    # assigned to the request's identity chain (key/team/user/org), fanned out to.
+    # Never request-settable: absent from the request-read whitelist in
+    # initialize_dynamic_callback_params, so a request body/metadata cannot set it.
+    otel_destinations: Optional[List[OtelDestinationParams]]
 
 
 class CustomPricingLiteLLMParams(BaseModel):

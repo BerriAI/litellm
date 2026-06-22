@@ -4798,3 +4798,243 @@ async def test_add_litellm_data_to_request_claude_code_drop_params(
     )
 
     assert updated.get("drop_params") == expected_drop_params
+
+
+@pytest.fixture
+def _seeded_logging_credentials():
+    from litellm.models.credentials import CredentialItem
+
+    original = litellm.credential_list
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="langfuse-eu",
+            credential_values={
+                "langfuse_host": "https://cloud.langfuse.com",
+                "langfuse_public_key": "pk-eu",
+                "langfuse_secret_key": "sk-eu",
+            },
+            credential_info={
+                "credential_type": "logging",
+                "description": "langfuse_otel",
+            },
+        ),
+        CredentialItem(
+            credential_name="arize-prod",
+            credential_values={"arize_space_id": "S", "arize_api_key": "K"},
+            credential_info={"credential_type": "logging", "description": "arize"},
+        ),
+        # A provider credential that must never resolve as a logging destination.
+        CredentialItem(
+            credential_name="openai-key",
+            credential_values={"api_key": "sk-openai"},
+            credential_info={"custom_llm_provider": "openai"},
+        ),
+    ]
+    try:
+        yield
+    finally:
+        litellm.credential_list = original
+
+
+def _auth(team_exporters=None, token=None, org_id=None, team_id=None):
+    return UserAPIKeyAuth(
+        api_key="hashed-key",
+        token=token,
+        org_id=org_id,
+        team_id=team_id,
+        team_metadata=({"logging_exporters": team_exporters} if team_exporters else {}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials):
+    # team_metadata is the team's own (not shadowed); resolves without a DB fetch.
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    destinations, backends = await _resolve_logging_exporters(
+        _auth(team_exporters=["langfuse-eu"])
+    )
+    assert {d["endpoint"] for d in destinations} == {
+        "https://cloud.langfuse.com/api/public/otel"
+    }
+    assert backends == ["langfuse_otel"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_unions_key_team_org(
+    _seeded_logging_credentials, monkeypatch
+):
+    # key + org are read from their OWN records (the key's .metadata is team-shadowed),
+    # team from team_metadata. All three union, deduped.
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        auth_checks,
+        "get_key_object",
+        AsyncMock(
+            return_value=SimpleNamespace(metadata={"logging_exporters": ["arize-prod"]})
+        ),
+    )
+    monkeypatch.setattr(
+        auth_checks,
+        "get_org_object",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                metadata={"logging_exporters": ["langfuse-eu"]}
+            )
+        ),
+    )
+
+    destinations, backends = await _resolve_logging_exporters(
+        _auth(team_exporters=["langfuse-eu"], token="hashed-key", org_id="org-1")
+    )
+
+    assert {d["endpoint"] for d in destinations} == {
+        "https://cloud.langfuse.com/api/public/otel",  # team + org (deduped)
+        "https://otlp.arize.com/v1",  # key
+    }
+    assert set(backends) == {"langfuse_otel", "arize"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_empty_without_assignment(
+    _seeded_logging_credentials,
+):
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    destinations, backends = await _resolve_logging_exporters(_auth())
+    assert destinations == [] and backends == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_skips_unknown_and_provider_creds(
+    _seeded_logging_credentials,
+):
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    # unknown name + a provider credential (not credential_type=logging) -> nothing
+    destinations, backends = await _resolve_logging_exporters(
+        _auth(team_exporters=["does-not-exist", "openai-key"])
+    )
+    assert destinations == [] and backends == []
+
+
+@pytest.mark.asyncio
+async def test_apply_admin_logging_exporters_stamps_and_activates(
+    _seeded_logging_credentials,
+):
+    from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
+
+    data: dict = {}
+    await _apply_admin_logging_exporters(data, _auth(team_exporters=["langfuse-eu"]))
+
+    assert data["otel_destinations"][0]["callback_name"] == "langfuse_otel"
+    assert (
+        data["otel_destinations"][0]["endpoint"]
+        == "https://cloud.langfuse.com/api/public/otel"
+    )
+    # the backend is activated for the request
+    assert "langfuse_otel" in data["success_callback"]
+
+
+_LANGFUSE_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
+_ARIZE_ENDPOINT = "https://otlp.arize.com/v1"
+
+
+@pytest.fixture
+def _seeded_logging_credentials_with_access():
+    """Destinations whose access lives ON the credential (global/team/org), in
+    addition to a name-only destination assigned via the identity chain."""
+    from litellm.models.credentials import CredentialItem
+
+    original = litellm.credential_list
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="langfuse-eu",
+            credential_values={
+                "langfuse_host": "https://cloud.langfuse.com",
+                "langfuse_public_key": "pk-eu",
+                "langfuse_secret_key": "sk-eu",
+            },
+            credential_info={
+                "credential_type": "logging",
+                "description": "langfuse_otel",
+                "access": {"teams": ["team-eu"], "orgs": ["org-eu"]},
+            },
+        ),
+        CredentialItem(
+            credential_name="arize-global",
+            credential_values={"arize_space_id": "S", "arize_api_key": "K"},
+            credential_info={
+                "credential_type": "logging",
+                "description": "arize",
+                "access": {"global": True},
+            },
+        ),
+    ]
+    try:
+        yield
+    finally:
+        litellm.credential_list = original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_kwargs, expected_endpoints",
+    [
+        # access.global reaches an unassigned caller (no names at all). This case
+        # fails if the resolver early-returns on empty identity names.
+        pytest.param({}, {_ARIZE_ENDPOINT}, id="access-global-unassigned"),
+        # access.teams matches the caller's team_id (no identity names).
+        pytest.param(
+            {"team_id": "team-eu"},
+            {_ARIZE_ENDPOINT, _LANGFUSE_ENDPOINT},
+            id="access-team-match",
+        ),
+        # a different team gets only the global destination.
+        pytest.param(
+            {"team_id": "team-other"}, {_ARIZE_ENDPOINT}, id="access-team-mismatch"
+        ),
+        # access.orgs matches the caller's org_id.
+        pytest.param(
+            {"org_id": "org-eu"},
+            {_ARIZE_ENDPOINT, _LANGFUSE_ENDPOINT},
+            id="access-org-match",
+        ),
+        # identity name AND access point at the same destination -> deduped to one
+        # (plus the always-on global). team-eu reaches langfuse via BOTH paths.
+        pytest.param(
+            {"team_id": "team-eu", "team_exporters": ["langfuse-eu"]},
+            {_ARIZE_ENDPOINT, _LANGFUSE_ENDPOINT},
+            id="both-paths-deduped",
+        ),
+    ],
+)
+async def test_resolve_logging_exporters_access_matrix(
+    _seeded_logging_credentials_with_access, auth_kwargs, expected_endpoints
+):
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    destinations, _ = await _resolve_logging_exporters(_auth(**auth_kwargs))
+    assert {d["endpoint"] for d in destinations} == expected_endpoints
+    # no duplicate destinations survive the union
+    assert len(destinations) == len(expected_endpoints)
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_access_default_deny(
+    _seeded_logging_credentials,
+):
+    """With no access grants and no identity assignment, nothing resolves -- the
+    global-access path must not invent a destination out of name-only creds."""
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    destinations, backends = await _resolve_logging_exporters(
+        _auth(team_id="team-eu", org_id="org-eu")
+    )
+    assert destinations == [] and backends == []

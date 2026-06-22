@@ -12,6 +12,7 @@ interface LoggingConfig {
 interface LoggingSettingsViewProps {
   loggingConfigs?: LoggingConfig[];
   disabledCallbacks?: string[];
+  loggingExporters?: string[];
   variant?: "card" | "inline";
   className?: string;
 }
@@ -19,6 +20,7 @@ interface LoggingSettingsViewProps {
 export function LoggingSettingsView({
   loggingConfigs = [],
   disabledCallbacks = [],
+  loggingExporters = [],
   variant = "card",
   className = "",
 }: LoggingSettingsViewProps) {
@@ -56,6 +58,29 @@ export function LoggingSettingsView({
 
   const content = (
     <div className="space-y-6">
+      {/* Logging Exporters (admin-owned OTEL trace destinations assigned to this identity) */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <CogIcon className="h-4 w-4 text-blue-600" />
+          <span className="font-semibold text-gray-900">Logging Exporters</span>
+          <Tag color="blue">{loggingExporters.length}</Tag>
+        </div>
+        {loggingExporters.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {loggingExporters.map((name, index) => (
+              <Tag key={index} color="blue">
+                {name}
+              </Tag>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+            <CogIcon className="h-4 w-4 text-gray-400" />
+            <span className="text-gray-500 text-sm">No logging exporters assigned</span>
+          </div>
+        )}
+      </div>
+
       {/* Logging Integrations Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">

@@ -44,16 +44,14 @@ def test_agentops_exporter_factory_is_registered():
     assert _AGENTOPS_EXPORTER_KIND in providers._EXPORTER_FACTORIES
 
 
-def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
-    """Each dynamic-credential preset must tag the exporter it contributes with
-    its own callback name, so per-request tenant routing
-    (``TenantTracerCache``) applies that integration's credentials only to its
-    own exporter and never bleeds them onto a co-configured backend.
+def test_destination_routable_presets_tag_exporter_with_matching_owner(monkeypatch):
+    """Each destination-routable preset must tag the exporter it contributes with
+    its own callback name, so per-tenant routing (``TenantTracerCache``) points
+    that integration's admin destination at its own exporter only and never
+    rewrites a co-configured backend's exporter.
     """
-    from litellm.integrations.otel.presets import (
-        DYNAMIC_HEADERS_BY_CALLBACK,
-        PRESET_BY_CALLBACK,
-    )
+    from litellm.integrations.otel.destinations import OTEL_V2_DESTINATION_CALLBACKS
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     monkeypatch.setenv("ARIZE_SPACE_ID", "S")
     monkeypatch.setenv("ARIZE_API_KEY", "K")
@@ -65,7 +63,7 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
 
     from litellm.integrations.otel.model.config import ExporterOwner
 
-    for callback_name in DYNAMIC_HEADERS_BY_CALLBACK:
+    for callback_name in OTEL_V2_DESTINATION_CALLBACKS:
         cfg = PRESET_BY_CALLBACK[callback_name]()
         owners = {e.owner for e in cfg.exporters}
         assert ExporterOwner(callback_name) in owners, (

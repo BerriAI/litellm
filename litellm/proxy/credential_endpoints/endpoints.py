@@ -10,14 +10,37 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.logging_exporter_validation import (
+    is_admin_gated_credential_info,
+    validate_credential_access,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
+
+
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only the proxy admin can manage logging credentials"},
+        )
+
+
+def _credential_in_memory(credential_name: str) -> Optional[CredentialItem]:
+    return next(
+        (
+            cred
+            for cred in litellm.credential_list
+            if cred.credential_name == credential_name
+        ),
+        None,
+    )
 
 
 class CredentialHelperUtils:
@@ -58,6 +81,10 @@ async def create_credential(
     Reloads credentials in memory.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    if is_admin_gated_credential_info(credential.credential_info):
+        _require_proxy_admin(user_api_key_dict)
+    validate_credential_access(credential.credential_info)
 
     try:
         if prisma_client is None:
@@ -240,6 +267,12 @@ async def delete_credential(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    existing = _credential_in_memory(credential_name)
+    if existing is not None and is_admin_gated_credential_info(
+        existing.credential_info
+    ):
+        _require_proxy_admin(user_api_key_dict)
+
     try:
         if prisma_client is None:
             raise HTTPException(
@@ -290,10 +323,12 @@ def update_db_credential(
 
         merged_credential.credential_values.update(encrypted_params)
 
-    # update model info
+    # Merge the patch into the existing credential_info so a partial update (e.g. only
+    # access) preserves credential_type/description/host. The prior guard checked for a
+    # key literally named "credential_info", which is never present, so it reset the dict
+    # on every patch and dropped the logging tag.
     if encrypted_credential.credential_info:
-        """Update credential info"""
-        if "credential_info" not in merged_credential.credential_info:
+        if merged_credential.credential_info is None:
             merged_credential.credential_info = {}
         merged_credential.credential_info.update(encrypted_credential.credential_info)
 
@@ -318,6 +353,14 @@ async def update_credential(
     [BETA] endpoint. This might change unexpectedly.
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    existing = _credential_in_memory(credential_name)
+    if is_admin_gated_credential_info(credential.credential_info) or (
+        existing is not None
+        and is_admin_gated_credential_info(existing.credential_info)
+    ):
+        _require_proxy_admin(user_api_key_dict)
+    validate_credential_access(credential.credential_info)
 
     try:
         if prisma_client is None:

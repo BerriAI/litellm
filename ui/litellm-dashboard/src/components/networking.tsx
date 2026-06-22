@@ -209,6 +209,18 @@ export interface CredentialItem {
     custom_llm_provider?: string;
     description?: string;
     required?: boolean;
+    // "logging" tags an admin-owned trace destination (Option A: lives in the
+    // free-form credential_info, no schema migration). Absent = a provider credential.
+    credential_type?: string;
+    // Non-secret destination host/endpoint, surfaced in the logging credentials list.
+    host?: string;
+    // Admin-owned access grant for a logging destination: which identities its
+    // traces fan out to. global reaches everyone; teams/orgs list ids.
+    access?: {
+      global?: boolean;
+      teams?: string[];
+      orgs?: string[];
+    };
   };
 }
 

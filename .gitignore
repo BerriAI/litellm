@@ -123,3 +123,7 @@ crash.*.log
 # and should be committed.
 .vscode
 .pin_list.txt
+repro_lit3850/
+
+# throwaway learning scripts (not a feature)
+scratch/

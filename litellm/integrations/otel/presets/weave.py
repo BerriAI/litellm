@@ -6,11 +6,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
-from litellm.integrations.weave.weave_otel import (
-    _get_weave_authorization_header,
-    get_weave_otel_config,
-)
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.integrations.weave.weave_otel import get_weave_otel_config
 
 
 def weave_preset(
@@ -34,15 +30,3 @@ def weave_preset(
             "mapper_names": ensure_mappers(base.mapper_names, "openinference", "weave"),
         }
     )
-
-
-def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
-    """Per-request Weave OTLP headers from team/key dynamic params."""
-    headers: dict[str, str] = {}
-    api_key = params.get("wandb_api_key")
-    if api_key:
-        headers["Authorization"] = _get_weave_authorization_header(api_key=api_key)
-    project_id = params.get("weave_project_id")
-    if project_id:
-        headers["project_id"] = project_id
-    return headers

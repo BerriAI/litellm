@@ -254,6 +254,9 @@ export default function KeyInfoView({
             ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
               ? { logging: formValues.logging_settings }
               : {}),
+            ...(formValues.logging_exporters !== undefined
+              ? { logging_exporters: formValues.logging_exporters }
+              : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
                   litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
@@ -274,6 +277,9 @@ export default function KeyInfoView({
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }
+            : {}),
+          ...(formValues.logging_exporters !== undefined
+            ? { logging_exporters: formValues.logging_exporters }
             : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
@@ -613,6 +619,11 @@ export default function KeyInfoView({
 
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                loggingExporters={
+                  Array.isArray(currentKeyData.metadata?.logging_exporters)
+                    ? currentKeyData.metadata.logging_exporters
+                    : []
+                }
                 disabledCallbacks={
                   Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)
                     ? mapInternalToDisplayNames(currentKeyData.metadata.litellm_disabled_callbacks)

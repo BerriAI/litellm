@@ -1022,6 +1022,11 @@ async def new_team(
     ```
     """
     try:
+        from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            validate_logging_exporter_assignment,
+        )
+
+        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
         )
@@ -1711,6 +1716,11 @@ async def update_team(
     ```
     """
     try:
+        from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            validate_logging_exporter_assignment,
+        )
+
+        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
