@@ -26,6 +26,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -2414,9 +2415,27 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
         )
-        # Responses agentic interception (e.g. code interpreter) runs the follow-up
-        # loop via the async hook, so it is async-only for now; the sync path returns
-        # the initial response unchanged.
+
+        if self._has_agentic_completion_hook(logging_obj):
+            final_response = run_async_function(
+                self._call_agentic_completion_hooks,
+                response=initial_response,
+                model=model,
+                messages=(
+                    input
+                    if isinstance(input, list)
+                    else [{"role": "user", "content": input}]
+                ),
+                anthropic_messages_provider_config=responses_api_provider_config,
+                anthropic_messages_optional_request_params=response_api_optional_request_params,
+                logging_obj=logging_obj,
+                stream=False,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=dict(litellm_params),
+                api_surface="responses",
+            )
+            return final_response if final_response is not None else initial_response
+
         return initial_response
 
     async def async_response_api_handler(

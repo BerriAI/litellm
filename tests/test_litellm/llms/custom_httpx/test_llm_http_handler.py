@@ -116,6 +116,52 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
     assert client.post.call_args.kwargs["json"]["stream"] is True
 
 
+def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.transform_responses_api_request.return_value = {
+        "model": "gpt-5",
+        "input": "hi",
+    }
+    config.sign_request.return_value = ({}, None)
+    initial_response = Mock()
+    final_response = Mock()
+    config.transform_response_api_response.return_value = initial_response
+
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+    logging_obj = Mock()
+
+    monkeypatch.setattr(handler, "_has_agentic_completion_hook", Mock(return_value=True))
+    hook_mock = AsyncMock(return_value=final_response)
+    monkeypatch.setattr(handler, "_call_agentic_completion_hooks", hook_mock)
+
+    response = handler.response_api_handler(
+        model="gpt-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+    )
+
+    assert response is final_response
+    hook_mock.assert_awaited_once()
+    assert hook_mock.call_args.kwargs["api_surface"] == "responses"
+    assert hook_mock.call_args.kwargs["messages"] == [
+        {"role": "user", "content": "hi"}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_async_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()

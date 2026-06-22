@@ -47,6 +47,7 @@ from litellm.types.llms.openai import (
     ToolChoice,
     ToolParam,
 )
+from litellm.types.utils import CallTypes
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
@@ -58,7 +59,11 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import (
+    ProviderConfigManager,
+    async_pre_call_deployment_hook,
+    client,
+)
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
@@ -72,6 +77,38 @@ from .streaming_iterator import BaseResponsesAPIStreamingIterator
 base_llm_http_handler = BaseLLMHTTPHandler()
 litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandler()
 #################################################
+
+_RESPONSES_NAMED_PARAM_NAMES = {
+    "input",
+    "model",
+    "include",
+    "instructions",
+    "max_output_tokens",
+    "prompt",
+    "metadata",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "reasoning",
+    "store",
+    "background",
+    "stream",
+    "temperature",
+    "text",
+    "text_format",
+    "tool_choice",
+    "tools",
+    "top_p",
+    "truncation",
+    "user",
+    "service_tier",
+    "safety_identifier",
+    "extra_headers",
+    "extra_query",
+    "extra_body",
+    "timeout",
+    "allowed_openai_params",
+    "custom_llm_provider",
+}
 
 
 def _has_file_search_tool(tools: Optional[Any]) -> bool:
@@ -982,6 +1019,134 @@ def responses(
             litellm_params=litellm_params,
             local_vars=local_vars,
         )
+
+        if (
+            not _is_async
+            and litellm_logging_obj is not None
+            and base_llm_http_handler._has_agentic_completion_hook(litellm_logging_obj)
+        ):
+            deployment_hook_kwargs = {
+                **kwargs,
+                "input": input,
+                "model": model,
+                "include": include,
+                "instructions": instructions,
+                "max_output_tokens": max_output_tokens,
+                "prompt": prompt,
+                "metadata": metadata,
+                "parallel_tool_calls": parallel_tool_calls,
+                "previous_response_id": previous_response_id,
+                "reasoning": reasoning,
+                "store": store,
+                "background": background,
+                "stream": stream,
+                "temperature": temperature,
+                "text": text,
+                "text_format": text_format,
+                "tool_choice": tool_choice,
+                "tools": tools,
+                "top_p": top_p,
+                "truncation": truncation,
+                "user": user,
+                "service_tier": service_tier,
+                "safety_identifier": safety_identifier,
+                "extra_headers": extra_headers,
+                "extra_query": extra_query,
+                "extra_body": extra_body,
+                "timeout": timeout,
+                "allowed_openai_params": allowed_openai_params,
+                "custom_llm_provider": custom_llm_provider,
+            }
+            modified_kwargs = run_async_function(
+                async_pre_call_deployment_hook,
+                deployment_hook_kwargs,
+                CallTypes.responses.value,
+            )
+            if modified_kwargs is not None:
+                input = cast(
+                    Union[str, ResponseInputParam],
+                    modified_kwargs.get("input", input),
+                )
+                model = cast(str, modified_kwargs.get("model", model))
+                include = modified_kwargs.get("include", include)
+                instructions = modified_kwargs.get("instructions", instructions)
+                max_output_tokens = modified_kwargs.get(
+                    "max_output_tokens", max_output_tokens
+                )
+                prompt = modified_kwargs.get("prompt", prompt)
+                metadata = modified_kwargs.get("metadata", metadata)
+                parallel_tool_calls = modified_kwargs.get(
+                    "parallel_tool_calls", parallel_tool_calls
+                )
+                previous_response_id = modified_kwargs.get(
+                    "previous_response_id", previous_response_id
+                )
+                reasoning = modified_kwargs.get("reasoning", reasoning)
+                store = modified_kwargs.get("store", store)
+                background = modified_kwargs.get("background", background)
+                stream = modified_kwargs.get("stream", stream)
+                temperature = modified_kwargs.get("temperature", temperature)
+                text = modified_kwargs.get("text", text)
+                text_format = modified_kwargs.get("text_format", text_format)
+                tool_choice = modified_kwargs.get("tool_choice", tool_choice)
+                tools = modified_kwargs.get("tools", tools)
+                top_p = modified_kwargs.get("top_p", top_p)
+                truncation = modified_kwargs.get("truncation", truncation)
+                user = modified_kwargs.get("user", user)
+                service_tier = modified_kwargs.get("service_tier", service_tier)
+                safety_identifier = modified_kwargs.get(
+                    "safety_identifier", safety_identifier
+                )
+                extra_headers = modified_kwargs.get("extra_headers", extra_headers)
+                extra_query = modified_kwargs.get("extra_query", extra_query)
+                extra_body = modified_kwargs.get("extra_body", extra_body)
+                timeout = modified_kwargs.get("timeout", timeout)
+                allowed_openai_params = modified_kwargs.get(
+                    "allowed_openai_params", allowed_openai_params
+                )
+                custom_llm_provider = modified_kwargs.get(
+                    "custom_llm_provider", custom_llm_provider
+                )
+                kwargs = {
+                    k: v
+                    for k, v in modified_kwargs.items()
+                    if k not in _RESPONSES_NAMED_PARAM_NAMES
+                }
+                litellm_params = GenericLiteLLMParams(**kwargs)
+                local_vars.update(
+                    {
+                        "input": input,
+                        "model": model,
+                        "include": include,
+                        "instructions": instructions,
+                        "max_output_tokens": max_output_tokens,
+                        "prompt": prompt,
+                        "metadata": metadata,
+                        "parallel_tool_calls": parallel_tool_calls,
+                        "previous_response_id": previous_response_id,
+                        "reasoning": reasoning,
+                        "store": store,
+                        "background": background,
+                        "stream": stream,
+                        "temperature": temperature,
+                        "text": text,
+                        "text_format": text_format,
+                        "tool_choice": tool_choice,
+                        "tools": tools,
+                        "top_p": top_p,
+                        "truncation": truncation,
+                        "user": user,
+                        "service_tier": service_tier,
+                        "safety_identifier": safety_identifier,
+                        "extra_headers": extra_headers,
+                        "extra_query": extra_query,
+                        "extra_body": extra_body,
+                        "timeout": timeout,
+                        "allowed_openai_params": allowed_openai_params,
+                        "custom_llm_provider": custom_llm_provider,
+                        "kwargs": kwargs,
+                    }
+                )
 
         #########################################################
         # PROMPT MANAGEMENT
