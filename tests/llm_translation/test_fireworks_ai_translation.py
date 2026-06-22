@@ -7,6 +7,9 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 
 fireworks = FireworksAIConfig()
@@ -65,6 +68,18 @@ def test_map_response_format():
         {"response_format": response_format}, {}, "some_model", drop_params=False
     )
     assert result == {"response_format": response_format}
+
+
+def test_get_supported_openai_params_transcription_returns_none():
+    # Fireworks AI deprecated audio transcription on 2026-06-10; the endpoint
+    # is decommissioned. Returning None (not chat-completion params) signals
+    # to callers that transcription is unsupported for this provider.
+    result = get_supported_openai_params(
+        model="fireworks_ai/accounts/fireworks/models/whisper-v3",
+        custom_llm_provider="fireworks_ai",
+        request_type="transcription",
+    )
+    assert result is None
 
 
 @pytest.mark.parametrize(
