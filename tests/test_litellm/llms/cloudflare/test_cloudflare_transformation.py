@@ -94,6 +94,26 @@ def test_transform_response_legacy_response_field_still_works():
     assert resp.usage.completion_tokens == 8
 
 
+def test_transform_response_response_text_field_still_works():
+    # Newer Workers AI models (e.g. Nemotron) return the answer under
+    # "response_text" rather than the legacy "response" key, and without an
+    # OpenAI-style choices block. Content must fall through to "response_text".
+    resp = _transform(
+        {
+            "result": {
+                "response_text": "The capital of France is Paris.",
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 8,
+                    "total_tokens": 28,
+                },
+            }
+        }
+    )
+    assert resp.choices[0].message.content == "The capital of France is Paris."
+    assert resp.usage.completion_tokens == 8
+
+
 def test_transform_response_missing_usage_is_estimated_not_zero():
     # No usage block: the content must survive and tokens must be estimated
     # (non-zero), not reported as 0.
