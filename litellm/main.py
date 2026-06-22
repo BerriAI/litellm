@@ -6617,6 +6617,13 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
+    if custom_llm_provider == "fireworks_ai":
+        raise litellm.BadRequestError(
+            message="Fireworks AI does not support audio transcription. Fireworks deprecated audio inference on 2026-06-10.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+
     optional_params = get_optional_params_transcription(
         model=model,
         language=language,

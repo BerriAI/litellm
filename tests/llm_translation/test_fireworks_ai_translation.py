@@ -10,7 +10,6 @@ import litellm
 from litellm import transcription
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from base_llm_unit_tests import BaseLLMChatTest
-from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
 
@@ -77,15 +76,19 @@ def test_map_response_format():
     }
 
 
-class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
-    def get_base_audio_transcription_call_args(self) -> dict:
-        return {
-            "model": "fireworks_ai/whisper-v3",
-            "api_base": "https://audio-prod.api.fireworks.ai/v1",
-        }
+def test_fireworks_audio_transcription_unsupported():
+    """
+    Fireworks AI deprecated audio inference on 2026-06-10, so transcription must be
+    rejected locally with a clear error before any outbound request is attempted.
 
-    def get_custom_llm_provider(self) -> litellm.LlmProviders:
-        return litellm.LlmProviders.FIREWORKS_AI
+    Regression for https://github.com/BerriAI/litellm/issues/30916
+    """
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        transcription(
+            model="fireworks_ai/whisper-v3",
+            file=("audio.wav", b"not a real audio file", "audio/wav"),
+        )
+    assert "audio transcription" in str(exc_info.value).lower()
 
 
 @pytest.mark.parametrize(

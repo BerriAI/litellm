@@ -75,10 +75,6 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.FireworksAIEmbeddingConfig().get_supported_openai_params(
                 model=model
             )
-        elif request_type == "transcription":
-            return litellm.FireworksAIAudioTranscriptionConfig().get_supported_openai_params(
-                model=model
-            )
         else:
             return litellm.FireworksAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nvidia_nim":
