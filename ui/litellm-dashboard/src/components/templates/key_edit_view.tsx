@@ -5,7 +5,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { Form, Input, Radio, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -76,6 +76,21 @@ const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): strin
   }
 
   return "default";
+};
+
+type McpScopeMode = "inherit" | "none" | "specific";
+
+const getMcpScopeMode = (keyData: KeyResponse): McpScopeMode => {
+  const mcpServers = keyData.object_permission?.mcp_servers;
+  const hasAccessGroups = (keyData.object_permission?.mcp_access_groups?.length ?? 0) > 0;
+
+  if (mcpServers == null && !hasAccessGroups) {
+    return "inherit";
+  }
+  if (Array.isArray(mcpServers) && mcpServers.length === 0 && !hasAccessGroups) {
+    return "none";
+  }
+  return "specific";
 };
 
 export function KeyEditView({
@@ -179,6 +194,7 @@ export function KeyEditView({
     prompts: keyData.metadata?.prompts,
     tags: keyData.metadata?.tags,
     vector_stores: keyData.object_permission?.vector_stores || [],
+    mcp_scope_mode: getMcpScopeMode(keyData),
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
@@ -212,6 +228,7 @@ export function KeyEditView({
       prompts: keyData.metadata?.prompts,
       tags: keyData.metadata?.tags,
       vector_stores: keyData.object_permission?.vector_stores || [],
+      mcp_scope_mode: getMcpScopeMode(keyData),
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
@@ -612,13 +629,22 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
-        <MCPServerSelector
-          onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
-          value={form.getFieldValue("mcp_servers_and_groups")}
-          accessToken={accessToken || ""}
-          placeholder="Select MCP servers or access groups (optional)"
-        />
+      <Form.Item
+        label={
+          <span>
+            MCP Servers / Access Groups{" "}
+            <Tooltip title="Inherit the team's MCP servers, grant no MCP access, or pick specific servers/access groups for this key">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="mcp_scope_mode"
+      >
+        <Radio.Group>
+          <Radio value="inherit">Inherit from team</Radio>
+          <Radio value="none">No MCP access</Radio>
+          <Radio value="specific">Specific servers</Radio>
+        </Radio.Group>
       </Form.Item>
 
       {/* Hidden field to register mcp_tool_permissions with the form */}
@@ -629,20 +655,34 @@ export function KeyEditView({
       <Form.Item
         noStyle
         shouldUpdate={(prevValues, currentValues) =>
+          prevValues.mcp_scope_mode !== currentValues.mcp_scope_mode ||
           prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
           prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
         }
       >
-        {() => (
-          <div className="mb-6">
-            <MCPToolPermissions
-              accessToken={accessToken || ""}
-              selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
-              toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
-              onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
-            />
-          </div>
-        )}
+        {() =>
+          form.getFieldValue("mcp_scope_mode") === "specific" && (
+            <>
+              <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
+                <MCPServerSelector
+                  onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
+                  value={form.getFieldValue("mcp_servers_and_groups")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select MCP servers or access groups (optional)"
+                />
+              </Form.Item>
+
+              <div className="mb-6">
+                <MCPToolPermissions
+                  accessToken={accessToken || ""}
+                  selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+                  toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                  onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+                />
+              </div>
+            </>
+          )
+        }
       </Form.Item>
 
       <Form.Item label="Agents / Access Groups" name="agents_and_groups">

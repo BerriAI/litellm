@@ -451,25 +451,31 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         delete formValues.allowed_vector_store_ids;
       }
 
-      // Transform allowed_mcp_servers_and_groups into object_permission format
-      if (
-        formValues.allowed_mcp_servers_and_groups &&
-        (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0)
-      ) {
+      // Transform the MCP scope mode + selector into object_permission format.
+      // The mode is tri-state: "inherit" omits mcp_servers (backend inherits the
+      // team's servers), "none" sets it to [] (explicitly zero), and "specific"
+      // sets the selected servers/access groups/toolsets.
+      const mcpScopeMode = formValues.mcp_scope_mode ?? "inherit";
+      if (mcpScopeMode === "none") {
         if (!formValues.object_permission) {
           formValues.object_permission = {};
         }
-        const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
-        if (servers && servers.length > 0) {
-          formValues.object_permission.mcp_servers = servers;
+        formValues.object_permission.mcp_servers = [];
+      } else if (mcpScopeMode === "specific") {
+        const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups ?? {};
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
         }
+        formValues.object_permission.mcp_servers = servers ?? [];
         if (accessGroups && accessGroups.length > 0) {
           formValues.object_permission.mcp_access_groups = accessGroups;
         }
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_servers_and_groups;
+        if (toolsets && toolsets.length > 0) {
+          formValues.object_permission.mcp_toolsets = toolsets;
+        }
       }
+      delete formValues.mcp_scope_mode;
+      delete formValues.allowed_mcp_servers_and_groups;
 
       // Add MCP tool permissions to object_permission
       const mcpToolPermissions = formValues.mcp_tool_permissions || {};
@@ -1385,46 +1391,81 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <Form.Item
                         label={
                           <span>
-                            Allowed MCP Servers{" "}
-                            <Tooltip title="Select which MCP servers or access groups this key can access">
+                            MCP Servers / Access Groups{" "}
+                            <Tooltip title="Inherit the team's MCP servers, grant no MCP access, or pick specific servers/access groups for this key">
                               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                             </Tooltip>
                           </span>
                         }
-                        name="allowed_mcp_servers_and_groups"
-                        help="Select MCP servers or access groups this key can access"
+                        name="mcp_scope_mode"
+                        initialValue="inherit"
                       >
-                        <MCPServerSelector
-                          onChange={(val: any) => form.setFieldValue("allowed_mcp_servers_and_groups", val)}
-                          value={form.getFieldValue("allowed_mcp_servers_and_groups")}
-                          accessToken={accessToken}
-                          teamId={selectedCreateKeyTeam?.team_id ?? null}
-                          placeholder="Select MCP servers or access groups (optional)"
-                        />
-                      </Form.Item>
-
-                      {/* Hidden field to register mcp_tool_permissions with the form */}
-                      <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
-                        <Input type="hidden" />
+                        <Radio.Group>
+                          <Radio value="inherit">Inherit from team</Radio>
+                          <Radio value="none">No MCP access</Radio>
+                          <Radio value="specific">Specific servers</Radio>
+                        </Radio.Group>
                       </Form.Item>
 
                       <Form.Item
                         noStyle
                         shouldUpdate={(prevValues, currentValues) =>
-                          prevValues.allowed_mcp_servers_and_groups !== currentValues.allowed_mcp_servers_and_groups ||
-                          prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+                          prevValues.mcp_scope_mode !== currentValues.mcp_scope_mode
                         }
                       >
-                        {() => (
-                          <div className="mt-6">
-                            <MCPToolPermissions
-                              accessToken={accessToken}
-                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
-                              toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
-                              onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
-                            />
-                          </div>
-                        )}
+                        {() =>
+                          form.getFieldValue("mcp_scope_mode") === "specific" && (
+                            <>
+                              <Form.Item
+                                label={
+                                  <span>
+                                    Allowed MCP Servers{" "}
+                                    <Tooltip title="Select which MCP servers or access groups this key can access">
+                                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                    </Tooltip>
+                                  </span>
+                                }
+                                name="allowed_mcp_servers_and_groups"
+                                help="Select MCP servers or access groups this key can access"
+                              >
+                                <MCPServerSelector
+                                  onChange={(val: any) => form.setFieldValue("allowed_mcp_servers_and_groups", val)}
+                                  value={form.getFieldValue("allowed_mcp_servers_and_groups")}
+                                  accessToken={accessToken}
+                                  teamId={selectedCreateKeyTeam?.team_id ?? null}
+                                  placeholder="Select MCP servers or access groups (optional)"
+                                />
+                              </Form.Item>
+
+                              <Form.Item
+                                noStyle
+                                shouldUpdate={(prevValues, currentValues) =>
+                                  prevValues.allowed_mcp_servers_and_groups !==
+                                    currentValues.allowed_mcp_servers_and_groups ||
+                                  prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+                                }
+                              >
+                                {() => (
+                                  <div className="mt-6">
+                                    <MCPToolPermissions
+                                      accessToken={accessToken}
+                                      selectedServers={
+                                        form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []
+                                      }
+                                      toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                                      onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+                                    />
+                                  </div>
+                                )}
+                              </Form.Item>
+                            </>
+                          )
+                        }
+                      </Form.Item>
+
+                      {/* Hidden field to register mcp_tool_permissions with the form */}
+                      <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+                        <Input type="hidden" />
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>

@@ -516,19 +516,22 @@ async def get_objectpermissions_for_mcp_server(
     """
     Get all the object permissions records and the associated team and verficiationtoken records that have access to the mcp server
     """
+    # mcp_servers is a nullable JSON column (null = inherit, [] = none, [ids] = those),
+    # so it can't be filtered with the scalar-list `has` operator; match in Python.
     object_permission_records = await ObjectPermissionRepository(
         prisma_client
     ).table.find_many(
-        where={
-            "mcp_servers": {"has": mcp_server_id},
-        },
         include={
             "teams": True,
             "verification_tokens": True,
         },
     )
 
-    return object_permission_records
+    return [
+        record
+        for record in object_permission_records
+        if isinstance(record.mcp_servers, list) and mcp_server_id in record.mcp_servers
+    ]
 
 
 async def get_virtualkeys_for_mcp_server(

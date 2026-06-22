@@ -657,19 +657,24 @@ class MCPRequestHandler:
             #########################################################
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
-            key_set = set(allowed_mcp_servers_for_key)
+            # allowed_mcp_servers_for_key is None when the key declares no scope of
+            # its own (inherit the team) and a list -- possibly empty -- when it does.
+            key_declares_scope = allowed_mcp_servers_for_key is not None
+            key_set = set(allowed_mcp_servers_for_key or [])
             team_set = set(allowed_mcp_servers_for_team)
             grants_set = set(key_access_group_grants)
 
-            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
+            has_lower_level_mcp_restrictions = bool(
+                key_declares_scope or team_set or grants_set
+            )
 
             # 1. Key/team ceiling. An empty set means "this level does not restrict".
-            if not team_set:
-                base = key_set  # no team restriction
-            elif not key_set:
-                base = team_set  # key has no own perms → inherits team
+            if not key_declares_scope:
+                base = team_set  # key inherits the team (team_set may be empty)
+            elif not team_set:
+                base = key_set  # key restricts, team does not
             else:
-                base = key_set & team_set  # both restrict → intersect
+                base = key_set & team_set  # both restrict → intersect ([] → zero)
 
             # 2. Add the key's access-group grants on top. These are additive:
             # attaching a group to the key grants its servers regardless of the
@@ -1014,10 +1019,15 @@ class MCPRequestHandler:
     @staticmethod
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+    ) -> Optional[List[str]]:
         """
         Get the key's own MCP ceiling from its object_permission
         (mcp_servers, tag-style mcp_access_groups, mcp_tool_permissions).
+
+        Returns None when the key declares no MCP scope of its own (so it inherits
+        the team's scope) and a list -- possibly empty -- when it does. An explicit
+        empty list means "no servers", which intersects the team down to nothing
+        instead of inheriting it.
 
         Unified key.access_group_ids are NOT resolved here — they are additive
         grants handled by _get_key_access_group_mcp_server_extras and unioned on
@@ -1025,7 +1035,7 @@ class MCPRequestHandler:
         intersected against the team).
         """
         if user_api_key_auth is None:
-            return []
+            return None
         try:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
@@ -1056,7 +1066,11 @@ class MCPRequestHandler:
                     proxy_logging_obj=proxy_logging_obj,
                 )
             if key_object_permission is None:
-                return []
+                return None
+
+            # None means the key never set its own list (inherit); [] means it
+            # explicitly scoped itself to no servers.
+            direct_scope_declared = key_object_permission.mcp_servers is not None
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
@@ -1079,12 +1093,16 @@ class MCPRequestHandler:
 
             # Combine all lists
             all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
-            return list(set(all_servers))
+            if all_servers:
+                return list(set(all_servers))
+
+            # Nothing resolved: preserve the inherit-vs-zero distinction.
+            return [] if direct_scope_declared else None
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for key: {str(e)}"
             )
-            return []
+            return None
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_team(

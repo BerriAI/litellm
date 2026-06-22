@@ -29,7 +29,7 @@ class TestMCPRequestHandler:
             (["server1", "server2"], [], ["server1", "server2"], "key_only"),
             # Test case 3: No key servers, team has servers (inherit from team)
             (
-                [],
+                None,
                 ["team_server1", "team_server2"],
                 ["team_server1", "team_server2"],
                 "inherit_from_team",
@@ -100,7 +100,7 @@ class TestMCPRequestHandler:
         "team_servers,key_servers,expected_servers,scenario",
         [
             # Test case 1: Key has no permissions, should inherit from team
-            (["server1", "server2"], [], ["server1", "server2"], "inherit_from_team"),
+            (["server1", "server2"], None, ["server1", "server2"], "inherit_from_team"),
             # Test case 2: Key has permissions, should use intersection with team
             (
                 ["server1", "server2", "server3"],
@@ -203,7 +203,7 @@ class TestMCPRequestHandler:
             # granted only via key.access_group_ids → caller sees team's server
             # AND the grant (grant is added on top of the ceiling).
             (
-                [],
+                None,
                 ["test"],
                 ["context7"],
                 ["context7", "test"],
@@ -250,6 +250,53 @@ class TestMCPRequestHandler:
             mock_grants.return_value = grant_servers
             result = await MCPRequestHandler.get_allowed_mcp_servers(mock_user_auth)
         assert sorted(result) == sorted(expected)
+
+    @pytest.mark.parametrize(
+        "key_servers,expected,scenario",
+        [
+            # Explicit [] means the key scoped itself to zero servers: it
+            # intersects the populated team down to nothing rather than
+            # inheriting it. This is the headline behavior the fix introduces.
+            ([], [], "explicit_empty_key_scopes_to_zero"),
+            # None means the key declares no scope of its own → inherit the team.
+            (None, ["alpha", "beta"], "none_key_inherits_team"),
+            # A real subset intersects against the team.
+            (["alpha"], ["alpha"], "subset_key_intersects_team"),
+        ],
+    )
+    async def test_get_allowed_mcp_servers_key_scope_tristate(
+        self, key_servers, expected, scenario
+    ):
+        """The key's MCP scope is tri-state: explicit ``[]`` (zero servers),
+        ``None`` (inherit team), or a concrete list (intersect). A populated
+        team must NOT rescue an explicitly-zero-scoped key."""
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+        )
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_key",
+                new_callable=AsyncMock,
+                return_value=key_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=["alpha", "beta"],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_access_group_mcp_server_extras",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(mock_user_auth)
+        assert sorted(result) == sorted(expected), f"scenario={scenario}"
 
     async def test_access_group_extras_returns_empty_when_no_auth(self):
         """No auth object → no additive grants."""
@@ -3113,7 +3160,7 @@ async def test_get_allowed_mcp_servers_for_team_without_team_id_returns_empty():
 async def test_get_allowed_mcp_servers_for_key_guard_conditions(
     user_api_key_auth, prisma_client_value, scenario
 ):
-    """Ensure guard clauses return [] before hitting get_object_permission."""
+    """Ensure guard clauses return None (inherit team) before hitting get_object_permission."""
 
     with patch(
         "litellm.proxy.auth.auth_checks.get_object_permission",
@@ -3124,13 +3171,13 @@ async def test_get_allowed_mcp_servers_for_key_guard_conditions(
                 user_api_key_auth
             )
 
-    assert result == []
+    assert result is None
     mock_get_perm.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_none():
-    """Ensure [] is returned when get_object_permission yields None."""
+async def test_get_allowed_mcp_servers_for_key_returns_none_when_db_returns_none():
+    """Ensure None is returned (inherit team) when get_object_permission yields None."""
 
     user_api_key_auth = UserAPIKeyAuth(
         api_key="test-key",
@@ -3153,7 +3200,7 @@ async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_non
             user_api_key_auth
         )
 
-    assert result == []
+    assert result is None
     mock_get_perm.assert_awaited_once()
 
 
@@ -3208,6 +3255,62 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
         mock_access_groups.assert_called_once_with(["grp-alpha"])
     finally:
         global_mcp_server_manager.registry.pop("direct-server", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mcp_servers,expected,scenario",
+    [
+        # None on the object_permission means the key never set its own list →
+        # inherit the team (the helper signals this with None).
+        (None, None, "mcp_servers_none_inherits_team"),
+        # An explicit empty list means the key scoped itself to zero servers →
+        # the helper returns [] so the combination logic intersects to zero.
+        ([], [], "mcp_servers_explicit_empty_is_zero"),
+        # A concrete list passes through (expand_permission_list keeps unknown
+        # ids as-is so we don't need a registered server here).
+        (["x"], ["x"], "mcp_servers_concrete_list"),
+    ],
+)
+async def test_get_allowed_mcp_servers_for_key_tristate_from_object_permission(
+    mcp_servers, expected, scenario
+):
+    """``_get_allowed_mcp_servers_for_key`` must preserve the inherit (None) vs
+    explicit-zero ([]) vs concrete-list distinction from the key's
+    object_permission.mcp_servers when there are no access groups or tool
+    permissions."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    perms = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-tristate",
+        mcp_servers=mcp_servers,
+        mcp_access_groups=[],
+        mcp_tool_permissions=None,
+    )
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        object_permission=perms,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new_callable=AsyncMock,
+        ) as mock_get_perm,
+        patch.object(
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+            user_api_key_auth
+        )
+
+    assert result == expected, f"scenario={scenario}"
+    mock_get_perm.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -3526,7 +3629,7 @@ class TestOrgMCPPermissions:
                 "org_empty_no_restriction",
             ),
             (
-                [],
+                None,
                 [],
                 ["org_s1", "org_s2"],
                 ["org_s1", "org_s2"],
@@ -4005,7 +4108,7 @@ async def test_get_allowed_mcp_servers_unions_key_access_group_extras():
             MCPRequestHandler,
             "_get_allowed_mcp_servers_for_key",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=None,
         ),
         patch.object(
             MCPRequestHandler,
@@ -4222,7 +4325,7 @@ async def test_get_allowed_mcp_servers_includes_team_access_group_extras_end_to_
             MCPRequestHandler,
             "_get_allowed_mcp_servers_for_key",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=None,
         ),
         patch.object(
             MCPRequestHandler,
@@ -4264,7 +4367,7 @@ async def test_allowed_mcp_servers_for_key_excludes_access_group_ids():
     ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
 
-    assert result == []
+    assert result is None
     mock_resolver.assert_not_called()
 
 
