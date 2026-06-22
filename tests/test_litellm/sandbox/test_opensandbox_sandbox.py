@@ -14,6 +14,14 @@ from litellm.llms.opensandbox.sandbox.transformation import (
 from litellm.utils import ProviderConfigManager
 
 
+def http_status_error(status_code, url="http://test"):
+    return httpx.HTTPStatusError(
+        f"status {status_code}",
+        request=httpx.Request("GET", url),
+        response=httpx.Response(status_code),
+    )
+
+
 def sse(data):
     return f"data: {json.dumps(data)}"
 
@@ -29,11 +37,7 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                f"status {self.status_code}",
-                request=httpx.Request("GET", "http://test"),
-                response=httpx.Response(self.status_code),
-            )
+            raise http_status_error(self.status_code)
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -47,6 +51,7 @@ class FakeHTTPClient:
         create_json=None,
         sandbox_states=None,
         endpoint_json=None,
+        endpoint_responses=None,
         execute_lines=None,
         delete_status=204,
         execute_raises=None,
@@ -72,6 +77,9 @@ class FakeHTTPClient:
             "endpoint": "execd.local:44772",
             "headers": {"X-EXECD-ACCESS-TOKEN": "execd-token"},
         }
+        self.endpoint_responses = (
+            list(endpoint_responses) if endpoint_responses is not None else None
+        )
         self.execute_lines = execute_lines or []
         self.delete_status = delete_status
         self.execute_raises = execute_raises
@@ -90,6 +98,13 @@ class FakeHTTPClient:
     async def get(self, url, headers=None, params=None, **kwargs):
         self.calls.append(("GET", url, headers, None, params))
         if "/endpoints/44772" in url:
+            if self.endpoint_responses is not None and self.endpoint_responses:
+                response = self.endpoint_responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                if isinstance(response, FakeResponse):
+                    return response
+                return FakeResponse(json_data=response)
             return FakeResponse(json_data=self.endpoint_json)
         if "/sandboxes/" in url:
             state = self.sandbox_states.pop(0)
@@ -99,11 +114,7 @@ class FakeHTTPClient:
     async def delete(self, url, headers=None, **kwargs):
         self.calls.append(("DELETE", url, headers, None, None))
         if not (200 <= self.delete_status < 300):
-            raise httpx.HTTPStatusError(
-                f"status {self.delete_status}",
-                request=httpx.Request("DELETE", url),
-                response=httpx.Response(self.delete_status),
-            )
+            raise http_status_error(self.delete_status, url)
         return FakeResponse(status_code=self.delete_status)
 
 
@@ -190,6 +201,7 @@ def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
     handle = ContainerHandle(id="osb", provider="opensandbox", domain="http://x/v1")
 
     assert config.validate_environment() == "env-key"
+    assert config.validate_environment(api_key="") == ""
     assert config._api_key(api_key=None, handle=handle) == "env-key"
 
     handle._hidden_params = {"api_key": "stored-key"}
@@ -240,8 +252,21 @@ async def test_create_posts_default_body_and_omits_empty_api_key():
     assert body["entrypoint"] == ["/opt/code-interpreter/code-interpreter.sh"]
     assert body["timeout"] == 300
     assert body["resourceLimits"] == {"cpu": "1", "memory": "2Gi"}
+    assert body["networkPolicy"] == {"defaultAction": "deny", "egress": []}
     assert handle.id == "osb_123"
     assert handle._hidden_params["execd_endpoint"] == "execd.local:44772"
+
+
+@pytest.mark.asyncio
+async def test_create_can_opt_into_internet_access():
+    client = FakeHTTPClient()
+
+    await OpenSandboxSandboxConfig().acreate_sandbox(
+        api_key="", allow_internet_access=True, client=client
+    )
+
+    _, _, _, body, _ = client.calls[0]
+    assert "networkPolicy" not in body
 
 
 @pytest.mark.asyncio
@@ -364,10 +389,53 @@ async def test_create_times_out_waiting_for_running():
 
 
 @pytest.mark.asyncio
+async def test_create_waits_for_endpoint_resolution(monkeypatch):
+    client = FakeHTTPClient(
+        endpoint_responses=[
+            http_status_error(404, f"{OPEN_SANDBOX_API_BASE}/sandboxes/osb_123"),
+            {
+                "endpoint": "execd.local:44772",
+                "headers": {"X-EXECD-ACCESS-TOKEN": "execd-token"},
+            },
+        ],
+    )
+    sleeps = []
+
+    async def fake_sleep(interval):
+        sleeps.append(interval)
+
+    monkeypatch.setattr(
+        "litellm.llms.opensandbox.sandbox.transformation.asyncio.sleep", fake_sleep
+    )
+
+    handle = await OpenSandboxSandboxConfig().acreate_sandbox(
+        api_key="",
+        ready_timeout=1,
+        poll_interval=0.01,
+        client=client,
+    )
+
+    endpoint_calls = [call for call in client.calls if "/endpoints/44772" in call[1]]
+    assert handle._hidden_params["execd_endpoint"] == "execd.local:44772"
+    assert len(endpoint_calls) == 2
+    assert sleeps == [0.01]
+
+
+@pytest.mark.asyncio
 async def test_create_raises_when_endpoint_is_missing():
     client = FakeHTTPClient(endpoint_json={"headers": {"X": "y"}})
 
-    with pytest.raises(ValueError, match="did not return an execd endpoint"):
+    with pytest.raises(TimeoutError, match="execd endpoint.*not ready"):
+        await OpenSandboxSandboxConfig().acreate_sandbox(
+            api_key="", ready_timeout=0, client=client
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_reraises_non_404_endpoint_error():
+    client = FakeHTTPClient(endpoint_responses=[http_status_error(500)])
+
+    with pytest.raises(httpx.HTTPStatusError):
         await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", client=client)
 
 

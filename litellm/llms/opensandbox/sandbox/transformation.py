@@ -9,6 +9,7 @@ from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
+    SANDBOX_MAX_OUTPUT_BYTES,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -26,7 +27,7 @@ OPEN_SANDBOX_EXECD_PORT = 44772
 DEFAULT_SANDBOX_TIMEOUT = 300
 DEFAULT_READY_TIMEOUT = 30.0
 DEFAULT_POLL_INTERVAL = 0.2
-MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+MAX_OUTPUT_BYTES = SANDBOX_MAX_OUTPUT_BYTES
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
@@ -45,7 +46,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         *,
         template: str | None = None,
         timeout: int | None = None,
-        allow_internet_access: bool = True,
+        allow_internet_access: bool | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         metadata: dict[str, str] | None = None,
@@ -56,13 +57,19 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         network_policy: dict[str, object] | None = None,
         secure_access: bool = False,
         use_server_proxy: bool = False,
-        ready_timeout: float | int | None = None,
-        poll_interval: float | int | None = None,
+        ready_timeout: float | None = None,
+        poll_interval: float | None = None,
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> ContainerHandle:
         key = self.validate_environment(api_key=api_key)
         base = self._api_base(api_base)
+        ready_timeout_seconds = (
+            float(ready_timeout) if ready_timeout is not None else DEFAULT_READY_TIMEOUT
+        )
+        poll_interval_seconds = (
+            float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL
+        )
         body = self._create_body(
             template=template,
             timeout=timeout,
@@ -93,24 +100,18 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
                 api_base=base,
                 headers=self._lifecycle_headers(key),
                 client=client,
-                ready_timeout=(
-                    float(ready_timeout)
-                    if ready_timeout is not None
-                    else DEFAULT_READY_TIMEOUT
-                ),
-                poll_interval=(
-                    float(poll_interval)
-                    if poll_interval is not None
-                    else DEFAULT_POLL_INTERVAL
-                ),
+                ready_timeout=ready_timeout_seconds,
+                poll_interval=poll_interval_seconds,
             )
 
-        endpoint, endpoint_headers = await self._get_execd_endpoint(
+        endpoint, endpoint_headers = await self._wait_for_execd_endpoint(
             sandbox_id=sandbox_id,
             api_base=base,
             headers=self._lifecycle_headers(key),
             use_server_proxy=use_server_proxy,
             client=client,
+            ready_timeout=ready_timeout_seconds,
+            poll_interval=poll_interval_seconds,
         )
 
         handle = ContainerHandle(id=sandbox_id, provider="opensandbox", domain=base)
@@ -132,6 +133,8 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         api_base: str | None = None,
         language: str = OPEN_SANDBOX_DEFAULT_LANGUAGE,
         use_server_proxy: bool = False,
+        ready_timeout: float | None = None,
+        poll_interval: float | None = None,
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> CodeExecutionResult:
@@ -140,6 +143,16 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             api_key=api_key,
             api_base=api_base,
             use_server_proxy=use_server_proxy,
+            ready_timeout=(
+                float(ready_timeout)
+                if ready_timeout is not None
+                else DEFAULT_READY_TIMEOUT
+            ),
+            poll_interval=(
+                float(poll_interval)
+                if poll_interval is not None
+                else DEFAULT_POLL_INTERVAL
+            ),
             client=client,
         )
         endpoint = str(handle._hidden_params["execd_endpoint"])
@@ -198,6 +211,8 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         api_key: str | None,
         api_base: str | None,
         use_server_proxy: bool,
+        ready_timeout: float,
+        poll_interval: float,
         client: AsyncHTTPHandler | None,
     ) -> ContainerHandle:
         handle = self._as_handle(container, api_base=api_base)
@@ -209,12 +224,14 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         resolved_use_server_proxy = bool(
             handle._hidden_params.get("use_server_proxy", use_server_proxy)
         )
-        endpoint, endpoint_headers = await self._get_execd_endpoint(
+        endpoint, endpoint_headers = await self._wait_for_execd_endpoint(
             sandbox_id=handle.id,
             api_base=base,
             headers=self._lifecycle_headers(key),
             use_server_proxy=resolved_use_server_proxy,
             client=client,
+            ready_timeout=ready_timeout,
+            poll_interval=poll_interval,
         )
         handle.domain = base
         handle._hidden_params = {
@@ -246,7 +263,6 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
                     headers=headers,
                 ),
             )
-            self._raise_for_status(response)
             data = response.json()
             state = self._sandbox_state(data)
             if state == "Running":
@@ -258,6 +274,42 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
                     f"OpenSandbox sandbox {sandbox_id} was not Running within "
                     f"{ready_timeout} seconds"
                 )
+            await asyncio.sleep(poll_interval)
+
+    async def _wait_for_execd_endpoint(
+        self,
+        *,
+        sandbox_id: str,
+        api_base: str,
+        headers: dict[str, str],
+        use_server_proxy: bool,
+        client: AsyncHTTPHandler | None,
+        ready_timeout: float,
+        poll_interval: float,
+    ) -> tuple[str, dict[str, str]]:
+        deadline = time.monotonic() + ready_timeout
+        last_error: Exception | None = None
+        while True:
+            try:
+                return await self._get_execd_endpoint(
+                    sandbox_id=sandbox_id,
+                    api_base=api_base,
+                    headers=headers,
+                    use_server_proxy=use_server_proxy,
+                    client=client,
+                )
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 404:
+                    raise
+                last_error = e
+            except ValueError as e:
+                last_error = e
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"OpenSandbox execd endpoint for {sandbox_id} was not ready within "
+                    f"{ready_timeout} seconds"
+                ) from last_error
             await asyncio.sleep(poll_interval)
 
     async def _get_execd_endpoint(
@@ -277,7 +329,6 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
                 params={"use_server_proxy": use_server_proxy},
             ),
         )
-        self._raise_for_status(response)
         data = response.json()
         endpoint = data.get("endpoint")
         if not endpoint:
@@ -319,7 +370,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         *,
         template: str | None,
         timeout: int | None,
-        allow_internet_access: bool,
+        allow_internet_access: bool | None,
         metadata: dict[str, str] | None,
         env_vars: dict[str, str] | None,
         resource_limits: dict[str, str] | None,
@@ -342,7 +393,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             body["resourceRequests"] = resource_requests
         if network_policy is not None:
             body["networkPolicy"] = network_policy
-        elif not allow_internet_access:
+        elif allow_internet_access is not True:
             body["networkPolicy"] = {"defaultAction": "deny", "egress": []}
         if secure_access:
             body["secureAccess"] = True
@@ -363,10 +414,6 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         if not isinstance(value, dict):
             return {}
         return {str(k): str(v) for k, v in value.items()}
-
-    @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
-        response.raise_for_status()
 
     @staticmethod
     def _api_base(api_base: str | None) -> str:
@@ -402,20 +449,6 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         )
         handle._hidden_params = {}
         return handle
-
-    @staticmethod
-    async def _read_capped_lines(response: httpx.Response) -> list[str]:
-        lines: list[str] = []
-        total = 0
-        async for line in response.aiter_lines():
-            total += len(line.encode("utf-8"))
-            if total > MAX_OUTPUT_BYTES:
-                raise ValueError(
-                    f"Sandbox output exceeded {MAX_OUTPUT_BYTES} bytes; aborting to "
-                    "avoid unbounded memory use."
-                )
-            lines.append(line)
-        return lines
 
     @staticmethod
     def _parse_lines(lines: list[str]) -> CodeExecutionResult:
