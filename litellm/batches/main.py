@@ -157,7 +157,7 @@ async def acreate_batch(
 
 
 @client
-def create_batch(  # noqa: PLR0915
+def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,

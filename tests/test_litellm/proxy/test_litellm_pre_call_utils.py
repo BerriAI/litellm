@@ -718,7 +718,18 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "control_field",
-    ["callbacks", "service_callback", "logger_fn", "litellm_disabled_callbacks"],
+    [
+        "callbacks",
+        "service_callback",
+        "logger_fn",
+        "litellm_disabled_callbacks",
+        "_agentic_loop_depth",
+        "_agentic_loop_fingerprints",
+        "_code_interpreter_interception_active",
+        "_code_interpreter_interception_converted_stream",
+        "_code_interpreter_interception_sandbox_key",
+        "max_agentic_loops",
+    ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
     control_field,
@@ -741,12 +752,19 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
 
-    sample_value = (
-        ["langfuse"]
-        if control_field
-        in ("callbacks", "service_callback", "litellm_disabled_callbacks")
-        else "module.func"
-    )
+    sample_values = {
+        "callbacks": ["langfuse"],
+        "service_callback": ["langfuse"],
+        "litellm_disabled_callbacks": ["langfuse"],
+        "logger_fn": "module.func",
+        "_agentic_loop_depth": 5,
+        "_agentic_loop_fingerprints": ["forged"],
+        "_code_interpreter_interception_active": True,
+        "_code_interpreter_interception_converted_stream": True,
+        "_code_interpreter_interception_sandbox_key": "forged-key",
+        "max_agentic_loops": 9999,
+    }
+    sample_value = sample_values[control_field]
 
     updated = await add_litellm_data_to_request(
         data={
@@ -4150,7 +4168,9 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:paid":
                 return 0.50
             return fallback_spend
@@ -4207,7 +4227,9 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:tenant:acme":
                 return 0.50
             return fallback_spend
@@ -4362,7 +4384,9 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:engineering":
                 return 0.50
             return fallback_spend
@@ -4413,7 +4437,9 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:engineering":
                 return 0.05
             return fallback_spend

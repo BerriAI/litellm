@@ -143,6 +143,14 @@
       "force_store_false": true
     }
   },
+  "libertai": {
+    "base_url": "https://api.libertai.io/v1",
+    "api_key_env": "LIBERTAI_API_KEY",
+    "api_base_env": "LIBERTAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "empiriolabs": {
     "base_url": "https://api.empiriolabs.ai/v1",
     "api_key_env": "EMPIRIOLABS_API_KEY",
@@ -151,5 +159,14 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "pinstripes": {
+    "base_url": "https://pinstripes.io/v1",
+    "api_key_env": "PINSTRIPES_API_KEY",
+    "api_base_env": "PINSTRIPES_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   }
 }

@@ -11,6 +11,8 @@
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
+  "api-keys": "api-keys",
+  models: "models-and-endpoints",
   api_ref: "api-reference",
   "llm-playground": "playground",
   projects: "projects",
@@ -37,9 +39,11 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "logging-and-alerts": "logging-and-alerts",
   "model-hub-table": "model-hub-table",
   new_usage: "usage",
+  usage: "old-usage",
   agents: "agents",
   "router-settings": "router-settings",
   users: "users",
+  teams: "teams",
   organizations: "organizations",
 };
 

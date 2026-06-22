@@ -351,7 +351,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             return 0
 
-    async def send_daily_reports(self, router) -> bool:  # noqa: PLR0915
+    async def send_daily_reports(self, router) -> bool:
         """
         Send a daily report on:
         - Top 5 deployments with most failed requests
@@ -1179,7 +1179,7 @@ Model Info:
         if response.status_code == 200:
             return True
         else:
-            print("Error sending webhook alert. Error=", response.text)  # noqa
+            print("Error sending webhook alert. Error=", response.text)  # noqa: T201
 
         return False
 
@@ -1373,7 +1373,7 @@ Model Info:
 
         return False
 
-    async def send_alert(  # noqa: PLR0915
+    async def send_alert(
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],

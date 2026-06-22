@@ -2189,7 +2189,7 @@ class AmazonConverseConfig(BaseConfig):
         real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
         return real_tools if real_tools else None
 
-    def _transform_response(  # noqa: PLR0915
+    def _transform_response(
         self,
         model: str,
         response: httpx.Response,

@@ -380,7 +380,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 potential_deployments = [_deployment]
         return potential_deployments
 
-    def _common_checks_available_deployment(  # noqa: PLR0915
+    def _common_checks_available_deployment(
         self,
         model_group: str,
         healthy_deployments: list,
