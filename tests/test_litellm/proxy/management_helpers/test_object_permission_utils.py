@@ -339,17 +339,46 @@ async def test_validate_no_team_non_global_server_raises(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_team_no_mcp_config_blocks_all(
+async def test_validate_team_no_mcp_config_imposes_no_restriction(
     mock_access_groups, mock_allow_all
 ):
-    """Team with no object_permission — key can't use any non-global MCP servers."""
+    """Team with no object_permission declares no MCP allow-list, so it imposes no
+    team-level restriction: a key under it can be granted any server (1.82 behavior).
+
+    Regression for the post-1.82 'MCP not allowed by team. Team allows: []' 403 that
+    blocked every key MCP grant under teams with default config."""
     team_obj = _make_team_obj()  # No object_permission
-    with pytest.raises(HTTPException) as exc_info:
-        await validate_key_mcp_servers_against_team(
-            object_permission={"mcp_servers": ["some-server"]},
-            team_obj=team_obj,
-        )
-    assert exc_info.value.status_code == 403
+    result = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["some-server"]},
+        team_obj=team_obj,
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("some-server"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_team_empty_mcp_list_imposes_no_restriction(
+    mock_access_groups, mock_allow_all
+):
+    """Team whose object_permission has an explicit empty mcp_servers list also
+    imposes no restriction (empty == no allow-list, same as the runtime resolver)."""
+    team_obj = _make_team_obj(mcp_servers=[])
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["some-server"]},
+        team_obj=team_obj,
+    )
 
 
 @pytest.mark.asyncio
@@ -570,7 +599,7 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
         return_value=[mock_db_server]
     )
 
-    team_obj = _make_team_obj(mcp_servers=[])
+    team_obj = _make_team_obj(mcp_servers=["team-allowed-server"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
             object_permission={"mcp_servers": ["private-alias"]},

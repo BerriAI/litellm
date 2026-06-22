@@ -469,11 +469,12 @@ async def validate_key_mcp_servers_against_team(
     Validate that MCP servers requested on a key are within the allowed scope.
 
     Rules:
-    - If key is in a team: key's mcp_servers must be a subset of
-      (team's allowed servers + allow_all_keys servers)
+    - If the team declares an MCP server allow-list: key's mcp_servers must be a
+      subset of (team's allowed servers + allow_all_keys servers)
+    - If the team declares no MCP allow-list: no team-level restriction applies
+      and the key may be granted any server (matches the runtime resolver)
     - If key is NOT in a team: key's mcp_servers must only contain
       allow_all_keys servers
-    - If team has no MCP config: key can only use allow_all_keys servers
 
     Raises HTTPException(403) if validation fails.
     """
@@ -494,6 +495,12 @@ async def validate_key_mcp_servers_against_team(
 
     # Combined allowed set = team servers + allow_all_keys servers
     all_allowed_servers = team_allowed_servers | allow_all_keys_servers
+
+    # A team that declares no MCP server allow-list imposes no team-level
+    # restriction on its keys (same semantics as the runtime resolver and the
+    # toolset check below). Only a team with an explicit list narrows what its
+    # keys may use; standalone keys (no team) stay limited to allow_all_keys.
+    enforce_server_scope = team_obj is None or bool(team_allowed_servers)
 
     # Validate requested server IDs
     if requested_servers:
@@ -522,7 +529,7 @@ async def validate_key_mcp_servers_against_team(
         )
 
         disallowed_servers = active_requested_servers - all_allowed_servers
-        if disallowed_servers:
+        if enforce_server_scope and disallowed_servers:
             if team_obj is not None:
                 team_id = team_obj.team_id
                 detail = (
