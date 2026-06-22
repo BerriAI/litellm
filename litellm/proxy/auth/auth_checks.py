@@ -699,6 +699,11 @@ async def common_checks(
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+                request_data=request_body,
+                route=route,
+            )
+
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
                 user_api_key_dict=valid_token,

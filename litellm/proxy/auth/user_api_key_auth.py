@@ -2396,6 +2396,17 @@ async def _run_centralized_common_checks(
         llm_router=llm_router,
     )
 
+    # Pin the metadata variable name (litellm_metadata vs metadata) before
+    # any tag merge runs. Without this, header tags from
+    # apply_client_tag_policy_pre_auth would land in `metadata` while the
+    # later seed in common_checks pushes key tags and the
+    # _tag_max_budget_check read into `litellm_metadata`, hiding header
+    # tags from per-tag budget enforcement on LITELLM_METADATA_ROUTES.
+    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+        request_data=request_data,
+        route=route,
+    )
+
     # Merge x-litellm-tags into request_data BEFORE common_checks runs.
     # _tag_max_budget_check inside common_checks only inspects request_data;
     # without this pre-merge, header-supplied tags bypass tag-budget
