@@ -14,8 +14,11 @@ These are members of a Team on LiteLLM
 
 import asyncio
 import json
+import os
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
@@ -2217,6 +2220,248 @@ async def get_users(
     }
 
 
+async def _send_email_via_ses(
+    receiver_emails: List[str],
+    subject: str,
+    html_body: str,
+) -> None:
+    """
+    Send email via AWS SES using Google OIDC auth.
+    Expects GCP_SERVICE_ACCOUNT_KEY as a raw JSON service account key.
+    Adapted from grid-ai-onboarding/cronjob/user-emails-sender/main.py
+    """
+    try:
+        import boto3
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import service_account
+    except ImportError as e:
+        print("[DEBUG] AWS SES deps missing: %s" % e)
+        return
+
+    gcp_service_account_key = os.getenv("GCP_SERVICE_ACCOUNT_KEY")
+    aws_role_arn = os.getenv("AWS_ROLE_ARN")
+    aws_region = os.getenv("AWS_REGION", "ap-south-1")
+    sender_email = os.getenv("SENDER_EMAIL")
+
+    if not all([gcp_service_account_key, aws_role_arn, sender_email]):
+        print("[DEBUG] Missing env vars, skipping email")
+        return
+
+    try:
+        # Parse GCP service account key and get ID token for AWS STS
+        sa_info = json.loads(gcp_service_account_key)
+        creds = service_account.IDTokenCredentials.from_service_account_info(
+            sa_info,
+            target_audience="sts.amazonaws.com",
+        )
+        auth_req = google_requests.Request()
+        creds.refresh(auth_req)
+        id_token = creds.token
+
+        # Exchange Google ID token for temporary AWS credentials
+        sts = boto3.client("sts", region_name="us-east-1")
+        response = sts.assume_role_with_web_identity(
+            RoleArn=aws_role_arn,
+            RoleSessionName="litellm-sa-key-rotation",
+            WebIdentityToken=id_token,
+        )
+        temp_creds = response["Credentials"]
+
+        # Create SES client with temporary credentials
+        session = boto3.Session(
+            aws_access_key_id=temp_creds["AccessKeyId"],
+            aws_secret_access_key=temp_creds["SecretAccessKey"],
+            aws_session_token=temp_creds["SessionToken"],
+            region_name=aws_region,
+        )
+        ses = session.client("ses", region_name=aws_region)
+
+        # Build multipart email
+        msg = MIMEMultipart()
+        msg["Subject"] = subject
+        msg["From"] = sender_email
+        msg["To"] = ", ".join(receiver_emails)
+        msg.attach(MIMEText(html_body, "html"))
+
+        # Send via SES
+        ses.send_raw_email(
+            Source=sender_email,
+            Destinations=receiver_emails,
+            RawMessage={"Data": msg.as_string()},
+        )
+    except Exception as e:
+        print("[DEBUG] FAILED to send email via AWS SES: %s" % str(e))
+
+
+async def _cleanup_service_accounts_on_user_delete(
+    deleted_user_ids: List[str],
+    prisma_client: "PrismaClient",
+) -> None:
+    """
+    When users are deleted:
+    1. Remove deleted users from service account owner_ids
+    2. For remaining owners, shorten active key expiry to now + 7 days
+    3. Email remaining owners to rotate keys
+    """
+    if not deleted_user_ids:
+        return
+
+    # Fetch emails for deleted users so we can show human-readable names in emails
+    deleted_users = await prisma_client.db.litellm_usertable.find_many(
+        where={"user_id": {"in": deleted_user_ids}}
+    )
+    deleted_user_email_map = {
+        u.user_id: (u.user_email or u.user_id) for u in deleted_users
+    }
+    deleted_user_display_list = [
+        deleted_user_email_map.get(uid, uid) for uid in deleted_user_ids
+    ]
+
+    # Find all service accounts where any deleted user is an owner
+    affected_sas = []
+    for user_id in deleted_user_ids:
+        sas = await prisma_client.db.litellm_serviceaccounttable.find_many(
+            where={"owner_ids": {"has": user_id}}
+        )
+        affected_sas.extend(sas)
+
+    # Deduplicate by user_id
+    seen_sa_ids = set()
+    unique_affected_sas = []
+    for sa in affected_sas:
+        if sa.user_id not in seen_sa_ids:
+            seen_sa_ids.add(sa.user_id)
+            unique_affected_sas.append(sa)
+
+    if not unique_affected_sas:
+        return
+
+    now = datetime.now(timezone.utc)
+    seven_days_later = now + timedelta(days=7)
+
+    for sa in unique_affected_sas:
+        # Skip if the service account itself is being deleted
+        if sa.user_id in deleted_user_ids:
+            continue
+
+        new_owner_ids = [oid for oid in sa.owner_ids if oid not in deleted_user_ids]
+
+        if not new_owner_ids:
+            await prisma_client.db.litellm_serviceaccounttable.update(
+                where={"user_id": sa.user_id},
+                data={"owner_ids": {"set": new_owner_ids}},
+            )
+            continue
+
+        # Find active keys for this service account
+        keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": sa.user_id}
+        )
+
+        active_keys = [
+            k for k in keys
+            if (k.blocked is None or k.blocked is False)
+            and (k.expires is None or k.expires > now)
+        ]
+
+        keys_info = []
+        for key in active_keys:
+            current_expiry = key.expires
+            new_expiry = (
+                seven_days_later
+                if current_expiry is None
+                else min(current_expiry, seven_days_later)
+            )
+
+            await prisma_client.db.litellm_verificationtoken.update(
+                where={"token": key.token},
+                data={"expires": new_expiry},
+            )
+
+            keys_info.append({
+                "key_name": key.key_name or "—",
+                "key_alias": key.key_alias or "—",
+                "new_expiry": new_expiry.isoformat(),
+            })
+
+        # Update service account with new owner_ids
+        await prisma_client.db.litellm_serviceaccounttable.update(
+            where={"user_id": sa.user_id},
+            data={"owner_ids": {"set": new_owner_ids}},
+        )
+
+        if not keys_info:
+            continue
+
+        # Get emails of all remaining owners for this service account
+        owner_users = await prisma_client.db.litellm_usertable.find_many(
+            where={"user_id": {"in": new_owner_ids}}
+        )
+        owner_emails = [
+            owner.user_email for owner in owner_users if owner.user_email
+        ]
+
+        if not owner_emails:
+            continue
+
+        # Fetch service account email for human-readable identifier
+        sa_user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": sa.user_id}
+        )
+        sa_identifier = sa_user_row.user_email if sa_user_row and sa_user_row.user_email else sa.user_id
+
+        # Build email for this specific service account
+        html_body = _build_service_account_key_rotation_email(
+            sa_identifier=sa_identifier,
+            keys_info=keys_info,
+            deleted_user_identifiers=deleted_user_display_list,
+        )
+
+        # Send one email to all remaining owners of this service account
+        asyncio.create_task(
+            _send_email_via_ses(
+                receiver_emails=owner_emails,
+                subject=(
+                    "Action Required: Service Account Key Rotation Needed"
+                ),
+                html_body=html_body,
+            )
+        )
+
+
+def _build_service_account_key_rotation_email(
+    sa_identifier: str,
+    keys_info: List[Dict[str, str]],
+    deleted_user_identifiers: List[str],
+) -> str:
+    """Build HTML email body for key rotation notification for a single SA."""
+    html = "<h2>Service Account Owner Removed — Action Required</h2>"
+    html += (
+        "<p>A co-owner of your service account has been removed "
+        f"(deleted users: {', '.join(deleted_user_identifiers)}).</p>"
+    )
+    html += (
+        "<p>The following keys for service account "
+        f"<strong>{sa_identifier}</strong> have had their expiry shortened to "
+        "<strong>7 days from now</strong>. Please rotate them before expiry or "
+        "they will become unusable.</p>"
+    )
+    html += "<hr>"
+    html += (
+        "<table border='1' cellpadding='8'>"
+        "<tr><th>Key Name</th><th>Key Alias</th><th>New Expiry (UTC)</th></tr>"
+    )
+    for key in keys_info:
+        html += (
+            f"<tr><td>{key['key_name']}</td>"
+            f"<td>{key['key_alias']}</td>"
+            f"<td>{key['new_expiry']}</td></tr>"
+        )
+    html += "</table>"
+    html += "<p><em>This is an automated message from the LiteLLM Proxy.</em></p>"
+    return html
+
+
 @router.post(
     "/user/delete",
     tags=["Internal User management"],
@@ -2383,6 +2628,12 @@ async def delete_user(
                 data={"members_with_roles": team.members_with_roles},
             )
     # End of Audit logging
+
+    ## CLEANUP SERVICE ACCOUNTS
+    await _cleanup_service_accounts_on_user_delete(
+        deleted_user_ids=data.user_ids,
+        prisma_client=prisma_client,
+    )
 
     ## DELETE ASSOCIATED KEYS
     await VerificationTokenRepository(prisma_client).table.delete_many(where={"user_id": {"in": data.user_ids}})

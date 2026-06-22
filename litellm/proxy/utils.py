@@ -5084,7 +5084,7 @@ def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
 
 
 async def send_email(
-    receiver_email: Optional[str] = None,
+    receiver_email: Optional[Union[str, List[str]]] = None,
     subject: Optional[str] = None,
     html: Optional[str] = None,
 ):
@@ -5115,7 +5115,10 @@ async def send_email(
     ## EMAIL SETUP ##
     email_message = MIMEMultipart()
     email_message["From"] = sender_email
-    email_message["To"] = receiver_email
+    if isinstance(receiver_email, list):
+        email_message["To"] = ", ".join(receiver_email)
+    else:
+        email_message["To"] = receiver_email
     email_message["Subject"] = subject
     verbose_proxy_logger.debug("sending email from %s to %s", sender_email, receiver_email)
 
