@@ -1,10 +1,11 @@
 import json
-from typing import TYPE_CHECKING, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 from httpx import Response
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
@@ -14,6 +15,40 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import CostResponseTypes
+
+
+def restrict_anthropic_bedrock_metadata(
+    request_data: Dict[str, object],
+) -> Dict[str, object]:
+    """
+    Project a forwarded Anthropic-on-Bedrock body's ``metadata`` down to the
+    provider's closed schema (:class:`AnthropicMetadata`, ``user_id`` only) before
+    signing.
+
+    AWS rejects every metadata field other than ``user_id`` with
+    ``metadata.<field>: Extra inputs are not permitted``. The proxy enriches the
+    request metadata with internal spend fields (tags, spend_logs_metadata,
+    user_api_key_*), and the passthrough route forwards that body verbatim, so any
+    enrichment lands in the provider payload and 400s the request.
+
+    A new body is returned rather than the input mutated, so the internal request
+    data that spend tracking reads keeps the stripped fields.
+    """
+    metadata = request_data.get("metadata")
+    if "anthropic_version" not in request_data or not isinstance(metadata, dict):
+        return request_data
+
+    metadata_obj = cast(Dict[str, object], metadata)
+    allowed = {
+        k: v for k, v in metadata_obj.items() if k in AnthropicMetadata.model_fields
+    }
+    if allowed == metadata_obj:
+        return request_data
+
+    return {
+        **{k: v for k, v in request_data.items() if k != "metadata"},
+        **({"metadata": allowed} if allowed else {}),
+    }
 
 
 class BedrockPassthroughConfig(
@@ -111,7 +146,7 @@ class BedrockPassthroughConfig(
             service_name="bedrock",
             headers=headers,
             optional_params=optional_params,
-            request_data=request_data or {},
+            request_data=restrict_anthropic_bedrock_metadata(request_data or {}),
             api_base=api_base,
             model=model,
         )
