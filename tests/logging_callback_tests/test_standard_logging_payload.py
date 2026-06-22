@@ -1184,3 +1184,19 @@ def test_inject_cache_tokens_prefers_private_attr_then_prompt_tokens_details():
     d = StandardLoggingPayloadSetup._inject_cache_tokens({}, openai)
     assert d["cache_read_input_tokens"] == 80
     assert d["cache_creation_input_tokens"] == 0
+
+
+def test_inject_cache_tokens_prompt_tokens_details_as_dict():
+    """_inject_cache_tokens must handle prompt_tokens_details as a plain dict
+    (the branch distinct from the PromptTokensDetailsWrapper object path)."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import Usage
+
+    # Construct a Usage where prompt_tokens_details is stored as a dict.
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    # Directly set a dict to exercise the isinstance(ptd, dict) branch.
+    object.__setattr__(usage, "prompt_tokens_details", {"cached_tokens": 42})
+
+    d = StandardLoggingPayloadSetup._inject_cache_tokens({}, usage)
+    assert d["cache_read_input_tokens"] == 42
+    assert d["cache_creation_input_tokens"] == 0

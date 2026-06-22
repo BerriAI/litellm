@@ -569,3 +569,40 @@ async def test_sync_callback_not_affected_by_atexit():
             assert (
                 callback_invoked_immediately
             ), "Sync callback should be invoked immediately"
+
+
+@pytest.mark.asyncio
+async def test_cache_tokens_emitted_when_nonzero():
+    """$ai_cache_read_input_tokens / $ai_cache_creation_input_tokens are
+    conditionally emitted — only when the corresponding field is non-zero."""
+    from create_mock_standard_logging_payload import create_standard_logging_payload
+
+    posthog_logger = PostHogLogger()
+    standard_payload = create_standard_logging_payload()
+    standard_payload["cache_read_input_tokens"] = 500
+    standard_payload["cache_creation_input_tokens"] = 100
+    kwargs = {"standard_logging_object": standard_payload}
+
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+    props = event_payload["properties"]
+
+    assert props["$ai_cache_read_input_tokens"] == 500
+    assert props["$ai_cache_creation_input_tokens"] == 100
+
+
+@pytest.mark.asyncio
+async def test_cache_tokens_absent_when_zero():
+    """Cache token fields must not be emitted when the value is 0 —
+    keeps PostHog events clean for non-caching providers."""
+    from create_mock_standard_logging_payload import create_standard_logging_payload
+
+    posthog_logger = PostHogLogger()
+    standard_payload = create_standard_logging_payload()
+    # Both default to 0; confirm they are not forwarded to PostHog.
+    kwargs = {"standard_logging_object": standard_payload}
+
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+    props = event_payload["properties"]
+
+    assert "$ai_cache_read_input_tokens" not in props
+    assert "$ai_cache_creation_input_tokens" not in props
