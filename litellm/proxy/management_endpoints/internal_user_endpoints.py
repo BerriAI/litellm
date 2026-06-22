@@ -2617,6 +2617,25 @@ async def ui_view_users(
 # Using shared metric helper implementations from common_daily_activity
 
 
+async def _resolve_user_email_metadata(
+    prisma_client: "PrismaClient", records: list[Any]
+) -> dict[str, dict]:
+    """Map each user_id on the page to its email/alias so the Usage dashboard can
+    label the 'Spend Per User' chart with the email instead of the raw UUID."""
+    user_ids = {
+        record.user_id for record in records if getattr(record, "user_id", None)
+    }
+    if not user_ids:
+        return {}
+    users = await UserRepository(prisma_client).table.find_many(
+        where={"user_id": {"in": list(user_ids)}}
+    )
+    return {
+        user.user_id: {"user_email": user.user_email, "user_alias": user.user_alias}
+        for user in users
+    }
+
+
 @router.get(
     "/user/daily/activity",
     tags=["Budget & Spend Tracking", "Internal User management"],
@@ -2719,6 +2738,9 @@ async def get_user_daily_activity(
             page=page,
             page_size=page_size,
             timezone_offset_minutes=timezone,
+            resolve_entity_metadata=lambda records: _resolve_user_email_metadata(
+                prisma_client, records
+            ),
         )
 
     except HTTPException:
