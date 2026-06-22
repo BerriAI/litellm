@@ -72,7 +72,7 @@ def get_fallback_model_group(
             elif list(item.keys())[0] == "*":  # check generic fallback
                 generic_fallback_idx = idx
         elif isinstance(item, str):
-            fallback_model_group = [fallbacks.pop(idx)]  # returns single-item list
+            fallback_model_group = [item]
     ## if none, check for generic fallback
     if fallback_model_group is None:
         if stripped_model_fallback is not None:
