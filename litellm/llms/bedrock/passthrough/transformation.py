@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, List, Optional, Tuple, cast
 
 from httpx import Response
 
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 
 
 def restrict_anthropic_bedrock_metadata(
-    request_data: Dict[str, object],
-) -> Dict[str, object]:
+    request_data: dict[str, object],
+) -> dict[str, object]:
     """
     Project a forwarded Anthropic-on-Bedrock body's ``metadata`` down to the
     provider's closed schema (:class:`AnthropicMetadata`, ``user_id`` only) before
@@ -38,7 +38,7 @@ def restrict_anthropic_bedrock_metadata(
     if "anthropic_version" not in request_data or not isinstance(metadata, dict):
         return request_data
 
-    metadata_obj = cast(Dict[str, object], metadata)
+    metadata_obj = cast(dict[str, object], metadata)
     allowed = {
         k: v for k, v in metadata_obj.items() if k in AnthropicMetadata.model_fields
     }
