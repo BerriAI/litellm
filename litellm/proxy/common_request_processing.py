@@ -740,7 +740,18 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
-        excluded_headers = {"transfer-encoding", "content-encoding", "set-cookie", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "upgrade"}
+        excluded_headers = {
+            "transfer-encoding",
+            "content-encoding",
+            "set-cookie",
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "upgrade",
+        }
 
         merged_headers = {
             key: value
