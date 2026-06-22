@@ -26,21 +26,34 @@ from e2e_http import (
 
 class FileObject(BaseModel):
     id: str
+    object: str | None = None
     purpose: str | None = None
     bytes: int | None = None
+    status: str | None = None
+    created_at: int | None = None
 
 
 class BatchObject(BaseModel):
     id: str
+    object: str | None = None
     status: str
     endpoint: str | None = None
     input_file_id: str | None = None
     output_file_id: str | None = None
+    completion_window: str | None = None
+    created_at: int | None = None
     model: str | None = None
 
 
 class BatchList(BaseModel):
+    object: str | None = None
     data: list[BatchObject] = []
+
+
+class FileDeleteResponse(BaseModel):
+    id: str
+    object: str | None = None
+    deleted: bool
 
 
 class BatchCreateBody(BaseModel):
@@ -131,12 +144,12 @@ class BatchClient:
 
     def delete_file(
         self, file_id: str, *, key: str, provider: str | None = None
-    ) -> None:
-        _ = self.gateway.transport.delete(
+    ) -> Result[FileDeleteResponse]:
+        return self.gateway.transport.delete(
             f"{_files_path(provider)}/{file_id}",
             headers=self.gateway.transport.bearer(key),
             json=NoBody(),
-            response_type=NoBody,
+            response_type=FileDeleteResponse,
         )
 
 

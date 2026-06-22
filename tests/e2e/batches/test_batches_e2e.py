@@ -118,6 +118,28 @@ def quietly(action: Callable[[], object]) -> Callable[[], None]:
     return run
 
 
+def assert_file_object(file: FileObject) -> None:
+    assert file.object == "file", f"file.object={file.object!r}"
+    assert file.purpose == "batch", f"file.purpose={file.purpose!r}"
+    assert file.bytes is not None and file.bytes > 0, f"file.bytes={file.bytes!r}"
+    assert file.status, "file.status missing"
+    assert (
+        file.created_at is not None and file.created_at > 0
+    ), "file.created_at missing"
+
+
+def assert_batch_object(batch: BatchObject) -> None:
+    assert batch.object == "batch", f"batch.object={batch.object!r}"
+    assert (
+        batch.endpoint == "/v1/chat/completions"
+    ), f"batch.endpoint={batch.endpoint!r}"
+    assert batch.completion_window == "24h", f"window={batch.completion_window!r}"
+    assert batch.input_file_id, "batch.input_file_id missing"
+    assert (
+        batch.created_at is not None and batch.created_at > 0
+    ), "batch.created_at missing"
+
+
 @pytest.mark.parametrize("cap", CAPABILITIES, ids=[c.id for c in CAPABILITIES])
 def test_batch_lifecycle(
     cap: Capability, client: BatchClient, resources: ResourceManager
@@ -125,15 +147,16 @@ def test_batch_lifecycle(
     key = resources.key()
     provider = op_provider(cap)
 
-    file_id = unwrap(
-        upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key)
-    ).id
-    resources.defer(lambda: client.delete_file(file_id, key=key, provider=provider))
+    file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
+    resources.defer(
+        quietly(lambda: client.delete_file(file.id, key=key, provider=provider))
+    )
+    assert_file_object(file)
     assert matches_id_shape(
-        FILE_ID_SHAPE[cap.scenario], file_id
-    ), f"{cap.id}: file id {file_id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
+        FILE_ID_SHAPE[cap.scenario], file.id
+    ), f"{cap.id}: file id {file.id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
 
-    created = create_for_scenario(client, cap, file_id, key)
+    created = create_for_scenario(client, cap, file.id, key)
     require_successful_call(created)
     batch = BatchObject.model_validate_json(created.body)
     resources.defer(
@@ -142,6 +165,7 @@ def test_batch_lifecycle(
 
     assert batch.id, f"create returned no batch id (body={created.body[:200]})"
     assert batch.status in NON_TERMINAL, f"unexpected initial status {batch.status!r}"
+    assert_batch_object(batch)
     assert matches_id_shape(
         BATCH_ID_SHAPE[cap.scenario], batch.id
     ), f"{cap.id}: batch id {batch.id!r} is not a {BATCH_ID_SHAPE[cap.scenario]} id"
@@ -151,17 +175,25 @@ def test_batch_lifecycle(
         ), f"{cap.provider} batch id {batch.id!r} not in that provider's native shape; misrouted?"
 
     fetched = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
+    assert_batch_object(fetched)
     assert fetched.id == batch.id
+    assert (
+        fetched.input_file_id == batch.input_file_id
+    ), "retrieve changed input_file_id"
+    assert fetched.status, "retrieved batch has no status"
 
     if cap.can_cancel:
         cancelled = unwrap(client.cancel_batch(batch.id, key=key, provider=provider))
+        assert cancelled.id == batch.id
+        assert cancelled.object == "batch"
         assert cancelled.status in {"cancelling", "cancelled"}
 
     if cap.can_list:
         listed = unwrap(client.list_batches(key=key, provider=provider))
-        assert any(
-            b.id == batch.id for b in listed.data
-        ), "created batch absent from list"
+        assert listed.object == "list", f"list envelope object={listed.object!r}"
+        match = next((b for b in listed.data if b.id == batch.id), None)
+        assert match is not None, "created batch absent from list"
+        assert match.object == "batch"
 
 
 def test_batch_key_model_access_denied(
@@ -187,7 +219,9 @@ def test_batch_key_model_access_denied(
             provider="openai",
         )
     ).id
-    resources.defer(lambda: client.delete_file(raw_file, key=key, provider="openai"))
+    resources.defer(
+        quietly(lambda: client.delete_file(raw_file, key=key, provider="openai"))
+    )
 
     denied_create = client.create_batch(
         body=BatchCreateBody(input_file_id=raw_file, model="azure-batch"), key=key
@@ -195,6 +229,26 @@ def test_batch_key_model_access_denied(
     assert is_model_access_denied(
         denied_create
     ), f"restricted key created a batch for a disallowed model (status {denied_create.status_code})"
+
+
+def test_file_upload_and_delete_outputs(
+    client: BatchClient, resources: ResourceManager
+) -> None:
+    key = resources.key()
+    file = unwrap(
+        client.upload_file(
+            content=render_jsonl("openai-batch"),
+            form=FileUploadForm(purpose="batch"),
+            model="openai-batch",
+            key=key,
+        )
+    )
+    assert_file_object(file)
+
+    deleted = unwrap(client.delete_file(file.id, key=key))
+    assert deleted.id, "delete response has no id"
+    assert deleted.object == "file", f"delete object={deleted.object!r}"
+    assert deleted.deleted is True, "file was not reported deleted"
 
 
 def test_anthropic_batch_retrieve(client: BatchClient, scoped_key: str) -> None:

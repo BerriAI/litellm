@@ -52,13 +52,24 @@ shape (`raw_id_matches_provider`).
 (files endpoint) and when it creates a batch for a disallowed model (batches
 endpoint).
 
+## Per-endpoint output assertions
+
+Each endpoint's full response is validated, not just the id. File upload asserts
+`object=="file"`, `purpose=="batch"`, a positive `bytes`, a status, and a created-at.
+Batch create / retrieve assert `object=="batch"`, `endpoint=="/v1/chat/completions"`,
+`completion_window=="24h"`, a non-empty `input_file_id`, and a created-at; retrieve
+additionally cross-checks that `id` and `input_file_id` match the created batch.
+Cancel asserts the same id, `object=="batch"`, and a cancelling/cancelled status. List
+asserts the `object=="list"` envelope and that the created batch is present as a batch.
+File delete asserts `object=="file"` and `deleted==True`.
+
 ## This suite's files
 
 | File | Covers |
 |------|--------|
-| `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list over the shared Gateway; denial helpers |
-| `capabilities.py` | the provider x scenario matrix + per-provider raw-id assertion |
-| `test_batches_e2e.py` | parametrized lifecycle, key-model-access denial, anthropic retrieve |
+| `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list/delete over the shared Gateway; denial helpers |
+| `capabilities.py` | the provider x scenario matrix + id-shape classifiers + per-provider raw-id assertion |
+| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, anthropic retrieve |
 
 ## Out of scope (intentionally)
 
