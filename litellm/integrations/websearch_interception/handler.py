@@ -49,6 +49,56 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY = "_websearch_interception_emit_native_blocks"
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY = "websearch_native_blocks"
 
 
+def _referenceable_tool_names(tool: Dict[str, Any]) -> set:
+    """Names a ``tool_choice`` could use to force ``tool``.
+
+    A forced ``tool_choice`` references a tool by its ``name`` (Anthropic
+    format) or ``function.name`` (OpenAI format). We collect both so the
+    caller can tell whether a forced choice pointed at this specific tool.
+    """
+    names = set()
+    name = tool.get("name")
+    if isinstance(name, str):
+        names.add(name)
+    fn = tool.get("function")
+    if isinstance(fn, dict):
+        fn_name = fn.get("name")
+        if isinstance(fn_name, str):
+            names.add(fn_name)
+    return names
+
+
+def _retarget_tool_choice(
+    tool_choice: Any, renamed_tool_names: set
+) -> Any:
+    """Point a forced ``tool_choice`` at the renamed web-search tool.
+
+    When web-search tools are renamed to ``litellm_web_search``, a
+    ``tool_choice`` that forced one of them by its original name would
+    otherwise dangle and the backend rejects the request with
+    "Tool '<name>' not found in provided tools".
+
+    Only a forced choice whose name is in ``renamed_tool_names`` is
+    retargeted; choices for other tools (e.g. a forced ``calculator`` in a
+    request that also happens to include web search) are left untouched.
+    Handles both Anthropic ``{"type":"tool","name":...}`` and OpenAI
+    ``{"type":"function","function":{"name":...}}`` shapes.
+    """
+    if not isinstance(tool_choice, dict) or not renamed_tool_names:
+        return tool_choice
+
+    result = tool_choice
+    if result.get("name") in renamed_tool_names:
+        result = {**result, "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+    fn = result.get("function")
+    if isinstance(fn, dict) and fn.get("name") in renamed_tool_names:
+        result = {
+            **result,
+            "function": {**fn, "name": LITELLM_WEB_SEARCH_TOOL_NAME},
+        }
+    return result
+
+
 class WebSearchInterceptionLogger(CustomLogger):
     """
     CustomLogger that intercepts WebSearch tool calls for models that don't
@@ -275,8 +325,13 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools = []
+        renamed_tool_names = set()
         for tool in tools:
             if is_web_search_tool(tool):
+                # Record the original name(s) this tool was referenceable by, so
+                # a forced tool_choice pointing at it can be retargeted below
+                # without affecting unrelated tools (e.g. a forced "calculator").
+                renamed_tool_names.update(_referenceable_tool_names(tool))
                 # Convert to LiteLLM standard web search tool
                 converted_tool = get_litellm_web_search_tool_openai()
                 converted_tools.append(converted_tool)
@@ -289,6 +344,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 converted_tools.append(tool)
 
         kwargs["tools"] = converted_tools
+
+        # Retarget a forced tool_choice (e.g. Claude Code's dedicated search
+        # sub-request sends tool_choice={"type":"tool","name":"web_search"}) to
+        # the renamed tool, else the backend rejects with "Tool 'web_search'
+        # not found in provided tools". Only retarget when the forced name was
+        # one of the web-search tools we just renamed — never a different tool.
+        kwargs["tool_choice"] = _retarget_tool_choice(
+            kwargs.get("tool_choice"), renamed_tool_names
+        )
 
         if kwargs.get("stream"):
             verbose_logger.debug(
@@ -406,8 +470,10 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         # Convert native web search tools to LiteLLM standard
         converted_tools = []
+        renamed_tool_names = set()
         for tool in tools:
             if is_web_search_tool(tool):
+                renamed_tool_names.update(_referenceable_tool_names(tool))
                 standard_tool = get_litellm_web_search_tool()
                 converted_tools.append(standard_tool)
                 verbose_logger.debug(
@@ -420,6 +486,15 @@ class WebSearchInterceptionLogger(CustomLogger):
         kwargs["tools"] = converted_tools
         verbose_logger.debug(
             f"WebSearchInterception: Tools after conversion: {[t.get('name') for t in converted_tools]}"
+        )
+
+        # Retarget a forced tool_choice (e.g. Claude Code's dedicated search
+        # sub-request sends tool_choice={"type":"tool","name":"web_search"}) to
+        # the renamed tool, else the backend rejects with "Tool 'web_search'
+        # not found in provided tools". Only retarget when the forced name was
+        # one of the web-search tools we just renamed — never a different tool.
+        kwargs["tool_choice"] = _retarget_tool_choice(
+            kwargs.get("tool_choice"), renamed_tool_names
         )
 
         # Also convert here for direct callers that bypass the deployment hook.
