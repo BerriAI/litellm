@@ -1,0 +1,58 @@
+# Proxy config for the realtime e2e suite.
+# Launch:
+#   python litellm/proxy/proxy_cli.py \
+#     --config tests/realtime_e2e/realtime_e2e_config.yaml \
+#     --detailed_debug --reload --use_v2_migration_resolver 2>&1 | tee litellm.log
+#
+# Adjust the upstream model ids below to whatever realtime models your accounts
+# have access to; the model_name aliases must stay in sync with providers.py.
+
+model_list:
+  - model_name: openai-realtime
+    litellm_params:
+      model: openai/gpt-realtime
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
+
+  - model_name: azure-realtime
+    litellm_params:
+      model: azure/gpt-realtime
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2025-08-28"
+      realtime_protocol: GA
+    model_info:
+      mode: realtime
+
+  - model_name: gemini-realtime
+    litellm_params:
+      model: gemini/gemini-2.0-flash-live-001
+      api_key: os.environ/GEMINI_API_KEY
+    model_info:
+      mode: realtime
+
+  - model_name: vertex-realtime
+    litellm_params:
+      model: vertex_ai/gemini-2.0-flash-live-preview-04-09
+      vertex_project: os.environ/VERTEX_PROJECT
+      vertex_location: us-central1
+    model_info:
+      mode: realtime
+
+  - model_name: bedrock-realtime
+    litellm_params:
+      model: bedrock/amazon.nova-sonic-v1:0
+      aws_region_name: us-east-1
+    model_info:
+      mode: realtime
+
+  - model_name: xai-realtime
+    litellm_params:
+      model: xai/grok-realtime
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      mode: realtime
+
+general_settings:
+  master_key: sk-1234

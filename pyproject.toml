@@ -282,6 +282,7 @@ markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
     "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
+    "realtime_e2e: mark test as a realtime proxy e2e test requiring a running proxy + live provider keys",
 ]
 filterwarnings = [
     # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
