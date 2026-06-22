@@ -298,6 +298,47 @@ class DeploymentAffinityCheck(CustomLogger):
                 return deployment
         return None
 
+    def _find_deployment_by_container_id(
+        self,
+        request_kwargs: dict,
+        healthy_deployments: List[dict],
+    ) -> Optional[List[dict]]:
+        """Pin to the deployment that owns a managed code_interpreter container.
+
+        A LiteLLM-managed container id (cntr_...) in tools[].container encodes the
+        owning deployment's model_id. Returns [deployment] so the follow-up
+        /v1/responses call routes to it instead of load-balancing by model name
+        (Azure containers are region-local). Returns None when no managed container
+        id is present. Non-str container values (e.g. {"type": "auto"}) carry no
+        model_id and are skipped.
+        """
+        tools = request_kwargs.get("tools")
+        if not isinstance(tools, list):
+            return None
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("type") != "code_interpreter":
+                continue
+            container = tool.get("container")
+            if not isinstance(container, str):
+                continue
+            decoded = ResponsesAPIRequestUtils._decode_container_id(container)
+            container_model_id = decoded.get("model_id")
+            if container_model_id is None:
+                continue
+            deployment = self._find_deployment_by_model_id(
+                healthy_deployments=healthy_deployments,
+                model_id=container_model_id,
+            )
+            if deployment is not None:
+                verbose_router_logger.debug(
+                    "DeploymentAffinityCheck: code_interpreter container pinning -> deployment=%s",
+                    container_model_id,
+                )
+                return [deployment]
+        return None
+
     async def async_filter_deployments(
         self,
         model: str,
@@ -341,44 +382,18 @@ class DeploymentAffinityCheck(CustomLogger):
                         )
                         return [deployment]
             # 1b) code_interpreter container affinity (Responses API create calls).
-            # A LiteLLM-managed container id (cntr_...) encodes the owning
-            # deployment's model_id. Reusing it in tools[].container must pin
-            # routing to that deployment, otherwise the call load-balances by
-            # model name and lands on a deployment that doesn't own the
-            # container (Azure containers are region-local -> 404). Lower
-            # priority than previous_response_id, which stays authoritative
-            # while its owning deployment is healthy.
-            # Reached when previous_response_id is absent, or when its owning
-            # deployment is unhealthy and the branch above fell through. Pinning
-            # to the container's deployment here is intentional -- the next-best
-            # routing signal, better than routing blindly by model name.
-            tools = request_kwargs.get("tools")
-            if isinstance(tools, list):
-                for tool in tools:
-                    if not isinstance(tool, dict):
-                        continue
-                    if tool.get("type") != "code_interpreter":
-                        continue
-                    # container is either a managed id string (cntr_...) or an
-                    # object for provisioning a new container ({"type": "auto"}),
-                    # which carries no model_id to pin -> skip non-str values.
-                    container = tool.get("container")
-                    if not isinstance(container, str):
-                        continue
-                    decoded = ResponsesAPIRequestUtils._decode_container_id(container)
-                    container_model_id = decoded.get("model_id")
-                    if container_model_id is None:
-                        continue
-                    deployment = self._find_deployment_by_model_id(
-                        healthy_deployments=typed_healthy_deployments,
-                        model_id=container_model_id,
-                    )
-                    if deployment is not None:
-                        verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: code_interpreter container pinning -> deployment=%s",
-                            container_model_id,
-                        )
-                        return [deployment]
+            # A managed container id in tools[].container encodes the owning
+            # deployment's model_id; pin to it. Reached when previous_response_id
+            # is absent, or when its deployment is unhealthy and the branch above
+            # fell through -- the container id is the next-best routing signal,
+            # better than load-balancing by model name. Lower priority than
+            # previous_response_id, which stays authoritative while healthy.
+            container_pin = self._find_deployment_by_container_id(
+                request_kwargs=request_kwargs,
+                healthy_deployments=typed_healthy_deployments,
+            )
+            if container_pin is not None:
+                return container_pin
 
         stable_model_map_key = self._get_stable_model_map_key_from_deployments(
             healthy_deployments=typed_healthy_deployments
