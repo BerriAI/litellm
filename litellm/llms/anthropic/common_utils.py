@@ -601,14 +601,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
-            if api_key.startswith("Bearer "):
-                headers["authorization"] = api_key
-            elif (
+            if (
                 api_base
                 and "api.anthropic.com" not in api_base
                 and not api_key.startswith("sk-ant-")
             ):
-                headers["authorization"] = f"Bearer {api_key}"
+                if api_key.startswith("Bearer "):
+                    headers["authorization"] = api_key
+                else:
+                    headers["authorization"] = f"Bearer {api_key}"
             else:
                 headers["x-api-key"] = api_key
 
@@ -745,13 +746,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
-            if resolved_key.startswith("Bearer "):
-                return {"authorization": resolved_key}
             if (
                 api_base
                 and "api.anthropic.com" not in api_base
                 and not resolved_key.startswith("sk-ant-")
             ):
+                if resolved_key.startswith("Bearer "):
+                    return {"authorization": resolved_key}
                 return {"authorization": f"Bearer {resolved_key}"}
             return {"x-api-key": resolved_key}
         auth_token = AnthropicModelInfo.get_auth_token()
