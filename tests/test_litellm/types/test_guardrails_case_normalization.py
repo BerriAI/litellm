@@ -89,3 +89,15 @@ class TestLitellmParamsCaseNormalization:
             )
             assert params.on_disallowed_action in ["block", "rewrite"]
             assert params.on_disallowed_action.islower()
+
+    @pytest.mark.parametrize("on_violation", ["block", "alert", "Block", "ALERT"])
+    def test_mcp_security_on_violation_allows_block_and_alert(self, on_violation):
+        """MCP security policy templates use block/alert violation actions."""
+        params = LitellmParams(
+            guardrail="mcp_security",
+            mode="pre_call",
+            default_on=True,
+            on_violation=on_violation,
+        )
+        assert params.on_violation in ["block", "alert"]
+        assert params.on_violation.islower()
