@@ -5,13 +5,15 @@ headers must be byte-identical to what v1 produces, and every other mode (or any
 fall back to v1 unchanged.
 """
 
+import base64
+
 import httpx
 import pytest
 
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-    _to_subject,
+    to_subject,
     resolve_v2_auth_value,
     resolve_v2_aws_auth,
 )
@@ -71,9 +73,34 @@ async def test_none_attaches_no_auth(v2_on):
     assert _v1_headers(MCPAuth.none, None) == _v1_headers(MCPAuth.none, v2_value) == {}
 
 
-async def test_non_grafted_mode_defers_to_v1(v2_on):
-    # bearer_token is not grafted yet -> v2 returns None so v1 handles it
-    assert await resolve_v2_auth_value(_server(MCPAuth.bearer_token, "k")) is None
+@pytest.mark.parametrize(
+    "auth_type,token,expected",
+    [
+        (MCPAuth.bearer_token, "up-secret", {"Authorization": "Bearer up-secret"}),
+        (MCPAuth.token, "up-secret", {"Authorization": "token up-secret"}),
+        (
+            MCPAuth.authorization,
+            "Custom raw-value",
+            {"Authorization": "Custom raw-value"},
+        ),
+        (
+            MCPAuth.basic,
+            "user:pass",
+            {"Authorization": f"Basic {base64.b64encode(b'user:pass').decode()}"},
+        ),
+    ],
+)
+async def test_static_authorization_modes_parity(v2_on, auth_type, token, expected):
+    server = _server(auth_type, token)
+    v2_value = await resolve_v2_auth_value(server)
+    assert v2_value == expected
+    # byte-identical to v1's final upstream headers
+    assert _v1_headers(auth_type, token) == _v1_headers(auth_type, v2_value) == expected
+
+
+async def test_static_auth_without_token_defers_to_v1(v2_on):
+    # A static Authorization mode with no configured token defers to v1 (parity-safe).
+    assert await resolve_v2_auth_value(_server(MCPAuth.bearer_token, None)) is None
 
 
 async def test_api_key_without_token_defers_to_v1(v2_on):
@@ -108,19 +135,46 @@ def _m2m_server():
 
 async def test_client_credentials_maps_to_config():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import (
         ClientCredentialsConfig,
     )
 
-    spec = _to_server_spec(_m2m_server())
+    spec = to_server_spec(_m2m_server())
     assert spec is not None
     assert isinstance(spec.config, ClientCredentialsConfig)
     assert spec.config.client_id == "cid"
     assert spec.config.token_url == "https://idp/token"
     assert spec.config.client_secret.get_secret_value() == "csecret"
     assert spec.config.scopes == ("a", "b")
+
+
+async def test_m2m_incomplete_creds_resolves_misconfigured():
+    # A client_credentials server missing client_id/secret now BUILDS a spec (the completeness
+    # pre-check was dropped) and resolve() raises misconfigured at the arm, instead of to_server_spec
+    # returning None and deferring to v1.
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        provider,
+        to_server_spec,
+        to_subject,
+    )
+    from litellm.proxy.gateway.mcp.result import Error
+
+    server = MCPServer(
+        server_id="m2m-incomplete",
+        name="m2m-incomplete",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://idp/token",
+    )  # has_client_credentials, but no client_id / client_secret
+    spec = to_server_spec(server)
+    assert spec is not None  # builds incomplete now (was None -> defer to v1 before)
+    result = await provider().resolve(to_subject(None, None), spec)
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
 
 
 async def test_client_credentials_graft_end_to_end(v2_on, monkeypatch):
@@ -244,7 +298,7 @@ async def test_aws_sigv4_config_defaults_to_ambient(v2_on):
 
 async def test_to_subject_maps_v1_identity():
     auth = UserAPIKeyAuth(token="sk-test", user_id="u1", org_id="org1", team_id="t1")
-    subj = _to_subject(auth, "inbound-jwt")
+    subj = to_subject(auth, "inbound-jwt")
     assert subj.subject_id == "u1"
     assert subj.tenant_id == "org1"  # org preferred over team
     assert subj.inbound_token is not None
@@ -252,7 +306,7 @@ async def test_to_subject_maps_v1_identity():
 
 
 async def test_to_subject_anonymous_when_no_auth():
-    subj = _to_subject(None, None)
+    subj = to_subject(None, None)
     assert subj.subject_id == ""
     assert subj.tenant_id == ""
     assert subj.inbound_token is None
@@ -260,7 +314,7 @@ async def test_to_subject_anonymous_when_no_auth():
 
 async def test_to_subject_falls_back_to_team_and_blanks_missing_user():
     auth = UserAPIKeyAuth(token="sk-test", team_id="team-x")
-    subj = _to_subject(auth, None)
+    subj = to_subject(auth, None)
     assert subj.tenant_id == "team-x"  # no org -> team
     assert (
         subj.subject_id == ""
@@ -278,7 +332,7 @@ async def test_resolve_v2_auth_value_threads_identity_without_breaking_static(v2
 
 async def test_byok_server_maps_to_byok_key_source():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import ApiKeyConfig, Byok
 
@@ -290,7 +344,7 @@ async def test_byok_server_maps_to_byok_key_source():
         auth_type=MCPAuth.api_key,
         is_byok=True,
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, ApiKeyConfig)
     assert isinstance(spec.config.key_source, Byok)
@@ -299,7 +353,7 @@ async def test_byok_server_maps_to_byok_key_source():
 
 async def test_token_exchange_server_maps_to_config():
     from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-        _to_server_spec,
+        to_server_spec,
     )
     from litellm.proxy.gateway.mcp.outbound_credentials.types import TokenExchangeConfig
 
@@ -315,7 +369,7 @@ async def test_token_exchange_server_maps_to_config():
         audience="https://aud.example",
         scopes=["a", "b"],
     )
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.token_exchange_endpoint == "https://idp/exchange"
@@ -324,3 +378,117 @@ async def test_token_exchange_server_maps_to_config():
     assert spec.config.client_secret.get_secret_value() == "csecret"
     assert spec.config.scopes == ("a", "b")
     assert spec.resource == "https://aud.example"  # audience preferred for the binding
+
+
+async def test_interactive_oauth2_no_delegate_maps_to_authorization_code():
+    # LIT-3795: a non-delegated interactive oauth2 server resolves to authorization_code
+    # (gateway-stored per-user token), so the caller JWT is never forwarded upstream.
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+        AuthorizationCodeConfig,
+    )
+
+    server = MCPServer(
+        server_id="oa1",
+        name="oa1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        delegate_auth_to_upstream=False,
+        client_id="cid",
+        client_secret="csecret",
+        authorization_url="https://idp/authorize",
+        token_url="https://idp/token",
+        scopes=["openid"],
+    )
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, AuthorizationCodeConfig)
+    assert spec.config.token_url == "https://idp/token"
+    assert spec.config.client_id == "cid"
+
+
+async def test_interactive_oauth2_delegate_maps_to_passthrough():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import PassthroughConfig
+
+    server = MCPServer(
+        server_id="oa2",
+        name="oa2",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        delegate_auth_to_upstream=True,
+    )
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, PassthroughConfig)
+
+
+async def test_none_oauth_passthrough_maps_to_passthrough():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import PassthroughConfig
+
+    server = MCPServer(
+        server_id="pt1",
+        name="pt1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.none,
+        oauth_passthrough=True,
+        extra_headers=["Authorization"],
+    )
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, PassthroughConfig)
+
+
+async def test_none_without_passthrough_maps_to_none():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import NoneConfig
+
+    server = MCPServer(
+        server_id="n1",
+        name="n1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.none,
+    )
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, NoneConfig)
+
+
+async def test_aws_sigv4_server_maps_to_config():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import to_server_spec
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+        AwsSigV4Config,
+        StaticKeys,
+    )
+
+    server = MCPServer(
+        server_id="sig1",
+        name="sig1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.aws_sigv4,
+        aws_access_key_id="AKIA",
+        aws_secret_access_key="secret",
+        aws_region_name="us-west-2",
+        aws_service_name="bedrock-agentcore",
+    )
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, AwsSigV4Config)
+    assert isinstance(spec.config.credentials, StaticKeys)
+    assert spec.config.region == "us-west-2"

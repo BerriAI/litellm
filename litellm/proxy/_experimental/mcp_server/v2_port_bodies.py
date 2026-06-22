@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Mapping, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
@@ -20,7 +20,10 @@ from litellm.proxy.gateway.mcp.outbound_credentials.clock import Clock, SystemCl
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     CredentialKey,
 )
-from litellm.proxy.gateway.mcp.outbound_credentials.token_store import StoredToken
+from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
+    StoredToken,
+    TokenKey,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AssumeRole,
     AwsSigV4Config,
@@ -110,6 +113,16 @@ class HttpxClientCredentialsFetcher:
     async def fetch(
         self, config: ClientCredentialsConfig
     ) -> Result[StoredToken, CredError]:
+        if (
+            config.client_id is None
+            or config.client_secret is None
+            or config.token_url is None
+        ):
+            return Error(
+                CredError.of_misconfigured(
+                    "client_credentials requires client_id, client_secret, and token_url"
+                )
+            )
         data = {
             "grant_type": "client_credentials",
             "client_id": config.client_id,
@@ -256,3 +269,91 @@ def _classify_sigv4_error(error: Exception) -> CredError:
     return CredError.of_misconfigured(
         f"aws_sigv4 credentials could not be resolved: {error}"
     )
+
+
+# v1 refreshes the per-user token on every read, so the token this store returns is always
+# currently valid; expiry is set beyond the resolver's refresh buffer to keep v2's proactive
+# refresh inert (the OAuth dance and refresh stay on v1 until it retires).
+_BRIDGE_TOKEN_TTL = timedelta(hours=1)
+
+
+class _OAuthPayload(BaseModel):
+    """The slice of v1's stored OAuth2 payload we consume; extra fields are ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+    access_token: str
+
+
+async def _read_valid_user_oauth_token(
+    subject_id: str, server_id: str
+) -> Optional[Mapping[str, object]]:
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_user_oauth_credential,
+        resolve_valid_user_oauth_token,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise RuntimeError("no DB client available for OAuth token lookup")
+    server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+    if server is None:
+        return None
+    cred = await get_user_oauth_credential(prisma_client, subject_id, server_id)
+    return await resolve_valid_user_oauth_token(subject_id, server, cred, prisma_client)
+
+
+class V1OAuthTokenStore:
+    """Per-user authorization_code TokenStore backed by v1's stored OAuth tokens.
+
+    Read-path graft: ``get`` returns the user's currently-valid upstream token, reusing v1's
+    ``resolve_valid_user_oauth_token`` (which reads the stored credential and refreshes it via the
+    server's token_url when near expiry). Because v1 refreshes on every read, the returned token is
+    always currently valid, so ``expires_at`` is set beyond the resolver's refresh buffer to keep
+    v2's proactive-refresh path inert; the dance and refresh stay on v1 until it retires, at which
+    point a v2-owned store returns real expiry and the resolver owns refresh. A missing/invalid
+    token is ``Ok(None)`` (the arm turns that into a 401 that starts the OAuth flow); a DB outage is
+    ``upstream_unavailable``. The reader is injected so the arm stays unit-testable without a DB.
+    """
+
+    def __init__(
+        self,
+        reader: Callable[
+            [str, str], Awaitable[Optional[Mapping[str, object]]]
+        ] = _read_valid_user_oauth_token,
+        clock: Optional[Clock] = None,
+    ) -> None:
+        self._reader = reader
+        self._clock: Clock = clock or SystemClock()
+
+    async def get(self, key: TokenKey) -> Result[Optional[StoredToken], CredError]:
+        if not key.subject_id:
+            # No authenticated identity -> no per-user token; never share one slot.
+            return Ok(None)
+        try:
+            payload = await self._reader(key.subject_id, key.server_id)
+        except Exception as e:
+            return Error(
+                CredError.of_upstream_unavailable(f"OAuth token lookup failed: {e}")
+            )
+        if payload is None:
+            return Ok(None)
+        try:
+            parsed = _OAuthPayload.model_validate(payload)
+        except ValidationError:
+            return Ok(None)  # no usable access_token -> drives the OAuth dance
+        return Ok(
+            StoredToken(
+                access_token=SecretStr(parsed.access_token),
+                expires_at=self._clock.now() + _BRIDGE_TOKEN_TTL,
+                refresh_token=None,
+            )
+        )
+
+    async def put(self, key: TokenKey, token: StoredToken) -> Result[None, CredError]:
+        # Unreached during the bridge: get returns non-near-expiry tokens, so the resolver never
+        # refreshes/persists through this port; v1 persists inside resolve_valid_user_oauth_token.
+        _ = (key, token)
+        return Ok(None)

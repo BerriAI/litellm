@@ -79,3 +79,25 @@ class MCPUpstreamAuthError(Exception):
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPUpstreamError(Exception):
+    """Raised when an egress call to an upstream MCP server fails for a non-auth reason: the upstream
+    is unreachable, or the server's credential config is invalid/unsupported.
+
+    Single-result routes (``call_tool``, ``read_resource``, ``get_prompt``) raise this since there is
+    no list to degrade to; auth failures use :class:`MCPUpstreamAuthError` instead so clients can
+    trigger re-auth. Carries a ``status_code`` so the gateway returns a semantically correct response
+    (e.g. 502 unreachable, 428 precondition, 500 misconfigured) rather than a blanket 500. Unlike the
+    auth error there is no ``WWW-Authenticate`` challenge to fabricate, so it converts to an
+    ``HTTPException`` with no request context.
+    """
+
+    def __init__(self, status_code: int, server_name: str, detail: str) -> None:
+        self.status_code = status_code
+        self.server_name = server_name
+        self.detail = detail
+        super().__init__(f"Upstream MCP server {server_name!r}: {detail}")
+
+    def to_http_exception(self) -> HTTPException:
+        return HTTPException(status_code=self.status_code, detail=self.detail)

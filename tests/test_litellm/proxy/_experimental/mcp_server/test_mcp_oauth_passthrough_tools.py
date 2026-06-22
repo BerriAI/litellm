@@ -11,7 +11,7 @@ sys.path.insert(0, "../../../../../")
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
-    _extract_upstream_auth_failure,
+    extract_upstream_auth_failure,
 )
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPAuth
@@ -26,7 +26,7 @@ def test_extract_upstream_auth_failure_finds_401_in_http_status_error():
     )
     exc = httpx.HTTPStatusError("401", request=response.request, response=response)
 
-    result = _extract_upstream_auth_failure(exc)
+    result = extract_upstream_auth_failure(exc)
     assert result == (401, 'Bearer resource_metadata="https://x"')
 
 
@@ -41,13 +41,13 @@ def test_extract_upstream_auth_failure_walks_exception_group():
     try:
         raise ExceptionGroup("wrapped", [inner])  # noqa: F821 (PEP 654, py3.11+)
     except Exception as group:
-        result = _extract_upstream_auth_failure(group)
+        result = extract_upstream_auth_failure(group)
 
     assert result == (401, "Bearer")
 
 
 def test_extract_upstream_auth_failure_returns_none_for_non_auth():
-    assert _extract_upstream_auth_failure(RuntimeError("boom")) is None
+    assert extract_upstream_auth_failure(RuntimeError("boom")) is None
 
 
 @pytest.mark.asyncio

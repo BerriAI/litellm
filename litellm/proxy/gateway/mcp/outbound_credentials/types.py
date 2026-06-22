@@ -158,9 +158,12 @@ class ClientCredentialsConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.client_credentials] = AuthSpecKind.client_credentials
-    client_id: str
-    client_secret: SecretStr
-    token_url: str
+    # Optional so the config can be built incomplete: the values may be supplied at runtime (token_url
+    # via RFC 8414 discovery, client_id/secret via DCR) and the _client_credentials arm raises
+    # CredError.misconfigured when a needed field is still absent at resolve time.
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+    token_url: str | None = None
     scopes: tuple[str, ...] = ()
 
 
@@ -188,15 +191,6 @@ class SharedKey(BaseModel):
     value: SecretStr
 
 
-class PerUserEnvVar(BaseModel):
-    """A per-user value the admin templated as an env var; the user fills it in. Pulled from
-    the credential store at resolve time. Missing means the user has not completed setup, a
-    precondition (412) rather than an auth failure."""
-
-    model_config = ConfigDict(frozen=True)
-    source: Literal["per_user_env_var"] = "per_user_env_var"
-
-
 class Byok(BaseModel):
     """A key the user brings via the entry flow, stored per-user. Pulled from the credential
     store at resolve time. Missing means the user must provide it, a 401 + WWW-Authenticate
@@ -206,9 +200,7 @@ class Byok(BaseModel):
     source: Literal["byok"] = "byok"
 
 
-ApiKeySource = Annotated[
-    SharedKey | PerUserEnvVar | Byok, Field(discriminator="source")
-]
+ApiKeySource = Annotated[SharedKey | Byok, Field(discriminator="source")]
 
 
 class ApiKeyConfig(BaseModel):

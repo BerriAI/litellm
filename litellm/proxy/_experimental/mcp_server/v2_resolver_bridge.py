@@ -12,6 +12,7 @@ This lives on the v1 side so the v2 core keeps its no-v1-imports invariant.
 
 from __future__ import annotations
 
+import base64
 import functools
 import os
 from typing import TYPE_CHECKING, Dict, Optional
@@ -25,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxSigV4Signer,
     HttpxTokenExchanger,
     V1ByokCredentialStore,
+    V1OAuthTokenStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import SystemClock
 from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
@@ -33,10 +35,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
 from litellm.proxy.gateway.mcp.outbound_credentials.service_token_store import (
     InMemoryServiceTokenStore,
 )
-from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
-    InMemoryTokenStore,
-    StoredToken,
-)
+from litellm.proxy.gateway.mcp.outbound_credentials.token_store import StoredToken
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     Ambient,
     ApiKeyConfig,
@@ -47,6 +46,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ClientCredentialsConfig,
     CredError,
     NoneConfig,
+    PassthroughConfig,
     ServerSpec,
     SharedKey,
     StaticKeys,
@@ -92,13 +92,14 @@ class _Unwired:
 
 
 @functools.lru_cache(maxsize=1)
-def _provider() -> UpstreamCredentialProvider:
-    # none + api_key resolve from config alone, so the stores/ports below are inert placeholders;
-    # real bodies get wired in as their modes are grafted.
+def provider() -> UpstreamCredentialProvider:
+    # Real bodies are wired as their modes are grafted. token_refresher stays unwired: the bridge's
+    # V1OAuthTokenStore returns currently-valid tokens (v1 refreshes on read), so the resolver's
+    # proactive-refresh path is inert until v1 retires.
     unwired = _Unwired()
     return UpstreamCredentialProvider(
         credential_store=V1ByokCredentialStore(),
-        token_store=InMemoryTokenStore(),
+        token_store=V1OAuthTokenStore(),
         token_refresher=unwired,
         clock=SystemClock(),
         service_token_store=InMemoryServiceTokenStore(),
@@ -108,9 +109,17 @@ def _provider() -> UpstreamCredentialProvider:
     )
 
 
-def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
+def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     resource = server.url or server.server_id
     if server.auth_type in (None, MCPAuth.none):
+        # A none server opted into upstream OAuth passthrough forwards the caller's bearer; the
+        # passthrough arm sends the inbound token. Otherwise no upstream credential.
+        if server.is_oauth_passthrough:
+            return ServerSpec(
+                server_id=server.server_id,
+                resource=resource,
+                config=PassthroughConfig(),
+            )
         return ServerSpec(
             server_id=server.server_id, resource=resource, config=NoneConfig()
         )
@@ -138,6 +147,42 @@ def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 key_source=SharedKey(value=SecretStr(token)),
             ),
         )
+    # Static credential on the Authorization header; these differ only by scheme prefix (basic is
+    # base64(user:pass)). All reuse the api_key arm. authorization uses an empty prefix (verbatim),
+    # so test the prefix with `is not None`, not truthiness.
+    authorization_prefix = {
+        MCPAuth.bearer_token: "Bearer",
+        MCPAuth.token: "token",
+        MCPAuth.authorization: "",
+        MCPAuth.basic: "Basic",
+    }.get(server.auth_type)
+    if authorization_prefix is not None:
+        token = server.authentication_token
+        if not token:
+            return None  # static Authorization mode with no token: let v1 handle it (parity-safe)
+        value = (
+            base64.b64encode(token.encode("utf-8")).decode()
+            if server.auth_type == MCPAuth.basic
+            else token
+        )
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=ApiKeyConfig(
+                header_name="Authorization",
+                value_prefix=authorization_prefix,
+                key_source=SharedKey(value=SecretStr(value)),
+            ),
+        )
+    if server.auth_type == MCPAuth.aws_sigv4:
+        # Reuse the SigV4 config builder; the resolver's aws_sigv4 arm turns it into the botocore
+        # signer (an httpx.Auth) that signs each upstream request.
+        aws_config = _to_aws_sigv4_config(server)
+        if aws_config is None:
+            return None  # AssumeRole with explicit base keys: not representable yet, defer to v1
+        return ServerSpec(
+            server_id=server.server_id, resource=resource, config=aws_config
+        )
     if server.has_token_exchange_config:
         # token_exchange takes precedence over client_credentials (matches v1's cascade); the arm
         # binds the exchanged token to this resource (audience, RFC 8707).
@@ -155,23 +200,47 @@ def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 scopes=tuple(server.scopes or ()),
             ),
         )
-    if (
-        server.has_client_credentials
-        and server.client_id
-        and server.client_secret
-        and server.token_url
-    ):
+    if server.has_client_credentials:
+        # Mode selector only (oauth2_flow == client_credentials); completeness is no longer a guard.
+        # An incomplete M2M config still builds, and the _client_credentials arm raises misconfigured
+        # at resolve time instead of returning None and deferring to v1.
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
             config=ClientCredentialsConfig(
                 client_id=server.client_id,
-                client_secret=SecretStr(server.client_secret),
+                client_secret=(
+                    SecretStr(server.client_secret) if server.client_secret else None
+                ),
                 token_url=server.token_url,
                 scopes=tuple(server.scopes or ()),
             ),
         )
-    return None  # other modes are not grafted yet
+    if server.needs_user_oauth_token:
+        # Interactive oauth2 (3LO), not M2M/exchange (handled above). delegate_auth_to_upstream
+        # forwards the caller token (passthrough); otherwise the gateway holds a per-user token
+        # (authorization_code). This split is the LIT-3795 fix: a non-delegated interactive oauth2
+        # server must not forward the caller JWT upstream.
+        if server.delegate_auth_to_upstream:
+            return ServerSpec(
+                server_id=server.server_id,
+                resource=resource,
+                config=PassthroughConfig(),
+            )
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=AuthorizationCodeConfig(
+                client_id=server.client_id,
+                client_secret=(
+                    SecretStr(server.client_secret) if server.client_secret else None
+                ),
+                authorization_url=server.authorization_url,
+                token_url=server.token_url,
+                scopes=tuple(server.scopes or ()),
+            ),
+        )
+    return None  # aws_sigv4 uses the aws_auth seam; misconfigured modes defer to v1
 
 
 def _added_headers(auth: httpx.Auth) -> Dict[str, str]:
@@ -187,7 +256,7 @@ def _added_headers(auth: httpx.Auth) -> Dict[str, str]:
     }
 
 
-def _to_subject(
+def to_subject(
     user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]
 ) -> Subject:
     """Map v1's authenticated principal onto the v2 Subject.
@@ -214,11 +283,11 @@ async def resolve_v2_auth_value(
     """Resolve `none`/`api_key` via the v2 resolver, or return None to defer to v1."""
     if not v2_resolver_enabled():
         return None
-    spec = _to_server_spec(server)
+    spec = to_server_spec(server)
     if spec is None:
         return None
-    result = await _provider().resolve(
-        _to_subject(user_api_key_auth, subject_token), spec
+    result = await provider().resolve(
+        to_subject(user_api_key_auth, subject_token), spec
     )
     if isinstance(result, Error):
         verbose_logger.warning(
@@ -283,7 +352,7 @@ async def resolve_v2_aws_auth(server: MCPServer) -> Optional[httpx.Auth]:
     config = _to_aws_sigv4_config(server)
     if config is None:
         return None
-    result = await _provider().resolve(
+    result = await provider().resolve(
         Subject(tenant_id="", subject_id="", inbound_token=None),
         ServerSpec(
             server_id=server.server_id,
