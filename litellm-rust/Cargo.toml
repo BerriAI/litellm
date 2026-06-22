@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/providers",
+    "crates/python-bridge",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/BerriAI/litellm"
+
+[workspace.dependencies]
+litellm-core = { path = "crates/core" }
+litellm-providers = { path = "crates/providers" }
+pyo3 = "0.23.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
