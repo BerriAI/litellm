@@ -14,6 +14,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlencode
 
 import pytest
@@ -142,11 +143,18 @@ class FunctionCallArgumentsDone(BaseModel):
     arguments: str
 
 
+class ContentPart(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    text: str | None = None
+    transcript: str | None = None
+
+
 class OutputItem(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: str | None = None
     name: str | None = None
     call_id: str | None = None
+    content: list[ContentPart] | None = None
 
 
 class OutputItemDone(BaseModel):
@@ -156,7 +164,8 @@ class OutputItemDone(BaseModel):
 
 class ResponsePayload(BaseModel):
     model_config = ConfigDict(extra="allow")
-    usage: dict[str, int] | None = None
+    usage: dict[str, Any] | None = None
+    output: list[OutputItem] | None = None
 
 
 class ResponseDone(BaseModel):
@@ -183,15 +192,41 @@ def parse_last[M: BaseModel](
     return model.model_validate_json(matches[-1].payload) if matches else None
 
 
+_TEXT_DELTA_TYPES = (
+    # beta protocol (OpenAI-Beta: realtime=v1)
+    "response.text.delta",
+    "response.audio_transcript.delta",
+    # GA protocol (default toward the proxy)
+    "response.output_text.delta",
+    "response.output_audio_transcript.delta",
+)
+
+
+def _text_from_response_done(events: tuple[ReceivedEvent, ...]) -> str:
+    done = parse_last(events, "response.done", ResponseDone)
+    if done is None or not done.response.output:
+        return ""
+    parts: list[str] = []
+    for item in done.response.output:
+        if item.type != "message":
+            continue
+        for content in item.content or []:
+            if content.text:
+                parts.append(content.text)
+            elif content.transcript:
+                parts.append(content.transcript)
+    return "".join(parts)
+
+
 def transcript(events: tuple[ReceivedEvent, ...]) -> str:
-    for delta_type in ("response.text.delta", "response.audio_transcript.delta"):
+    for delta_type in _TEXT_DELTA_TYPES:
         text = "".join(
             DeltaEvent.model_validate_json(e.payload).delta
             for e in events_of_type(events, delta_type)
         )
         if text:
             return text
-    return ""
+    return _text_from_response_done(events)
 
 
 def function_call_item(events: tuple[ReceivedEvent, ...]) -> OutputItem | None:
