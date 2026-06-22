@@ -101,6 +101,7 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+.coverage
 test-config
 
 # ---------- Terraform ----------

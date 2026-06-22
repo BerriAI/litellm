@@ -1,9 +1,22 @@
 import json
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from pydantic import BaseModel
 from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
+
+
+class LiteLLMControlParams(BaseModel):
+    """LiteLLM-internal control parameters that must never be serialized into a
+    provider request body. They live in optional_params for convenience but
+    govern client-side behavior (e.g. how the HTTP response stream is
+    re-chunked), so Bedrock rejects them as unknown fields."""
+
+    stream_chunk_size: int | None = None
+
+
+LITELLM_CONTROL_PARAM_KEYS = frozenset(LiteLLMControlParams.model_fields)
 
 
 class CachePointBlock(TypedDict, total=False):

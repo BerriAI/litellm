@@ -154,34 +154,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         return _anthropic_request
 
-    async def async_transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        _anthropic_request = self._build_bedrock_anthropic_request_base(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-
-        await self._async_convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list = self._compute_bedrock_invoke_beta_headers(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            headers=headers,
-        )
-        if beta_list:
-            _anthropic_request["anthropic_beta"] = beta_list
-
-        return _anthropic_request
-
     def _build_bedrock_anthropic_request_base(
         self,
         model: str,
@@ -190,11 +162,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in self.aws_authentication_params
-        }
+        filtered_params = self.filter_invoke_request_params(optional_params)
         output_config = filtered_params.get("output_config")
         if isinstance(output_config, dict):
             filtered_params["output_config"] = dict(output_config)
@@ -215,7 +183,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
-        anthropic_request.pop("stream_chunk_size", None)
         output_format = anthropic_request.pop("output_format", None)
         output_config_format = pop_bedrock_invoke_output_config_format(
             anthropic_request
