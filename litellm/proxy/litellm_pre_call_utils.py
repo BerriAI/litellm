@@ -1469,8 +1469,7 @@ async def add_litellm_data_to_request(
         _metadata_variable_name=_metadata_variable_name,
     )
 
-    # Add headers to metadata for guardrails to access (fixes #17477)
-    # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
+    # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(
         data[_metadata_variable_name], dict
     ):

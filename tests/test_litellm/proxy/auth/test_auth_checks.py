@@ -1751,6 +1751,49 @@ async def test_reject_clientside_metadata_tags_allows_key_tags_without_client_ta
 
 
 @pytest.mark.asyncio
+async def test_common_checks_bedrock_route_keeps_key_tags_out_of_provider_metadata():
+    """GH#30629: key-level tags on a bedrock passthrough request must land in
+    litellm_metadata, never in the provider-facing metadata field (Bedrock rejects
+    non-user_id metadata with HTTP 400). Dropping the litellm_metadata pre-seed makes
+    apply_key_tags_pre_auth fall back to metadata, so this guards that regression.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {"messages": [{"role": "user", "content": "test"}]}
+
+    mock_request = MagicMock(spec=Request)
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        metadata={"tags": ["engineering"]},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        result = await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+        )
+
+    assert result is True
+    assert request_body["litellm_metadata"]["tags"] == ["engineering"]
+    assert "metadata" not in request_body
+
+
+@pytest.mark.asyncio
 async def test_virtual_key_soft_budget_check_with_user_obj():
     """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
     alert_triggered = False
