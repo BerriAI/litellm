@@ -123,11 +123,13 @@ def get_key_models(
             and user_api_key_dict.team_id is not None
         ):
             all_models = list(user_api_key_dict.team_models)
-            # GH#30619: if team_models also contains all-team-models,
-            # expand to actual proxy model list instead of leaking
-            # the sentinel string into /model/info
             if SpecialModelNames.all_team_models.value in all_models:
-                all_models = list(proxy_model_list)
+                all_models = [
+                    model
+                    for model in all_models
+                    if model != SpecialModelNames.all_team_models.value
+                ]
+                all_models.extend(proxy_model_list)
                 if include_model_access_groups:
                     all_models.extend(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models:

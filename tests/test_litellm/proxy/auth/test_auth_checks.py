@@ -352,6 +352,43 @@ async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
 
 
 @pytest.mark.asyncio
+async def test_can_team_access_model_all_team_models_expands_router_models():
+    from litellm import Router
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "allowed-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    assert (
+        await can_team_access_model(
+            model="allowed-model",
+            team_object=team_object,
+            llm_router=router,
+        )
+        is True
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="blocked-model",
+            team_object=team_object,
+            llm_router=router,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_reconnect_once_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(

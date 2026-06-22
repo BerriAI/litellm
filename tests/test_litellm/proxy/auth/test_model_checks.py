@@ -565,6 +565,27 @@ def test_get_key_models_all_team_models_recursive_team():
     assert set(result) == {"model-a", "model-b"}
 
 
+def test_get_key_models_all_team_models_keeps_mixed_team_entries():
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": "team-1",
+            "team_models": [
+                SpecialModelNames.all_team_models.value,
+                "restricted-model",
+            ],
+        },
+    )()
+    result = get_key_models(user_api_key_dict, ["model-a", "model-b"], {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b", "restricted-model"}
+
+
 def test_get_team_models_all_team_models_expands():
     """GH#30619: all-team-models in team_models should expand."""
     from litellm.proxy.auth.model_checks import get_team_models
