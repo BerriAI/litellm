@@ -247,6 +247,13 @@ def handle_cohere_response(
             for i, tc in enumerate(cohere_response.chatResponse.toolCalls)
         ]
 
+    # Per OpenAI semantics a response carrying tool calls must report
+    # finish_reason="tool_calls". OCI's Cohere protocol has no TOOL_CALLS
+    # finishReason value (it returns "COMPLETE"), so _normalize_oci_finish_reason
+    # yields "stop"; override it when tool calls are present.
+    if tool_calls:
+        finish_reason = "tool_calls"
+
     content: Optional[str] = response_text if response_text else None
 
     # Only include ``tool_calls`` in the message dict when actually present.

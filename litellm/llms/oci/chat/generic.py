@@ -377,6 +377,10 @@ def handle_generic_response(
     model_response.choices[0].finish_reason = _normalize_oci_finish_reason(  # type: ignore[union-attr,assignment]
         response_choice.finishReason
     )
+    # OpenAI semantics: a response carrying tool calls reports
+    # finish_reason="tool_calls" regardless of the provider's raw stop reason.
+    if message.tool_calls:
+        model_response.choices[0].finish_reason = "tool_calls"  # type: ignore[union-attr]
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None
