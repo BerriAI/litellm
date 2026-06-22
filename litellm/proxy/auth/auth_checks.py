@@ -3658,9 +3658,17 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            # Identify the key in the error so callers know which key hit its
+            # budget without an operator having to reverse-map spend->key.
+            # key_name is LiteLLM's masked form (e.g. "sk-...um_g"), which
+            # carries the last 4 chars of the raw key.
+            key_descriptor = valid_token.key_alias or "key"
+            if valid_token.key_name:
+                key_descriptor = f"{key_descriptor} ({valid_token.key_name})"
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 
