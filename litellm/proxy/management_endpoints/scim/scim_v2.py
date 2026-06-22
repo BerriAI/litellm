@@ -130,6 +130,7 @@ class ScimUserData(TypedDict):
     given_name: Optional[str]
     family_name: Optional[str]
     active: Optional[bool]
+    enterprise: Optional[SCIMEnterpriseUser]
 
 
 class GroupMemberExtractionResult(BaseModel):
@@ -211,11 +212,15 @@ def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
         "given_name": user.name.givenName if user.name else None,
         "family_name": user.name.familyName if user.name else None,
         "active": user.active,
+        "enterprise": user.enterprise_user,
     }
 
 
 def _build_scim_metadata(
-    given_name: Optional[str], family_name: Optional[str], active: Optional[bool] = None
+    given_name: Optional[str],
+    family_name: Optional[str],
+    active: Optional[bool] = None,
+    enterprise: Optional[SCIMEnterpriseUser] = None,
 ) -> Dict[str, Any]:
     """Build metadata dictionary with SCIM data."""
     metadata: Dict[str, Any] = {
@@ -227,6 +232,11 @@ def _build_scim_metadata(
 
     if active is not None:
         metadata["scim_active"] = active
+
+    if enterprise is not None:
+        metadata[SCIM_ENTERPRISE_METADATA_KEY] = enterprise.model_dump(
+            by_alias=True, exclude_none=True
+        )
 
     return metadata
 
@@ -1122,7 +1132,9 @@ async def create_user(
         # Create user in database
         user_id = user.userName or str(uuid.uuid4())
         metadata = _build_scim_metadata(
-            user_data["given_name"], user_data["family_name"]
+            user_data["given_name"],
+            user_data["family_name"],
+            enterprise=user_data["enterprise"],
         )
 
         default_role = _default_scim_user_role()
@@ -1208,6 +1220,7 @@ async def update_user(
             user_data["given_name"],
             user_data["family_name"],
             scim_active_for_metadata,
+            enterprise=user_data["enterprise"],
         )
 
         await _handle_team_membership_changes(
