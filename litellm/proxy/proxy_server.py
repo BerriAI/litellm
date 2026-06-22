@@ -106,6 +106,10 @@ from litellm.proxy.common_utils.callback_utils import (
     process_callback,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.router_utils.add_retry_fallback_headers import (
+    get_fallback_errors_from_headers,
+    get_hidden_params_dict,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -7085,57 +7089,120 @@ def _get_client_requested_model_for_streaming(request_data: dict) -> str:
     return requested_model if isinstance(requested_model, str) else ""
 
 
+def _is_positive_int_like(value: Any) -> bool:
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _should_include_fallback_errors(request_data: dict[str, object]) -> bool:
+    return request_data.get("include_fallback_errors") is True
+
+
+def _get_streaming_fallback_metadata(
+    response_obj: object,
+) -> tuple[bool, str | None, list[dict[str, object]]]:
+    additional_headers = get_hidden_params_dict(response_obj).get("additional_headers")
+    if not isinstance(additional_headers, dict):
+        return False, None, []
+
+    if not _is_positive_int_like(
+        additional_headers.get("x-litellm-attempted-fallbacks")
+    ):
+        return False, None, []
+
+    fallback_model = additional_headers.get("x-litellm-model-group")
+    fallback_errors = get_fallback_errors_from_headers(additional_headers)
+    if isinstance(fallback_model, str) and fallback_model:
+        return True, fallback_model, fallback_errors
+    return True, None, fallback_errors
+
+
+def _format_fallback_metadata_sse_event(
+    *,
+    fallback_model: str | None,
+    fallback_errors: list[dict[str, object]],
+) -> str:
+    import time
+
+    payload = {
+        "id": "litellm-fallback-metadata",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": fallback_model or "",
+        "choices": [],
+        "litellm_fallback": {
+            "fallback_model": fallback_model,
+            "errors": fallback_errors,
+        },
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 def _restamp_streaming_chunk_model(
     *,
     chunk: Any,
     requested_model_from_client: str,
     request_data: dict,
     model_mismatch_logged: bool,
-) -> Tuple[Any, bool]:
+    fallback_was_attempted: bool = False,
+    fallback_model_from_metadata: str | None = None,
+) -> tuple[Any, bool]:
+    target_model = (
+        fallback_model_from_metadata
+        if fallback_was_attempted
+        else requested_model_from_client
+    )
     # Always return the client-requested model name (not provider-prefixed internal identifiers)
     # on streaming chunks.
+    # On fallback, use the public OpenAI-compatible model name. This keeps
+    # provider-prefixed internal identifiers from leaking into the public API.
     #
     # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+    if not target_model or not isinstance(chunk, (BaseModel, dict)):
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
-    if _is_azure_model_router_request(requested_model_from_client):
+    if not fallback_was_attempted and _is_azure_model_router_request(
+        requested_model_from_client
+    ):
         return chunk, model_mismatch_logged
 
     # For fastest_response batch completions, preserve the winning model's name
     # instead of stamping the comma-separated list the client sent.
-    if request_data.get("fastest_response", False):
+    if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
-    if downstream_model == requested_model_from_client:
+    if downstream_model == target_model:
         return chunk, model_mismatch_logged
 
-    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+    if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
-            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            "litellm_call_id=%s: streaming chunk model mismatch - target=%r downstream=%r fallback_was_attempted=%s. Overriding chunk model to target.",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
+            target_model,
             downstream_model,
+            fallback_was_attempted,
         )
         model_mismatch_logged = True
 
     if isinstance(chunk, dict):
-        chunk["model"] = requested_model_from_client
+        chunk["model"] = target_model
         return chunk, model_mismatch_logged
 
     try:
-        setattr(chunk, "model", requested_model_from_client)
+        chunk.model = target_model
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
+            target_model,
             type(chunk),
             str(e),
             exc_info=True,
@@ -7294,7 +7361,14 @@ async def async_data_generator(
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
+        (
+            fallback_was_attempted,
+            fallback_model_from_metadata,
+            fallback_errors,
+        ) = _get_streaming_fallback_metadata(response)
         model_mismatch_logged = False
+        fallback_metadata_event_sent = False
+        include_fallback_errors = _should_include_fallback_errors(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -7332,13 +7406,37 @@ async def async_data_generator(
                     str_so_far=_str_so_far,
                 )
 
+            # Mid-stream fallbacks surface metadata on individual chunks rather than
+            # the response wrapper. Keep scanning chunks until a fallback model is
+            # resolved, then latch it for the rest of the stream.
+            if fallback_model_from_metadata is None:
+                (
+                    chunk_fallback_was_attempted,
+                    chunk_fallback_model,
+                    chunk_fallback_errors,
+                ) = _get_streaming_fallback_metadata(chunk)
+                if chunk_fallback_was_attempted:
+                    fallback_was_attempted = True
+                    fallback_model_from_metadata = chunk_fallback_model
+                    fallback_errors = fallback_errors or chunk_fallback_errors
+
+            pending_fallback_event = (
+                include_fallback_errors
+                and fallback_was_attempted
+                and fallback_errors
+                and not fallback_metadata_event_sent
+            )
+
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
                 requested_model_from_client=requested_model_from_client,
                 request_data=request_data,
                 model_mismatch_logged=model_mismatch_logged,
+                fallback_was_attempted=fallback_was_attempted,
+                fallback_model_from_metadata=fallback_model_from_metadata,
             )
 
+            raw_passthrough = False
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
@@ -7354,14 +7452,14 @@ async def async_data_generator(
                         raise ValueError(
                             "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                         )
-                    continue
-                if chunk.startswith(("data:", "event:", ":")):
+                    raw_passthrough = True
+                elif chunk.startswith(("data:", "event:", ":")):
                     yield (
                         chunk
                         if chunk.endswith(_SSE_FRAME_DELIMITERS)
                         else chunk + "\n\n"
                     )
-                    continue
+                    raw_passthrough = True
             elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
                 while True:
@@ -7373,15 +7471,23 @@ async def async_data_generator(
                     raise ValueError(
                         "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                     )
-                continue
+                raw_passthrough = True
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
 
-            try:
-                yield _format_streaming_sse_chunk(chunk=chunk)
-            except Exception as e:
-                yield f"data: {str(e)}\n\n"
+            if not raw_passthrough:
+                try:
+                    yield _format_streaming_sse_chunk(chunk=chunk)
+                except Exception as e:
+                    yield f"data: {str(e)}\n\n"
+
+            if pending_fallback_event:
+                yield _format_fallback_metadata_sse_event(
+                    fallback_model=fallback_model_from_metadata,
+                    fallback_errors=fallback_errors,
+                )
+                fallback_metadata_event_sent = True
 
         stream_completed = True
         if not needs_iterator_wrap:
