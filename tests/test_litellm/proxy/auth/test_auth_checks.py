@@ -1751,11 +1751,22 @@ async def test_reject_clientside_metadata_tags_allows_key_tags_without_client_ta
 
 
 @pytest.mark.asyncio
-async def test_common_checks_bedrock_route_keeps_key_tags_out_of_provider_metadata():
-    """GH#30629: key-level tags on a bedrock passthrough request must land in
-    litellm_metadata, never in the provider-facing metadata field (Bedrock rejects
-    non-user_id metadata with HTTP 400). Dropping the litellm_metadata pre-seed makes
-    apply_key_tags_pre_auth fall back to metadata, so this guards that regression.
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+        "/v1/messages",
+    ],
+)
+async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metadata(
+    route,
+):
+    """GH#30629: on routes that track tags in litellm_metadata (bedrock, /v1/messages,
+    responses, ...) key-level tags must land in litellm_metadata, never in the
+    provider-facing metadata field (Bedrock rejects non-user_id metadata with HTTP 400).
+    The auth-time pre-seed keys off LITELLM_METADATA_ROUTES, so hardcoding a single route
+    or dropping the pre-seed makes apply_key_tags_pre_auth fall back to metadata; this
+    guards that regression.
     """
     from fastapi import Request
 
@@ -1781,7 +1792,7 @@ async def test_common_checks_bedrock_route_keeps_key_tags_out_of_provider_metada
             end_user_object=None,
             global_proxy_spend=None,
             general_settings={},
-            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+            route=route,
             llm_router=None,
             proxy_logging_obj=MagicMock(),
             valid_token=valid_token,
