@@ -98,9 +98,10 @@ class ResourceManager:
         """Register a teardown action for any resource the test just created."""
         self._cleanups.append(cleanup)
 
-    def key(self) -> str:
-        """Create an all-models virtual key; delete it on teardown."""
-        key = self.client.generate_key(KeyGenerateBody(models=[]))
+    def key(self, models: list[str] | None = None) -> str:
+        """Create a virtual key; delete it on teardown. `models` restricts which
+        models the key may call (None/[] means all)."""
+        key = self.client.generate_key(KeyGenerateBody(models=models or []))
         self.defer(lambda: self.client.delete_key(key))
         return key
 

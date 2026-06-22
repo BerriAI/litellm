@@ -1,0 +1,197 @@
+"""Live e2e for the Batches API across every provider LiteLLM supports.
+
+Synchronous tier only: a batch's completion window is 24h, so these never wait for
+"completed". Each case uploads a tiny JSONL, creates the batch through one of the
+four routing scenarios, asserts it was accepted (non-terminal status) and routed to
+the right provider, then retrieves / cancels / lists where the provider supports it.
+Everything created is deleted on teardown. Completion + cost tracking are out of
+scope here (see COVERAGE.md).
+
+Routing signal: for provider_fallback the raw batch id discriminates the provider;
+for the encoded/unified/model_param scenarios the proxy re-encodes the id, so the
+load-bearing signal is that create SUCCEEDS against that provider's own model - a
+misroute to the wrong provider fails the create.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Callable
+
+import pytest
+
+from batch_client import (
+    BatchClient,
+    BatchCreateBody,
+    BatchObject,
+    FileObject,
+    is_model_access_denied,
+    is_result_access_denied,
+)
+from capabilities import CAPABILITIES, Capability, raw_id_matches_provider
+from e2e_http import (
+    FileUploadForm,
+    Result,
+    StreamingResponse,
+    require_successful_call,
+    unwrap,
+)
+from lifecycle import ResourceManager
+
+pytestmark = pytest.mark.e2e
+
+NON_TERMINAL = {"validating", "in_progress", "finalizing", "cancelling", "cancelled"}
+
+
+def render_jsonl(model: str) -> bytes:
+    line = {
+        "custom_id": "req-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 8,
+        },
+    }
+    return (json.dumps(line) + "\n").encode()
+
+
+def upload_for_scenario(
+    client: BatchClient, cap: Capability, content: bytes, key: str
+) -> Result[FileObject]:
+    if cap.scenario == "encoded":
+        return client.upload_file(
+            content=content,
+            form=FileUploadForm(purpose="batch"),
+            model=cap.model,
+            key=key,
+        )
+    if cap.scenario == "unified":
+        return client.upload_file(
+            content=content,
+            form=FileUploadForm(purpose="batch", target_model_names=cap.model),
+            key=key,
+        )
+    return client.upload_file(
+        content=content,
+        form=FileUploadForm(purpose="batch"),
+        key=key,
+        provider=cap.provider,
+    )
+
+
+def create_for_scenario(
+    client: BatchClient, cap: Capability, file_id: str, key: str
+) -> StreamingResponse:
+    if cap.scenario == "model_param":
+        return client.create_batch(
+            body=BatchCreateBody(input_file_id=file_id, model=cap.model), key=key
+        )
+    if cap.scenario == "provider_fallback":
+        return client.create_batch(
+            body=BatchCreateBody(input_file_id=file_id), key=key, provider=cap.provider
+        )
+    return client.create_batch(body=BatchCreateBody(input_file_id=file_id), key=key)
+
+
+def op_provider(cap: Capability) -> str | None:
+    """provider_fallback ids are raw, so retrieve/cancel/list/delete need the provider
+    hint; the other scenarios encode it into the id and route automatically."""
+    return cap.provider if cap.scenario == "provider_fallback" else None
+
+
+def quietly(action: Callable[[], object]) -> Callable[[], None]:
+    """Adapt a value-returning call into a best-effort cleanup the teardown can run."""
+
+    def run() -> None:
+        action()
+
+    return run
+
+
+@pytest.mark.parametrize("cap", CAPABILITIES, ids=[c.id for c in CAPABILITIES])
+def test_batch_lifecycle(
+    cap: Capability, client: BatchClient, resources: ResourceManager
+) -> None:
+    key = resources.key()
+    provider = op_provider(cap)
+
+    file_id = unwrap(
+        upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key)
+    ).id
+    resources.defer(lambda: client.delete_file(file_id, key=key, provider=provider))
+
+    created = create_for_scenario(client, cap, file_id, key)
+    require_successful_call(created)
+    batch = BatchObject.model_validate_json(created.body)
+    resources.defer(
+        quietly(lambda: client.cancel_batch(batch.id, key=key, provider=provider))
+    )
+
+    assert batch.id, f"create returned no batch id (body={created.body[:200]})"
+    assert batch.status in NON_TERMINAL, f"unexpected initial status {batch.status!r}"
+    if cap.scenario == "provider_fallback":
+        assert raw_id_matches_provider(
+            cap.provider, batch.id
+        ), f"{cap.provider} batch id {batch.id!r} not in that provider's native shape; misrouted?"
+
+    fetched = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
+    assert fetched.id == batch.id
+
+    if cap.can_cancel:
+        cancelled = unwrap(client.cancel_batch(batch.id, key=key, provider=provider))
+        assert cancelled.status in {"cancelling", "cancelled"}
+
+    if cap.can_list:
+        listed = unwrap(client.list_batches(key=key, provider=provider))
+        assert any(
+            b.id == batch.id for b in listed.data
+        ), "created batch absent from list"
+
+
+def test_batch_key_model_access_denied(
+    client: BatchClient, resources: ResourceManager
+) -> None:
+    key = resources.key(models=["openai-batch"])
+
+    denied_upload = client.upload_file(
+        content=render_jsonl("azure-batch"),
+        form=FileUploadForm(purpose="batch"),
+        model="azure-batch",
+        key=key,
+    )
+    assert is_result_access_denied(
+        denied_upload
+    ), f"restricted key uploaded a file for a disallowed model: {denied_upload}"
+
+    raw_file = unwrap(
+        client.upload_file(
+            content=render_jsonl("openai-batch"),
+            form=FileUploadForm(purpose="batch"),
+            key=key,
+            provider="openai",
+        )
+    ).id
+    resources.defer(lambda: client.delete_file(raw_file, key=key, provider="openai"))
+
+    denied_create = client.create_batch(
+        body=BatchCreateBody(input_file_id=raw_file, model="azure-batch"), key=key
+    )
+    assert is_model_access_denied(
+        denied_create
+    ), f"restricted key created a batch for a disallowed model (status {denied_create.status_code})"
+
+
+def test_anthropic_batch_retrieve(client: BatchClient, scoped_key: str) -> None:
+    batch_id = os.environ.get("ANTHROPIC_BATCH_ID")
+    if not batch_id:
+        pytest.skip(
+            "set ANTHROPIC_BATCH_ID to a real anthropic batch id to exercise retrieve"
+        )
+    fetched = unwrap(
+        client.retrieve_batch(batch_id, key=scoped_key, provider="anthropic")
+    )
+    assert fetched.id == batch_id
+    assert fetched.status
