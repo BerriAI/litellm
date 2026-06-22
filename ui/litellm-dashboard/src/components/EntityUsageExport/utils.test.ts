@@ -1036,6 +1036,18 @@ describe("EntityUsageExport utils", () => {
                   failed_requests: 2,
                   total_tokens: 500,
                 },
+                api_key_breakdown: {
+                  key1: {
+                    metrics: {
+                      spend: 5.0,
+                      api_requests: 50,
+                      successful_requests: 48,
+                      failed_requests: 2,
+                      total_tokens: 500,
+                    },
+                    metadata: { team_id: "team-1" },
+                  },
+                },
               },
               "gpt-3.5-turbo": {
                 metrics: {
@@ -1044,6 +1056,18 @@ describe("EntityUsageExport utils", () => {
                   successful_requests: 47,
                   failed_requests: 3,
                   total_tokens: 500,
+                },
+                api_key_breakdown: {
+                  key2: {
+                    metrics: {
+                      spend: 5.5,
+                      api_requests: 50,
+                      successful_requests: 47,
+                      failed_requests: 3,
+                      total_tokens: 500,
+                    },
+                    metadata: { team_id: "team-1" },
+                  },
                 },
               },
             },
@@ -1118,6 +1142,18 @@ describe("EntityUsageExport utils", () => {
                     failed_requests: 5,
                     total_tokens: 1000,
                   },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
                 },
               },
             },
@@ -1134,12 +1170,229 @@ describe("EntityUsageExport utils", () => {
       );
     });
 
-    it("should aggregate model metrics from api key breakdown", () => {
+    it("should attribute each model only its own per-key spend", () => {
       const result = generateDailyWithModelsData(mockSpendDataWithModels, "Team");
 
       const gpt4Entry = result.find((r) => r.Model === "gpt-4");
-      expect(gpt4Entry).toBeDefined();
-      expect(gpt4Entry?.Requests).toBeGreaterThan(0);
+      const gpt35Entry = result.find((r) => r.Model === "gpt-3.5-turbo");
+
+      expect(gpt4Entry?.["Spend ($)"]).toBe("5.0000");
+      expect(gpt4Entry?.Requests).toBe(50);
+      expect(gpt4Entry?.["Total Tokens"]).toBe(500);
+
+      expect(gpt35Entry?.["Spend ($)"]).toBe("5.5000");
+      expect(gpt35Entry?.Requests).toBe(50);
+      expect(gpt35Entry?.["Total Tokens"]).toBe(500);
+    });
+
+    it("should not duplicate a user's spend across every model (regression for LIT overcount)", () => {
+      // One user, one key, that key used two models. The entity-level api_key_breakdown
+      // carries the key's total (8.0) across both models; each model's api_key_breakdown
+      // carries only that model's share (3.0 + 5.0). The per-model rows must sum back to
+      // the user-day total, not repeat the total once per model.
+      const data: EntitySpendData = {
+        results: [
+          {
+            date: "2025-02-14",
+            breakdown: {
+              entities: {
+                user1: {
+                  metrics: {
+                    spend: 8.0,
+                    api_requests: 80,
+                    successful_requests: 78,
+                    failed_requests: 2,
+                    total_tokens: 800,
+                    prompt_tokens: 500,
+                    completion_tokens: 300,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 8.0,
+                        api_requests: 80,
+                        successful_requests: 78,
+                        failed_requests: 2,
+                        total_tokens: 800,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+              models: {
+                "claude-3-haiku": {
+                  metrics: {
+                    spend: 3.0,
+                    api_requests: 30,
+                    successful_requests: 29,
+                    failed_requests: 1,
+                    total_tokens: 300,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 3.0,
+                        api_requests: 30,
+                        successful_requests: 29,
+                        failed_requests: 1,
+                        total_tokens: 300,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+                "claude-sonnet-4-5": {
+                  metrics: {
+                    spend: 5.0,
+                    api_requests: 50,
+                    successful_requests: 49,
+                    failed_requests: 1,
+                    total_tokens: 500,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 5.0,
+                        api_requests: 50,
+                        successful_requests: 49,
+                        failed_requests: 1,
+                        total_tokens: 500,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: {
+          total_spend: 8.0,
+          total_api_requests: 80,
+          total_successful_requests: 78,
+          total_failed_requests: 2,
+          total_tokens: 800,
+        },
+      };
+
+      const result = generateDailyWithModelsData(data, "User");
+
+      expect(result).toHaveLength(2);
+
+      const haiku = result.find((r) => r.Model === "claude-3-haiku");
+      const sonnet = result.find((r) => r.Model === "claude-sonnet-4-5");
+
+      expect(haiku?.["Spend ($)"]).toBe("3.0000");
+      expect(sonnet?.["Spend ($)"]).toBe("5.0000");
+
+      const totalSpend = result.reduce((sum, r) => sum + parseFloat(r["Spend ($)"].replace(/,/g, "")), 0);
+      const totalRequests = result.reduce((sum, r) => sum + r.Requests, 0);
+      const totalTokens = result.reduce((sum, r) => sum + r["Total Tokens"], 0);
+
+      expect(totalSpend).toBeCloseTo(8.0, 4);
+      expect(totalRequests).toBe(80);
+      expect(totalTokens).toBe(800);
+    });
+
+    it("should omit models the user never called instead of fanning out", () => {
+      // A second key (key2) belongs to a different user and is the only caller of
+      // gpt-3.5-turbo. user1 only used key1 -> gpt-4. user1 must get exactly one row.
+      const data: EntitySpendData = {
+        results: [
+          {
+            date: "2025-02-14",
+            breakdown: {
+              entities: {
+                user1: {
+                  metrics: {
+                    spend: 5.0,
+                    api_requests: 50,
+                    successful_requests: 48,
+                    failed_requests: 2,
+                    total_tokens: 500,
+                    prompt_tokens: 300,
+                    completion_tokens: 200,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 5.0,
+                        api_requests: 50,
+                        successful_requests: 48,
+                        failed_requests: 2,
+                        total_tokens: 500,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+              models: {
+                "gpt-4": {
+                  metrics: {
+                    spend: 5.0,
+                    api_requests: 50,
+                    successful_requests: 48,
+                    failed_requests: 2,
+                    total_tokens: 500,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 5.0,
+                        api_requests: 50,
+                        successful_requests: 48,
+                        failed_requests: 2,
+                        total_tokens: 500,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+                "gpt-3.5-turbo": {
+                  metrics: {
+                    spend: 9.0,
+                    api_requests: 90,
+                    successful_requests: 90,
+                    failed_requests: 0,
+                    total_tokens: 900,
+                  },
+                  api_key_breakdown: {
+                    key2: {
+                      metrics: {
+                        spend: 9.0,
+                        api_requests: 90,
+                        successful_requests: 90,
+                        failed_requests: 0,
+                        total_tokens: 900,
+                      },
+                      metadata: { team_id: "team-2" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: {
+          total_spend: 14.0,
+          total_api_requests: 140,
+          total_successful_requests: 138,
+          total_failed_requests: 2,
+          total_tokens: 1400,
+        },
+      };
+
+      const result = generateDailyWithModelsData(data, "User");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].Model).toBe("gpt-4");
+      expect(result[0]["Spend ($)"]).toBe("5.0000");
     });
 
     it("should use team alias when available", () => {
@@ -1311,6 +1564,18 @@ describe("EntityUsageExport utils", () => {
                     successful_requests: 95,
                     failed_requests: 5,
                     total_tokens: 1000,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
                   },
                 },
               },
@@ -1595,7 +1860,43 @@ describe("EntityUsageExport utils", () => {
               metadata: { team_id: "team-1", key_alias: "staging-key" },
             },
           },
-          models: { "gpt-4": { metrics: { spend: 35, api_requests: 350, total_tokens: 3500 } } },
+          models: {
+            "gpt-4": {
+              metrics: { spend: 35.8, api_requests: 350, total_tokens: 3500 },
+              api_key_breakdown: {
+                key1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                  },
+                  metadata: { team_id: "team-1" },
+                },
+                key1b: {
+                  metrics: {
+                    spend: 5,
+                    api_requests: 50,
+                    successful_requests: 48,
+                    failed_requests: 2,
+                    total_tokens: 500,
+                  },
+                  metadata: { team_id: "team-1" },
+                },
+                key2: {
+                  metrics: {
+                    spend: 20.3,
+                    api_requests: 200,
+                    successful_requests: 195,
+                    failed_requests: 5,
+                    total_tokens: 2000,
+                  },
+                  metadata: { team_id: "team-2" },
+                },
+              },
+            },
+          },
         },
       })),
     };
@@ -1699,6 +2000,13 @@ describe("EntityUsageExport utils", () => {
         const result = generateDailyWithModelsData(aggregatedSpendData, "Team");
         expect(result.length).toBeGreaterThan(0);
         expect(result[0]).toHaveProperty("Model");
+
+        // team-1 = key1 (10.5) + key1b (5) on gpt-4; team-2 = key2 (20.3) on gpt-4.
+        // Spend must aggregate per team-key, not repeat the model total per team.
+        const team1 = result.find((r) => r["Team ID"] === "team-1");
+        const team2 = result.find((r) => r["Team ID"] === "team-2");
+        expect(team1?.["Spend ($)"]).toBe("15.5000");
+        expect(team2?.["Spend ($)"]).toBe("20.3000");
       });
     });
   });
