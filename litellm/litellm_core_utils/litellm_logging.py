@@ -5368,28 +5368,15 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
-def _extract_mcp_tool_error_message(response_obj: dict) -> Optional[str]:
-    """Return an upstream MCP tool error message when result.isError is true."""
+MCP_TOOL_ERROR_LOGGING_MESSAGE = "MCP tool returned isError=true"
+
+
+def _has_mcp_tool_error(response_obj: dict) -> bool:
+    """Return True when an MCP tool result reports isError."""
     result_obj = response_obj.get("result", response_obj)
     if not isinstance(result_obj, dict) or result_obj.get("isError") is not True:
-        return None
-
-    content = result_obj.get("content")
-    messages: List[str] = []
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("message")
-                if isinstance(text, str) and text.strip():
-                    messages.append(text.strip())
-            elif isinstance(item, str) and item.strip():
-                messages.append(item.strip())
-    elif isinstance(content, str) and content.strip():
-        messages.append(content.strip())
-
-    if messages:
-        return " ".join(messages)
-    return "MCP tool returned isError=true"
+        return False
+    return True
 
 
 def _get_mcp_tool_call_logging_status(
@@ -5406,8 +5393,7 @@ def _get_mcp_tool_call_logging_status(
     if call_type != CallTypes.call_mcp_tool.value:
         return call_type, status, error_str, None
 
-    mcp_tool_error_message = _extract_mcp_tool_error_message(response_obj)
-    if mcp_tool_error_message is None:
+    if _has_mcp_tool_error(response_obj) is False:
         return call_type, status, error_str, None
 
     error_information = StandardLoggingPayloadErrorInformation(
@@ -5415,9 +5401,14 @@ def _get_mcp_tool_call_logging_status(
         error_class="MCPToolError",
         llm_provider="mcp",
         traceback="",
-        error_message=mcp_tool_error_message,
+        error_message=MCP_TOOL_ERROR_LOGGING_MESSAGE,
     )
-    return call_type, "failure", error_str or mcp_tool_error_message, error_information
+    return (
+        call_type,
+        "failure",
+        error_str or MCP_TOOL_ERROR_LOGGING_MESSAGE,
+        error_information,
+    )
 
 
 def get_standard_logging_object_payload(

@@ -2729,12 +2729,12 @@ def test_mcp_tool_is_error_marks_standard_logging_payload_as_failure(logging_obj
     assert payload is not None
     assert payload["status"] == "failure"
     assert payload["status_fields"]["llm_api_status"] == "failure"
-    assert payload["error_str"] == "Input validation error: 'query' is required"
+    assert payload["error_str"] == "MCP tool returned isError=true"
     assert payload["error_information"] is not None
     assert payload["error_information"]["error_class"] == "MCPToolError"
     assert (
         payload["error_information"]["error_message"]
-        == "Input validation error: 'query' is required"
+        == "MCP tool returned isError=true"
     )
     assert payload["metadata"]["mcp_tool_call_metadata"] is not None
     assert (
@@ -2766,7 +2766,7 @@ def test_mcp_tool_json_rpc_is_error_envelope_marks_payload_as_failure(logging_ob
                 "content": [
                     {
                         "type": "text",
-                        "text": "Permission denied for repository",
+                        "text": "Permission denied for repository sk-live-secret",
                     }
                 ],
                 "isError": True,
@@ -2784,8 +2784,11 @@ def test_mcp_tool_json_rpc_is_error_envelope_marks_payload_as_failure(logging_ob
     assert payload["error_information"]["error_class"] == "MCPToolError"
     assert (
         payload["error_information"]["error_message"]
-        == "Permission denied for repository"
+        == "MCP tool returned isError=true"
     )
+    assert payload["error_str"] == "MCP tool returned isError=true"
+    assert "sk-live-secret" not in payload["error_str"]
+    assert "sk-live-secret" not in payload["error_information"]["error_message"]
 
 
 def test_mcp_tool_success_keeps_standard_logging_payload_success(logging_obj):
