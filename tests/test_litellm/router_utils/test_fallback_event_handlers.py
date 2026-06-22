@@ -80,6 +80,51 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
         )
 
 
+class RecordingRouter:
+    def __init__(self):
+        self.received_kwargs = None
+
+    def log_retry(self, kwargs, e):
+        return kwargs
+
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        self.received_kwargs = kwargs
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_forwards_include_fallback_errors_to_nested_call():
+    """A nested fallback (multi-hop) must keep collecting errors, so the opt-in
+    flag has to reach the nested async_function_with_fallbacks call."""
+    router = RecordingRouter()
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("upstream limited request"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        include_fallback_errors=True,
+    )
+
+    assert router.received_kwargs.get("include_fallback_errors") is True
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_forward_flag_without_opt_in():
+    router = RecordingRouter()
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("upstream limited request"),
+        max_fallbacks=3,
+        fallback_depth=0,
+    )
+
+    assert "include_fallback_errors" not in router.received_kwargs
+
+
 @pytest.mark.asyncio
 async def test_run_async_fallback_skips_original_model_group():
     response = await run_async_fallback(

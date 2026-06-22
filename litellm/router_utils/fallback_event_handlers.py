@@ -139,6 +139,8 @@ async def run_async_fallback(
             fallback_depth = fallback_depth + 1
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
+            if include_fallback_errors:
+                kwargs["include_fallback_errors"] = include_fallback_errors
             response = await litellm_router.async_function_with_fallbacks(
                 *args, **kwargs
             )
