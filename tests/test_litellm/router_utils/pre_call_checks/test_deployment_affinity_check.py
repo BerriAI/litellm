@@ -1068,14 +1068,29 @@ async def test_async_code_interpreter_container_pins_to_owning_deployment():
             litellm_metadata={"user_api_key_hash": user_api_key_hash},
         )
         first_model_id = first_response._hidden_params["model_id"]
-
-        encoded_container_ids = (
-            ResponsesAPIRequestUtils.collect_container_ids_from_responses_response(
-                first_response
-            )
+        # Extract the encoded container id from the first response's output.
+        # (collect_container_ids_from_responses_response postdates this base
+        # branch, so read the code_interpreter_call item directly.)
+        output = (
+            first_response.output
+            if not isinstance(first_response, dict)
+            else first_response.get("output", [])
         )
-        assert len(encoded_container_ids) == 1
-        encoded_container_id = encoded_container_ids[0]
+        encoded_container_id = None
+        for item in output or []:
+            item_type = (
+                item.get("type")
+                if isinstance(item, dict)
+                else getattr(item, "type", None)
+            )
+            if item_type == "code_interpreter_call":
+                encoded_container_id = (
+                    item.get("container_id")
+                    if isinstance(item, dict)
+                    else getattr(item, "container_id", None)
+                )
+                break
+        assert encoded_container_id is not None
         # the managed id must encode routing payload (not the raw native id)
         assert encoded_container_id != "cntr_rawnativeid123456789"
 
