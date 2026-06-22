@@ -30,7 +30,7 @@ def singulr_guardrail():
     return SingulrGuardrail(
         api_base="https://api.test.singulr.ai",
         api_key="test_token_1234",
-        sdk_guardrail_id="test_guardrail_id",
+        guardrail_id="test_guardrail_id",
         enforcement_entity_id="test_enforcement_entity",
         guardrail_name="test-singulr",
         event_hook="pre_call",
@@ -70,13 +70,13 @@ class TestSingulrConfiguration:
         guardrail = SingulrGuardrail(
             api_key="test_key",
             api_base="https://custom.api.local",
-            sdk_guardrail_id="id123",
+            guardrail_id="id123",
             enforcement_entity_id="entity123",
             guardrail_name="my-guardrail",
         )
         assert guardrail.api_key == "test_key"
         assert guardrail.api_base == "https://custom.api.local"
-        assert guardrail.sdk_guardrail_id == "id123"
+        assert guardrail.guardrail_id == "id123"
         assert guardrail.enforcement_entity_id == "entity123"
 
     def test_block_on_error_defaults_true(self):

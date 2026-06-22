@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     )
 
 _DEFAULT_API_BASE = "http://localhost:8000"
-_GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-sdk"
+_GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
 
 
 class SingulrMissingCredentials(Exception):
@@ -50,7 +50,7 @@ class SingulrGuardrail(CustomGuardrail):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         enforcement_entity_id: Optional[str] = None,
-        sdk_guardrail_id: Optional[str] = None,
+        guardrail_id: Optional[str] = None,
         block_on_error: Optional[bool] = None,
         **kwargs: Any,
     ) -> None:
@@ -63,8 +63,8 @@ class SingulrGuardrail(CustomGuardrail):
         self.enforcement_entity_id = enforcement_entity_id or os.environ.get(
             "SINGULR_ENFORCEMENT_ENTITY_ID"
         )
-        self.sdk_guardrail_id = sdk_guardrail_id or os.environ.get(
-            "SINGULR_SDK_GUARDRAIL_ID"
+        self.guardrail_id = guardrail_id or os.environ.get(
+            "SINGULR_guardrail_id"
         )
 
         if block_on_error is None:
@@ -130,8 +130,8 @@ class SingulrGuardrail(CustomGuardrail):
         if self.enforcement_entity_id:
             headers["X-Singulr-Enforcement-Entity-Id"] = self.enforcement_entity_id
 
-        if self.sdk_guardrail_id:
-            headers["X-Singulr-Guardrail-Id"] = self.sdk_guardrail_id
+        if self.guardrail_id:
+            headers["X-Singulr-Guardrail-Id"] = self.guardrail_id
 
         verbose_proxy_logger.debug(
             "Singulr: %s",

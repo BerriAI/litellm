@@ -28,7 +28,7 @@ class SingulrGuardrailConfigModel(GuardrailConfigModel):
             "to send in the X-Singulr-Enforcement-Entity-Id header."
         ),
     )
-    sdk_guardrail_id: Optional[str] = Field(
+    guardrail_id: Optional[str] = Field(
         default=None,
         description=(
             "The SDK guardrail ID to send in the X-Singulr-Guardrail-Id header."
