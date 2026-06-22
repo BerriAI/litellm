@@ -257,7 +257,12 @@ class RealtimeSession:
         deadline = time.monotonic() + timeout
         collected: list[ReceivedEvent] = []
         while time.monotonic() < deadline:
-            text = _as_text(self.connection.recv(timeout=deadline - time.monotonic()))
+            try:
+                text = _as_text(
+                    self.connection.recv(timeout=deadline - time.monotonic())
+                )
+            except TimeoutError:
+                break
             event = ReceivedEvent(
                 type=ServerEnvelope.model_validate_json(text).type, payload=text
             )

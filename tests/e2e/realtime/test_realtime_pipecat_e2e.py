@@ -27,7 +27,7 @@ import pytest
 from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
-    realtime_ws_url,
+    _ws_base_url,
     skip_if_unconfigured,
 )
 
@@ -93,7 +93,7 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
         await params.result_callback({"city": "Paris", "temperature_f": 72})
 
     llm = OpenAIRealtimeLLMService(
-        api_key=key, base_url=realtime_ws_url(model), model=model
+        api_key=key, base_url=f"{_ws_base_url()}/v1/realtime", model=model
     )
     llm.register_function("get_weather", get_weather)
 
