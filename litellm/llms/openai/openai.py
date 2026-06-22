@@ -32,6 +32,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -267,6 +268,30 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
+        optional_params = {
+            k: v
+            for k, v in optional_params.items()
+            if not (
+                k.startswith("_code_interpreter_interception")
+                or k.startswith("_agentic_loop")
+                or k == "max_agentic_loops"
+            )
+        }
+        extra_body = optional_params.get("extra_body")
+        if isinstance(extra_body, dict):
+            extra_body = {
+                k: v
+                for k, v in extra_body.items()
+                if not (
+                    k.startswith("_code_interpreter_interception")
+                    or k.startswith("_agentic_loop")
+                    or k == "max_agentic_loops"
+                )
+            }
+            if extra_body:
+                optional_params["extra_body"] = extra_body
+            else:
+                optional_params.pop("extra_body", None)
         return {"model": model, "messages": messages, **optional_params}
 
     def transform_response(
@@ -520,75 +545,37 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         Returns the response from agentic loop, or None if no hook runs.
         """
-        from litellm._logging import verbose_logger
-        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
-        callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
-        # Avoid logging full callback objects to prevent leaking sensitive data
-        verbose_logger.debug("LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks))
-        tools = optional_params.get("tools", [])
-        # Avoid logging full tools payloads; they may contain sensitive parameters
-        verbose_logger.debug(
-            "LiteLLM.AgenticHooks: tools_count=%s",
-            len(tools) if isinstance(tools, list) else 1 if tools else 0,
-        )
-        # Get custom_llm_provider from litellm_params
         custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
+        hook_kwargs = self._get_agentic_hook_kwargs(
+            litellm_params=litellm_params, optional_params=optional_params
+        )
+        return await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+            response=response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=hook_kwargs,
+        )
 
-        for callback in callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    # Check if the callback has the chat completion agentic loop methods
-                    if not hasattr(
-                        callback, "async_should_run_chat_completion_agentic_loop"
-                    ):
-                        continue
-
-                    # First: Check if agentic loop should run (using chat completion method)
-                    (
-                        should_run,
-                        tool_calls,
-                    ) = await callback.async_should_run_chat_completion_agentic_loop(
-                        response=response,
-                        model=model,
-                        messages=messages,
-                        tools=tools,
-                        stream=stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=litellm_params,
-                    )
-
-                    if should_run:
-                        # Second: Execute agentic loop
-                        kwargs_with_provider = (
-                            litellm_params.copy() if litellm_params else {}
-                        )
-                        kwargs_with_provider["custom_llm_provider"] = (
-                            custom_llm_provider
-                        )
-
-                        # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response = (
-                            await callback.async_run_chat_completion_agentic_loop(
-                                tools=tool_calls,
-                                model=model,
-                                messages=messages,
-                                response=response,
-                                optional_params=optional_params,
-                                logging_obj=logging_obj,
-                                stream=stream,
-                                kwargs=kwargs_with_provider,
-                            )
-                        )
-                        # First hook that runs agentic loop wins
-                        return agentic_response
-
-            except Exception as e:
-                verbose_logger.exception(
-                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {str(e)}"
-                )
-
-        return None
+    @staticmethod
+    def _get_agentic_hook_kwargs(litellm_params: Dict, optional_params: Dict) -> Dict:
+        hook_kwargs = dict(litellm_params)
+        for params in (optional_params, optional_params.get("extra_body")):
+            if not isinstance(params, dict):
+                continue
+            hook_kwargs.update(
+                {
+                    k: v
+                    for k, v in params.items()
+                    if k.startswith("_code_interpreter_interception")
+                }
+            )
+        return hook_kwargs
 
     def mock_streaming(
         self,
@@ -798,6 +785,18 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             model_response_object=model_response,
                             _response_headers=headers,
                         )
+                        agentic_response = run_async_function(
+                            self._call_agentic_completion_hooks_openai,
+                            response=final_response_obj,
+                            model=model,
+                            messages=messages,
+                            optional_params=inference_params,
+                            logging_obj=logging_obj,
+                            stream=False,
+                            litellm_params=litellm_params,
+                        )
+                        if agentic_response is not None:
+                            final_response_obj = agentic_response
                         if fake_stream is True:
                             return self.mock_streaming(
                                 response=cast(ModelResponse, final_response_obj),
@@ -1132,9 +1131,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
-            except (
-                Exception
-            ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
+            except Exception as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
                 if isinstance(e, OpenAIError):
                     raise e
 
@@ -1433,7 +1430,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=stringified_response,
+                model_response_object=model_response,
+                response_type="image_generation",
+            )  # type: ignore
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1466,7 +1467,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization, headers=headers)  # type: ignore
+                return self.aimage_generation(
+                    data=data,
+                    prompt=prompt,
+                    logging_obj=logging_obj,
+                    model_response=model_response,
+                    api_base=api_base,
+                    api_key=api_key,
+                    timeout=timeout,
+                    client=client,
+                    max_retries=max_retries,
+                    organization=organization,
+                    headers=headers,
+                )  # type: ignore
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1503,7 +1516,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response,
+                model_response_object=model_response,
+                response_type="image_generation",
+            )  # type: ignore
         except OpenAIError as e:
             ## LOGGING
             logging_obj.post_call(
@@ -2517,8 +2534,11 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        thread_message: OpenAIMessage = await openai_client.beta.threads.messages.create(  # type: ignore
-            thread_id, **message_data  # type: ignore
+        thread_message: OpenAIMessage = (
+            await openai_client.beta.threads.messages.create(  # type: ignore
+                thread_id,
+                **message_data,  # type: ignore
+            )
         )
 
         response_obj: Optional[OpenAIMessage] = None
@@ -2596,7 +2616,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         )
 
         thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
-            thread_id, **message_data  # type: ignore
+            thread_id,
+            **message_data,  # type: ignore
         )
 
         response_obj: Optional[OpenAIMessage] = None

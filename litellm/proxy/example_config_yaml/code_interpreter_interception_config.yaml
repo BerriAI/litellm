@@ -11,6 +11,7 @@ sandbox_tools:
       api_key: os.environ/E2B_API_KEY
 
 litellm_settings:
+  # Intercepts native OpenAI code_interpreter tools on Responses API and Chat Completions.
   callbacks: ["code_interpreter_interception"]
   code_interpreter_interception_params:
     enabled_providers: ["openai"]

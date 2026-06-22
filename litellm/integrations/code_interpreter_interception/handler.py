@@ -99,7 +99,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             kwargs.pop(_SANDBOX_KEY, None)
         if not self.enabled:
             return None
-        if call_type not in (CallTypes.responses, CallTypes.aresponses):
+        if call_type not in (
+            CallTypes.responses,
+            CallTypes.aresponses,
+            CallTypes.completion,
+            CallTypes.acompletion,
+        ):
             return None
         if (
             self.enabled_providers is not None
@@ -122,16 +127,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             kwargs["stream"] = False
             kwargs["_code_interpreter_interception_converted_stream"] = True
 
-        function_tool = {
-            "type": "function",
-            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
-            "description": "Execute python code in a sandbox and return stdout.",
-            "parameters": {
-                "type": "object",
-                "properties": {"code": {"type": "string"}},
-                "required": ["code"],
-            },
-        }
+        function_tool = self._get_function_tool(call_type=call_type)
         kwargs["tools"] = [
             (
                 function_tool
@@ -141,19 +137,60 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             for tool in tools
         ]
         if self._tool_choice_targets_code_interpreter(kwargs.get("tool_choice")):
-            kwargs["tool_choice"] = {
-                "type": "function",
-                "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
-            }
+            kwargs["tool_choice"] = self._get_function_tool_choice(call_type=call_type)
         return kwargs
+
+    @staticmethod
+    def _get_function_parameters() -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"code": {"type": "string"}},
+            "required": ["code"],
+        }
+
+    def _get_function_tool(self, call_type: CallTypes | None) -> dict[str, Any]:
+        description = "Execute python code in a sandbox and return stdout."
+        if call_type in (CallTypes.completion, CallTypes.acompletion):
+            return {
+                "type": "function",
+                "function": {
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "description": description,
+                    "parameters": self._get_function_parameters(),
+                },
+            }
+        return {
+            "type": "function",
+            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+            "description": description,
+            "parameters": self._get_function_parameters(),
+        }
+
+    @staticmethod
+    def _get_function_tool_choice(call_type: CallTypes | None) -> dict[str, Any]:
+        if call_type in (CallTypes.completion, CallTypes.acompletion):
+            return {
+                "type": "function",
+                "function": {"name": LITELLM_CODE_EXECUTION_TOOL_NAME},
+            }
+        return {
+            "type": "function",
+            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+        }
 
     @staticmethod
     def _tool_choice_targets_code_interpreter(tool_choice: Any) -> bool:
         if not isinstance(tool_choice, dict):
             return False
+        function = tool_choice.get("function")
         return (
             tool_choice.get("type") == "code_interpreter"
             or tool_choice.get("name") == "code_interpreter"
+            or tool_choice.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
+            or (
+                isinstance(function, dict)
+                and function.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
+            )
         )
 
     def _resolve_provider(self, kwargs: dict[str, Any]) -> str | None:
@@ -189,6 +226,34 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return False, {}
 
         tool_calls = self._extract_code_execution_tool_calls(response=response)
+        if not tool_calls:
+            return False, {}
+
+        return True, {"tool_calls": tool_calls}
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        if not self.enabled:
+            return False, {}
+        if not kwargs.get(_INTERCEPTION_ACTIVE_KEY):
+            return False, {}
+        if (
+            self.enabled_providers is not None
+            and custom_llm_provider not in self.enabled_providers
+        ):
+            return False, {}
+
+        tool_calls = self._extract_chat_completion_code_execution_tool_calls(
+            response=response
+        )
         if not tool_calls:
             return False, {}
 
@@ -256,9 +321,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         request_patch = AgenticLoopRequestPatch(
             model=model,
             messages=input_list,
-            tools=optional_params.get("tools"),
-            optional_params={k: v for k, v in optional_params.items() if k != "tools"},
-            kwargs={k: v for k, v in kwargs.items() if k != "litellm_logging_obj"},
+            tools=self._get_followup_tools(
+                tools=optional_params.get("tools"),
+                call_type=CallTypes.responses,
+            ),
+            optional_params=self._get_followup_optional_params(optional_params),
+            kwargs=self._filter_agentic_loop_kwargs(kwargs),
         )
 
         return AgenticLoopPlan(
@@ -271,11 +339,113 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             },
         )
 
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: Any,
+        optional_params: dict,
+        logging_obj: Any,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        await self._prune_expired_cache()
+        tool_calls = cast(list[dict[str, Any]], tools.get("tool_calls", []))
+        sandbox_key = kwargs.get(_SANDBOX_KEY)
+        container, params = await self._get_or_create_container(cache_key=sandbox_key)
+
+        try:
+            container_id = getattr(container, "id", None)
+            tool_messages = []
+            code_interpreter_calls = []
+            for tool_call in tool_calls:
+                arguments = tool_call.get("arguments", "")
+                code = self._parse_code(arguments)
+                stdout = await self._run_tool_call(
+                    container=container, params=params, arguments=arguments
+                )
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "content": stdout,
+                    }
+                )
+                code_interpreter_calls.append(
+                    {
+                        "id": f"ci_{uuid.uuid4().hex}",
+                        "type": "code_interpreter_call",
+                        "status": "completed",
+                        "code": code,
+                        "container_id": container_id,
+                        "outputs": (
+                            [{"type": "logs", "logs": stdout}] if stdout else []
+                        ),
+                    }
+                )
+        except Exception:
+            await self._delete_container_for_cache_key(sandbox_key)
+            raise
+
+        request_patch = AgenticLoopRequestPatch(
+            model=model,
+            messages=self._normalize_messages(messages)
+            + [self._build_chat_completion_assistant_message(tool_calls)]
+            + tool_messages,
+            tools=self._get_followup_tools(
+                tools=optional_params.get("tools"),
+                call_type=CallTypes.completion,
+            ),
+            optional_params=self._get_followup_optional_params(optional_params),
+            kwargs=self._filter_agentic_loop_kwargs(kwargs),
+        )
+
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=request_patch,
+            metadata={
+                "tool_type": "code_interpreter",
+                "sandbox_key": sandbox_key or "",
+                "code_interpreter_calls": code_interpreter_calls,
+                "response_format": "openai",
+            },
+        )
+
     async def async_agentic_loop_cleanup_hook(
         self, plan: AgenticLoopPlan, kwargs: dict
     ) -> None:
         metadata = plan.metadata or {} if plan else {}
         await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
+
+    @staticmethod
+    def _filter_agentic_loop_kwargs(kwargs: dict) -> dict:
+        return {
+            k: v
+            for k, v in kwargs.items()
+            if k not in {"litellm_logging_obj", "acompletion"}
+            and not k.startswith("_code_interpreter_interception_")
+        }
+
+    def _get_followup_tools(self, tools: Any, call_type: CallTypes | None) -> Any:
+        if not isinstance(tools, list):
+            return tools
+        return [
+            (
+                self._get_function_tool(call_type=call_type)
+                if isinstance(tool, dict) and tool.get("type") == "code_interpreter"
+                else tool
+            )
+            for tool in tools
+        ]
+
+    def _get_followup_optional_params(self, optional_params: dict) -> dict:
+        followup_params = {k: v for k, v in optional_params.items() if k != "tools"}
+        if self._tool_choice_targets_code_interpreter(
+            followup_params.get("tool_choice")
+        ):
+            followup_params.pop("tool_choice", None)
+        return followup_params
 
     async def async_post_agentic_loop_response_hook(
         self, response: Any, plan: AgenticLoopPlan, kwargs: dict
@@ -445,6 +615,105 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             for item in output
             if self._is_code_execution_call(item)
         ]
+
+    def _extract_chat_completion_code_execution_tool_calls(
+        self, response: Any
+    ) -> list[dict[str, Any]]:
+        choices = (
+            response.get("choices", [])
+            if isinstance(response, dict)
+            else getattr(response, "choices", []) or []
+        )
+        if not isinstance(choices, list) or not choices:
+            return []
+
+        first_choice = choices[0]
+        message = (
+            first_choice.get("message")
+            if isinstance(first_choice, dict)
+            else getattr(first_choice, "message", None)
+        )
+        if message is None:
+            return []
+
+        tool_calls = (
+            message.get("tool_calls", [])
+            if isinstance(message, dict)
+            else getattr(message, "tool_calls", None) or []
+        )
+        if not isinstance(tool_calls, list):
+            return []
+
+        return [
+            normalized
+            for tool_call in tool_calls
+            for normalized in (self._normalize_chat_completion_tool_call(tool_call),)
+            if normalized is not None
+        ]
+
+    @staticmethod
+    def _normalize_chat_completion_tool_call(
+        tool_call: Any,
+    ) -> dict[str, Any] | None:
+        tool_id = (
+            tool_call.get("id")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "id", None)
+        )
+        tool_type = (
+            tool_call.get("type")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "type", None)
+        )
+        function = (
+            tool_call.get("function")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "function", None)
+        )
+        function_name = (
+            function.get("name")
+            if isinstance(function, dict)
+            else getattr(function, "name", None)
+        )
+        if tool_type != "function" or function_name != LITELLM_CODE_EXECUTION_TOOL_NAME:
+            return None
+
+        arguments = (
+            function.get("arguments")
+            if isinstance(function, dict)
+            else getattr(function, "arguments", "")
+        )
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments)
+        elif not isinstance(arguments, str):
+            arguments = "" if arguments is None else str(arguments)
+
+        return {
+            "id": tool_id,
+            "call_id": tool_id,
+            "type": "function",
+            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+            "arguments": arguments,
+        }
+
+    @staticmethod
+    def _build_chat_completion_assistant_message(
+        tool_calls: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": tool_call.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                        "arguments": tool_call.get("arguments", ""),
+                    },
+                }
+                for tool_call in tool_calls
+            ],
+        }
 
     def _is_code_execution_call(self, item: Any) -> bool:
         if isinstance(item, dict):
