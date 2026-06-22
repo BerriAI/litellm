@@ -149,9 +149,17 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        # Support both "response" and "response_text" keys (newer models like Nemotron use "response_text")
+        # Support both "response"/"response_text" keys (legacy) AND newer OpenAI-style "choices[0].message.content" (newer models like Kimi K-2.6, GLM, Gemma-4-26B)
         result = completion_response["result"]
-        model_response.choices[0].message.content = result.get("response") if result.get("response") is not None else result.get("response_text", "")  # type: ignore
+        if result.get("response") is not None:
+            content = result.get("response")
+        elif result.get("response_text") is not None:
+            content = result.get("response_text")
+        elif result.get("choices") and len(result.get("choices", [])) > 0:
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        else:
+            content = ""
+        model_response.choices[0].message.content = content  # type: ignore
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
