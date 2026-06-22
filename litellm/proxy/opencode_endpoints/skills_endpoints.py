@@ -11,6 +11,7 @@ from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 OPENCODE_SKILLS_DEFAULT_PATH = "/opencode/skills"
+AGENT_SKILLS_PATHS = ("/.well-known/agent-skills", "/.well-known/skills")
 _MAX_SKILLS = 1000
 
 
@@ -22,6 +23,17 @@ def _opencode_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
         skills_gateway_config.get("enabled") is True
         and isinstance(opencode_config, dict)
         and opencode_config.get("enabled") is True
+    )
+
+
+def _agent_skills_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
+    if not isinstance(skills_gateway_config, dict):
+        return False
+    agent_skills_config = skills_gateway_config.get("agent_skills", {})
+    return (
+        skills_gateway_config.get("enabled") is True
+        and isinstance(agent_skills_config, dict)
+        and agent_skills_config.get("enabled") is True
     )
 
 
@@ -45,6 +57,16 @@ def _skill_enabled(skill: LiteLLM_SkillsTable) -> bool:
 
 def _opencode_skill_name(skill: LiteLLM_SkillsTable) -> str:
     return skill.skill_id
+
+
+def _agent_skill_name(skill: LiteLLM_SkillsTable) -> str:
+    return _slug(skill.skill_id)[:64].strip("-") or "litellm-skill"
+
+
+def _agent_skill_description(skill: LiteLLM_SkillsTable) -> str:
+    return _one_line(
+        skill.description or skill.instructions or skill.display_title or skill.skill_id
+    )[:1024]
 
 
 def _slug(value: str) -> str:
@@ -130,6 +152,43 @@ async def opencode_skill_file(
     raise HTTPException(status_code=404, detail="Skill file not found")
 
 
+async def agent_skills_index(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    skills = await _enabled_skills(user_api_key_dict)
+    return {
+        "skills": [
+            {
+                "name": _agent_skill_name(skill),
+                "description": _agent_skill_description(skill),
+                "files": _sorted_files(_skill_files(skill)),
+            }
+            for skill in skills
+        ]
+    }
+
+
+async def agent_skill_file(
+    skill_name: str,
+    file_path: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    for skill in await _enabled_skills(user_api_key_dict):
+        if _agent_skill_name(skill) != skill_name:
+            continue
+        files = _skill_files(skill)
+        content = files.get(file_path)
+        if content is None:
+            break
+        media_type = (
+            "text/markdown; charset=utf-8"
+            if file_path.endswith(".md")
+            else "application/octet-stream"
+        )
+        return Response(content=content, media_type=media_type)
+    raise HTTPException(status_code=404, detail="Skill file not found")
+
+
 def _add_route(app: FastAPI, path: str, endpoint):
     for route in app.routes:
         if getattr(route, "path", None) == path and "GET" in getattr(
@@ -150,3 +209,15 @@ def initialize_opencode_skills_endpoint(
     _add_route(app, path, opencode_skills_index)
     _add_route(app, f"{path}/index.json", opencode_skills_index)
     _add_route(app, f"{path}/{{skill_name}}/{{file_path:path}}", opencode_skill_file)
+
+
+def initialize_agent_skills_endpoint(
+    app: FastAPI,
+    skills_gateway_config: Optional[dict],
+) -> None:
+    if not _agent_skills_config_enabled(skills_gateway_config):
+        return
+
+    for path in AGENT_SKILLS_PATHS:
+        _add_route(app, f"{path}/index.json", agent_skills_index)
+        _add_route(app, f"{path}/{{skill_name}}/{{file_path:path}}", agent_skill_file)

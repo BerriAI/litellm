@@ -4552,10 +4552,15 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
         from litellm.proxy.opencode_endpoints.skills_endpoints import (
+            initialize_agent_skills_endpoint,
             initialize_opencode_skills_endpoint,
         )
 
         initialize_opencode_skills_endpoint(
+            app=app,
+            skills_gateway_config=config.get("skills_gateway"),
+        )
+        initialize_agent_skills_endpoint(
             app=app,
             skills_gateway_config=config.get("skills_gateway"),
         )
