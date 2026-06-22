@@ -4445,6 +4445,8 @@ class Router:
 
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
+        self._decode_responses_api_tool_container_ids(kwargs)
+
         # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
         # mutates them. A shallow copy alone is not enough: the primary
         # attempt mutates nested dicts in place — notably `litellm_metadata`,
@@ -4475,6 +4477,19 @@ class Router:
                 initial_kwargs=fallback_kwargs,
             )
         return response
+
+    @staticmethod
+    def _decode_responses_api_tool_container_ids(kwargs: Dict[str, Any]) -> None:
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        # Keep authorization and deployment selection anchored to the requested
+        # model. Managed container IDs are supplied by the client, so only the
+        # provider-issued container ID is safe to recover from them here.
+        tools = ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(
+            kwargs.get("tools")
+        )
+        if tools is not kwargs.get("tools"):
+            kwargs["tools"] = tools
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
@@ -5514,6 +5529,8 @@ class Router:
                 client: Optional[Any] = None,
                 **kwargs,
             ):
+                if call_type == "responses":
+                    self._decode_responses_api_tool_container_ids(kwargs)
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
             return sync_wrapper
@@ -5617,6 +5634,8 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "aresponses":
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
                 return await self._aresponses_with_streaming_fallbacks(
                     original_function=original_function,
                     **kwargs,

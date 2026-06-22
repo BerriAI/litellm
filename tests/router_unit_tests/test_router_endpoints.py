@@ -768,6 +768,44 @@ async def test_init_responses_api_endpoints():
 
 
 @pytest.mark.asyncio
+async def test_router_aresponses_decodes_managed_tool_container_id_without_routing_override():
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    router._ageneric_api_call_with_fallbacks = AsyncMock(return_value={"id": "resp_1"})
+
+    encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-deployment-id",
+        container_id="cntr_native_123",
+    )
+    tools = [{"type": "code_interpreter", "container": encoded_container_id}]
+
+    await router.aresponses(
+        model="logical-model",
+        input="hello",
+        tools=tools,
+        custom_llm_provider="openai",
+    )
+
+    call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+    assert call_kwargs["model"] == "logical-model"
+    assert call_kwargs["custom_llm_provider"] == "openai"
+    assert call_kwargs["tools"][0]["container"] == "cntr_native_123"
+    assert tools[0]["container"] == encoded_container_id
+
+    kwargs = {
+        "model": "logical-model",
+        "custom_llm_provider": "openai",
+        "tools": [{"type": "code_interpreter", "container": encoded_container_id}],
+    }
+    router._decode_responses_api_tool_container_ids(kwargs)
+    assert kwargs["model"] == "logical-model"
+    assert kwargs["custom_llm_provider"] == "openai"
+    assert kwargs["tools"][0]["container"] == "cntr_native_123"
+
+
+@pytest.mark.asyncio
 async def test_init_vector_store_api_endpoints():
     """
     Test that _init_vector_store_api_endpoints correctly passes custom_llm_provider to kwargs

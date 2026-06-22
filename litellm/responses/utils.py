@@ -586,6 +586,42 @@ class ResponsesAPIRequestUtils:
         return decoded.get("response_id", container_id)
 
     @staticmethod
+    def decode_container_ids_in_tools_for_request(
+        tools: Optional[Iterable[Any]],
+    ) -> Optional[Iterable[Any]]:
+        """Decode LiteLLM-managed Responses API tool container IDs.
+
+        Returns the possibly updated tools with LiteLLM-managed container IDs
+        replaced by the original provider-issued container IDs.
+        """
+        if tools is None:
+            return tools
+
+        updated_tools: List[Any] = []
+        changed = False
+
+        for tool in tools:
+            updated_tool = tool.copy() if isinstance(tool, dict) else tool
+            if isinstance(updated_tool, dict):
+                container_id = updated_tool.get("container")
+                if isinstance(container_id, str):
+                    decoded = ResponsesAPIRequestUtils._decode_container_id(
+                        container_id
+                    )
+                    original_id = decoded.get("response_id", container_id)
+                    if original_id != container_id:
+                        updated_tool["container"] = original_id
+                        changed = True
+            updated_tools.append(updated_tool)
+
+        if not changed:
+            if isinstance(tools, list):
+                return tools
+            return updated_tools
+
+        return updated_tools
+
+    @staticmethod
     def _encode_container_ids_in_annotations(
         annotations: Any,
         custom_llm_provider: Optional[str],

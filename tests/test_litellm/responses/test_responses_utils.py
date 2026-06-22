@@ -123,6 +123,34 @@ class TestResponsesAPIRequestUtils:
         )
         assert result_plain == plain_id
 
+    def test_decode_container_ids_in_tools_for_request(self):
+        encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="azure-deployment-id",
+            container_id="cntr_native_123",
+        )
+        tools = [
+            {"type": "code_interpreter", "container": encoded_container_id},
+            {"type": "file_search", "vector_store_ids": ["vs_123"]},
+        ]
+
+        updated_tools = (
+            ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(tools)
+        )
+
+        assert updated_tools is not tools
+        assert isinstance(updated_tools, list)
+        assert updated_tools[0]["container"] == "cntr_native_123"
+        assert tools[0]["container"] == encoded_container_id
+
+        plain_tools = [{"type": "file_search", "vector_store_ids": ["vs_123"]}]
+        plain_result = (
+            ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(
+                plain_tools
+            )
+        )
+        assert plain_result is plain_tools
+
     def test_update_responses_api_response_id_with_model_id_handles_dict(self):
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}
