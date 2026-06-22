@@ -23,9 +23,17 @@ import sys
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
 # runners don't set these. We pin throwaway values before the import so the
-# test never depends on a live database or master key.
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
-os.environ.setdefault("LITELLM_MASTER_KEY", "sk-test-component-allowlist")
+# test never depends on a live database or master key, then restore the prior
+# environment so the throwaway values don't leak into sibling tests sharing the
+# xdist worker (a leaked non-postgres ``DATABASE_URL`` makes DB-backed tests
+# treat a phantom database as available instead of skipping).
+_THROWAWAY_ENV = {
+    "DATABASE_URL": "sqlite:///:memory:",
+    "LITELLM_MASTER_KEY": "sk-test-component-allowlist",
+}
+_PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
+for _key, _value in _THROWAWAY_ENV.items():
+    os.environ.setdefault(_key, _value)
 
 from fastapi.routing import Mount
 
@@ -34,9 +42,19 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
+from backend.routes.allowlist import (
+    BACKEND_EXACT_PATHS,
+    BACKEND_MOUNT_PATHS,
+    BACKEND_PATH_PREFIXES,
+)
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
 from litellm.proxy.proxy_server import app
+
+for _key, _previous in _PRE_EXISTING_ENV.items():
+    if _previous is None:
+        os.environ.pop(_key, None)
+    else:
+        os.environ[_key] = _previous
 
 
 def _component_paths(routes, exact_paths, path_prefixes) -> set[str]:
@@ -74,3 +92,44 @@ def test_gateway_plus_backend_covers_full_app():
         f"Update gateway/routes/allowlist.py or backend/routes/allowlist.py to cover:\n  "
         + "\n  ".join(sorted(uncovered))
     )
+
+
+def test_backend_mount_paths_defined():
+    """BACKEND_MOUNT_PATHS constant must exist and be a frozenset."""
+    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), \
+        f"BACKEND_MOUNT_PATHS must be a frozenset, got {type(BACKEND_MOUNT_PATHS)}"
+    assert len(BACKEND_MOUNT_PATHS) > 0, \
+        "BACKEND_MOUNT_PATHS must contain at least one Mount path"
+
+
+def test_swagger_mount_in_backend_allowlist():
+    """The /swagger Mount must be in BACKEND_MOUNT_PATHS."""
+    assert "/swagger" in BACKEND_MOUNT_PATHS, \
+        "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
+
+
+def test_backend_keeps_swagger_mount():
+    """Verify that Mounts in BACKEND_MOUNT_PATHS are kept on the backend."""
+    backend_mounts = {
+        getattr(r, "path")
+        for r in app.router.routes
+        if isinstance(r, Mount) and getattr(r, "path", None) in BACKEND_MOUNT_PATHS
+    }
+    assert "/swagger" in backend_mounts, \
+        "/swagger Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
+
+
+def test_backend_drops_non_allowlisted_mounts():
+    """Verify that Mounts NOT in BACKEND_MOUNT_PATHS would be dropped from backend."""
+    all_mounts = {
+        getattr(r, "path")
+        for r in app.router.routes
+        if isinstance(r, Mount) and getattr(r, "path", None) is not None
+    }
+    non_backend_mounts = all_mounts - BACKEND_MOUNT_PATHS
+
+    assert len(non_backend_mounts) > 0, \
+        "Expected at least one non-backend Mount (e.g., /ui, /_next) to verify filtering logic"
+    for mount_path in non_backend_mounts:
+        assert mount_path not in BACKEND_MOUNT_PATHS, \
+            f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"

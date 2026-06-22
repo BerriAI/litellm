@@ -20,9 +20,7 @@ describe("guardrail_info_helpers", () => {
   // Reset mutable module state between tests
   beforeEach(() => {
     // Clear DynamicGuardrailProviders by repopulating with empty
-    Object.keys(DynamicGuardrailProviders).forEach(
-      (key) => delete DynamicGuardrailProviders[key]
-    );
+    Object.keys(DynamicGuardrailProviders).forEach((key) => delete DynamicGuardrailProviders[key]);
     // Remove any dynamically added keys from guardrail_provider_map
     const staticKeys = new Set([
       "PresidioPII",
@@ -123,15 +121,11 @@ describe("guardrail_info_helpers", () => {
         },
       });
 
-      expect(
-        shouldRenderContentFilterConfigSettings("LitellmContentFilter")
-      ).toBe(true);
+      expect(shouldRenderContentFilterConfigSettings("LitellmContentFilter")).toBe(true);
     });
 
     it("should return false for unrelated providers", () => {
-      expect(shouldRenderContentFilterConfigSettings("PresidioPII")).toBe(
-        false
-      );
+      expect(shouldRenderContentFilterConfigSettings("PresidioPII")).toBe(false);
     });
 
     it("should return false for null", () => {
@@ -147,9 +141,7 @@ describe("guardrail_info_helpers", () => {
         },
       });
 
-      expect(
-        shouldRenderAzureTextModerationConfigSettings("AzureContentSafety")
-      ).toBe(true);
+      expect(shouldRenderAzureTextModerationConfigSettings("AzureContentSafety")).toBe(true);
     });
 
     it("should return false for null", () => {
@@ -201,6 +193,20 @@ describe("guardrail_info_helpers", () => {
 
       expect(result.displayName).toBe("Noma Security");
       expect(result.logo).toContain("noma_security.png");
+    });
+
+    it("should resolve RepelloAI Argus logo and display name", () => {
+      populateGuardrailProviders({
+        repelloai: { ui_friendly_name: "RepelloAI Argus" },
+      });
+      populateGuardrailProviderMap({
+        repelloai: { ui_friendly_name: "RepelloAI Argus" },
+      });
+
+      const result = getGuardrailLogoAndName("repelloai");
+
+      expect(result.displayName).toBe("RepelloAI Argus");
+      expect(result.logo).toContain("repelloai.png");
     });
   });
 

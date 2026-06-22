@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, TypedDict, cast
+from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,6 +32,34 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
 
 # Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
+
+
+def _get_token_detail_value(details: object, key: str) -> Optional[int]:
+    if isinstance(details, dict):
+        value = details.get(key)
+    else:
+        value = getattr(details, key, None)
+    return value if isinstance(value, int) else None
+
+
+def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
+    """
+    Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
+    that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
+    or any other object supporting attribute access.
+
+    Returns ``None`` when the value cannot be resolved — callers can
+    distinguish "absent" from "zero" using ``is None``.
+
+    See https://github.com/BerriAI/litellm/issues/26153 — ``stream_chunk_builder``
+    historically left this as a plain ``dict``, which broke direct attribute
+    access in cost calculation.
+    """
+    if server_tool_use is None:
+        return None
+    if isinstance(server_tool_use, dict):
+        return server_tool_use.get("web_search_requests")
+    return getattr(server_tool_use, "web_search_requests", None)
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -163,6 +191,11 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
     return base_key
 
 
+def _parse_above_token_threshold(key: str) -> float:
+    threshold_str = key.split("_above_")[1].split("_tokens")[0]
+    return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
+
+
 def _get_token_base_cost(
     model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
 ) -> Tuple[float, float, float, float, float]:
@@ -228,15 +261,13 @@ def _get_token_base_cost(
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: Optional[float] = None
-    for key in sorted(threshold_keys, reverse=True):
+    for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
         value = model_info.get(key)
         if value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
-                threshold = float(threshold_str.replace("k", "")) * (
-                    1000 if "k" in threshold_str else 1
-                )
+                threshold = _parse_above_token_threshold(key)
                 if usage.prompt_tokens > threshold:
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
@@ -275,40 +306,54 @@ def _get_token_base_cost(
 
                     # Apply tiered pricing to cache costs
                     cache_creation_tiered_key = (
-                        f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
+                        _get_service_tier_cost_key(
+                            f"cache_creation_input_token_cost_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
                     )
-                    cache_creation_1hr_tiered_key = f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
+                    cache_creation_1hr_tiered_key = (
+                        _get_service_tier_cost_key(
+                            f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
+                    )
                     cache_read_tiered_key = (
-                        f"cache_read_input_token_cost_above_{threshold_str}_tokens"
+                        _get_service_tier_cost_key(
+                            f"cache_read_input_token_cost_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"cache_read_input_token_cost_above_{threshold_str}_tokens"
                     )
 
-                    if cache_creation_tiered_key in model_info:
-                        cache_creation_cost = cast(
-                            float,
-                            _get_cost_per_unit(
-                                model_info,
-                                cache_creation_tiered_key,
-                                cache_creation_cost,
-                            ),
-                        )
+                    cache_creation_cost = cast(
+                        float,
+                        _get_cost_per_unit(
+                            model_info,
+                            cache_creation_tiered_key,
+                            cache_creation_cost,
+                        ),
+                    )
 
-                    if cache_creation_1hr_tiered_key in model_info:
-                        cache_creation_cost_above_1hr = cast(
-                            float,
-                            _get_cost_per_unit(
-                                model_info,
-                                cache_creation_1hr_tiered_key,
-                                cache_creation_cost_above_1hr,
-                            ),
-                        )
+                    cache_creation_cost_above_1hr = cast(
+                        float,
+                        _get_cost_per_unit(
+                            model_info,
+                            cache_creation_1hr_tiered_key,
+                            cache_creation_cost_above_1hr,
+                        ),
+                    )
 
-                    if cache_read_tiered_key in model_info:
-                        cache_read_cost = cast(
-                            float,
-                            _get_cost_per_unit(
-                                model_info, cache_read_tiered_key, cache_read_cost
-                            ),
-                        )
+                    cache_read_cost = cast(
+                        float,
+                        _get_cost_per_unit(
+                            model_info, cache_read_tiered_key, cache_read_cost
+                        ),
+                    )
 
                     break
             except (IndexError, ValueError):
@@ -655,7 +700,7 @@ def _get_regional_uplift_multiplier(
         return 1.0
 
 
-def generic_cost_per_token(  # noqa: PLR0915
+def generic_cost_per_token(
     model: str,
     usage: Usage,
     custom_llm_provider: str,
@@ -870,17 +915,47 @@ def calculate_image_response_cost_from_usage(
             cached_tokens=0,
         )
 
+    output_tokens_details = getattr(usage, "completion_tokens_details", None)
+    if output_tokens_details is None:
+        output_tokens_details = getattr(usage, "output_tokens_details", None)
+
+    if output_tokens_details is None:
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=0,
+            image_tokens=completion_tokens,
+            reasoning_tokens=0,
+            audio_tokens=0,
+        )
+    else:
+        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+        image_tokens = (
+            _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+        )
+        audio_tokens = (
+            _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+        )
+        reasoning_tokens = (
+            _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+        )
+        known_output_tokens = (
+            text_tokens + image_tokens + audio_tokens + reasoning_tokens
+        )
+        if completion_tokens > known_output_tokens:
+            text_tokens += completion_tokens - known_output_tokens
+
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            image_tokens=image_tokens,
+            reasoning_tokens=reasoning_tokens,
+            audio_tokens=audio_tokens,
+        )
+
     normalized_usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         prompt_tokens_details=prompt_tokens_details,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        ),
+        completion_tokens_details=completion_tokens_details,
     )
 
     prompt_cost, completion_cost = generic_cost_per_token(
@@ -889,6 +964,43 @@ def calculate_image_response_cost_from_usage(
         custom_llm_provider=custom_llm_provider,
     )
     return prompt_cost + completion_cost
+
+
+def calculate_image_response_web_search_cost(
+    image_response: ImageResponse,
+    custom_llm_provider: str,
+    model_info: ModelInfo,
+) -> float:
+    """
+    Cost of Google Search grounding performed during image generation.
+
+    The grounding request count is carried on the image usage object by the
+    provider transformers; it is billed with the same per-request accounting
+    used for chat completions.
+    """
+    usage = image_response.usage
+    if usage is None:
+        return 0.0
+
+    web_search_requests = getattr(usage, "web_search_requests", None)
+    if not web_search_requests:
+        return 0.0
+
+    from litellm.llms import get_cost_for_web_search_request
+
+    synthetic_usage = Usage(
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            web_search_requests=web_search_requests
+        )
+    )
+    return (
+        get_cost_for_web_search_request(
+            custom_llm_provider=custom_llm_provider,
+            usage=synthetic_usage,
+            model_info=model_info,
+        )
+        or 0.0
+    )
 
 
 class CostCalculatorUtils:

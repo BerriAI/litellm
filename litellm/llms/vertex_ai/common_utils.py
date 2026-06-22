@@ -12,7 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import PartType, Schema
+from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_PROVIDER_METADATA_FIELDS,
+    PartType,
+    Schema,
+)
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
@@ -25,6 +29,47 @@ class VertexAIError(BaseLLMException):
         headers: Optional[Union[Dict, httpx.Headers]] = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
+
+
+def redact_vertex_ai_metadata_from_logged_object(obj: Any) -> None:
+    if isinstance(obj, dict):
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            if field in obj:
+                obj[field] = []
+        hidden_params = obj.get("_hidden_params")
+        if isinstance(hidden_params, dict):
+            for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+                hidden_params.pop(field, None)
+        return
+
+    for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+        if hasattr(obj, field):
+            setattr(obj, field, [])
+    hidden_params = getattr(obj, "_hidden_params", None)
+    if isinstance(hidden_params, dict):
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+    """
+    success_handler() merges response._hidden_params into
+    litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
+    metadata must be scrubbed from that copy too.
+    """
+    litellm_params = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        hidden_params = metadata.get("hidden_params")
+        if not isinstance(hidden_params, dict):
+            continue
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
 
 
 def vertex_request_labels_from_litellm_params(
@@ -226,7 +271,7 @@ def supports_response_json_schema(model: str) -> bool:
 
     # Gemini 2.0+ and 2.5+ models support responseJsonSchema
     # Pattern matches: gemini-2.0-*, gemini-2.5-*, gemini-3-*, etc.
-    gemini_2_plus_pattern = re.compile(r"gemini-([2-9]|[1-9]\d+)\.")
+    gemini_2_plus_pattern = re.compile(r"gemini-(?:[2-9]|[1-9]\d+)(?:\.|\-)")
 
     return bool(gemini_2_plus_pattern.search(model_lower))
 

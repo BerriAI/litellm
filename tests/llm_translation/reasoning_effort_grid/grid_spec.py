@@ -21,6 +21,7 @@ class ModelEntry:
     extra_params: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
     required_env: FrozenSet[str] = field(default_factory=frozenset)
     caps: FrozenSet[str] = field(default_factory=frozenset)
+    unavailable_error: Optional[str] = None
     fail_reason: Optional[str] = None
     bedrock_effort_ceiling: Optional[str] = None
 
@@ -126,7 +127,7 @@ _VERTEX_REQ = frozenset({"VERTEX_PROJECT"})
 _BEDROCK_REQ = frozenset({"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
 
 
-_CAPS_OPUS_4_7: FrozenSet[str] = frozenset(
+_CAPS_XHIGH_MAX: FrozenSet[str] = frozenset(
     {"supports_xhigh_reasoning_effort", "supports_max_reasoning_effort"}
 )
 _CAPS_4_6: FrozenSet[str] = frozenset({"supports_max_reasoning_effort"})
@@ -135,11 +136,31 @@ _CAPS_NONE: FrozenSet[str] = frozenset()
 
 ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="claude-fable-5",
+        model="anthropic/claude-fable-5",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5 is not yet released on the Anthropic API for the CI "
+            "account; Anthropic returns not_found_error until the model is "
+            "available, so this cell stays loud in CI. Remove this fail_reason "
+            "once the model is available."
+        ),
+    ),
+    ModelEntry(
+        alias="claude-opus-4-8",
+        model="anthropic/claude-opus-4-8",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+    ),
+    ModelEntry(
         alias="claude-opus-4-7",
         model="anthropic/claude-opus-4-7",
         mode="adaptive",
         required_env=_ANTHROPIC_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_XHIGH_MAX,
     ),
     ModelEntry(
         alias="claude-sonnet-4-6",
@@ -160,11 +181,37 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
 
 AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="azure-claude-fable-5",
+        model="azure_ai/claude-fable-5",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5 has no deployment on the CI Microsoft Foundry "
+            "resource yet; Foundry returns DeploymentNotFound until someone "
+            "creates the fable-5 deployment, so this cell stays loud in CI. "
+            "Remove this fail_reason once the deployment exists."
+        ),
+    ),
+    ModelEntry(
+        alias="azure-claude-opus-4-8",
+        model="azure_ai/claude-opus-4-8",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-opus-4-8 has no deployment on the CI Microsoft Foundry "
+            "resource yet; Foundry returns DeploymentNotFound until someone "
+            "creates the opus-4-8 deployment, so this cell stays loud in CI. "
+            "Remove this fail_reason once the deployment exists."
+        ),
+    ),
+    ModelEntry(
         alias="azure-claude-opus-4-7",
         model="azure_ai/claude-opus-4-7",
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_XHIGH_MAX,
     ),
     ModelEntry(
         alias="azure-claude-opus-4-6",
@@ -192,12 +239,40 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="vertex-claude-fable-5",
+        model="vertex_ai/claude-fable-5",
+        mode="adaptive",
+        extra_params=(("vertex_location", "global"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5 availability on the CI Vertex project is not yet "
+            "confirmed for this brand-new release, so this cell stays loud in "
+            "CI until verified. Remove this fail_reason once the model is "
+            "confirmed available on the global Vertex endpoint."
+        ),
+    ),
+    ModelEntry(
+        alias="vertex-claude-opus-4-8",
+        model="vertex_ai/claude-opus-4-8",
+        mode="adaptive",
+        extra_params=(("vertex_location", "global"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-opus-4-8 availability on the CI Vertex project is not yet "
+            "confirmed for this brand-new release, so this cell stays loud in "
+            "CI until verified. Remove this fail_reason once the model is "
+            "confirmed available on the global Vertex endpoint."
+        ),
+    ),
+    ModelEntry(
         alias="vertex-claude-opus-4-7",
         model="vertex_ai/claude-opus-4-7",
         mode="adaptive",
         extra_params=(("vertex_location", "global"),),
         required_env=_VERTEX_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_XHIGH_MAX,
     ),
     ModelEntry(
         alias="vertex-claude-opus-4-6",
@@ -228,18 +303,41 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="bedrock-claude-fable-5",
+        model="bedrock/converse/us.anthropic.claude-fable-5",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        bedrock_effort_ceiling="xhigh",
+        unavailable_error="is not available for this account",
+        fail_reason=(
+            "claude-fable-5 on Bedrock requires the account to opt in to "
+            "provider data sharing (data retention mode "
+            "'provider_data_sharing' via the Data Retention API); the CI "
+            "account has not opted in yet, so this cell stays loud in CI. "
+            "Remove this fail_reason once the opt-in is done."
+        ),
+    ),
+    ModelEntry(
+        alias="bedrock-claude-opus-4-8",
+        model="bedrock/converse/us.anthropic.claude-opus-4-8",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        bedrock_effort_ceiling="xhigh",
+        unavailable_error="is not available for this account",
+    ),
+    ModelEntry(
         alias="bedrock-claude-opus-4-7",
         model="bedrock/converse/us.anthropic.claude-opus-4-7",
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_OPUS_4_7,
-        fail_reason=(
-            "claude-opus-4-7 is not entitled on the Bedrock CI account "
-            "941277531214 (model access requires an AWS Sales request, not "
-            "self-serve); this cell fails on purpose so it stays loud in CI — "
-            "remove this fail_reason once access is granted"
-        ),
+        caps=_CAPS_XHIGH_MAX,
+        bedrock_effort_ceiling="xhigh",
+        unavailable_error="is not available for this account",
     ),
     ModelEntry(
         alias="bedrock-claude-opus-4-6",

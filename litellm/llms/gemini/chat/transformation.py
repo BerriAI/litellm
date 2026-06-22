@@ -93,6 +93,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "include_server_side_tool_invocations",
             "service_tier",
         ]
         if supports_reasoning(model, custom_llm_provider="gemini"):

@@ -97,7 +97,7 @@ async def test_gemini_3_responses_api_with_thought_signatures():
         pytest.skip("GEMINI_API_KEY not set")
 
     litellm.set_verbose = False
-    request_model = "gemini/gemini-3-pro-preview"
+    request_model = "gemini/gemini-3.1-pro-preview"
 
     tools = [
         {
@@ -197,7 +197,7 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
         pytest.skip("GEMINI_API_KEY not set")
 
     litellm.set_verbose = False
-    request_model = "gemini/gemini-3-pro-preview"
+    request_model = "gemini/gemini-3.1-pro-preview"
 
     tools = [
         {

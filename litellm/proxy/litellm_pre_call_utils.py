@@ -13,6 +13,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
@@ -140,6 +141,20 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "service_callback",
     "logger_fn",
     "litellm_disabled_callbacks",
+    # Agentic-loop control fields. These bound or drive an interceptor's agentic
+    # loop (web search, compression, code interpreter) and are server-controlled.
+    # A client-supplied value would forge loop depth/cycle state, mark an
+    # interception as active (triggering sandbox code execution without the
+    # native tool ever being present), force the completed response to be
+    # re-wrapped as a synthetic stream the caller never asked for, or raise the
+    # loop ceiling to drive many upstream model calls and sandbox executions
+    # from a single request.
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_code_interpreter_interception_active",
+    "_code_interpreter_interception_converted_stream",
+    "_code_interpreter_interception_sandbox_key",
+    "max_agentic_loops",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (
@@ -161,6 +176,9 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "secret_fields",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    "client_disconnected",
+    "error_information",
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
@@ -394,6 +412,32 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
+    )
+
+
+def is_claude_code_user_agent(user_agent: str) -> bool:
+    """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
+    extensions and the Agent SDK run through the same CLI and share that prefix."""
+    return user_agent.startswith("claude-cli/")
+
+
+def should_auto_drop_params_for_claude_code(
+    user_agent: str, data: dict, proxy_config: ProxyConfig
+) -> bool:
+    """drop_params defaults to on for Claude Code so its Anthropic-specific
+    params (e.g. thinking) don't fail requests routed to non-Anthropic
+    providers. An explicit drop_params from the caller or in the operator's
+    ``litellm_settings`` always wins over this default."""
+    if not is_claude_code_user_agent(user_agent):
+        return False
+    if "drop_params" in data:
+        return False
+    config = getattr(proxy_config, "config", None)
+    litellm_settings = (
+        config.get("litellm_settings") if isinstance(config, dict) else None
+    )
+    return not (
+        isinstance(litellm_settings, dict) and "drop_params" in litellm_settings
     )
 
 
@@ -1289,7 +1333,7 @@ class LiteLLMProxyRequestSetup:
         )
 
 
-async def add_litellm_data_to_request(  # noqa: PLR0915
+async def add_litellm_data_to_request(
     data: dict,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1741,6 +1785,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ):
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
+
+    if should_auto_drop_params_for_claude_code(user_agent, data, proxy_config):
+        data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.

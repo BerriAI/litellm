@@ -132,6 +132,7 @@ async def _send_message_via_completion_bridge(
     custom_llm_provider: str,
     api_base: Optional[str],
     litellm_params: Dict[str, Any],
+    agent_extra_headers: Optional[Dict[str, str]] = None,
 ) -> LiteLLMSendMessageResponse:
     """
     Route a send_message through the LiteLLM completion bridge (e.g. LangGraph, Bedrock AgentCore).
@@ -157,9 +158,12 @@ async def _send_message_via_completion_bridge(
         params=params,
         litellm_params=litellm_params,
         api_base=api_base,
+        agent_extra_headers=agent_extra_headers,
     )
 
-    return LiteLLMSendMessageResponse.from_dict(response_dict)
+    return LiteLLMSendMessageResponse.from_dict(
+        response_dict, request_id=str(request.id)
+    )
 
 
 async def _execute_a2a_send_with_retry(
@@ -281,6 +285,7 @@ async def asend_message(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             litellm_params=litellm_params,
+            agent_extra_headers=agent_extra_headers,
         )
 
     # Standard A2A client flow
@@ -317,15 +322,6 @@ async def asend_message(
     )
     card_url = getattr(agent_card, "url", None) if agent_card else None
 
-    context_id = trace_id or str(uuid.uuid4())
-    message = request.params.message
-    if isinstance(message, dict):
-        if message.get("context_id") is None:
-            message["context_id"] = context_id
-    else:
-        if getattr(message, "context_id", None) is None:
-            message.context_id = context_id
-
     a2a_response = await _execute_a2a_send_with_retry(
         a2a_client=a2a_client,
         request=request,
@@ -338,7 +334,9 @@ async def asend_message(
     verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
 
     # Wrap in LiteLLM response type for _hidden_params support
-    response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response)
+    response = LiteLLMSendMessageResponse.from_a2a_response(
+        a2a_response, request_id=str(request.id)
+    )
 
     # Calculate token usage from request and response
     response_dict = a2a_response.model_dump(mode="json", exclude_none=True)
@@ -438,7 +436,7 @@ def _build_streaming_logging_obj(
     return logging_obj
 
 
-async def asend_message_streaming(  # noqa: PLR0915
+async def asend_message_streaming(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: Optional[str] = None,
@@ -514,6 +512,7 @@ async def asend_message_streaming(  # noqa: PLR0915
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
+            agent_extra_headers=agent_extra_headers,
         ):
             yield chunk
         return

@@ -569,8 +569,6 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
                 == final_usage_block
             )
 
-        print(mock_log_success_event.call_args.kwargs.keys())
-
 
 def test_streaming_handler_with_stop_chunk(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
@@ -1511,6 +1509,44 @@ def test_raise_on_model_repetition(
             wrapper.raise_on_model_repetition()
 
 
+@pytest.mark.parametrize(
+    "empty_chunk_index",
+    [-1, -2],
+    ids=["last_chunk_empty", "second_to_last_chunk_empty"],
+)
+def test_raise_on_model_repetition_tolerates_empty_choices(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    empty_chunk_index: int,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/28884
+
+    Vertex Gemini Flash / Flash Lite with web search streaming emits
+    metadata-only and usage-only chunks that carry no choices. These are
+    appended to self.chunks, and raise_on_model_repetition() previously
+    accessed choices[0] unconditionally, raising IndexError mid-stream
+    (surfaced to users as MidStreamFallbackError -> APIConnectionError).
+    """
+    wrapper = initialized_custom_stream_wrapper
+
+    chunks = [
+        _make_chunk("hello world"),
+        ModelResponseStream(
+            id="usage-only",
+            created=1741037890,
+            model="vertex_ai/gemini-3.1-flash-lite",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+        ),
+    ]
+    if empty_chunk_index == -2:
+        chunks.append(_make_chunk("hello world again"))
+
+    for chunk in chunks:
+        wrapper.chunks.append(chunk)
+        wrapper.raise_on_model_repetition()
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -2036,23 +2072,19 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
             chunks.append(chunk)
 
     # The prompt_filter chunk should be forwarded with choices=[]
-    assert len(chunks[0].choices) == 0, (
-        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
-    )
+    assert (
+        len(chunks[0].choices) == 0
+    ), f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
 
     # At least one chunk must have role='assistant' in its delta
     has_role = any(
-        len(c.choices) > 0
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        len(c.choices) > 0 and getattr(c.choices[0].delta, "role", None) == "assistant"
         for c in chunks
     )
     assert has_role, (
         "No chunk contained role='assistant' in delta (issue #24221). "
         "Chunk deltas: "
-        + str([
-            c.choices[0].delta if c.choices else "no choices"
-            for c in chunks
-        ])
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
 
 
@@ -2124,3 +2156,248 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+def test_chunk_creator_passes_through_model_response_stream(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    finish_reason: str,
+):
+    """
+    chunk_creator must pass ModelResponseStream chunks from custom providers
+    straight through and preserve finish_reason exactly — not force-cast to GChunk.
+    Regression test for issue #27389.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None
+    assert initialized_custom_stream_wrapper.received_finish_reason == finish_reason
+
+
+def test_chunk_creator_drops_empty_finish_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    A ModelResponseStream chunk with finish_reason but no content should return
+    None so finish_reason_handler() synthesises the final chunk — mirrors GChunk
+    behaviour via is_chunk_non_empty.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=""),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is None
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+def test_chunk_creator_stops_iteration_on_trailing_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    After received_finish_reason is set, any empty trailing chunk (e.g. provider
+    metadata flush) must raise StopIteration to end the stream cleanly.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    litellm._custom_providers.append("my-custom-provider")
+
+    trailing_chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=trailing_chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+
+def test_chunk_creator_strips_finish_reason_from_content_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    When content and finish_reason arrive in the same chunk, finish_reason must be
+    stripped so finish_reason_handler() emits it on the synthetic terminal chunk —
+    preventing two terminal chunks (double finish_reason bug).
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello"),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None
+    assert (
+        result.choices[0].finish_reason is None
+    ), "finish_reason must be stripped from content chunks to avoid double terminal chunks"
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+def test_chunk_creator_tool_calls_not_dropped_on_finish(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    A terminal chunk with finish_reason="tool_calls" and delta.tool_calls must NOT
+    be silently dropped — tool_calls counts as content so the chunk is passed through
+    (with finish_reason stripped) rather than returning None.
+    """
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_abc",
+                            function=Function(name="get_weather", arguments='{"city":"NYC"}'),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None, "tool_calls chunk must not be dropped"
+    assert result.choices[0].delta.tool_calls is not None
+    assert result.choices[0].finish_reason is None
+    assert initialized_custom_stream_wrapper.received_finish_reason == "tool_calls"
+
+
+def test_record_partial_usage_for_failure_stashes_usage_and_cost():
+    """A stream that breaks mid-flight must surface the usage assembled from the
+    chunks already delivered, plus its cost, on the logging object so the
+    failure handler records the real partial spend instead of zero.
+    """
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-1",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-1",
+            created=1742056047,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens == 30
+    assert stashed.completion_tokens == 1
+    assert stashed.total_tokens == 31
+    assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+def test_record_partial_usage_for_failure_noop_without_chunks():
+    """With no chunks delivered there is nothing billed to recover, so the
+    failure stash must stay absent and not force a zero-usage row.
+    """
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-2",
+        function_id="1245",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = []
+
+    wrapper._record_partial_usage_for_failure()
+
+    assert "combined_usage_object" not in logging_obj.model_call_details

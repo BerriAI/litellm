@@ -87,6 +87,7 @@ class ExceptionCheckers:
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
+            "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
@@ -169,6 +170,16 @@ def get_error_message(error_obj) -> Optional[str]:
 
 
 ####### EXCEPTION MAPPING ################
+def _get_body_error_code(error_str: str) -> int | None:
+    """Return error.code from a JSON error body, or None if not parseable."""
+    try:
+        body = json.loads(error_str)
+        code = body.get("error", {}).get("code")
+        return int(code) if code is not None else None
+    except Exception:
+        return None
+
+
 def _get_response_headers(original_exception: Exception) -> Optional[httpx.Headers]:
     """
     Extract and return the response headers from an exception, if present.
@@ -233,7 +244,7 @@ def extract_and_raise_litellm_exception(
                 )
 
 
-def exception_type(  # type: ignore  # noqa: PLR0915
+def exception_type(  # type: ignore
     model,
     original_exception,
     custom_llm_provider,
@@ -249,14 +260,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
     if litellm.suppress_debug_info is False:
-        print()  # noqa
-        print(  # noqa
-            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
-        )  # noqa
-        print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
-        )  # noqa
-        print()  # noqa
+        print()  # noqa: T201
+        print(  # noqa: T201
+            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+        )
+        print(  # noqa: T201
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."
+        )
+        print()  # noqa: T201
 
     litellm_response_headers = _get_response_headers(
         original_exception=original_exception
@@ -654,7 +665,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 custom_llm_provider == "anthropic"
                 or custom_llm_provider == "anthropic_text"
             ):  # one of the anthropics
-                if "prompt is too long" in error_str or "prompt: length" in error_str:
+                if (
+                    "prompt is too long" in error_str
+                    or "prompt: length" in error_str
+                    or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message="AnthropicError - {}".format(error_str),
@@ -891,12 +906,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "model's maximum context limit" in error_str:
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"{custom_llm_provider.capitalize()}Exception: Context Window Error - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
+                        response=getattr(original_exception, "response", None),
+                        litellm_debug_info=extra_information,
                     )
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True
@@ -1394,6 +1411,29 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     or "429 Unable to submit request because the service is temporarily out of capacity."
                     in error_str
                 ):
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
+                    )
+                elif (
+                    isinstance(getattr(original_exception, "status_code", None), int)
+                    and 500 <= original_exception.status_code < 600
+                    and _get_body_error_code(error_str) == 429
+                ):
+                    # upstream gateway wraps a 429 inside a 5xx envelope
+                    # e.g. HTTP 500/503 with {"error":{"code":429,...}}.
+                    # Scoped to 5xx so HTTP 400/401 with body code:429
+                    # still maps to BadRequestError / AuthenticationError.
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",

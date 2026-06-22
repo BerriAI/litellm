@@ -802,6 +802,8 @@ ValidUserMessageContentTypes = [
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
@@ -813,6 +815,8 @@ ValidUserMessageContentTypesLiteral = Literal[
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
 ]
@@ -824,6 +828,8 @@ ValidUserMessageContentTypes = [
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
@@ -851,6 +857,8 @@ ValidChatCompletionMessageContentTypesLiteral = Literal[
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
     "thinking",
@@ -864,6 +872,8 @@ ValidChatCompletionMessageContentTypes = [
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
     "thinking",
@@ -965,6 +975,7 @@ ChatCompletionAssistantContentValue = (
 
 class ChatCompletionResponseMessage(TypedDict, total=False):
     content: Optional[ChatCompletionAssistantContentValue]
+    annotations: Optional[List[ChatCompletionAnnotation]]
     tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
@@ -1083,6 +1094,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "imageConfig",
 ]
 
 OpenAIImageEditOptionalParams = Literal[
@@ -1890,7 +1902,7 @@ class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
     """The ID of the previous conversation item for reference"""
     text: str
     """The text content, used for 'input_text' / 'text' / 'output_text' content types"""
-    transcript: str
+    transcript: Optional[str]
     """The transcript content, used for 'input_audio' / 'audio' content types"""
     type: Literal[
         "input_audio",
@@ -1996,7 +2008,7 @@ class OpenAIRealtimeResponseContentPart(TypedDict, total=False):
     text: str
     """The text content, if type is 'text' or 'output_text'"""
 
-    transcript: str
+    transcript: Optional[str]
     """The transcript content, if type is 'audio' or 'output_audio'"""
 
     type: Union[

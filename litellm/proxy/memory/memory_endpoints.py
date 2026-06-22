@@ -29,6 +29,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import MemoryRepository
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.memory_management import (
     LiteLLM_MemoryRow,
     MemoryCreateRequest,
@@ -173,7 +175,7 @@ async def _is_team_admin_for(
     )
 
     try:
-        team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+        team_obj = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": team_id}
         )
     except Exception as e:
@@ -304,7 +306,7 @@ async def create_memory(
         create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
 
     try:
-        row = await prisma_client.db.litellm_memorytable.create(data=create_data)
+        row = await MemoryRepository(prisma_client).table.create(data=create_data)
     except Exception as e:
         # Key is globally unique. Any duplicate → 409.
         if _is_unique_violation(e):
@@ -364,8 +366,8 @@ async def list_memory(
         where = {"AND": [key_filter, vis]}
 
     try:
-        total = await prisma_client.db.litellm_memorytable.count(where=where)
-        rows = await prisma_client.db.litellm_memorytable.find_many(
+        total = await MemoryRepository(prisma_client).table.count(where=where)
+        rows = await MemoryRepository(prisma_client).table.find_many(
             where=where,
             order={"updated_at": "desc"},
             skip=(page - 1) * page_size,
@@ -386,7 +388,7 @@ async def _find_memory_for_caller(
     key_filter: dict = {"key": key}
     vis = _visibility_filter(user_api_key_dict)
     where: dict = key_filter if vis is None else {"AND": [key_filter, vis]}
-    rows = await prisma_client.db.litellm_memorytable.find_many(
+    rows = await MemoryRepository(prisma_client).table.find_many(
         where=where, take=1, order={"updated_at": "desc"}
     )
     if not rows:
@@ -475,7 +477,7 @@ async def upsert_memory(
             # their team) — otherwise a teammate could overwrite a personal
             # entry through the OR-based visibility filter.
             await _assert_write_access(prisma_client, existing, user_api_key_dict)
-            row = await prisma_client.db.litellm_memorytable.update(
+            row = await MemoryRepository(prisma_client).table.update(
                 where={"memory_id": existing.memory_id},
                 data=data,
             )
@@ -503,7 +505,7 @@ async def upsert_memory(
             if body.metadata is not None:
                 create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
             try:
-                row = await prisma_client.db.litellm_memorytable.create(
+                row = await MemoryRepository(prisma_client).table.create(
                     data=create_data
                 )
             except Exception as e:
@@ -524,7 +526,7 @@ async def upsert_memory(
                 await _assert_write_access(
                     prisma_client, existing_after_race, user_api_key_dict
                 )
-                row = await prisma_client.db.litellm_memorytable.update(
+                row = await MemoryRepository(prisma_client).table.update(
                     where={"memory_id": existing_after_race.memory_id},
                     data=data,
                 )
@@ -554,7 +556,7 @@ async def delete_memory(
     # Visibility != write authority — see the upsert handler for the rationale.
     await _assert_write_access(prisma_client, row, user_api_key_dict)
     try:
-        await prisma_client.db.litellm_memorytable.delete(
+        await MemoryRepository(prisma_client).table.delete(
             where={"memory_id": row.memory_id}
         )
     except Exception as e:
