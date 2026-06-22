@@ -91,6 +91,9 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
+from litellm.proxy.common_utils.ui_session_budget_utils import (
+    resolve_ui_session_max_budget,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
@@ -166,16 +169,6 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS = frozenset(
 
 def _hash_cli_sso_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
-
-
-def _resolve_ui_session_max_budget(user_max_budget: Optional[float]) -> Optional[float]:
-    """
-    Session credentials use the user's configured max_budget when set;
-    otherwise fall back to the default UI/CLI session cap.
-    """
-    if user_max_budget is not None:
-        return user_max_budget
-    return litellm.max_ui_session_budget
 
 
 def _normalize_cli_sso_user_code(user_code: str) -> str:
@@ -2336,7 +2329,7 @@ async def cli_poll_key(
                 user_id=user_id,
                 user_role=session_data["user_role"],
                 models=session_data.get("models", []),
-                max_budget=_resolve_ui_session_max_budget(
+                max_budget=resolve_ui_session_max_budget(
                     session_data.get("max_budget")
                 ),
             )
@@ -3358,7 +3351,7 @@ class SSOAuthenticationHandler:
         )
 
         default_ui_key_values.update(user_defined_values)
-        default_ui_key_values["key_max_budget"] = _resolve_ui_session_max_budget(
+        default_ui_key_values["key_max_budget"] = resolve_ui_session_max_budget(
             user_info.max_budget if user_info is not None else None
         )
         default_ui_key_values["request_type"] = "key"
@@ -3411,7 +3404,7 @@ class SSOAuthenticationHandler:
                     user_id=user_defined_values["user_id"],
                     user_role=user_defined_values["user_role"] or user_role,
                     models=[],
-                    max_budget=_resolve_ui_session_max_budget(
+                    max_budget=resolve_ui_session_max_budget(
                         user_info.max_budget if user_info is not None else None
                     ),
                 )

@@ -1445,21 +1445,6 @@ class TestCLISSOCallbackFunction:
 class TestCLIPollingFunction:
     """Test the cli_poll_key function specifically"""
 
-    def test_resolve_ui_session_max_budget_prefers_user_budget(self):
-        from litellm.proxy.management_endpoints.ui_sso import (
-            _resolve_ui_session_max_budget,
-        )
-
-        assert _resolve_ui_session_max_budget(500.0) == 500.0
-
-    def test_resolve_ui_session_max_budget_falls_back_to_session_cap(self):
-        import litellm
-        from litellm.proxy.management_endpoints.ui_sso import (
-            _resolve_ui_session_max_budget,
-        )
-
-        assert _resolve_ui_session_max_budget(None) == litellm.max_ui_session_budget
-
     def test_cli_poll_key_validation_invalid_format(self):
         """Test CLI polling key format validation"""
         # Test key format validation logic

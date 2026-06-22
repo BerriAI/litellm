@@ -127,6 +127,24 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert expires <= now + timedelta(minutes=10, seconds=2)
 
 
+def test_get_experimental_ui_login_jwt_auth_token_falls_back_to_session_cap_without_user_budget(
+    valid_sso_user_defined_values,
+):
+    user_without_budget = valid_sso_user_defined_values.model_copy(
+        update={"max_budget": None}
+    )
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        user_without_budget
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+    assert token_data["max_budget"] == litellm.max_ui_session_budget
+
+
 def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_values):
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
         valid_sso_user_defined_values,
