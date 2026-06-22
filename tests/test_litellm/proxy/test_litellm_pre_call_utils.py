@@ -4256,6 +4256,49 @@ class TestApplyClientTagPolicyPreAuth:
             assert exc_info.value.current_cost == 0.50
             assert exc_info.value.max_budget == 0.10
 
+    @pytest.mark.asyncio
+    async def test_header_tags_do_not_leak_into_forwarded_passthrough_body(self):
+        """GH#30629 follow-up: x-litellm-tags must reach _tag_max_budget_check
+        without leaking into the provider-facing body that passthrough routes
+        forward verbatim.
+
+        request_data["metadata"] is shared by reference with the cached request
+        body, so an in-place write injects the LiteLLM-internal billing tags
+        into the upstream Bedrock payload, which Bedrock rejects with HTTP 400.
+        """
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            _read_request_body,
+            _safe_set_request_parsed_body,
+        )
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "billing:cost-center-1"}
+        )
+        request_mock.scope = {}
+        _safe_set_request_parsed_body(
+            request=request_mock,
+            parsed_body={
+                "anthropic_version": "bedrock-2023-05-31",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"user_id": "end-user-1"},
+            },
+        )
+
+        auth_body = await _read_request_body(request_mock)
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=auth_body,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={}),
+        )
+
+        # _tag_max_budget_check reads the same dict the merge wrote to.
+        assert auth_body["metadata"]["tags"] == ["billing:cost-center-1"]
+
+        # Passthrough re-reads the body from cache and forwards it to Bedrock.
+        forwarded_body = await _read_request_body(request_mock)
+        assert "tags" not in forwarded_body["metadata"]
+        assert forwarded_body["metadata"] == {"user_id": "end-user-1"}
+
 
 class TestApplyKeyTagsPreAuth:
     def test_merges_key_tags_into_metadata(self):

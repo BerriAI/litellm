@@ -1313,24 +1313,31 @@ class LiteLLMProxyRequestSetup:
         # from (litellm_metadata vs metadata) so the merged tags are visible
         # to _tag_max_budget_check.
         _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
-        metadata = request_data.get(_metadata_variable_name)
+        raw_metadata = request_data.get(_metadata_variable_name)
         # metadata can arrive as a JSON string (multipart/form-data, extra_body).
-        # Parse it so existing tags survive the merge — overwriting the string
-        # with {} would let a caller bypass _tag_max_budget_check on an
-        # over-budget body tag by also sending a within-budget header tag.
-        if isinstance(metadata, str):
-            parsed = safe_json_loads(metadata)
-            metadata = parsed if isinstance(parsed, dict) else {}
-            request_data[_metadata_variable_name] = metadata
-        elif not isinstance(metadata, dict):
-            metadata = {}
-            request_data[_metadata_variable_name] = metadata
+        # Parse it so existing tags survive the merge — dropping the string
+        # would let a caller bypass _tag_max_budget_check on an over-budget
+        # body tag by also sending a within-budget header tag.
+        if isinstance(raw_metadata, str):
+            parsed = safe_json_loads(raw_metadata)
+            existing_metadata = parsed if isinstance(parsed, dict) else {}
+        elif isinstance(raw_metadata, dict):
+            existing_metadata = raw_metadata
+        else:
+            existing_metadata = {}
 
-        existing_tags = metadata.get("tags")
-        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=existing_tags if isinstance(existing_tags, list) else None,
-            tags_to_add=header_tags,
-        )
+        # Build a new dict instead of mutating existing_metadata: it may be the
+        # request body's metadata object, shared by reference with the cached
+        # body that passthrough routes forward verbatim. An in-place write would
+        # leak these LiteLLM-internal tags into the upstream provider payload.
+        existing_tags = existing_metadata.get("tags")
+        request_data[_metadata_variable_name] = {
+            **existing_metadata,
+            "tags": LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=existing_tags if isinstance(existing_tags, list) else None,
+                tags_to_add=header_tags,
+            ),
+        }
 
 
 async def add_litellm_data_to_request(
