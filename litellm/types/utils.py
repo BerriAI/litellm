@@ -261,6 +261,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_audio: Optional[float]  # flat per-request audio generation
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
     output_cost_per_second_1080p: Optional[
         float
@@ -3143,6 +3144,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
+    output_cost_per_audio: Optional[float] = None
     search_context_cost_per_query: Optional[Dict[str, Any]] = None
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None

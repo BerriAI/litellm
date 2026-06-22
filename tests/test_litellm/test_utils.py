@@ -593,6 +593,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "input_cost_per_second",
         "output_cost_per_second",
+        "output_cost_per_audio",
         "output_cost_per_second_1080p",
         "input_cost_per_query",
         "input_cost_per_request",

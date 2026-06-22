@@ -36,7 +36,9 @@ def _add_base64_padding(value: str) -> str:
 
 
 def encode_video_id_with_provider(
-    video_id: str, provider: str, model_id: Optional[str] = None
+    video_id: str,
+    provider: str,
+    model_id: Optional[str] = None,
 ) -> str:
     """Encode provider and model_id into video_id using base64."""
     if not provider or not video_id:
@@ -96,16 +98,15 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
         model_id = None
         decoded_video_id = encoded_video_id
 
-        if len(parts) >= 3:
-            custom_llm_provider_part = parts[0]
-            model_id_part = parts[1]
-            video_id_part = parts[2]
-
-            custom_llm_provider = custom_llm_provider_part.replace(
-                "litellm:custom_llm_provider:", ""
-            )
-            model_id = model_id_part.replace("model_id:", "")
-            decoded_video_id = video_id_part.replace("video_id:", "")
+        for part in parts:
+            if part.startswith("litellm:custom_llm_provider:"):
+                custom_llm_provider = part.replace(
+                    "litellm:custom_llm_provider:", ""
+                )
+            elif part.startswith("model_id:"):
+                model_id = part.replace("model_id:", "")
+            elif part.startswith("video_id:"):
+                decoded_video_id = part.replace("video_id:", "")
 
         return DecodedVideoId(
             custom_llm_provider=custom_llm_provider,

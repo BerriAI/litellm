@@ -7419,6 +7419,31 @@ def speech(
             api_key=api_key,
             **kwargs,
         )
+    elif custom_llm_provider == "fal_ai":
+        from litellm.llms.fal_ai.audio.transformation import FalAIAudioConfig
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = FalAIAudioConfig()
+
+        fal_ai_audio_config = cast(
+            FalAIAudioConfig, text_to_speech_provider_config
+        )
+
+        response = fal_ai_audio_config.dispatch_text_to_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            base_llm_http_handler=base_llm_http_handler,
+            aspeech=aspeech or False,
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
 
     if response is None:
         raise Exception(

@@ -6152,6 +6152,7 @@ def _get_model_info_helper(
                     "output_cost_per_token_above_512k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                output_cost_per_audio=_model_info.get("output_cost_per_audio", None),
                 output_cost_per_second_1080p=_model_info.get(
                     "output_cost_per_second_1080p", None
                 ),
@@ -9508,6 +9509,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
+
+            return FalAIVideoConfig()
         return None
 
     @staticmethod
@@ -9789,6 +9794,10 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.audio.transformation import FalAIAudioConfig
+
+            return FalAIAudioConfig()
         return None
 
     @staticmethod

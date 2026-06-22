@@ -491,6 +491,23 @@ def cost_per_token(
         speech_model_info = litellm.get_model_info(
             model=model_without_prefix, custom_llm_provider=custom_llm_provider
         )
+        # Flat per-request audio pricing (e.g. fal.ai music generation):
+        # billed a fixed amount per call, independent of length or duration.
+        flat_audio_cost = speech_model_info.get("output_cost_per_audio")
+        if flat_audio_cost is not None:
+            return 0.0, float(flat_audio_cost)
+        # Per-second audio pricing: duration is decoded post-download and stashed
+        # on response._hidden_params["audio_output_duration"] by the provider
+        # transform, mirroring the transcription "audio_transcription_duration".
+        output_cost_per_second = speech_model_info.get("output_cost_per_second")
+        if output_cost_per_second is not None:
+            audio_output_duration = 0.0
+            if response is not None:
+                _hidden = getattr(response, "_hidden_params", {}) or {}
+                audio_output_duration = (
+                    _hidden.get("audio_output_duration", 0.0) or 0.0
+                )
+            return 0.0, output_cost_per_second * float(audio_output_duration)
         cost_metric = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
         completion_cost: float = 0.0

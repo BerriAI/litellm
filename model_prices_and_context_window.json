@@ -14444,6 +14444,356 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.07,
+        "source": "https://fal.ai/pricing",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.1,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "Listed price is for 720p/1080p video without audio"
+        }
+    },
+    "fal_ai/fal-ai/kling-video/v3/pro/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.112,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v3/pro/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v3/standard/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.084,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v3/standard/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.3034,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v3/pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.112,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v3/pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v3/standard/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.084,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v3/standard/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.3034,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/elevenlabs/tts/eleven-v3": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 0.0001,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/elevenlabs/tts/turbo-v2.5": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 5e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/elevenlabs/tts/multilingual-v2": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 0.0001,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/speech-2.8-hd": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 0.0001,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/speech-2.8-turbo": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 6e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/kokoro/american-english": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 2e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/orpheus-tts": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 5e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/dia-tts": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 4e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/inworld-tts": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "input_cost_per_character": 1e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/elevenlabs/music": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.013333,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/lyria3/pro": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_audio": 0.08,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/minimax-music/v2.6": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_audio": 0.15,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/stable-audio-25/text-to-audio": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_audio": 0.2,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/elevenlabs/sound-effects/v2": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.002,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/mmaudio-v2/text-to-audio": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.001,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
+    "fal_ai/fal-ai/stable-audio-3/medium/text-to-audio": {
+        "litellm_provider": "fal_ai",
+        "mode": "audio_speech",
+        "output_cost_per_audio": 0.0376,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ]
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,
