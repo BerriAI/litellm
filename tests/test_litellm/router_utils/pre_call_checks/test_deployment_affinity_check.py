@@ -11,6 +11,7 @@ import json
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -967,3 +968,151 @@ async def test_model_group_affinity_config_overrides_global():
     )
     # All deployments returned (user-key affinity disabled for this group)
     assert len(filtered) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_code_interpreter_container_pins_to_owning_deployment():
+    """
+    Reusing a LiteLLM-issued code_interpreter container id in tools[].container
+    on a follow-up /v1/responses call must pin routing to the deployment that
+    owns the container, overriding user-key affinity -- mirroring
+    previous_response_id pinning. Regression test for #30781.
+    """
+    mock_response_data = {
+        "id": "resp_mock-resp-789",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "azure/computer-use-preview",
+        "output": [
+            {
+                "type": "code_interpreter_call",
+                "id": "ci_123",
+                "status": "completed",
+                "container_id": "cntr_rawnativeid123456789",
+                "code": "print('hi')",
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-computer-use-preview",
+                "litellm_params": {
+                    "model": "azure/computer-use-preview-1",
+                    "api_key": "mock-api-key-1",
+                    "api_version": "mock-api-version",
+                    "api_base": "https://mock-endpoint-1.openai.azure.com",
+                },
+                "model_info": {"base_model": "computer-use-preview"},
+            },
+            {
+                "model_name": "azure-computer-use-preview",
+                "litellm_params": {
+                    "model": "azure/computer-use-preview-2",
+                    "api_key": "mock-api-key-2",
+                    "api_version": "mock-api-version-2",
+                    "api_base": "https://mock-endpoint-2.openai.azure.com",
+                },
+                "model_info": {"base_model": "computer-use-preview"},
+            },
+        ],
+        optional_pre_call_checks=[
+            "deployment_affinity",
+            "responses_api_deployment_check",
+        ],
+    )
+
+    model_group = "azure-computer-use-preview"
+    user_api_key_hash = "test-user-key-1"
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=lambda seq: seq[0],
+        ),
+    ):
+        mock_post.return_value = MockResponse(mock_response_data, 200)
+
+        first_response = await router.aresponses(
+            model=model_group,
+            input="Run some code.",
+            truncation="auto",
+            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        first_model_id = first_response._hidden_params["model_id"]
+        # Extract the encoded container id from the first response's output.
+        # (collect_container_ids_from_responses_response postdates this base
+        # branch, so read the code_interpreter_call item directly.)
+        output = (
+            first_response.output
+            if not isinstance(first_response, dict)
+            else first_response.get("output", [])
+        )
+        encoded_container_id = None
+        for item in output or []:
+            item_type = (
+                item.get("type")
+                if isinstance(item, dict)
+                else getattr(item, "type", None)
+            )
+            if item_type == "code_interpreter_call":
+                encoded_container_id = (
+                    item.get("container_id")
+                    if isinstance(item, dict)
+                    else getattr(item, "container_id", None)
+                )
+                break
+        assert encoded_container_id is not None
+        # the managed id must encode routing payload (not the raw native id)
+        assert encoded_container_id != "cntr_rawnativeid123456789"
+
+        all_model_ids = router.get_model_ids(model_name=model_group)
+        other_model_id = next(mid for mid in all_model_ids if mid != first_model_id)
+
+        # Force user-key affinity to point to the OTHER deployment.
+        affinity_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+            model_group=model_group,
+            user_key=user_api_key_hash,
+        )
+        await router.cache.async_set_cache(
+            affinity_cache_key, {"model_id": other_model_id}, ttl=3600
+        )
+
+        # Reusing the container id must pin back to the owning deployment,
+        # overriding user-key affinity.
+        follow_up = await router.aresponses(
+            model=model_group,
+            input="Run more code.",
+            truncation="auto",
+            tools=[{"type": "code_interpreter", "container": encoded_container_id}],
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        assert follow_up._hidden_params["model_id"] == first_model_id
