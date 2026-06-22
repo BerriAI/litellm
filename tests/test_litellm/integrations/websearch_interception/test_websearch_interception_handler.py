@@ -380,3 +380,170 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_retargets_anthropic_forced_tool_choice():
+    """Regression test: when the native web_search tool is renamed to
+    litellm_web_search, an Anthropic-format forced tool_choice
+    ({"type":"tool","name":"web_search"}) must be retargeted to the renamed
+    tool. Otherwise the backend rejects with "Tool 'web_search' not found in
+    provided tools" (e.g. Claude Code's dedicated web-search sub-request via
+    Bedrock).
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+        ],
+        "tool_choice": {"type": "tool", "name": "web_search"},
+        "custom_llm_provider": "bedrock",
+        "api_key": "fake-key",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    assert result["tool_choice"] == {"type": "tool", "name": "litellm_web_search"}
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_retargets_openai_forced_tool_choice():
+    """Regression test: OpenAI-format forced tool_choice
+    ({"type":"function","function":{"name":"web_search"}}) must also be
+    retargeted to the renamed tool.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search"},
+        ],
+        "tool_choice": {"type": "function", "function": {"name": "web_search"}},
+        "custom_llm_provider": "openai",
+        "api_key": "fake-key",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    assert result["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "litellm_web_search"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_leaves_non_forced_tool_choice_untouched():
+    """A string tool_choice ("auto"/"required") or one not naming the
+    web_search tool must be left untouched.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search"},
+        ],
+        "tool_choice": "auto",
+        "custom_llm_provider": "bedrock",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    assert result["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hook_retargets_anthropic_forced_tool_choice():
+    """Regression test for the anthropic-format pre-request hook: a forced
+    tool_choice naming the original web_search tool must be retargeted to the
+    renamed litellm_web_search tool.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+        ],
+        "tool_choice": {"type": "tool", "name": "web_search"},
+        "litellm_params": {"custom_llm_provider": "bedrock"},
+    }
+
+    result = await logger.async_pre_request_hook(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Search the web for LiteLLM"}],
+        kwargs=kwargs,
+    )
+
+    assert result is not None
+    assert result["tool_choice"] == {"type": "tool", "name": "litellm_web_search"}
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_preserves_forced_non_web_search_tool_choice():
+    """A request that mixes a web_search tool with another tool and forces
+    tool_choice to that *other* tool must NOT have its choice rewritten to
+    litellm_web_search — only the web_search tool is renamed.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "messages": [{"role": "user", "content": "What is 2 + 2?"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {
+                "type": "function",
+                "function": {"name": "calculator", "parameters": {}},
+            },
+        ],
+        "tool_choice": {"type": "tool", "name": "calculator"},
+        "custom_llm_provider": "bedrock",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    # The forced calculator choice must be preserved untouched.
+    assert result["tool_choice"] == {"type": "tool", "name": "calculator"}
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hook_preserves_forced_non_web_search_tool_choice():
+    """Same guard for the anthropic-format pre-request hook: forcing a
+    non-web-search tool in a request that also includes web search must be
+    left untouched.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {
+                "type": "function",
+                "function": {"name": "calculator", "parameters": {}},
+            },
+        ],
+        "tool_choice": {"type": "function", "function": {"name": "calculator"}},
+        "litellm_params": {"custom_llm_provider": "bedrock"},
+    }
+
+    result = await logger.async_pre_request_hook(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "What is 2 + 2?"}],
+        kwargs=kwargs,
+    )
+
+    assert result is not None
+    assert result["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "calculator"},
+    }
