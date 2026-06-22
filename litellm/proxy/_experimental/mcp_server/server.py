@@ -249,6 +249,37 @@ if MCP_AVAILABLE:
         stateless=True,
     )
 
+    def _build_host_progress_callback(
+        host_ctx: Any,
+    ) -> Optional[Callable[[float, Optional[float]], Any]]:
+        """Build a progress forwarder for the host MCP request context."""
+        if not host_ctx or not getattr(host_ctx, "meta", None):
+            return None
+
+        host_token = getattr(host_ctx.meta, "progressToken", None)
+        host_session = getattr(host_ctx, "session", None)
+        if host_token is None or host_session is None:
+            return None
+
+        async def forward_progress(progress: float, total: Optional[float]):
+            """Forward progress notifications from external MCP to Host"""
+            try:
+                await host_session.send_progress_notification(
+                    progress_token=host_token,
+                    progress=progress,
+                    total=total,
+                )
+                verbose_logger.debug(
+                    f"Forwarded progress {progress}/{total} to Host"
+                )
+            except Exception as e:
+                verbose_logger.error(f"Failed to forward progress to Host: {e}")
+
+        verbose_logger.debug(
+            f"Host progressToken captured: {str(host_token)[:8]}..."
+        )
+        return forward_progress
+
     # Create SSE session manager
     sse_session_manager = StreamableHTTPSessionManager(
         app=server,
@@ -403,32 +434,9 @@ if MCP_AVAILABLE:
         )
         host_progress_callback = None
         try:
-            host_ctx = server.request_context
-            if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
-                host_token = getattr(host_ctx.meta, "progressToken", None)
-                if host_token and hasattr(host_ctx, "session") and host_ctx.session:
-                    host_session = host_ctx.session
-
-                    async def forward_progress(progress: float, total: float | None):
-                        """Forward progress notifications from external MCP to Host"""
-                        try:
-                            await host_session.send_progress_notification(
-                                progress_token=host_token,
-                                progress=progress,
-                                total=total,
-                            )
-                            verbose_logger.debug(
-                                f"Forwarded progress {progress}/{total} to Host"
-                            )
-                        except Exception as e:
-                            verbose_logger.error(
-                                f"Failed to forward progress to Host: {e}"
-                            )
-
-                    host_progress_callback = forward_progress
-                    verbose_logger.debug(
-                        f"Host progressToken captured: {host_token[:8]}..."
-                    )
+            host_progress_callback = _build_host_progress_callback(
+                server.request_context
+            )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
