@@ -10,6 +10,7 @@ from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -961,20 +962,12 @@ def _resolve_vertex_model_name(model: str) -> str:
 
         if llm_router is not None:
             model_list = llm_router.get_model_list(model_name=model)
-            print(f"Model list from llm_router for model '{model}': {model_list}")
             if model_list:
                 deployment = model_list[0]
                 litellm_params = deployment.get("litellm_params", {})
                 model = litellm_params.get("model", "")
-                # if litellm_model:
-                #     if litellm_model.startswith("vertex_ai/"):
-                #         return litellm_model[len("vertex_ai/"):]
-                #     elif litellm_model.startswith("gemini/"):
-                #         return litellm_model[len("gemini/"):]
-                #     return litellm_model
     except Exception as e:
-        print(f"Error resolving model name from llm_router: {e}")
-        pass
+        verbose_logger.warning(f"Error resolving model name from llm_router: {e}")
 
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
@@ -982,7 +975,7 @@ def _resolve_vertex_model_name(model: str) -> str:
         _model, _, _, _ = get_llm_provider(model=model)
         model = VertexGeminiConfig.get_model_for_vertex_ai_url(model=_model)
     except Exception as e:
-        print(f"Error resolving model name from get_llm_provider: {e}")
+        verbose_logger.warning(f"Error resolving model name from get_llm_provider: {e}")
         pass
-    print(f"Resolved model name for Vertex AI: {model}")
+    verbose_logger.debug(f"Resolved model name for Vertex AI: {model}")
     return model

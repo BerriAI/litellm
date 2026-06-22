@@ -1,3 +1,4 @@
+from litellm._logging import verbose_proxy_logger
 import base64
 import mimetypes
 import re
@@ -19,8 +20,9 @@ if TYPE_CHECKING:
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
     # Ensure b64_uid is a string and not a mock object
-    if not isinstance(b64_uid, str):
-        return False
+    # if not isinstance(b64_uid, str):
+    #     return False
+    b64_uid = str(b64_uid).removeprefix("batch_")
     # Add padding back if needed
     padded = b64_uid + "=" * (-len(b64_uid) % 4)
     # Decode from base64
@@ -28,9 +30,11 @@ def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False
         decoded = base64.urlsafe_b64decode(padded).decode()
         if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
             return decoded
+        elif decoded.startswith("litellm:"):
+            return decoded
         else:
             return False
-    except Exception:
+    except Exception as e:
         return False
 
 
@@ -74,8 +78,26 @@ def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
         # Ensure file_id is a string and not a mock object
         if not isinstance(file_id, str):
             return None
-        return file_id.split("model_id:")[1].split(";")[0]
+        if "model_id:" in file_id:
+            return file_id.split("model_id:")[1].split(";")[0]
+        if "model," in file_id:
+            model_name = file_id.split("model,")[1].split(";")[0]
+            from litellm.proxy.proxy_server import llm_router
+
+            if llm_router is not None:
+                model_list = llm_router.get_model_list(model_name=model_name)
+                if model_list:
+                    deployment = model_list[0]
+                    litellm_params = deployment.get("model_info", {})
+                    model_id = litellm_params.get("id", "")
+                    if model_id:
+                        verbose_proxy_logger.debug(f"Extracted model_id '{model_id}' from model_name '{model_name}' in file_id '{file_id}'")
+                        return model_id
+
+        return None
+
     except Exception:
+        verbose_proxy_logger.warning(f"Error extracting model_id from model_name '{model_name}' in file_id '{file_id}'") 
         return None
 
 
@@ -86,8 +108,10 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
         return ""
     if "llm_batch_id" in file_id:
         batch_id = file_id.split("llm_batch_id:", 1)[1]
-    else:
+    elif "generic_response_id:" in file_id:
         batch_id = file_id.split("generic_response_id:", 1)[1]
+    elif "litellm:" in file_id:
+        batch_id = file_id.split("litellm:", 1)[1]
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
 

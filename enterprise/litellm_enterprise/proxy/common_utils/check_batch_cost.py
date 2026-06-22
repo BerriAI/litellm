@@ -105,6 +105,8 @@ class CheckBatchCost:
         - if not, return False
         - if so, return True
         """
+        verbose_proxy_logger.info("CheckBatchCost: Start==================")
+
         from litellm.batches.batch_utils import (
             _get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
@@ -174,6 +176,7 @@ class CheckBatchCost:
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
+            verbose_proxy_logger.info("Processing job with unified_object_id: %s", unified_object_id)
             decoded_unified_object_id = _is_base64_encoded_unified_file_id(
                 unified_object_id
             )
@@ -339,6 +342,7 @@ class CheckBatchCost:
                 # Pass deployment model_info so custom batch pricing
                 # (input_cost_per_token_batches etc.) is used for cost calc
                 deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+                model_name=deployment_info.model_name
                 batch_cost, batch_usage, batch_models = (
                     await calculate_batch_cost_and_usage(
                         file_content_dictionary=file_content_as_dict,
@@ -348,13 +352,14 @@ class CheckBatchCost:
                     )
                 )
                 logging_obj = LiteLLMLogging(
-                    model=batch_models[0],
+                    model=model_name,
                     messages=[{"role": "user", "content": "<retrieve_batch>"}],
                     stream=False,
                     call_type="aretrieve_batch",
                     start_time=datetime.now(),
                     litellm_call_id=str(uuid.uuid4()),
                     function_id=str(uuid.uuid4()),
+                    kwargs={"custom_llm_provider": llm_provider},
                 )
 
                 creator_user_id = job.created_by
@@ -380,7 +385,8 @@ class CheckBatchCost:
                     result=response,
                     batch_cost=batch_cost,
                     batch_usage=batch_usage,
-                    batch_models=batch_models,
+                    batch_models=[model_name],
+                    custom_llm_provider=llm_provider,
                 )
 
                 # Record batch duration (completed_at - created_at)
