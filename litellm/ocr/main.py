@@ -20,6 +20,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.rust_bridge.ocr import get_rust_ocr_provider_config
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -276,6 +277,11 @@ def ocr(
 
         verbose_logger.debug(
             f"OCR call - model: {model}, provider: {custom_llm_provider}"
+        )
+
+        ocr_provider_config = get_rust_ocr_provider_config(
+            custom_llm_provider=custom_llm_provider,
+            fallback_config=ocr_provider_config,
         )
 
         # Get litellm params using GenericLiteLLMParams (same as responses API)
