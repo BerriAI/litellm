@@ -462,6 +462,66 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
 
 
 @pytest.mark.asyncio
+async def test_new_team_serializes_multi_window_budget_limits(
+    mock_db_client, mock_admin_auth
+):
+    """
+    Regression test for LIT-3896: /team/new must json-encode budget_limits before
+    passing them to Prisma. The LiteLLM_TeamTable.budget_limits column is `Json?`,
+    and jsonify_team_object only stringifies dict values, so a raw Python list
+    reaches Prisma unencoded and the create call 500s.
+    """
+    import json
+
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(
+        return_value=MagicMock(team_id="team-budget-windows")
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    team_request = NewTeamRequest(
+        team_alias="multi-window-team",
+        budget_limits=[
+            BudgetLimitEntry(budget_duration="1d", max_budget=10.0),
+            BudgetLimitEntry(budget_duration="30d", max_budget=100.0),
+        ],
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    await new_team(
+        data=team_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    created_data = mock_db_client.db.litellm_teamtable.create.call_args.kwargs["data"]
+
+    assert isinstance(created_data["budget_limits"], str)
+
+    decoded = json.loads(created_data["budget_limits"])
+    assert isinstance(decoded, list)
+    assert len(decoded) == 2
+    assert {w["budget_duration"] for w in decoded} == {"1d", "30d"}
+    assert {w["max_budget"] for w in decoded} == {10.0, 100.0}
+    assert all(w.get("reset_at") for w in decoded)
+
+
+@pytest.mark.asyncio
 async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_auth):
     """
     Test that /team/new correctly handles mcp_tool_permissions in object_permission.

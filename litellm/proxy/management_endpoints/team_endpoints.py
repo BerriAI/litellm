@@ -1268,6 +1268,11 @@ async def new_team(
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
 
+        if complete_team_data_dict.get("budget_limits") is not None:
+            complete_team_data_dict["budget_limits"] = json.dumps(
+                complete_team_data_dict["budget_limits"]
+            )
+
         # Serialize router_settings to JSON (matching key creation pattern)
         router_settings_value = getattr(data, "router_settings", None)
         router_settings_json = (
