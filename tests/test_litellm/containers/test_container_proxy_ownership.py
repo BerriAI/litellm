@@ -215,6 +215,87 @@ async def test_should_deny_untracked_container_access_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_response_code_interpreter_container_requires_owner_access(monkeypatch):
+    from litellm.proxy.common_request_processing import (
+        _authorize_response_code_interpreter_containers,
+    )
+
+    table = AsyncMock()
+    table.find_first.return_value = SimpleNamespace(created_by="user-2")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-deployment-id",
+        container_id="cntr_native_123",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _authorize_response_code_interpreter_containers(
+            data={
+                "tools": [
+                    {
+                        "type": "code_interpreter",
+                        "container": encoded_container_id,
+                    }
+                ]
+            },
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+    assert exc.value.status_code == 403
+    table.find_first.assert_awaited_once_with(
+        where={
+            "model_object_id": "container:azure:cntr_native_123",
+            "file_purpose": ownership.CONTAINER_OBJECT_PURPOSE,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_code_interpreter_container_allows_owner(monkeypatch):
+    from litellm.proxy.common_request_processing import (
+        _authorize_response_code_interpreter_containers,
+    )
+
+    table = AsyncMock()
+    table.find_first.return_value = SimpleNamespace(created_by="user-1")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-deployment-id",
+        container_id="cntr_native_123",
+    )
+
+    await _authorize_response_code_interpreter_containers(
+        data={
+            "tools": [
+                {
+                    "type": "code_interpreter",
+                    "container": encoded_container_id,
+                }
+            ]
+        },
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    table.find_first.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_should_not_reassign_existing_container_to_different_owner(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = SimpleNamespace(
