@@ -403,19 +403,33 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.parametrize("method", ["GET", "POST"])
-def test_virtual_key_llm_api_routes_allows_v1_mcp_tools(method):
-    """Regression test: virtual keys with allowed_routes=["llm_api_routes"] must
-    be able to list MCP tools via GET /v1/mcp/tools.
+@pytest.mark.parametrize(
+    "route, method",
+    [
+        ("/mcp", "POST"),
+        ("/mcp/", "POST"),
+        ("/mcp/my-server", "POST"),  # matches the /mcp/{subpath} pattern
+        ("/mcp/tools", "GET"),
+        ("/mcp/tools/list", "POST"),
+        ("/mcp/tools/call", "POST"),
+        ("/mcp-rest/tools/list", "GET"),
+        ("/mcp-rest/tools/call", "POST"),
+        ("/v1/mcp/tools", "GET"),
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_mcp_inference_endpoints(route, method):
+    """Every MCP inference/discovery endpoint must be reachable by virtual keys
+    scoped to allowed_routes=["llm_api_routes"], the default the Create Key UI
+    applies.
 
-    The proxy already exposes `/mcp/tools/list` and `/mcp-rest/tools/list` to
-    llm_api_routes keys, so the equivalent `/v1/mcp/tools` discovery endpoint
-    must be reachable too. Unlike `/v1/mcp/server`, this path has no
-    management write counterpart, so it lives directly in `mcp_inference_routes`
-    rather than behind a method-aware carve-out.
+    /v1/mcp/tools is the most recent addition: before it joined this group a key
+    could list tools via /mcp/tools/list and /mcp-rest/tools/list but got a 403
+    on the equivalent /v1/mcp/tools. Unlike /v1/mcp/server, none of these paths
+    have a management write counterpart, so they live directly in
+    `mcp_inference_routes` rather than behind a method-aware carve-out.
     """
 
-    assert RouteChecks.is_llm_api_route(route="/v1/mcp/tools") is True
+    assert RouteChecks.is_llm_api_route(route=route) is True
 
     valid_token = UserAPIKeyAuth(
         user_id="test_user",
@@ -423,7 +437,7 @@ def test_virtual_key_llm_api_routes_allows_v1_mcp_tools(method):
     )
 
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/v1/mcp/tools",
+        route=route,
         valid_token=valid_token,
         request=_mock_request(method),
     )
