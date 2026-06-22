@@ -237,10 +237,17 @@ def test_data_url_is_returned_unchanged_without_fetch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_data_url_is_returned_unchanged_when_downloads_disabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
+async def test_async_data_url_is_returned_unchanged_without_fetch(monkeypatch):
+    """
+    The async path must short-circuit data URLs identically to the sync path,
+    otherwise async OCR flows would attempt an impossible HTTP fetch.
+    """
+
+    class ExplodingAsyncClient:
+        async def get(self, url, follow_redirects=True):
+            raise AssertionError("data URLs must not trigger an HTTP fetch")
+
+    monkeypatch.setattr(litellm, "module_level_aclient", ExplodingAsyncClient())
 
     data_url = "data:image/png;base64,iVBORw0KGgo="
 
