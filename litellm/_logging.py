@@ -399,11 +399,17 @@ def _get_uvicorn_json_log_config():
                 "()": json_formatter_class,
             },
         },
-        "filters": {
-            "healthcheck": {
-                "()": "litellm._logging.HealthCheckAccessLogFilter",
-            },
-        },
+        **(
+            {
+                "filters": {
+                    "healthcheck": {
+                        "()": "litellm._logging.HealthCheckAccessLogFilter",
+                    },
+                },
+            }
+            if _DISABLED_ACCESS_LOG_PATHS
+            else {}
+        ),
         "handlers": {
             "default": {
                 "formatter": "json",
@@ -414,7 +420,7 @@ def _get_uvicorn_json_log_config():
                 "formatter": "access",
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stdout",
-                "filters": ["healthcheck"],
+                **({"filters": ["healthcheck"]} if _DISABLED_ACCESS_LOG_PATHS else {}),
             },
         },
         "loggers": {
