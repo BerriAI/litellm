@@ -67,7 +67,9 @@ class TestInvalidRoleValidation:
         error_text = str(exc_info.value)
         # No traceback leakage
         assert "Traceback" not in error_text
-        assert ".py\"" not in error_text or "litellm" not in error_text
+        # No internal path disclosure
+        assert ".py\"" not in error_text, f"Internal file path leaked: {error_text}"
+        assert "litellm" not in error_text or "Invalid role" in error_text, f"litellm internal path leaked: {error_text}"
         # No internal path disclosure
         assert "/usr/lib/" not in error_text
         assert "site-packages" not in error_text

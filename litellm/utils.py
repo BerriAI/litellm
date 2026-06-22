@@ -73,6 +73,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
+    VALID_MESSAGE_ROLES,
 )
 
 _CachingHandlerResponse = None
@@ -8211,8 +8212,6 @@ def convert_list_message_to_dict(messages: List):
     return new_messages
 
 
-VALID_MESSAGE_ROLES = {"system", "user", "assistant", "tool", "function", "developer"}
-
 
 def validate_and_fix_openai_messages(messages: List):
     """
@@ -8221,7 +8220,7 @@ def validate_and_fix_openai_messages(messages: List):
     Handles missing role for assistant messages and rejects invalid roles.
     """
     new_messages = []
-    for idx, message in enumerate(messages):
+    for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
         elif message["role"] not in VALID_MESSAGE_ROLES:
