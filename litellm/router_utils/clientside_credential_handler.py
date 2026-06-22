@@ -59,6 +59,13 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
         # ``api_base`` for the same reason as the OCI entries above.
         "nvcf_function_id",
         "use_ssl",
+        # custom_oauth — deployment OAuth2 credentials consumed via litellm_params.
+        # Without these, an admin's token URL + client id/secret would be used to
+        # mint a bearer that then gets forwarded to a client-redirected upstream.
+        "oauth_token_url",
+        "oauth_client_id",
+        "oauth_client_secret",
+        "oauth_scope",
     ]
     return typed_fields + kwargs_only_fields
 

@@ -653,6 +653,24 @@
         "interactions": true
       }
     },
+    "custom_oauth": {
+      "display_name": "Custom OAuth (`custom_oauth`)",
+      "url": "https://docs.litellm.ai/docs/providers/custom_oauth",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "custom": {
       "display_name": "Custom (`custom`)",
       "url": "https://docs.litellm.ai/docs/providers/custom_llm_server",

@@ -3286,6 +3286,7 @@ class LlmProviders(str, Enum):
     MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
+    CUSTOM_OAUTH = "custom_oauth"
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"

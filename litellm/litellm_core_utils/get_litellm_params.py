@@ -39,6 +39,10 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "itpm",
         "otpm",
         "use_xai_oauth",
+        "oauth_token_url",
+        "oauth_client_id",
+        "oauth_client_secret",
+        "oauth_scope",
     }
 )
 
