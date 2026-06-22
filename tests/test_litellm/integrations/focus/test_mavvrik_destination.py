@@ -771,3 +771,43 @@ async def test_gcs_session_cancelled_on_chunk_failure():
     delete_call = calls[4]
     assert delete_call.kwargs["method"] == "DELETE"
     assert "storage.googleapis.com/session" in delete_call.kwargs["url"]
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_marker_warns_on_4xx():
+    """_update_metrics_marker must log a warning on 4xx but not raise."""
+    dest = _dest()
+
+    fail_resp = MagicMock()
+    fail_resp.status_code = 500
+    fail_resp.text = "Internal Server Error"
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(return_value=fail_resp)
+    dest._http = mock_http
+
+    # Must not raise — warning only
+    await dest._update_metrics_marker(1234567890)
+    assert mock_http.client.request.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_marker_raises_on_410():
+    """_update_metrics_marker must raise RuntimeError and reset _registered on 410."""
+    dest = _dest()
+    dest._registered = True
+
+    resp_410 = MagicMock()
+    resp_410.status_code = 410
+    resp_410.text = "Gone"
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(return_value=resp_410)
+    dest._http = mock_http
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await dest._update_metrics_marker(1234567890)
+
+    assert dest._registered is False
