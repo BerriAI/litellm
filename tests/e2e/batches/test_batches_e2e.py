@@ -48,7 +48,7 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
-NON_TERMINAL = {"validating", "in_progress", "finalizing", "cancelling", "cancelled"}
+CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
 
 
 def render_jsonl(model: str) -> bytes:
@@ -164,7 +164,9 @@ def test_batch_lifecycle(
     )
 
     assert batch.id, f"create returned no batch id (body={created.body[:200]})"
-    assert batch.status in NON_TERMINAL, f"unexpected initial status {batch.status!r}"
+    assert (
+        batch.status in CREATED_BATCH_STATUSES
+    ), f"freshly created batch has non-transitional status {batch.status!r}"
     assert_batch_object(batch)
     assert matches_id_shape(
         BATCH_ID_SHAPE[cap.scenario], batch.id
