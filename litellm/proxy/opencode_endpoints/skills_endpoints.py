@@ -1,0 +1,152 @@
+import re
+from typing import Dict, List, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Response
+
+from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+from litellm.llms.litellm_proxy.skills.prompt_injection import (
+    SkillPromptInjectionHandler,
+)
+from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+OPENCODE_SKILLS_DEFAULT_PATH = "/opencode/skills"
+_MAX_SKILLS = 1000
+
+
+def _opencode_config_enabled(skills_gateway_config: Optional[dict]) -> bool:
+    if not isinstance(skills_gateway_config, dict):
+        return False
+    opencode_config = skills_gateway_config.get("opencode", {})
+    return (
+        skills_gateway_config.get("enabled") is True
+        and isinstance(opencode_config, dict)
+        and opencode_config.get("enabled") is True
+    )
+
+
+def _opencode_path(skills_gateway_config: Optional[dict]) -> str:
+    if not isinstance(skills_gateway_config, dict):
+        return OPENCODE_SKILLS_DEFAULT_PATH
+    opencode_config = skills_gateway_config.get("opencode", {})
+    if not isinstance(opencode_config, dict):
+        return OPENCODE_SKILLS_DEFAULT_PATH
+    path = opencode_config.get("path") or OPENCODE_SKILLS_DEFAULT_PATH
+    path = str(path).strip() or OPENCODE_SKILLS_DEFAULT_PATH
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path.rstrip("/") or OPENCODE_SKILLS_DEFAULT_PATH
+
+
+def _skill_enabled(skill: LiteLLM_SkillsTable) -> bool:
+    metadata = skill.metadata if isinstance(skill.metadata, dict) else {}
+    return metadata.get("enabled") is not False
+
+
+def _opencode_skill_name(skill: LiteLLM_SkillsTable) -> str:
+    return skill.skill_id
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "litellm-skill"
+
+
+def _one_line(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return " ".join(str(value).split())
+
+
+def _generated_skill_md(skill: LiteLLM_SkillsTable) -> bytes:
+    title = skill.display_title or skill.skill_id
+    description = _one_line(skill.description or skill.instructions or title)
+    instructions = (skill.instructions or skill.description or title).strip()
+    return (
+        "---\n"
+        f"name: {_slug(skill.skill_id)}\n"
+        f"description: {description}\n"
+        "---\n\n"
+        f"# {title}\n\n"
+        f"{instructions}\n"
+    ).encode("utf-8")
+
+
+def _skill_files(skill: LiteLLM_SkillsTable) -> Dict[str, bytes]:
+    files = SkillPromptInjectionHandler().extract_all_files(skill)
+    if "SKILL.md" not in files:
+        files["SKILL.md"] = _generated_skill_md(skill)
+    return files
+
+
+async def _enabled_skills(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[LiteLLM_SkillsTable]:
+    skills = await LiteLLMSkillsHandler.list_skills(
+        limit=_MAX_SKILLS,
+        offset=0,
+        user_api_key_dict=user_api_key_dict,
+    )
+    return [skill for skill in skills if _skill_enabled(skill)]
+
+
+def _sorted_files(files: Dict[str, bytes]) -> List[str]:
+    return sorted(files)
+
+
+async def opencode_skills_index(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    skills = await _enabled_skills(user_api_key_dict)
+    return {
+        "skills": [
+            {
+                "name": _opencode_skill_name(skill),
+                "files": _sorted_files(_skill_files(skill)),
+            }
+            for skill in skills
+        ]
+    }
+
+
+async def opencode_skill_file(
+    skill_name: str,
+    file_path: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    for skill in await _enabled_skills(user_api_key_dict):
+        if _opencode_skill_name(skill) != skill_name:
+            continue
+        files = _skill_files(skill)
+        content = files.get(file_path)
+        if content is None:
+            break
+        media_type = (
+            "text/markdown; charset=utf-8"
+            if file_path.endswith(".md")
+            else "application/octet-stream"
+        )
+        return Response(content=content, media_type=media_type)
+    raise HTTPException(status_code=404, detail="Skill file not found")
+
+
+def _add_route(app: FastAPI, path: str, endpoint):
+    for route in app.routes:
+        if getattr(route, "path", None) == path and "GET" in getattr(
+            route, "methods", set()
+        ):
+            return
+    app.add_api_route(path=path, endpoint=endpoint, methods=["GET"])
+
+
+def initialize_opencode_skills_endpoint(
+    app: FastAPI,
+    skills_gateway_config: Optional[dict],
+) -> None:
+    if not _opencode_config_enabled(skills_gateway_config):
+        return
+
+    path = _opencode_path(skills_gateway_config)
+    _add_route(app, path, opencode_skills_index)
+    _add_route(app, f"{path}/index.json", opencode_skills_index)
+    _add_route(app, f"{path}/{{skill_name}}/{{file_path:path}}", opencode_skill_file)
