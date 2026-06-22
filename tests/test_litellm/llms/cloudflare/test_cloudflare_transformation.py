@@ -98,7 +98,11 @@ def test_transform_response_missing_usage_is_estimated_not_zero():
     # No usage block: the content must survive and tokens must be estimated
     # (non-zero), not reported as 0.
     resp = _transform(
-        {"result": {"choices": [{"message": {"content": "The capital of France is Paris."}}]}}
+        {
+            "result": {
+                "choices": [{"message": {"content": "The capital of France is Paris."}}]
+            }
+        }
     )
     assert resp.choices[0].message.content == "The capital of France is Paris."
     assert resp.usage.completion_tokens > 0

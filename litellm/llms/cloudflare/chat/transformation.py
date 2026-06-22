@@ -180,7 +180,9 @@ class CloudflareChatConfig(BaseConfig):
         usage_block = result.get("usage") or {}
         prompt_tokens = usage_block.get("prompt_tokens")
         if not prompt_tokens:
-            prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
+            prompt_tokens = litellm.utils.get_token_count(
+                messages=messages, model=model
+            )
         completion_tokens = usage_block.get("completion_tokens")
         if not completion_tokens:
             completion_tokens = len(encoding.encode(content or ""))
@@ -241,9 +243,7 @@ class CloudflareChatResponseIterator(BaseModelResponseIterator):
                     index = int(choices[0].get("index", index))
                     delta = choices[0].get("delta") or {}
                     text = delta.get("content") or ""
-                    reasoning = delta.get("reasoning") or delta.get(
-                        "reasoning_content"
-                    )
+                    reasoning = delta.get("reasoning") or delta.get("reasoning_content")
                     if reasoning:
                         provider_specific_fields = {"reasoning_content": reasoning}
                     finish_reason = choices[0].get("finish_reason") or ""
