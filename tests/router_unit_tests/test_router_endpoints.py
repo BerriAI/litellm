@@ -805,6 +805,34 @@ async def test_router_aresponses_decodes_managed_tool_container_id_without_routi
     assert kwargs["tools"][0]["container"] == "cntr_native_123"
 
 
+def test_router_responses_preserves_custom_provider_when_decoding_managed_tool_container_id():
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    router._generic_api_call_with_fallbacks = MagicMock(return_value={"id": "resp_1"})
+
+    encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-deployment-id",
+        container_id="cntr_native_123",
+    )
+    tools = [{"type": "code_interpreter", "container": encoded_container_id}]
+
+    response = router.responses(
+        model="logical-model",
+        input="hello",
+        tools=tools,
+        custom_llm_provider="openai",
+    )
+
+    call_kwargs = router._generic_api_call_with_fallbacks.call_args.kwargs
+    assert response == {"id": "resp_1"}
+    assert call_kwargs["model"] == "logical-model"
+    assert call_kwargs["custom_llm_provider"] == "openai"
+    assert call_kwargs["tools"][0]["container"] == "cntr_native_123"
+    assert tools[0]["container"] == encoded_container_id
+
+
 @pytest.mark.asyncio
 async def test_init_vector_store_api_endpoints():
     """

@@ -5530,6 +5530,8 @@ class Router:
                 **kwargs,
             ):
                 if call_type == "responses":
+                    if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                        kwargs["custom_llm_provider"] = custom_llm_provider
                     self._decode_responses_api_tool_container_ids(kwargs)
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
