@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
+    _resolve_user_email_metadata,
     _update_internal_user_params,
     get_user_key_counts,
     get_users,
@@ -3098,3 +3100,56 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
         user_request=user_request, user_api_key_dict=admin_caller
     )
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_email_metadata_maps_page_user_ids_to_email(mocker):
+    """Regression for LIT-3889.
+
+    The Spend Per User chart rendered raw UUIDs because the per-user activity
+    breakdown carried no email. This resolver must turn the user_ids on the
+    page into {user_id: {user_email, user_alias}} so the chart can label each
+    spender, and it must only look up the user_ids actually present (not the
+    whole user table).
+    """
+
+    mock_prisma_client = mocker.MagicMock()
+    find_many = mocker.AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                user_id="u1", user_email="alice@example.com", user_alias="Alice"
+            ),
+            SimpleNamespace(user_id="u2", user_email=None, user_alias="bob-alias"),
+        ]
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = find_many
+
+    records = [
+        SimpleNamespace(user_id="u1"),
+        SimpleNamespace(user_id="u1"),  # duplicate -> deduped
+        SimpleNamespace(user_id="u2"),
+    ]
+
+    result = await _resolve_user_email_metadata(mock_prisma_client, records)
+
+    assert result == {
+        "u1": {"user_email": "alice@example.com", "user_alias": "Alice"},
+        "u2": {"user_email": None, "user_alias": "bob-alias"},
+    }
+    where_arg = find_many.call_args.kwargs["where"]
+    assert set(where_arg["user_id"]["in"]) == {"u1", "u2"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
+    """No user_ids on the page (e.g. all spend is unattributed) means no query."""
+    mock_prisma_client = mocker.MagicMock()
+    find_many = mocker.AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_usertable.find_many = find_many
+
+    records = [SimpleNamespace(user_id=None), SimpleNamespace(user_id="")]
+
+    result = await _resolve_user_email_metadata(mock_prisma_client, records)
+
+    assert result == {}
+    find_many.assert_not_called()
