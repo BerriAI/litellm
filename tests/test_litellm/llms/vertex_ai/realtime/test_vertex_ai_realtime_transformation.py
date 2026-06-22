@@ -348,27 +348,45 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
     )
 
 
-def test_vertex_backend_url_must_not_include_client_query_params():
-    """Regression: appending ?model= to Vertex Live WSS URLs causes 1007 errors."""
+async def test_async_realtime_does_not_forward_client_query_params_to_vertex_backend(
+    monkeypatch,
+):
+    """Regression: forwarding client ?model=/?intent= to the Vertex Live WSS URL causes 1007 errors.
+
+    Exercises ``async_realtime`` end-to-end so that re-adding ``_append_query_params``
+    (the reverted bug) would push ``model=``/``intent=`` onto the backend URL and fail here.
+    """
+    import websockets
+
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
     cfg = VertexAIRealtimeConfig(
         access_token="tok", project="my-proj", location="us-central1"
     )
-    backend_url = cfg.get_complete_url(
-        api_base=None, model="gemini-live-2.5-flash-native-audio"
-    )
-    client_query_params = {
-        "model": "gemini-live-2.5-flash-native-audio",
-        "intent": "chat",
-    }
 
-    assert "?" not in backend_url
-    polluted_url = BaseLLMHTTPHandler._append_query_params(
-        backend_url, client_query_params
+    captured = {}
+
+    def fake_connect(url, *args, **kwargs):
+        captured["url"] = url
+        raise RuntimeError("stop before establishing the backend connection")
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+
+    await BaseLLMHTTPHandler().async_realtime(
+        model="gemini-live-2.5-flash-native-audio",
+        websocket=AsyncMock(),
+        logging_obj=MagicMock(),
+        provider_config=cfg,
+        headers={},
+        query_params={
+            "model": "gemini-live-2.5-flash-native-audio",
+            "intent": "chat",
+        },
     )
-    assert "model=" in polluted_url
-    assert polluted_url != backend_url
+
+    assert "?" not in captured["url"]
+    assert "model=" not in captured["url"]
+    assert "intent=" not in captured["url"]
 
 
 def test_vertex_function_call_output_omits_id():
