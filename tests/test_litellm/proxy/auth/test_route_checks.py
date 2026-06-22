@@ -403,6 +403,34 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_virtual_key_llm_api_routes_allows_v1_mcp_tools(method):
+    """Regression test: virtual keys with allowed_routes=["llm_api_routes"] must
+    be able to list MCP tools via GET /v1/mcp/tools.
+
+    The proxy already exposes `/mcp/tools/list` and `/mcp-rest/tools/list` to
+    llm_api_routes keys, so the equivalent `/v1/mcp/tools` discovery endpoint
+    must be reachable too. Unlike `/v1/mcp/server`, this path has no
+    management write counterpart, so it lives directly in `mcp_inference_routes`
+    rather than behind a method-aware carve-out.
+    """
+
+    assert RouteChecks.is_llm_api_route(route="/v1/mcp/tools") is True
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/v1/mcp/tools",
+        valid_token=valid_token,
+        request=_mock_request(method),
+    )
+
+    assert result is True
+
+
 def test_spend_logs_v2_classified_as_management_not_llm_api():
     """Paginated spend logs are a management/spend read route, not an LLM API."""
 
