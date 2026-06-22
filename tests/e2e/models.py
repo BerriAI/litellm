@@ -211,9 +211,15 @@ class CustomPricing(BaseModel):
     """The per-token custom-pricing fields a deployment can override in
     litellm_params - the token-cost subset of litellm's CustomPricingLiteLLMParams
     the proxy applies to chat spend. All optional: a config sets only what it
-    overrides, and /model/info echoes the rates the proxy resolved."""
+    overrides, and /model/info echoes the rates the proxy resolved.
+
+    ``mode`` is the deployment mode declared under ``model_info`` in the proxy
+    config (e.g. ``"realtime"``). It lives here rather than a separate model so
+    the existing ``ModelInfoEntry.model_info`` field can carry it without a
+    breaking change; unknown fields are still dropped via ``extra="ignore"``."""
 
     model_config = ConfigDict(extra="ignore")
+    mode: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     cache_read_input_token_cost: float | None = None

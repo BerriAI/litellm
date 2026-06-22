@@ -279,7 +279,11 @@ class RealtimeClient:
     gateway: Gateway
 
     def configured_models(self) -> frozenset[str]:
-        return frozenset(entry.model_name for entry in self.gateway.model_info())
+        return frozenset(
+            entry.model_name
+            for entry in self.gateway.model_info()
+            if entry.model_info.mode == "realtime"
+        )
 
     @contextmanager
     def connect(
