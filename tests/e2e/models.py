@@ -179,10 +179,6 @@ class TagSpends(RootModel[list[TagSpend]]):
     pass
 
 
-class SpendTagsResponse(BaseModel):
-    spend_per_tag: list[TagSpend] | None = None
-
-
 # ---------- route probing ----------
 
 

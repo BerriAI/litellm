@@ -226,8 +226,18 @@ def test_tag_spend_matches_sum_of_tagged_logs(
     logs_total = sum((r.spend or 0) for r in tagged)
     assert logs_total > 0
 
-    entry = client.poll_tag_spend(tag, minimum=logs_total * 0.999)
-    assert entry is not None, f"tag {tag!r} never appeared in /spend/tags"
+    # A non-200 from /spend/tags raises SpendTagsError (status + body) here, failing
+    # the test loudly with the real server response instead of masking it as "no
+    # tags". Reaching this line means the endpoint returned 200 at least once.
+    poll = client.poll_tag_spend(tag, minimum=logs_total * 0.999)
+    assert poll.saw_ok, (
+        f"/spend/tags never returned 200; last observed: {poll.last_status}"
+    )
+    entry = poll.entry
+    assert entry is not None, (
+        f"tag {tag!r} never appeared in /spend/tags (endpoint was healthy: "
+        f"{poll.last_status}); tagged rows: {_summarize(tagged)}"
+    )
     assert _approx_equal(entry.total_spend or 0, logs_total), (
         f"/spend/tags total_spend {entry} != sum of tagged rows {logs_total}"
     )
