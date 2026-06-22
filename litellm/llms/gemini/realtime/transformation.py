@@ -608,7 +608,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
 
         # Build Gemini toolResponse format
-        function_response: Dict[str, Any] = {"response": output_dict}
+        function_response: dict[str, Any] = {"response": output_dict}
         if self._include_function_response_id() and call_id:
             function_response["id"] = call_id
         if function_name:
