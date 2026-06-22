@@ -657,6 +657,56 @@ async def test_get_users_includes_timestamps(mocker):
     assert user_response.key_count == 0
 
 
+@pytest.mark.asyncio
+async def test_get_users_redacts_scim_enterprise_metadata(mocker):
+    """
+    /user/list must strip scim_enterprise from each user's metadata while leaving
+    the rest of the metadata intact, matching the user-info endpoints.
+    """
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = "listed-user"
+    mock_user_row.model_dump.return_value = {
+        "user_id": "listed-user",
+        "user_email": "listed@example.com",
+        "user_role": "internal_user",
+        "metadata": {
+            "scim_metadata": {"givenName": "Jane", "familyName": "Doe"},
+            "scim_enterprise": {"costCenter": "CC-42", "department": "Platform"},
+        },
+    }
+
+    async def mock_find_many(*args, **kwargs):
+        return [mock_user_row]
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    async def mock_get_user_key_counts(*args, **kwargs):
+        return {"listed-user": 0}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_key_counts",
+        mock_get_user_key_counts,
+    )
+
+    admin_key = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await get_users(
+        page=1, page_size=1, user_api_key_dict=admin_key, organization_ids=None
+    )
+
+    listed = response["users"][0]
+    assert listed.metadata == {
+        "scim_metadata": {"givenName": "Jane", "familyName": "Doe"}
+    }
+    assert "scim_enterprise" not in (listed.metadata or {})
+
+
 def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
@@ -2165,6 +2215,94 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     assert response.teams == ["team-1", "team-2"]
     assert response.sso_user_id == "sso-abc"
     assert response.metadata == {"team": "engineering"}
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_redacts_scim_enterprise_metadata(mocker):
+    """
+    SCIM enterprise attributes are persisted in metadata for reporting, but
+    /v2/user/info must not surface them; the rest of metadata is preserved.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": "target-user-123",
+        "user_email": "target@example.com",
+        "metadata": {
+            "scim_metadata": {"givenName": "Jane", "familyName": "Doe"},
+            "scim_enterprise": {
+                "costCenter": "CC-42",
+                "department": "Platform",
+                "employeeNumber": "E-1001",
+            },
+        },
+        "teams": ["team-1"],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        if kwargs.get("where", {}).get("user_id") == "target-user-123":
+            return mock_user_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    admin_key = UserAPIKeyAuth(
+        user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id="target-user-123",
+        user_api_key_dict=admin_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.metadata == {
+        "scim_metadata": {"givenName": "Jane", "familyName": "Doe"}
+    }
+    assert "scim_enterprise" not in (response.metadata or {})
+
+
+def test_build_user_info_response_redacts_scim_enterprise_metadata():
+    """
+    The shared /user/info builder strips scim_enterprise from the returned user row
+    while leaving every other metadata key intact.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _build_user_info_response,
+    )
+
+    user_row = {
+        "user_id": "target-user-123",
+        "metadata": {
+            "scim_metadata": {"givenName": "Jane"},
+            "scim_enterprise": {"costCenter": "CC-42"},
+        },
+    }
+
+    response = _build_user_info_response(
+        user_id="target-user-123",
+        user_info=user_row,
+        keys=None,
+        team_list=[],
+        teams_1=None,
+    )
+
+    assert response.user_info is not None
+    assert response.user_info["metadata"] == {"scim_metadata": {"givenName": "Jane"}}
+    assert "scim_enterprise" not in response.user_info["metadata"]
 
 
 @pytest.mark.asyncio
