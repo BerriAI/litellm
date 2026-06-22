@@ -200,18 +200,18 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 scopes=tuple(server.scopes or ()),
             ),
         )
-    if (
-        server.has_client_credentials
-        and server.client_id
-        and server.client_secret
-        and server.token_url
-    ):
+    if server.has_client_credentials:
+        # Mode selector only (oauth2_flow == client_credentials); completeness is no longer a guard.
+        # An incomplete M2M config still builds, and the _client_credentials arm raises misconfigured
+        # at resolve time instead of returning None and deferring to v1.
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
             config=ClientCredentialsConfig(
                 client_id=server.client_id,
-                client_secret=SecretStr(server.client_secret),
+                client_secret=(
+                    SecretStr(server.client_secret) if server.client_secret else None
+                ),
                 token_url=server.token_url,
                 scopes=tuple(server.scopes or ()),
             ),

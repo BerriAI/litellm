@@ -113,6 +113,16 @@ class HttpxClientCredentialsFetcher:
     async def fetch(
         self, config: ClientCredentialsConfig
     ) -> Result[StoredToken, CredError]:
+        if (
+            config.client_id is None
+            or config.client_secret is None
+            or config.token_url is None
+        ):
+            return Error(
+                CredError.of_misconfigured(
+                    "client_credentials requires client_id, client_secret, and token_url"
+                )
+            )
         data = {
             "grant_type": "client_credentials",
             "client_id": config.client_id,

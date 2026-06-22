@@ -150,6 +150,33 @@ async def test_client_credentials_maps_to_config():
     assert spec.config.scopes == ("a", "b")
 
 
+async def test_m2m_incomplete_creds_resolves_misconfigured():
+    # A client_credentials server missing client_id/secret now BUILDS a spec (the completeness
+    # pre-check was dropped) and resolve() raises misconfigured at the arm, instead of to_server_spec
+    # returning None and deferring to v1.
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        provider,
+        to_server_spec,
+        to_subject,
+    )
+    from litellm.proxy.gateway.mcp.result import Error
+
+    server = MCPServer(
+        server_id="m2m-incomplete",
+        name="m2m-incomplete",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://idp/token",
+    )  # has_client_credentials, but no client_id / client_secret
+    spec = to_server_spec(server)
+    assert spec is not None  # builds incomplete now (was None -> defer to v1 before)
+    result = await provider().resolve(to_subject(None, None), spec)
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
 async def test_client_credentials_graft_end_to_end(v2_on, monkeypatch):
     # M2M flows through the real fetcher; mock the IdP token endpoint and assert the Bearer.
     from litellm.proxy._experimental.mcp_server import v2_port_bodies

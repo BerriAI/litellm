@@ -158,9 +158,12 @@ class ClientCredentialsConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.client_credentials] = AuthSpecKind.client_credentials
-    client_id: str
-    client_secret: SecretStr
-    token_url: str
+    # Optional so the config can be built incomplete: the values may be supplied at runtime (token_url
+    # via RFC 8414 discovery, client_id/secret via DCR) and the _client_credentials arm raises
+    # CredError.misconfigured when a needed field is still absent at resolve time.
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+    token_url: str | None = None
     scopes: tuple[str, ...] = ()
 
 
