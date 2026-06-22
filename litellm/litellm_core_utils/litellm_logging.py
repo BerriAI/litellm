@@ -292,6 +292,48 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+def get_model_from_passthrough_model_group(
+    model_call_details: dict,
+) -> Optional[str]:
+    """Recover ``<provider>/<model>`` from a pass-through request's ``model_group``.
+
+    Pass-through requests (``/anthropic/v1/messages``, ``/openai/...`` etc.) reach
+    logging with no resolved model — ``self.model`` is ``"unknown"`` because the
+    model isn't known when the logging object is created. The model IS available
+    via the inferred ``model_group`` of the form ``passthrough/<provider>/<model>``
+    (see ``_infer_model_group_for_passthrough`` in ``pass_through_endpoints.py``).
+
+    Returns ``"<provider>/<model>"`` (a valid litellm model id, since the provider
+    token is a litellm provider prefix) so ``completion_cost`` can price it instead
+    of recording $0 spend. Returns ``None`` when nothing usable can be recovered
+    (no/!passthrough model_group, or no model segment).
+    """
+    try:
+        litellm_params = (model_call_details or {}).get("litellm_params", {}) or {}
+        model_group: Optional[str] = None
+        # metadata may live under either key depending on call path; check both.
+        for meta_key in ("litellm_metadata", "metadata"):
+            metadata = litellm_params.get(meta_key) or {}
+            model_group = metadata.get("model_group")
+            if model_group:
+                break
+
+        if not model_group or not str(model_group).startswith("passthrough/"):
+            return None
+
+        # Format: passthrough/<provider>/<model>
+        parts = str(model_group).split("/", 2)
+        if len(parts) < 3 or not parts[2]:
+            return None
+        provider, model_name = parts[1], parts[2]
+        return f"{provider}/{model_name}"
+    except Exception as e:  # pragma: no cover
+        verbose_logger.debug(
+            "get_model_from_passthrough_model_group: could not recover model: %s", e
+        )
+        return None
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
@@ -1542,10 +1584,23 @@ class Logging(LiteLLMLoggingBaseClass):
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
+        # pass-through requests (e.g. /anthropic/v1/messages) reach logging
+        # with self.model == "unknown" (the model isn't known when the logging object
+        # is created), so cost is recorded as $0. The model is available via the
+        # inferred model_group ("passthrough/<provider>/<model>"); recover it so
+        # streaming + non-streaming pass-through spend is tracked for all providers.
+        model_for_cost = litellm_model_name or self.model
+        if not model_for_cost or model_for_cost == "unknown":
+            recovered_passthrough_model = get_model_from_passthrough_model_group(
+                self.model_call_details
+            )
+            if recovered_passthrough_model:
+                model_for_cost = recovered_passthrough_model
+
         try:
             response_cost_calculator_kwargs = {
                 "response_object": result,
-                "model": litellm_model_name or self.model,
+                "model": model_for_cost,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get(
                     "custom_llm_provider", None

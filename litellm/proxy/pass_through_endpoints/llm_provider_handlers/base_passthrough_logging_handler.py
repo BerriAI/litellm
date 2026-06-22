@@ -8,6 +8,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
+    get_model_from_passthrough_model_group as _recover_passthrough_model,
+)
+from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -26,6 +29,20 @@ else:
     EndpointType = Any
 
 from abc import ABC, abstractmethod
+
+
+def get_model_from_passthrough_model_group(
+    logging_obj: LiteLLMLoggingObj,
+) -> Optional[str]:
+    """Recover ``<provider>/<model>`` from a pass-through ``model_group``.
+
+    Thin ``logging_obj``-accepting wrapper over the canonical recovery in
+    ``litellm.litellm_core_utils.litellm_logging.get_model_from_passthrough_model_group``
+    (which the central cost calculator also uses). See that function for details.
+    """
+    return _recover_passthrough_model(
+        getattr(logging_obj, "model_call_details", {}) or {}
+    )
 
 
 class BasePassthroughLoggingHandler(ABC):
@@ -109,6 +126,22 @@ class BasePassthroughLoggingHandler(ABC):
         """
 
         try:
+            # pass-through requests can reach logging with an empty /
+            # "unknown" model (absent from the streamed response or collected
+            # chunks), so completion_cost() fails and the request is recorded with
+            # $0 spend. The real model is still known via the inferred model_group
+            # ("passthrough/<provider>/<model>"); recover it so cost tracking works
+            # across all pass-through providers (openai/cohere/vertex_ai/...).
+            if not model or model == "unknown":
+                recovered_model = get_model_from_passthrough_model_group(logging_obj)
+                if recovered_model:
+                    model = recovered_model
+
+            # record the resolved model up-front so a cost-calc failure cannot
+            # leave SpendLogs with model="unknown".
+            if model and model != "unknown":
+                logging_obj.model_call_details["model"] = model
+
             response_cost = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model,
@@ -116,6 +149,9 @@ class BasePassthroughLoggingHandler(ABC):
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
+            # the pass-through success path reads SpendLogs spend from
+            # model_call_details["response_cost"] (not from kwargs); record it here too.
+            logging_obj.model_call_details["response_cost"] = response_cost
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )
@@ -193,18 +229,36 @@ class BasePassthroughLoggingHandler(ABC):
         """
 
         model = request_body.get("model", "")
+        # recover the model from the inferred model_group if still unknown.
+        if not model or model == "unknown":
+            recovered_model = get_model_from_passthrough_model_group(
+                litellm_logging_obj
+            )
+            if recovered_model:
+                model = recovered_model
+        if model and model != "unknown":
+            litellm_logging_obj.model_call_details["model"] = model
+
         complete_streaming_response = self._build_complete_streaming_response(
             all_chunks=all_chunks,
             litellm_logging_obj=litellm_logging_obj,
             model=model,
         )
         if complete_streaming_response is None:
+            # do not silently drop — record the resolved model so the request is
+            # still attributed (instead of model="unknown" / dropped entirely).
             verbose_proxy_logger.error(
-                "Unable to build complete streaming response for Anthropic passthrough endpoint, not logging..."
+                "Unable to build complete streaming response for %s passthrough endpoint "
+                "(model=%s); recording model with $0 cost.",
+                self.llm_provider_name,
+                model,
             )
+            if model and model != "unknown":
+                litellm_logging_obj.model_call_details["model"] = model
+            litellm_logging_obj.model_call_details.setdefault("response_cost", 0.0)
             return {
                 "result": None,
-                "kwargs": {},
+                "kwargs": {"model": model, "response_cost": 0.0},
             }
         kwargs = self._create_response_logging_payload(
             litellm_model_response=complete_streaming_response,

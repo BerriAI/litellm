@@ -1897,6 +1897,30 @@ class CustomStreamWrapper:
         if self.logging_obj._is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    def _log_partial_usage_on_stream_error(self) -> None:
+        """A stream that dies mid-flight (request timeout / mid-stream provider
+        error) otherwise records ZERO usage, even though the provider billed the tokens it
+        generated before the failure — a major source of the billed-vs-tracked gap for long
+        agentic streams. Assemble the partial usage from the chunks already received and log
+        it via the normal success path so spend is tracked. Best-effort: never raise from
+        here and never mask the original streaming error."""
+        try:
+            if self.sent_stream_usage or not self.chunks:
+                return
+            # pass the same context the normal end-of-stream assembler gets, so prompt
+            # tokens fall back to token_counter(messages) when chunks lack explicit usage
+            partial = litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages,
+                logging_obj=self.logging_obj,
+            )
+            if partial is None:
+                return
+            self.sent_stream_usage = True
+            executor.submit(self.run_success_logging_and_cache_storage, partial, False)
+        except Exception:
+            pass
+
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
         _finish_reason = self.received_finish_reason or self.intermittent_finish_reason
@@ -2005,11 +2029,34 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception as e:
+                    # stream_chunk_builder can re-raise (as APIError) on large
+                    # agentic tool-use streams. That raise originates INSIDE this
+                    # except-StopIteration handler, so the sibling `except Exception` below
+                    # does NOT catch it — it escapes __next__ and the request is dropped from
+                    # SpendLogs while the provider already billed the tokens. Recover
+                    # best-effort usage from the raw chunks so cost is still tracked.
+                    verbose_logger.warning(
+                        "stream_chunk_builder raised at end-of-stream (%s); logging "
+                        "best-effort usage from chunks.",
+                        str(e),
+                    )
+                    try:
+                        _recovered = self.model_response_creator()
+                        setattr(
+                            _recovered,
+                            "usage",
+                            calculate_total_usage(chunks=self.chunks),
+                        )
+                        complete_streaming_response = _recovered
+                    except Exception:
+                        complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
@@ -2078,6 +2125,9 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
+            # track tokens billed before the failure (success-only logging
+            # would otherwise record zero usage for this request).
+            self._log_partial_usage_on_stream_error()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(
                 target=self.logging_obj.failure_handler, args=(e, traceback_exception)
@@ -2234,11 +2284,32 @@ class CustomStreamWrapper:
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception as e:
+                    # see sync __next__ — a raise from stream_chunk_builder here
+                    # originates inside this except handler, escapes __anext__, and drops the
+                    # request from SpendLogs while the provider billed the tokens. Recover
+                    # best-effort usage from the raw chunks so cost is still tracked.
+                    verbose_logger.warning(
+                        "stream_chunk_builder raised at end-of-stream (%s); logging "
+                        "best-effort usage from chunks.",
+                        str(e),
+                    )
+                    try:
+                        _recovered = self.model_response_creator()
+                        setattr(
+                            _recovered,
+                            "usage",
+                            calculate_total_usage(chunks=self.chunks),
+                        )
+                        complete_streaming_response = _recovered
+                    except Exception:
+                        complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
@@ -2314,6 +2385,9 @@ class CustomStreamWrapper:
             traceback_exception += "\nLiteLLM Default Request Timeout - {}".format(
                 litellm.request_timeout
             )
+            # long agentic streams time out here; track tokens billed before
+            # the timeout instead of recording zero usage.
+            self._log_partial_usage_on_stream_error()
             if self.logging_obj is not None:
                 self._record_partial_usage_for_failure()
                 ## LOGGING
@@ -2328,6 +2402,9 @@ class CustomStreamWrapper:
             self._handle_stream_fallback_error(e)
         except Exception as e:
             traceback_exception = traceback.format_exc()
+            # track tokens billed before a mid-stream failure (success-only
+            # logging would otherwise record zero usage for this request).
+            self._log_partial_usage_on_stream_error()
             if self.logging_obj is not None:
                 self._record_partial_usage_for_failure()
                 ## LOGGING
