@@ -218,6 +218,23 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
     assert "exceeds maximum allowed size" in str(excinfo.value)
 
 
+def test_data_url_is_returned_unchanged_without_fetch(monkeypatch):
+    """
+    A data URL is already inline base64 image data, so convert_url_to_base64
+    must return it as-is instead of attempting an HTTP fetch.
+    """
+
+    class ExplodingClient:
+        def get(self, url, follow_redirects=True):
+            raise AssertionError("data URLs must not trigger an HTTP fetch")
+
+    monkeypatch.setattr(litellm, "module_level_client", ExplodingClient())
+
+    data_url = "data:image/png;base64,iVBORw0KGgo="
+
+    assert convert_url_to_base64(data_url) == data_url
+
+
 def test_image_size_limit_disabled(monkeypatch):
     """
     Test that setting MAX_IMAGE_URL_DOWNLOAD_SIZE_MB to 0 disables all image URL downloads.
