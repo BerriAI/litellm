@@ -179,9 +179,15 @@ SSRF / path-traversal regression coverage as the methods move.
 
 ## Proof of fix
 
-Live proxy (`localhost:4000`) against real AWS S3. Upload a managed batch JSONL
-via `POST /v1/files` (real S3 write), then `GET /v1/files/{id}/content` and show
-the curl command and returned bytes. A full batch end-to-end (create batch, wait
-for `Completed`, fetch output) is shown if it completes in the available window;
-otherwise the limitation is stated and the closest real-S3-backed retrieval is
-shown.
+Live proxy (`localhost:4000`) against real AWS, full Bedrock batch end-to-end,
+captured for the PR:
+
+1. `POST /v1/files` with a batch JSONL (real S3 write) -> managed file id
+2. `POST /v1/batches` against a real Bedrock model -> batch id
+3. poll `GET /v1/batches/{id}` until status `completed` -> `output_file_id`
+4. `GET /v1/files/{output_file_id}/content` -> the batch output bytes returned
+
+Each step shown as the curl command plus its output. Before/after contrast: the
+same step 4 against `main` returns the 500
+`BedrockFilesConfig does not support file content retrieval`; after the fix it
+returns the S3 object content.
