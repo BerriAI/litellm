@@ -321,7 +321,8 @@ async def count_tokens(
         return _anthropic_error_response(e.status_code, raw_message)
     except ProxyException as e:
         status_code = int(e.code) if e.code and e.code.isdigit() else 500
-        return _anthropic_error_response(status_code, e.message)
+        raw_message = e.message if e.message is not None else str(e)
+        return _anthropic_error_response(status_code, raw_message)
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(

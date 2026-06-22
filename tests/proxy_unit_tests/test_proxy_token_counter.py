@@ -1482,3 +1482,51 @@ async def test_count_tokens_generic_exception_returns_anthropic_500():
     finally:
         anthropic_endpoints._read_request_body = original_read
         proxy_server.token_counter = original_counter
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_proxyexception_none_message_falls_back_to_str():
+    """Regression for Greptile P1 on PR #30385 (commit b9c17be1).
+
+    `ProxyException` is sometimes constructed with `message=None`. Passing
+    that None straight to `transform_to_anthropic_error` reaches
+    `_strip_litellm_wrapper_prefixes(None)` where `re.sub` raises
+    `TypeError: expected string or bytes-like object`, crashing the
+    handler and emitting an unhandled 500 with no Anthropic-shaped body.
+
+    The handler must coerce `None -> str(e)`, mirroring the same guard
+    already applied on the `anthropic_response()` /v1/messages path.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    mock_request = MagicMock(spec=Request)
+
+    async def mock_read_request_body(request):
+        return {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    async def mock_token_counter_none_message(request, call_endpoint=False):
+        exc = ProxyException(
+            message="placeholder",
+            type="token_counting_error",
+            param="model",
+            code=429,
+        )
+        exc.message = None  # the exact failure mode greptile flagged
+        raise exc
+
+    original_read = anthropic_endpoints._read_request_body
+    original_counter = proxy_server.token_counter
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    proxy_server.token_counter = mock_token_counter_none_message
+    try:
+        response = await anthropic_count_tokens(mock_request, MagicMock())
+        body = _assert_anthropic_error_envelope(response, 429, "rate_limit_error")
+        # Must not crash; must yield a non-empty Anthropic-shaped message.
+        assert body["error"]["message"]
+    finally:
+        anthropic_endpoints._read_request_body = original_read
+        proxy_server.token_counter = original_counter
