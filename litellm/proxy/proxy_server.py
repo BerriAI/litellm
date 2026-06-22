@@ -7097,6 +7097,8 @@ def _is_positive_int_like(value: Any) -> bool:
 
 
 def _should_include_fallback_errors(request_data: dict[str, object]) -> bool:
+    if not general_settings.get("expose_fallback_errors_to_caller"):
+        return False
     return request_data.get("include_fallback_errors") is True
 
 
