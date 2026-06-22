@@ -112,6 +112,26 @@ def test_transform_response_missing_usage_is_estimated_not_zero():
     )
 
 
+def test_transform_response_respects_provider_zero_completion_tokens():
+    # A genuine 0 from the provider must be kept (not re-estimated), and the
+    # provider total must stay consistent with prompt + completion.
+    resp = _transform(
+        {
+            "result": {
+                "choices": [{"message": {"content": ""}}],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 0,
+                    "total_tokens": 20,
+                },
+            }
+        }
+    )
+    assert resp.usage.prompt_tokens == 20
+    assert resp.usage.completion_tokens == 0
+    assert resp.usage.total_tokens == 20
+
+
 def test_chunk_parser_openai_style_delta_and_total_default():
     it = CloudflareChatResponseIterator(streaming_response=iter([]), sync_stream=True)
 

@@ -176,19 +176,23 @@ class CloudflareChatConfig(BaseConfig):
 
         # Prefer Cloudflare's own usage; estimate any field it omits so we never
         # silently report zero tokens. Reasoning models always return usage; the
-        # legacy text shape may not.
+        # legacy text shape may not. Use ``is None`` so a genuine provider 0 is
+        # respected, and drop the provider total whenever we estimate a field so
+        # ``prompt + completion == total`` stays consistent.
         usage_block = result.get("usage") or {}
         prompt_tokens = usage_block.get("prompt_tokens")
-        if not prompt_tokens:
+        completion_tokens = usage_block.get("completion_tokens")
+        total_tokens = usage_block.get("total_tokens")
+        if prompt_tokens is None:
             prompt_tokens = litellm.utils.get_token_count(
                 messages=messages, model=model
             )
-        completion_tokens = usage_block.get("completion_tokens")
-        if not completion_tokens:
+            total_tokens = None
+        if completion_tokens is None:
             completion_tokens = len(encoding.encode(content or ""))
-        total_tokens = usage_block.get("total_tokens") or (
-            prompt_tokens + completion_tokens
-        )
+            total_tokens = None
+        if total_tokens is None:
+            total_tokens = prompt_tokens + completion_tokens
 
         usage = Usage(
             prompt_tokens=prompt_tokens,
