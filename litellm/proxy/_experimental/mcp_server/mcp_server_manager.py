@@ -4018,13 +4018,22 @@ class MCPServerManager:
         )
         return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
 
-    def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
+    def get_mcp_server_by_id(
+        self, server_id: str, client_ip: Optional[str] = None
+    ) -> Optional[MCPServer]:
         """
-        Get the MCP Server from the server id
+        Get the MCP Server from the server id.
+
+        Args:
+            server_id: The server ID to look up.
+            client_ip: Optional client IP for access control. When provided,
+                       non-public servers are hidden from external IPs.
         """
         registry = self.get_registry()
         for server in registry.values():
             if server.server_id == server_id:
+                if not self._is_server_accessible_from_ip(server, client_ip):
+                    return None
                 return server
         return None
 
