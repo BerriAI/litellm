@@ -97,6 +97,10 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
     return MockPrismaClient()
 
 
+from collections import Counter
+from typing import Dict, List, Optional, Tuple
+
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
@@ -3786,3 +3790,114 @@ async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict
         assert body["data"][0]["metadata"] == {}
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _ScalarExtractionError(Exception):
+    """Mirrors PostgreSQL's "cannot extract elements from a scalar" error that
+    ``jsonb_array_elements_text`` raises when a row's request_tags is not a JSON
+    array. A single such row aborts the whole GROUP BY, which is the LIT-3906
+    bug."""
+
+
+def _jsonb_typeof(literal: str) -> str:
+    value = json.loads(literal)
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, dict):
+        return "object"
+    if value is None:
+        return "null"
+    return "number"
+
+
+def _normalized_tags(literal: str, query_guards_strings: bool) -> Optional[List[str]]:
+    typeof = _jsonb_typeof(literal)
+    if typeof == "array":
+        return json.loads(literal)
+    if not query_guards_strings:
+        raise _ScalarExtractionError("cannot extract elements from a scalar")
+    if typeof != "string":
+        return None
+    inner = json.loads(literal)
+    if not inner.lstrip().startswith("["):
+        return None
+    parsed = json.loads(inner)
+    return parsed if isinstance(parsed, list) else None
+
+
+class _FakeSpendLogsJsonbTable:
+    """Faithful emulator of the subset of PostgreSQL JSONB behaviour that
+    ``get_spend_by_tags`` relies on.
+
+    Each seeded row stores ``request_tags`` exactly as the spend-log write path
+    produces it: the tag list is ``safe_dumps``'d to a JSON string and Prisma's
+    ``create_many`` JSON-encodes that string again into the ``Json`` column, so
+    the column literal is ``json.dumps(json.dumps(tags))`` - a JSON scalar
+    string, not a JSON array. ``jsonb_array_elements_text`` raises on a scalar,
+    which is the LIT-3906 bug.
+    """
+
+    def __init__(self, rows: Tuple[Tuple[str, float], ...]) -> None:
+        self._rows = rows
+
+    async def query_raw(self, query: str, *args: object) -> List[Dict[str, object]]:
+        guards_strings = "jsonb_typeof(request_tags) = 'string'" in query
+        expanded = tuple(
+            (tag, spend)
+            for literal, spend in self._rows
+            for tag in (_normalized_tags(literal, guards_strings) or ())
+        )
+        counts = Counter(tag for tag, _ in expanded)
+        spends: Dict[str, float] = {
+            tag: sum(spend for t, spend in expanded if t == tag) for tag in counts
+        }
+        return [
+            {
+                "individual_request_tag": tag,
+                "log_count": counts[tag],
+                "total_spend": spends[tag],
+            }
+            for tag in counts
+        ]
+
+
+def _double_encoded_request_tags(tags: List[str]) -> str:
+    return json.dumps(safe_dumps(tags))
+
+
+@pytest.mark.asyncio
+async def test_get_spend_by_tags_surfaces_scalar_string_tags() -> None:
+    """Regression for LIT-3906: tags stored as a JSON scalar string (the shape
+    the write path produces) must still surface from /spend/tags with the
+    summed spend and correct log count."""
+    rows = (
+        (_double_encoded_request_tags(["prod-tag", "shared"]), 0.10),
+        (_double_encoded_request_tags(["prod-tag"]), 0.05),
+        (_double_encoded_request_tags(["shared"]), 0.02),
+        (json.dumps(["already-array"]), 0.03),
+        (json.dumps(None), 0.99),
+        (json.dumps("not-json-at-all"), 0.99),
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db = _FakeSpendLogsJsonbTable(rows)
+
+    response = await spend_management_endpoints.get_spend_by_tags(
+        prisma_client=prisma_client
+    )
+
+    by_tag = {r["individual_request_tag"]: r for r in response}
+
+    assert "prod-tag" in by_tag, "double-encoded tag never surfaced from /spend/tags"
+    assert by_tag["prod-tag"]["log_count"] == 2
+    assert by_tag["prod-tag"]["total_spend"] == pytest.approx(0.15)
+
+    assert by_tag["shared"]["log_count"] == 2
+    assert by_tag["shared"]["total_spend"] == pytest.approx(0.12)
+
+    assert by_tag["already-array"]["log_count"] == 1
+    assert by_tag["already-array"]["total_spend"] == pytest.approx(0.03)
+
+    assert "not-json-at-all" not in by_tag

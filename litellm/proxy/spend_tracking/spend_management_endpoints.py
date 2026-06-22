@@ -218,15 +218,6 @@ async def view_spend_tags(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # run the following SQL query on prisma
-        """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        GROUP BY individual_request_tag;
-        """
         response = await get_spend_by_tags(
             start_date=start_date, end_date=end_date, prisma_client=prisma_client
         )
@@ -3248,11 +3239,24 @@ async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
     response = await prisma_client.db.query_raw("""
+        WITH normalized_tags AS (
+            SELECT
+                spend,
+                CASE
+                    WHEN jsonb_typeof(request_tags) = 'array' THEN request_tags
+                    WHEN jsonb_typeof(request_tags) = 'string'
+                         AND (request_tags #>> '{}') ~ '^\\s*\\['
+                        THEN (request_tags #>> '{}')::jsonb
+                    ELSE NULL
+                END AS tags
+            FROM "LiteLLM_SpendLogs"
+        )
         SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
+            jsonb_array_elements_text(tags) AS individual_request_tag,
+            COUNT(*) AS log_count,
+            SUM(spend) AS total_spend
+        FROM normalized_tags
+        WHERE jsonb_typeof(tags) = 'array'
         GROUP BY individual_request_tag;
         """)
 
