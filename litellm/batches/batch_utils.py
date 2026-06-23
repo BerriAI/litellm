@@ -314,10 +314,11 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
         raise e
 
 
-def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
     """
-    Yield batch input JSONL entries one at a time without materializing the whole
-    file as a list, so peak memory stays bounded when counting a large batch file.
+    Yield non-empty JSONL lines (unparsed) one at a time, so a caller can parse
+    each row in its own try/except and a single malformed line cannot abort the
+    whole pass. Peak memory stays bounded for large batch files.
     """
     start, length, newline = 0, len(file_content), ord("\n")
     while start < length:
@@ -328,7 +329,30 @@ def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
             chunk, start = file_content[start:idx], idx + 1
         line = chunk.strip()
         if line:
-            yield json.loads(line)
+            yield line
+
+
+def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+    """
+    Yield parsed batch input JSONL entries one at a time without materializing the
+    whole file as a list, so peak memory stays bounded. Raises on a malformed line;
+    callers that must survive bad rows should iterate ``_iter_batch_input_lines``
+    and parse per-row instead.
+    """
+    for line in _iter_batch_input_lines(file_content):
+        yield json.loads(line)
+
+
+# A batch request's input tokens scale roughly with its serialized size, so this
+# is a conservative per-row fallback when the token counter cannot measure a row.
+_BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 4
+
+
+def _estimate_batch_entry_tokens(raw_line: bytes) -> int:
+    """Conservative token estimate for a batch row the token counter cannot measure
+    (or that cannot be parsed). Keeps the batch token total non-zero so a crafted
+    row cannot evade the TPM limit, without hard-rejecting a legitimate batch."""
+    return max(1, len(raw_line) // _BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN)
 
 
 def _count_entry_tokens(

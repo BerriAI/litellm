@@ -1546,11 +1546,12 @@ async def test_count_input_file_usage_enforces_models_when_token_counting_fails(
 
 
 @pytest.mark.asyncio
-async def test_count_input_file_usage_blocks_when_counting_fails_for_allowed_model():
-    """Even for an allowed model, a token-counting failure must block with an
-    HTTPException rather than return. Returning would let async_pre_call_hook
-    treat it as success, so a caller could evade token rate limits by sending
-    rows the counter cannot measure."""
+async def test_count_input_file_usage_estimates_tokens_when_counting_fails_for_allowed_model():
+    """A token-counting failure for an allowed model must not hard-block the batch
+    (the pre-streaming behavior let such batches through), but it also must not
+    zero the token total, which would let a caller evade the TPM limit by sending
+    rows the counter cannot measure. The row falls back to a conservative
+    size-based estimate so the batch proceeds with a non-zero count."""
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 
     rate_limiter = _PROXY_BatchRateLimiter(
@@ -1577,6 +1578,55 @@ async def test_count_input_file_usage_blocks_when_counting_fails_for_allowed_mod
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=allow),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):
+        usage = await rate_limiter.count_input_file_usage(
+            file_id="file-not-managed",
+            custom_llm_provider="openai",
+            user_api_key_dict=user,
+        )
+
+    allow.assert_awaited()
+    assert usage.request_count == 1
+    # Estimated, not zeroed: a crafted uncountable row can't evade the TPM limit.
+    assert usage.total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_collects_models_after_malformed_line():
+    """A malformed JSONL line must not abort model collection. A restricted model
+    named on a row AFTER a malformed line must still be collected and denied by the
+    allowlist check, otherwise a caller could hide a restricted model behind a bad
+    row."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    fake_content = MagicMock()
+    fake_content.content = (
+        _one_row_batch_bytes("only-allowed")
+        + b"{ this is not valid json\n"
+        + _one_row_batch_bytes("restricted-model")
+    )
+    user = UserAPIKeyAuth(
+        api_key="sk-x",
+        user_id="bob",
+        models=["only-allowed"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    async def _deny_restricted(model, **kwargs):
+        if model == "restricted-model":
+            raise Exception("model not in allowlist")
+        return True
+
+    deny = AsyncMock(side_effect=_deny_restricted)
+
+    with (
+        patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=deny),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
+    ):
         with pytest.raises(HTTPException) as exc:
             await rate_limiter.count_input_file_usage(
                 file_id="file-not-managed",
@@ -1584,5 +1634,4 @@ async def test_count_input_file_usage_blocks_when_counting_fails_for_allowed_mod
                 user_api_key_dict=user,
             )
 
-    allow.assert_awaited()
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 403

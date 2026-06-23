@@ -33,12 +33,15 @@ from typing import (
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+import json
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
     _count_entry_tokens,
+    _estimate_batch_entry_tokens,
     _extract_file_access_credentials,
-    _iter_batch_input_entries,
+    _iter_batch_input_lines,
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
@@ -571,37 +574,37 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     f"got {type(file_content_bytes)}"
                 )
 
-            # Single streaming pass over the JSONL entries: accumulate request
-            # count, distinct models, and token total without ever holding all
-            # entries in a list, so peak memory does not scale with file size.
-            #
-            # Token counting and line parsing are best-effort accounting and must
-            # never gate the security check below: a restricted caller could craft
-            # a row (e.g. provider-valid `input_audio`/`file` content the token
-            # counter rejects, or a malformed line) that makes counting/parsing
-            # raise. If that aborted the loop, async_pre_call_hook would swallow
-            # the non-HTTP exception and submit the batch unchecked. So failures
-            # are captured, model collection always completes, and the failure is
-            # re-raised as a blocking HTTPException only after the allowlist check.
+            # Single streaming pass over the JSONL lines, accounting each row
+            # independently. One bad row can never abort the pass: a malformed
+            # line is skipped (its request can't run upstream anyway) and a row
+            # the token counter can't measure falls back to a conservative
+            # size-based estimate. This guarantees two things a restricted caller
+            # must not be able to break by crafting a row that raises:
+            #   1. The allowlist check below always sees every parseable
+            #      ``body.model`` (the loop never stops early), so models can't be
+            #      smuggled in after a bad row.
+            #   2. The token total is never silently zeroed, so the TPM limit
+            #      can't be evaded by sending uncountable rows.
+            # Counting stays best-effort, so a legitimate (e.g. multimodal) row
+            # the counter can't measure is estimated, not hard-rejected.
             models: set = set()
             total_tokens = 0
             request_count = 0
-            processing_error: Optional[Exception] = None
-            try:
-                for entry in _iter_batch_input_entries(file_content_bytes):
-                    request_count += 1
-                    if isinstance(entry, dict):
-                        model = (entry.get("body") or {}).get("model")
-                        if model:
-                            models.add(model)
-                    try:
-                        total_tokens += _count_entry_tokens(entry)
-                    except Exception as e:
-                        if processing_error is None:
-                            processing_error = e
-            except Exception as e:
-                if processing_error is None:
-                    processing_error = e
+            for raw_line in _iter_batch_input_lines(file_content_bytes):
+                request_count += 1
+                try:
+                    entry = json.loads(raw_line)
+                except Exception:
+                    total_tokens += _estimate_batch_entry_tokens(raw_line)
+                    continue
+                if isinstance(entry, dict):
+                    model = (entry.get("body") or {}).get("model")
+                    if model:
+                        models.add(model)
+                try:
+                    total_tokens += _count_entry_tokens(entry)
+                except Exception:
+                    total_tokens += _estimate_batch_entry_tokens(raw_line)
 
             # Validate every model named in the batch JSONL against the
             # caller's per-key model allowlist. Without this, a caller
@@ -613,21 +616,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     user_api_key_dict=user_api_key_dict,
                     models=models,
                     target_model_names=target_model_names or None,
-                )
-
-            # A counting/parsing failure blocks the batch (HTTPException is
-            # re-raised by async_pre_call_hook, unlike other exceptions), so it
-            # can neither bypass the allowlist nor evade token rate limits by
-            # undercounting. Runs only after the allowlist check above.
-            if processing_error is not None:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": (
-                            "Could not account for all tokens in the batch input "
-                            f"file: {processing_error}"
-                        )
-                    },
                 )
 
             return BatchFileUsage(
