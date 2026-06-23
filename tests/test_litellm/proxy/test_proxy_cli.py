@@ -1746,6 +1746,64 @@ class TestRunServerDbSetup:
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_startup_exits_when_migration_raises(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """An unrecoverable migration error (RuntimeError) must abort startup
+        with code 2, even without --enforce_prisma_migration_check. This is the
+        v2 default's bad-DB path that the test_bad_database_url CI job asserts on."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.side_effect = RuntimeError(
+            "Database migration failed and cannot be auto-recovered. "
+            "Manual intervention required."
+        )
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                run_server.main(
+                    ["--local", "--skip_server_startup"], standalone_mode=False
+                )
+            assert exc_info.value.code == 2
+            mock_setup_database.assert_called_once_with(
+                use_migrate=True, use_v2_resolver=True
+            )
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_exits_on_non_postgres_database_url(
         self,
         mock_should_update_schema,
