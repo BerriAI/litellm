@@ -100,6 +100,20 @@ def test_get_complete_url_raises_when_account_id_and_base_missing(monkeypatch):
         )
 
 
+def test_get_complete_url_raises_when_account_id_is_empty(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "   ")
+    config = CloudflareChatConfig()
+
+    with pytest.raises(ValueError, match="Missing CLOUDFLARE_ACCOUNT_ID"):
+        config.get_complete_url(
+            api_base=None,
+            api_key="cf-key",
+            model="@cf/meta/llama-2-7b-chat-int8",
+            optional_params={},
+            litellm_params={},
+        )
+
+
 def test_get_complete_url_migrates_legacy_ai_run_base():
     config = CloudflareChatConfig()
 
