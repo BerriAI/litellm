@@ -562,7 +562,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "litellm-core",
- "litellm-router",
+ "litellm-providers",
  "pyo3",
  "serde",
  "serde_json",
@@ -573,6 +573,7 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -598,18 +599,6 @@ dependencies = [
  "litellm-providers",
  "pyo3",
  "serde_json",
-]
-
-[[package]]
-name = "litellm-router"
-version = "0.1.0"
-dependencies = [
- "litellm-core",
- "litellm-providers",
- "rand 0.8.6",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
