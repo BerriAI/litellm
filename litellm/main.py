@@ -81,11 +81,17 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    maybe_run_chat_completion_agentic_loop,
+)
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -654,6 +660,39 @@ async def acompletion(
                 response_object=response,
                 model_response_object=litellm.ModelResponse(),
             )
+        # Provider-agnostic dispatch point for the chat-completions agentic loop
+        # (code-interpreter interception, etc). Chat routing forks per provider
+        # before this (OpenAI goes through the OpenAI SDK in openai.py, others
+        # through the shared httpx handler), so a dispatch inside any single
+        # provider handler would miss the others. Here is where every fork
+        # reconverges, so the loop runs once for all providers. Responses needs
+        # no equivalent: every provider already funnels through one shared
+        # handler where the loop is dispatched.
+        if isinstance(response, litellm.ModelResponse):
+            looped = await maybe_run_chat_completion_agentic_loop(
+                response=response,
+                model=model,
+                messages=messages,
+                optional_params={
+                    k: v
+                    for k, v in completion_kwargs.items()
+                    if v is not None
+                    and k
+                    not in (
+                        "model",
+                        "messages",
+                        "stream",
+                        "acompletion",
+                        "deployment_id",
+                    )
+                },
+                kwargs=kwargs,
+                logging_obj=kwargs.get("litellm_logging_obj"),
+                custom_llm_provider=custom_llm_provider,
+                stream=bool(stream),
+            )
+            if looped is not None:
+                response = looped
         if isinstance(response, CustomStreamWrapper):
             response.set_logging_event_loop(
                 loop=loop
@@ -4372,13 +4411,7 @@ def _complete_cloudflare(ctx: _CompletionDispatchContext) -> _CompletionDispatch
         or litellm.api_key
         or get_secret("CLOUDFLARE_API_KEY")
     )
-    account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
-    api_base = (
-        api_base
-        or litellm.api_base
-        or get_secret("CLOUDFLARE_API_BASE")
-        or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
-    )
+    api_base = api_base or litellm.api_base or get_secret("CLOUDFLARE_API_BASE")
 
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
     return base_llm_http_handler.completion(
@@ -5285,7 +5318,7 @@ def completion(  # type: ignore
             timeout,
             kwargs,
             custom_llm_provider,
-            global_timeout=getattr(litellm, "request_timeout", None),
+            global_timeout=get_configured_request_timeout(),
             supports_httpx_timeout=supports_httpx_timeout,
         )
 
