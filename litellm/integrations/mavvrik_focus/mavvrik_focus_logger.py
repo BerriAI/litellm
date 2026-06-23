@@ -149,8 +149,8 @@ class MavvrikFocusLogger(FocusLogger):
 
         On each run:
         1. Register with Mavvrik → get metricsMarker (last successfully ingested date)
-        2. If metricsMarker is behind yesterday, catch up missed dates (capped at
-           _MAX_CATCHUP_DAYS to avoid runaway loops on long outages)
+        2. If metricsMarker is behind yesterday (or 0/None for a fresh connector),
+           catch up missed dates (capped at _MAX_CATCHUP_DAYS)
         3. Export yesterday (today's daily window)
 
         This ensures a failed export on day N is automatically retried on day N+1
@@ -177,13 +177,18 @@ class MavvrikFocusLogger(FocusLogger):
 
         last_ingested = _parse_metrics_marker(marker)
 
-        # Catch up missed dates, capped at _MAX_CATCHUP_DAYS
-        if last_ingested and last_ingested < yesterday:
-            # Never go further back than _MAX_CATCHUP_DAYS from yesterday
-            earliest_catchup = yesterday - timedelta(days=self._MAX_CATCHUP_DAYS - 1)
-            catch_up_date = max(last_ingested + timedelta(days=1), earliest_catchup)
+        # Catch up missed dates, capped at _MAX_CATCHUP_DAYS.
+        # last_ingested=None means metricsMarker=0 (fresh connector, never ingested) --
+        # treat the same as being _MAX_CATCHUP_DAYS behind so we export all available history.
+        earliest_catchup = yesterday - timedelta(days=self._MAX_CATCHUP_DAYS - 1)
+        if last_ingested is None or last_ingested < yesterday:
+            catch_up_date = (
+                earliest_catchup
+                if last_ingested is None
+                else max(last_ingested + timedelta(days=1), earliest_catchup)
+            )
 
-            if last_ingested + timedelta(days=1) < earliest_catchup:
+            if last_ingested is not None and last_ingested + timedelta(days=1) < earliest_catchup:
                 verbose_proxy_logger.warning(
                     "Mavvrik FOCUS export: metricsMarker is more than %d days behind "
                     "(%s). Catching up from %s only; earlier data will not be re-exported.",
