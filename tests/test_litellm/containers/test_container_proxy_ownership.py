@@ -1,7 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -88,6 +88,80 @@ async def test_response_code_interpreter_container_authorization_defaults_to_ope
         container_id="cntr_native_123",
         user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
         custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_pre_call_authorizes_vector_stores_and_code_containers(
+    monkeypatch,
+):
+    from litellm.proxy import common_request_processing
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    data = {
+        "model": "gpt-4.1",
+        "tools": [
+            {"type": "file_search", "vector_store_ids": ["vs_123"]},
+            {"type": "code_interpreter", "container": "cntr_native_123"},
+        ],
+    }
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    request = MagicMock()
+    request.headers = {}
+    request.url.path = "/v1/responses"
+    user_api_key_dict = UserAPIKeyAuth(user_id="user-1")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.pre_call_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs["data"]
+    )
+    logging_obj = MagicMock()
+
+    async def mock_add_litellm_data_to_request(**kwargs):
+        return kwargs["data"]
+
+    mock_authorize_vector_stores = AsyncMock()
+    mock_authorize_code_containers = AsyncMock()
+    monkeypatch.setattr(
+        common_request_processing,
+        "add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    )
+    monkeypatch.setattr(
+        common_request_processing,
+        "_authorize_response_file_search_vector_stores",
+        mock_authorize_vector_stores,
+    )
+    monkeypatch.setattr(
+        common_request_processing,
+        "_authorize_response_code_interpreter_containers",
+        mock_authorize_code_containers,
+    )
+    monkeypatch.setattr(
+        common_request_processing.litellm.utils,
+        "function_setup",
+        lambda **kwargs: (logging_obj, kwargs),
+    )
+
+    returned_data, returned_logging_obj = (
+        await processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=MagicMock(),
+            route_type="aresponses",
+        )
+    )
+
+    assert returned_data["tools"] == data["tools"]
+    assert returned_logging_obj is logging_obj
+    mock_authorize_vector_stores.assert_awaited_once_with(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    mock_authorize_code_containers.assert_awaited_once_with(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
     )
 
 
