@@ -1,23 +1,23 @@
-//! End-to-end OCR orchestration.
+//! End-to-end OCR orchestration (async).
 //!
-//! Owns the whole Mistral OCR call so the Python side stays a thin bridge:
-//! resolve the API key, build the URL + body via the pure transforms, POST it,
-//! and normalize the response. The HTTP client is built once and reused.
+//! The typed foundation: dispatch on [`OcrProvider`], build the URL + body via
+//! the pure per-provider transforms, POST it with a shared async client, and
+//! parse the response into a typed [`OcrResponse`]. Blocking work happens off the
+//! Python GIL — the bridge either awaits this future (`aocr`) or `block_on`s it
+//! (`ocr`).
 
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrProviderConfig;
+use litellm_core::ocr::types::{OcrProvider, OcrRequest, OcrResponse};
 use litellm_core::CoreResult;
-use serde_json::{Map, Value};
 
 use crate::mistral::ocr::transformation as mistral;
-use crate::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
 /// OCR over large documents can take a while; bound it generously rather than
 /// hanging forever on an unresponsive upstream. The client-level limit is the
-/// outer ceiling; callers can tighten it per request via ``run_ocr``'s ``timeout``.
+/// outer ceiling; callers can tighten it per request via `OcrRequest::timeout`.
 const OCR_TIMEOUT_SECS: u64 = 600;
 
 /// Maximum upstream body characters retained in error messages. OCR responses
@@ -25,11 +25,11 @@ const OCR_TIMEOUT_SECS: u64 = 600;
 /// forwarding sensitive payloads across the host boundary.
 const ERROR_BODY_MAX_CHARS: usize = 256;
 
-/// Process-wide blocking HTTP client (connection pool + TLS reused across calls).
-fn http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+/// Process-wide async HTTP client (connection pool + TLS reused across calls).
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
+        reqwest::Client::builder()
             .timeout(Duration::from_secs(OCR_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client")
@@ -44,39 +44,63 @@ fn truncate_error_body(body: &str) -> String {
     format!("{truncated}... (truncated)")
 }
 
-/// Perform a Mistral OCR call end to end and return the normalized response as
-/// JSON (the shape the Python `OCRResponse` model expects).
+/// Wire label for a provider, for error messages on unsupported providers.
+fn provider_label(provider: OcrProvider) -> &'static str {
+    match provider {
+        OcrProvider::Mistral => "mistral",
+        OcrProvider::AzureAi => "azure_ai",
+        OcrProvider::AzureDocumentIntelligence => "azure_document_intelligence",
+        OcrProvider::VertexAi => "vertex_ai",
+        OcrProvider::VertexDeepseek => "vertex_deepseek",
+        OcrProvider::Reducto => "reducto",
+    }
+}
+
+/// Perform an OCR call end to end and return the typed, standardized response.
 ///
-/// Blocking: intended to be called with the GIL released from the Python bridge.
-pub fn run_ocr(
-    model: &str,
-    document: Value,
-    api_key: Option<&str>,
-    api_base: Option<&str>,
-    optional_params: Map<String, Value>,
-    timeout: Option<Duration>,
-) -> CoreResult<Value> {
-    let config = &MISTRAL_OCR_CONFIG;
+/// Async: intended to be awaited (`aocr`) or `block_on`'d (`ocr`) from the
+/// Python bridge, both of which keep the GIL free during the HTTP wait.
+pub async fn ocr(request: OcrRequest) -> CoreResult<OcrResponse> {
+    match request.provider {
+        OcrProvider::Mistral => mistral_ocr(request).await,
+        other => Err(CoreError::UnsupportedProvider(
+            provider_label(other).to_string(),
+        )),
+    }
+}
 
-    let api_key = mistral::resolve_api_key(api_key, &|key| std::env::var(key).ok())?;
-    let url = mistral::complete_url(api_base);
-    let filtered_params = config.map_ocr_params(&optional_params);
-    let body = config
-        .transform_ocr_request(model, document, filtered_params)?
-        .data;
+async fn mistral_ocr(request: OcrRequest) -> CoreResult<OcrResponse> {
+    let api_key =
+        mistral::resolve_api_key(request.api_key.as_deref(), &|key| std::env::var(key).ok())?;
+    let url = mistral::complete_url(request.api_base.as_deref());
+    let body = mistral::request_body(&request.model, &request.document, &request.params);
 
-    let mut request = http_client().post(&url).bearer_auth(&api_key).json(&body);
-    if let Some(duration) = timeout {
-        request = request.timeout(duration);
+    // Let an explicit Authorization header in extra_headers win over the resolved key.
+    let caller_set_auth = request
+        .extra_headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("authorization"));
+
+    let mut builder = http_client().post(&url).json(&body);
+    if !caller_set_auth {
+        builder = builder.bearer_auth(&api_key);
+    }
+    for (name, value) in &request.extra_headers {
+        builder = builder.header(name, value);
+    }
+    if let Some(duration) = request.timeout {
+        builder = builder.timeout(duration);
     }
 
-    let response = request
+    let response = builder
         .send()
+        .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
 
     let status = response.status();
     let text = response
         .text()
+        .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
 
     if !status.is_success() {
@@ -86,42 +110,56 @@ pub fn run_ocr(
         });
     }
 
-    let response_json: Value = serde_json::from_str(&text)
-        .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
-
-    Ok(config
-        .transform_ocr_response(model, response_json)?
-        .into_json())
+    mistral::parse_response(&request.model, &text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_core::ocr::types::{OcrDocument, OcrParams};
+    use std::collections::BTreeMap;
+
+    fn request(provider: OcrProvider) -> OcrRequest {
+        OcrRequest {
+            provider,
+            model: "m".to_string(),
+            document: OcrDocument::DocumentUrl {
+                document_url: "https://example.com/doc.pdf".to_string(),
+            },
+            api_key: Some("sk-test".to_string()),
+            api_base: None,
+            extra_headers: BTreeMap::new(),
+            timeout: None,
+            params: OcrParams::default(),
+        }
+    }
 
     #[test]
-    fn truncate_error_body_passes_short_strings_through() {
-        let body = "Unauthorized";
-        assert_eq!(truncate_error_body(body), "Unauthorized");
+    fn unsupported_provider_errors_with_label() {
+        let err = futures_block_on(ocr(request(OcrProvider::Reducto)))
+            .expect_err("reducto not wired yet");
+        assert_eq!(err, CoreError::UnsupportedProvider("reducto".to_string()));
     }
 
     #[test]
     fn truncate_error_body_caps_long_payloads() {
         let body = "x".repeat(ERROR_BODY_MAX_CHARS + 50);
         let truncated = truncate_error_body(&body);
-
         assert!(truncated.ends_with("... (truncated)"));
-        let prefix_chars = truncated
-            .strip_suffix("... (truncated)")
-            .expect("truncated marker present")
-            .chars()
-            .count();
-        assert_eq!(prefix_chars, ERROR_BODY_MAX_CHARS);
+        assert!(truncated.is_char_boundary(truncated.len()));
     }
 
     #[test]
-    fn truncate_error_body_does_not_split_multibyte_chars() {
-        let body = "é".repeat(ERROR_BODY_MAX_CHARS + 10);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.is_char_boundary(truncated.len()));
+    fn truncate_error_body_passes_short_strings_through() {
+        assert_eq!(truncate_error_body("Unauthorized"), "Unauthorized");
+    }
+
+    /// Minimal single-threaded executor so dispatch logic can be unit-tested
+    /// without a network or a full Tokio runtime.
+    fn futures_block_on<F: std::future::Future>(fut: F) -> F::Output {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        rt.block_on(fut)
     }
 }

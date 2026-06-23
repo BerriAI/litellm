@@ -8,6 +8,7 @@ import contextvars
 import mimetypes
 import os
 import re
+from dataclasses import dataclass
 from functools import partial
 from io import IOBase
 from typing import Any, Callable, Coroutine, Dict, Optional, Union, cast
@@ -20,7 +21,12 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.ocr.rust_bridge import RustOcr, load_rust_ocr, rust_ocr_enabled
+from litellm.ocr.rust_bridge import (
+    RustBridge,
+    load_rust_bridge,
+    rust_ocr_enabled,
+    rust_supports,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -45,64 +51,108 @@ def _timeout_to_seconds(
     return float(timeout)
 
 
-def _run_rust_ocr(
-    rust_ocr: RustOcr,
-    logging_obj: LiteLLMLoggingObj,
-    provider_config: BaseOCRConfig,
-    resolve_api_key: Callable[[str], Optional[str]],
-    model: str,
-    document: dict[str, object],
-    api_key: Optional[str],
-    api_base: Optional[str],
-    optional_params: dict[str, object],
-    litellm_params: dict[str, object],
-    timeout_seconds: Optional[float],
-) -> OCRResponse:
-    """Run the Mistral OCR call through the Rust bridge and wrap the result.
+# Providers whose secret-manager-backed key the shell resolves before handing the
+# call to Rust. Rust's own fallback only reads the process environment, so
+# AWS/Azure/GCP/Vault-backed keys are resolved here and passed in. One entry per
+# Rust-supported provider.
+_RUST_PROVIDER_API_KEY_ENV: dict[str, str] = {"mistral": "MISTRAL_API_KEY"}
 
-    Resolves the key the same way the Python path does so secret-manager backends
-    (AWS/Azure/GCP/Vault) work; the Rust bridge's own fallback only reads the
-    process environment. The request that Rust actually sends (resolved URL and
-    headers) is mirrored into pre_call so logs match the wire. Dependencies are
-    injected so this stays unit-testable without patching module globals.
+
+@dataclass
+class _RustOcrCall:
+    """Everything the Rust bridge needs for one OCR call, resolved in the shell."""
+
+    logging_obj: LiteLLMLoggingObj
+    provider_config: BaseOCRConfig
+    resolve_api_key: Callable[[str], Optional[str]]
+    provider: str
+    model: str
+    document: dict
+    api_key: Optional[str]
+    api_base: Optional[str]
+    extra_headers: Optional[dict]
+    optional_params: dict
+    litellm_params: dict
+    timeout_seconds: Optional[float]
+
+
+def _rust_ocr_pre_call(call: _RustOcrCall) -> Optional[str]:
+    """Resolve the key the Python way and mirror Rust's request into ``pre_call``.
+
+    Returns the resolved API key for the bridge. Secret-manager backends
+    (AWS/Azure/GCP/Vault) are resolved here; Rust's env fallback only reads the
+    process environment. The logged URL/headers match what Rust sends so logs
+    stay faithful to the wire. Shared by the sync and async runners.
     """
-    resolved_api_key = api_key or resolve_api_key("MISTRAL_API_KEY")
-    resolved_headers = provider_config.validate_environment(
-        headers={},
-        model=model,
+    secret_env = _RUST_PROVIDER_API_KEY_ENV.get(call.provider)
+    resolved_api_key = call.api_key or (
+        call.resolve_api_key(secret_env) if secret_env else None
+    )
+    resolved_headers = call.provider_config.validate_environment(
+        headers=dict(call.extra_headers or {}),
+        model=call.model,
         api_key=resolved_api_key,
-        api_base=api_base,
-        litellm_params=litellm_params,
+        api_base=call.api_base,
+        litellm_params=call.litellm_params,
     )
-    resolved_complete_url = provider_config.get_complete_url(
-        api_base=api_base,
-        model=model,
-        optional_params=optional_params,
-        litellm_params=litellm_params,
+    resolved_complete_url = call.provider_config.get_complete_url(
+        api_base=call.api_base,
+        model=call.model,
+        optional_params=call.optional_params,
+        litellm_params=call.litellm_params,
     )
-    logging_obj.pre_call(
+    call.logging_obj.pre_call(
         input="OCR document processing",
         api_key=resolved_api_key,
         additional_args={
             "complete_input_dict": {
-                "model": model,
-                "document": document,
-                **optional_params,
+                "model": call.model,
+                "document": call.document,
+                **call.optional_params,
             },
             "api_base": resolved_complete_url,
             "headers": resolved_headers,
         },
     )
+    return resolved_api_key
+
+
+def _run_rust_ocr(bridge: RustBridge, call: _RustOcrCall) -> OCRResponse:
+    """Synchronous Rust OCR: pre_call, then block on the bridge (GIL released in Rust)."""
+    resolved_api_key = _rust_ocr_pre_call(call)
     return OCRResponse.model_validate(
-        rust_ocr(
-            model=model,
-            document=document,
+        bridge.ocr(
+            provider=call.provider,
+            model=call.model,
+            document=call.document,
             api_key=resolved_api_key,
-            api_base=api_base,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
+            api_base=call.api_base,
+            extra_headers=call.extra_headers,
+            timeout_seconds=call.timeout_seconds,
+            params=call.optional_params,
         )
     )
+
+
+async def _arun_rust_ocr(bridge: RustBridge, call: _RustOcrCall) -> OCRResponse:
+    """Async Rust OCR: pre_call, then await the bridge awaitable.
+
+    The HTTP call runs on the Rust Tokio runtime with the GIL released, so no
+    event-loop thread is held during the request — unlike the ``run_in_executor``
+    path, this scales to many concurrent OCR calls on a handful of threads.
+    """
+    resolved_api_key = _rust_ocr_pre_call(call)
+    raw = await bridge.aocr(
+        provider=call.provider,
+        model=call.model,
+        document=call.document,
+        api_key=resolved_api_key,
+        api_base=call.api_base,
+        extra_headers=call.extra_headers,
+        timeout_seconds=call.timeout_seconds,
+        params=call.optional_params,
+    )
+    return OCRResponse.model_validate(raw)
 
 
 @client
@@ -383,29 +433,35 @@ def ocr(
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
-        if custom_llm_provider == "mistral" and rust_ocr_enabled():
-            rust_ocr = load_rust_ocr()
-            if rust_ocr is None:
+        # Optional Rust path: hand the whole OCR call to the Rust bridge. The async
+        # entry point returns a coroutine that ``aocr`` awaits on the event loop, so
+        # the HTTP wait never holds an executor thread.
+        if rust_ocr_enabled() and rust_supports(custom_llm_provider):
+            bridge = load_rust_bridge()
+            if bridge is None:
                 verbose_logger.debug(
                     "Rust OCR bridge unavailable; falling back to Python path"
                 )
             else:
                 from litellm.secret_managers.main import get_secret_str
 
-                return _run_rust_ocr(
-                    rust_ocr=rust_ocr,
+                rust_call = _RustOcrCall(
                     logging_obj=litellm_logging_obj,
                     provider_config=ocr_provider_config,
                     resolve_api_key=get_secret_str,
+                    provider=custom_llm_provider,
                     model=model,
                     document=document,
                     api_key=api_key,
                     api_base=api_base,
+                    extra_headers=extra_headers,
                     optional_params=optional_params,
                     litellm_params=dict(litellm_params),
                     timeout_seconds=_timeout_to_seconds(effective_timeout),
                 )
+                if _is_async:
+                    return _arun_rust_ocr(bridge, rust_call)
+                return _run_rust_ocr(bridge, rust_call)
 
         response = base_llm_http_handler.ocr(
             model=model,

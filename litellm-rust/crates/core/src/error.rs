@@ -15,6 +15,8 @@ pub enum CoreError {
     InvalidResponse(String),
     #[error("{0}")]
     Auth(String),
+    #[error("OCR is not supported for provider: {0}")]
+    UnsupportedProvider(String),
     #[error("OCR request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("OCR network error: {0}")]

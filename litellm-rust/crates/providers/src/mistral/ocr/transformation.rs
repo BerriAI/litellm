@@ -1,22 +1,12 @@
-use litellm_core::error::{json_type_name, CoreError, CoreResult};
-use litellm_core::ocr::transformation::OcrProviderConfig;
-use litellm_core::ocr::types::{OcrRequestData, OcrResponseData};
-use serde_json::{Map, Value};
+//! Mistral OCR — typed request/response transforms.
+//!
+//! Pure functions: build the request body and parse the response. No network,
+//! no env reads (the env fallback for the key takes a closure). Serde produces
+//! the exact wire JSON, so there is no hand-built JSON here.
 
-const SUPPORTED_OCR_PARAMS: &[&str] = &[
-    "pages",
-    "include_image_base64",
-    "image_limit",
-    "image_min_size",
-    "bbox_annotation_format",
-    "document_annotation_format",
-    "document_annotation_prompt",
-    "extract_header",
-    "extract_footer",
-    "table_format",
-    "confidence_scores_granularity",
-    "id",
-];
+use litellm_core::error::{CoreError, CoreResult};
+use litellm_core::ocr::types::{OcrDocument, OcrParams, OcrResponse};
+use serde::Serialize;
 
 /// Default Mistral API base, used when the caller does not override `api_base`.
 pub const MISTRAL_DEFAULT_API_BASE: &str = "https://api.mistral.ai/v1";
@@ -26,6 +16,16 @@ pub const MISTRAL_API_KEY_ENV: &str = "MISTRAL_API_KEY";
 
 /// Error message raised when no Mistral API key can be resolved.
 pub const MISSING_KEY_MESSAGE: &str = "Missing Mistral API Key - A call is being made to Mistral but no key is set either in the environment variables or via params";
+
+/// The Mistral OCR request body. `model` + `document` + the set OCR params,
+/// flattened to the top level exactly as Mistral expects.
+#[derive(Debug, Serialize)]
+pub struct MistralRequestBody<'a> {
+    pub model: &'a str,
+    pub document: &'a OcrDocument,
+    #[serde(flatten)]
+    pub params: &'a OcrParams,
+}
 
 /// Build the complete OCR endpoint URL, de-duplicating a trailing `/v1`.
 ///
@@ -64,196 +64,132 @@ pub fn resolve_api_key(
         .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
-pub struct MistralOcrConfig;
-
-pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
-
-impl OcrProviderConfig for MistralOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
-        SUPPORTED_OCR_PARAMS
-    }
-
-    fn transform_ocr_request(
-        &self,
-        model: &str,
-        document: Value,
-        optional_params: Map<String, Value>,
-    ) -> CoreResult<OcrRequestData> {
-        if !document.is_object() {
-            return Err(CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&document),
-            });
-        }
-
-        let mut data = Map::new();
-        data.insert("model".to_string(), Value::String(model.to_string()));
-        data.insert("document".to_string(), document);
-        for (param, value) in optional_params {
-            data.insert(param, value);
-        }
-
-        Ok(OcrRequestData {
-            data: Value::Object(data),
-            files: None,
-        })
-    }
-
-    fn transform_ocr_response(
-        &self,
-        model: &str,
-        response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
-        let response_object = response_json
-            .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
-
-        let pages = response_object
-            .get("pages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let model = response_object
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or(model)
-            .to_string();
-        let document_annotation = response_object.get("document_annotation").cloned();
-        let usage_info = response_object.get("usage_info").cloned();
-
-        Ok(OcrResponseData {
-            pages,
-            model,
-            document_annotation,
-            usage_info,
-            object: "ocr".to_string(),
-        })
+/// Build the typed Mistral request body (borrows the request fields).
+pub fn request_body<'a>(
+    model: &'a str,
+    document: &'a OcrDocument,
+    params: &'a OcrParams,
+) -> MistralRequestBody<'a> {
+    MistralRequestBody {
+        model,
+        document,
+        params,
     }
 }
 
-pub fn supported_ocr_params() -> &'static [&'static str] {
-    MISTRAL_OCR_CONFIG.supported_ocr_params()
-}
+/// Parse a Mistral OCR response body into the standardized [`OcrResponse`].
+///
+/// Mistral already returns the canonical shape, so this is a typed deserialize.
+/// Unknown fields are dropped (serde default). Falls back to the request `model`
+/// when the response omits it, matching the Python path.
+pub fn parse_response(model: &str, body: &str) -> CoreResult<OcrResponse> {
+    let mut response: OcrResponse = serde_json::from_str(body)
+        .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
 
-pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Value> {
-    MISTRAL_OCR_CONFIG.map_ocr_params(non_default_params)
-}
-
-pub fn transform_ocr_request(
-    model: &str,
-    document: Value,
-    optional_params: Map<String, Value>,
-) -> CoreResult<OcrRequestData> {
-    MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
-}
-
-pub fn transform_ocr_response(model: &str, response_json: Value) -> CoreResult<OcrResponseData> {
-    MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
+    if response.model.is_empty() {
+        response.model = model.to_string();
+    }
+    if response.object.is_empty() {
+        response.object = "ocr".to_string();
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_core::ocr::types::TableFormat;
     use serde_json::json;
 
-    #[test]
-    fn supported_params_match_python_mistral_ocr_config() {
-        assert_eq!(
-            supported_ocr_params(),
-            &[
-                "pages",
-                "include_image_base64",
-                "image_limit",
-                "image_min_size",
-                "bbox_annotation_format",
-                "document_annotation_format",
-                "document_annotation_prompt",
-                "extract_header",
-                "extract_footer",
-                "table_format",
-                "confidence_scores_granularity",
-                "id",
-            ]
-        );
+    fn document() -> OcrDocument {
+        OcrDocument::DocumentUrl {
+            document_url: "https://example.com/doc.pdf".to_string(),
+        }
     }
 
     #[test]
-    fn map_ocr_params_drops_unknown_params() {
-        let params = json!({
-            "extract_header": true,
-            "unsupported_param": "value",
-            "pages": [0, 1]
-        });
-        let mapped = map_ocr_params(params.as_object().unwrap());
+    fn request_body_serializes_to_mistral_wire_shape() {
+        let doc = document();
+        let params = OcrParams {
+            include_image_base64: Some(true),
+            table_format: Some(TableFormat::Html),
+            ..Default::default()
+        };
 
-        assert_eq!(mapped.get("extract_header"), Some(&json!(true)));
-        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
-        assert!(!mapped.contains_key("unsupported_param"));
-    }
-
-    #[test]
-    fn transform_ocr_request_builds_mistral_body() {
-        let document = json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        });
-        let optional_params = json!({
-            "include_image_base64": true,
-            "table_format": "html"
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        let result = transform_ocr_request("mistral-ocr-latest", document.clone(), optional_params)
-            .expect("request should transform");
+        let body = request_body("mistral-ocr-latest", &doc, &params);
+        let value = serde_json::to_value(&body).expect("serializes");
 
         assert_eq!(
-            result.data,
+            value,
             json!({
                 "model": "mistral-ocr-latest",
-                "document": document,
+                "document": {
+                    "type": "document_url",
+                    "document_url": "https://example.com/doc.pdf"
+                },
                 "include_image_base64": true,
                 "table_format": "html"
             })
         );
-        assert_eq!(result.files, None);
     }
 
     #[test]
-    fn transform_ocr_request_rejects_non_object_document() {
-        let err = transform_ocr_request("mistral-ocr-latest", json!("bad"), Map::new())
-            .expect_err("string document should be rejected");
+    fn request_body_omits_unset_params() {
+        let doc = document();
+        let params = OcrParams::default();
+        let value = serde_json::to_value(request_body("m", &doc, &params)).expect("serializes");
 
+        // Only model + document; no param keys leak through.
         assert_eq!(
-            err,
-            CoreError::InvalidType {
-                expected: "object",
-                actual: "string",
-            }
+            value,
+            json!({
+                "model": "m",
+                "document": {
+                    "type": "document_url",
+                    "document_url": "https://example.com/doc.pdf"
+                }
+            })
         );
     }
 
     #[test]
-    fn transform_ocr_response_normalizes_mistral_json() {
-        let response = json!({
-            "pages": [{"index": 0, "markdown": "hello"}],
+    fn parse_response_normalizes_and_drops_unknown_fields() {
+        let body = r#"{
+            "pages": [{"index": 0, "markdown": "hello", "secret_field": "dropped"}],
             "model": "mistral-ocr-2505-completion",
             "document_annotation": null,
-            "usage_info": {"pages_processed": 1}
-        });
+            "usage_info": {"pages_processed": 1, "extra": "dropped"},
+            "object": "ocr"
+        }"#;
 
-        let result = transform_ocr_response("mistral-ocr-latest", response)
-            .expect("response should transform");
+        let response = parse_response("mistral-ocr-latest", body).expect("parses");
 
-        assert_eq!(result.pages, vec![json!({"index": 0, "markdown": "hello"})]);
-        assert_eq!(result.model, "mistral-ocr-2505-completion");
-        assert_eq!(result.document_annotation, Some(Value::Null));
-        assert_eq!(result.usage_info, Some(json!({"pages_processed": 1})));
-        assert_eq!(result.object, "ocr");
+        assert_eq!(response.pages.len(), 1);
+        assert_eq!(response.pages[0].index, 0);
+        assert_eq!(response.pages[0].markdown, "hello");
+        assert_eq!(response.model, "mistral-ocr-2505-completion");
+        assert_eq!(response.object, "ocr");
+        assert_eq!(
+            response.usage_info.as_ref().and_then(|u| u.pages_processed),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn parse_response_falls_back_to_request_model_and_default_object() {
+        // No model, no object in the body.
+        let body = r#"{"pages": []}"#;
+        let response = parse_response("mistral-ocr-latest", body).expect("parses");
+
+        assert_eq!(response.model, "mistral-ocr-latest");
+        assert_eq!(response.object, "ocr");
+        assert!(response.pages.is_empty());
+    }
+
+    #[test]
+    fn parse_response_rejects_non_json() {
+        let err = parse_response("m", "not json").expect_err("should reject");
+        assert!(matches!(err, CoreError::InvalidResponse(_)));
     }
 
     #[test]
@@ -280,7 +216,6 @@ mod tests {
 
         let with_env = |key: &str| (key == MISTRAL_API_KEY_ENV).then(|| "sk-env".to_string());
         assert_eq!(resolve_api_key(None, &with_env).unwrap(), "sk-env");
-        // Blank param falls through to the environment.
         assert_eq!(resolve_api_key(Some("  "), &with_env).unwrap(), "sk-env");
     }
 
