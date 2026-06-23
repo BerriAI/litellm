@@ -4,6 +4,9 @@
 //! (simple-shuffle) → `providers::realtime::realtime()` invokes OpenAI. The
 //! server owns transport + config; routing lives in the `router` crate.
 
+mod gil;
+#[cfg(feature = "python-config")]
+mod python_config;
 mod routes;
 mod state;
 
@@ -16,7 +19,7 @@ use crate::state::AppState;
 #[tokio::main]
 async fn main() {
     let state = AppState {
-        router: Arc::new(build_router_from_env()),
+        router: Arc::new(build_router()),
     };
 
     let port: u16 = std::env::var("PORT")
@@ -31,6 +34,25 @@ async fn main() {
     axum::serve(listener, routes::app(state))
         .await
         .expect("server error");
+}
+
+/// Build the router. With the `python-config` feature and `LITELLM_CONFIG_PATH`
+/// set, load the resolved `model_list` from the proxy config via the embedded
+/// Python reader (load time only). Otherwise fall back to the env stand-in.
+fn build_router() -> Router {
+    #[cfg(feature = "python-config")]
+    if let Ok(config_path) = std::env::var("LITELLM_CONFIG_PATH") {
+        match python_config::load_router_from_config(&config_path) {
+            Ok(router) => {
+                eprintln!("loaded model_list from {config_path} via python config reader");
+                return router;
+            }
+            Err(err) => {
+                eprintln!("config load failed ({err}); falling back to env deployment");
+            }
+        }
+    }
+    build_router_from_env()
 }
 
 /// Build a minimal single-deployment `model_list` from the environment.
