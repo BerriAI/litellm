@@ -1,6 +1,8 @@
 """Tests for the optional Rust-backed OCR path (``litellm/ocr/rust_bridge.py``)."""
 
 import importlib
+import sys
+import types
 
 import httpx
 import pytest
@@ -133,6 +135,18 @@ def test_load_rust_ocr_none_when_extension_absent():
     caller degrades to the Python path instead of raising ImportError."""
     litellm.use_litellm_rust(True)  # no impl injected; extension isn't built in CI
     assert rust_bridge.load_rust_ocr() is None
+
+
+def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
+    """With no injected impl but a compiled ``litellm_python_bridge`` importable,
+    the loader returns the extension's ``ocr`` callable. The native wheel isn't
+    built in CI, so stand in a fake module via ``sys.modules``."""
+    fake_module = types.ModuleType("litellm_python_bridge")
+    fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm_python_bridge", fake_module)
+
+    litellm.use_litellm_rust(True)  # enabled, no impl injected -> import the extension
+    assert rust_bridge.load_rust_ocr() is fake_module.ocr
 
 
 def test_timeout_to_seconds_handles_float_timeout_and_none():
@@ -298,3 +312,22 @@ def test_ocr_does_not_route_to_rust_when_disabled():
     # The impl stays available for injection, but the disabled flag gates usage,
     # so ocr() never reaches the Rust path (asserted via the enabled-path test).
     assert bridge.calls == []
+
+
+def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
+    """Rust enabled but no bridge available (no injected impl, no compiled wheel):
+    ocr() must degrade to the Python HTTP handler instead of raising."""
+    litellm.use_litellm_rust(True)  # enabled, but load_rust_ocr() returns None in CI
+
+    captured = {}
+
+    def fake_handler_ocr(**kwargs):
+        captured["called"] = True
+        return OCRResponse(pages=[], model="mistral-ocr-latest", object="ocr")
+
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
+
+    response = litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert captured.get("called") is True  # Python path was used
+    assert isinstance(response, OCRResponse)
