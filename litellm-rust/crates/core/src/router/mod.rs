@@ -1,13 +1,21 @@
-//! The router: construction, deployment lookup, and route methods.
+//! Minimal Rust port of LiteLLM's `router.py` deployment selection.
+//!
+//! A [`Router`] is built from a `model_list` of [`Deployment`]s
+//! (`{ model_name, litellm_params: { model, api_key, api_base } }`) and selects
+//! one per request via a [`RoutingStrategy`]. For now the only strategy is
+//! `simple-shuffle` — a uniform random pick within a `model_name` group.
+//!
+//! This stays pure (no I/O): it only *chooses* a deployment. The host (the
+//! gateway) takes the chosen deployment and performs the actual provider call.
+//!
+//! - [`deployment`] — the `model_list` data types.
+//! - [`strategy`] — how a deployment is chosen.
 
-use std::time::Duration;
+mod deployment;
+mod strategy;
 
-use litellm_core::error::CoreError;
-use litellm_core::realtime::types::RealtimeEvent;
-use litellm_core::CoreResult;
-
-use crate::deployment::Deployment;
-use crate::strategy::RoutingStrategy;
+pub use deployment::{Deployment, LiteLLMParams};
+pub use strategy::RoutingStrategy;
 
 /// Load-balancing router over a `model_list`.
 #[derive(Clone, Debug, Default)]
@@ -35,42 +43,11 @@ impl Router {
             .collect();
         self.routing_strategy.select(&candidates)
     }
-
-    /// Select a deployment for `model` and invoke the realtime route against it.
-    ///
-    /// Mirrors `router._arealtime`: resolve a deployment, then call the
-    /// underlying provider entry point with that deployment's params.
-    pub async fn realtime(
-        &self,
-        model: &str,
-        input_events: Vec<RealtimeEvent>,
-        timeout: Option<Duration>,
-    ) -> CoreResult<Vec<RealtimeEvent>> {
-        let deployment = self.get_available_deployment(model).ok_or_else(|| {
-            CoreError::Routing(format!("no deployment available for model '{model}'"))
-        })?;
-        let params = &deployment.litellm_params;
-        // Strip a leading `openai/` so the OpenAI-only realtime fn gets the bare model.
-        let provider_model = params
-            .model
-            .strip_prefix("openai/")
-            .unwrap_or(&params.model);
-
-        litellm_providers::realtime::realtime(
-            provider_model,
-            input_events,
-            params.api_key.as_deref(),
-            params.api_base.as_deref(),
-            timeout,
-        )
-        .await
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::deployment::LiteLLMParams;
 
     fn deployment(name: &str, model: &str) -> Deployment {
         Deployment {
@@ -99,15 +76,5 @@ mod tests {
     fn unknown_model_returns_none() {
         let router = Router::new(vec![deployment("gpt-realtime", "gpt-realtime")]);
         assert!(router.get_available_deployment("missing").is_none());
-    }
-
-    #[tokio::test]
-    async fn realtime_errors_for_unknown_model() {
-        let router = Router::new(vec![deployment("gpt-realtime", "gpt-realtime")]);
-        let err = router
-            .realtime("missing", Vec::new(), None)
-            .await
-            .expect_err("unknown model should error");
-        assert!(matches!(err, CoreError::Routing(_)));
     }
 }

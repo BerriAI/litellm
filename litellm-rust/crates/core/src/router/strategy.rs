@@ -2,7 +2,7 @@
 
 use rand::seq::SliceRandom;
 
-use crate::deployment::Deployment;
+use super::Deployment;
 
 /// How the router chooses among the deployments sharing a `model_name`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -25,7 +25,7 @@ impl RoutingStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::deployment::LiteLLMParams;
+    use crate::router::{Deployment, LiteLLMParams};
 
     fn deployment(model: &str) -> Deployment {
         Deployment {
