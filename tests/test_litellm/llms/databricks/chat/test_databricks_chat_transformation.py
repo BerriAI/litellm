@@ -8,6 +8,11 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
@@ -416,3 +421,114 @@ def test_transform_request_keeps_parallel_tool_calls_for_claude():
     )["messages"]
 
     assert len([m for m in result if m.get("role") == "assistant"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# reasoning_effort translation
+#
+# Databricks foundation-model endpoints take reasoning controls via different
+# payload shapes depending on the underlying model family:
+#
+#   Claude:        Anthropic-style `thinking={"type":"enabled","budget_tokens":N}`
+#   Gemini 2.5:    Same Anthropic-style `thinking` payload as Claude
+#                  (per docs.databricks.com/.../query-reason-models)
+#   Gemini 3+:     Native OpenAI-style top-level `reasoning_effort`
+#   GPT-5/GPT-OSS: Native OpenAI-style top-level `reasoning_effort`
+#
+# LiteLLM should translate `reasoning_effort` into the right shape for the
+# first two families and pass it through unchanged for the latter two.
+# ---------------------------------------------------------------------------
+
+
+def _map_reasoning_effort(model: str, reasoning_effort, **extra_non_default):
+    """Run map_openai_params with reasoning_effort + optional extras.
+
+    `max_tokens` is included by default to mirror real client behavior. Without
+    it the base-class `update_optional_params_with_thinking_tokens` helper
+    KeyErrors on pure pass-through models (a pre-existing issue orthogonal to
+    this fix — `is_thinking_enabled` returns True whenever `reasoning_effort` is
+    set, but the helper then assumes `optional_params["thinking"]` exists).
+    """
+    non_default = {"reasoning_effort": reasoning_effort, "max_tokens": 1024}
+    non_default.update(extra_non_default)
+    return DatabricksConfig().map_openai_params(
+        non_default_params=non_default,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def test_claude_translates_reasoning_effort_to_thinking():
+    """Regression: Claude path must still translate to Anthropic-style thinking."""
+    params = _map_reasoning_effort("databricks-claude-3-7-sonnet", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_low_translates_to_thinking_budget():
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_medium_translates_to_thinking_budget():
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "medium")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_high_translates_to_thinking_budget():
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_pro_translates_to_thinking_budget():
+    """Cover the gemini-2-5-pro endpoint too, not just flash."""
+    params = _map_reasoning_effort("databricks-gemini-2-5-pro", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_none_drops_thinking_and_reasoning_effort():
+    """`reasoning_effort='none'` mirrors the Claude behavior: no thinking emitted."""
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "none")
+    assert "thinking" not in params
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_3_passes_reasoning_effort_through():
+    """Databricks-Gemini-3+ accepts reasoning_effort natively — do not translate."""
+    params = _map_reasoning_effort("databricks-gemini-3-1-pro", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_5_passes_reasoning_effort_through():
+    """Databricks-GPT-5 family accepts reasoning_effort natively."""
+    params = _map_reasoning_effort("databricks-gpt-5-1", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_oss_passes_reasoning_effort_through():
+    """Databricks-GPT-OSS accepts reasoning_effort natively."""
+    params = _map_reasoning_effort("databricks-gpt-oss-120b", "high")
+    assert params.get("reasoning_effort") == "high"
+    assert "thinking" not in params
