@@ -1,26 +1,24 @@
 import React, { useEffect, useState } from "react";
-import { ExperimentOutlined, SaveOutlined, ToolOutlined } from "@ant-design/icons";
-import { Button, Card, InputNumber, Spin, Switch, Typography } from "antd";
+import { ExperimentOutlined, ToolOutlined } from "@ant-design/icons";
+import { Card, Spin, Switch, Typography } from "antd";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "../networking";
 
 const { Text } = Typography;
 
 const PLATFORM_MCP_ENABLED_FIELD = "platform_mcp_enabled";
-const PLATFORM_MCP_THRESHOLD_FIELD = "platform_mcp_tool_threshold";
-const DEFAULT_THRESHOLD = 10;
 
 interface PlatformMCPTabProps {
   accessToken: string | null;
 }
 
-const getFieldValue = (response: unknown, fallback: boolean | number): boolean | number => {
+const getFieldValue = (response: unknown, fallback: boolean): boolean => {
   if (response && typeof response === "object") {
     const field = response as { field_value?: unknown; field_default_value?: unknown };
     if (field.field_value !== undefined && field.field_value !== null) {
-      return field.field_value as boolean | number;
+      return Boolean(field.field_value);
     }
     if (field.field_default_value !== undefined && field.field_default_value !== null) {
-      return field.field_default_value as boolean | number;
+      return Boolean(field.field_default_value);
     }
   }
   return fallback;
@@ -29,9 +27,7 @@ const getFieldValue = (response: unknown, fallback: boolean | number): boolean |
 const PlatformMCPTab: React.FC<PlatformMCPTabProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState(true);
   const [savingEnabled, setSavingEnabled] = useState(false);
-  const [savingThreshold, setSavingThreshold] = useState(false);
   const [enabled, setEnabled] = useState(false);
-  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -42,13 +38,8 @@ const PlatformMCPTab: React.FC<PlatformMCPTabProps> = ({ accessToken }) => {
 
       setLoading(true);
       try {
-        const [enabledResponse, thresholdResponse] = await Promise.all([
-          getConfigFieldSetting(accessToken, PLATFORM_MCP_ENABLED_FIELD),
-          getConfigFieldSetting(accessToken, PLATFORM_MCP_THRESHOLD_FIELD),
-        ]);
-        setEnabled(Boolean(getFieldValue(enabledResponse, false)));
-        const nextThreshold = Number(getFieldValue(thresholdResponse, DEFAULT_THRESHOLD));
-        setThreshold(Number.isFinite(nextThreshold) && nextThreshold > 0 ? nextThreshold : DEFAULT_THRESHOLD);
+        const enabledResponse = await getConfigFieldSetting(accessToken, PLATFORM_MCP_ENABLED_FIELD);
+        setEnabled(getFieldValue(enabledResponse, false));
       } catch (error) {
         console.error("Failed to load Platform MCP settings:", error);
       } finally {
@@ -69,18 +60,6 @@ const PlatformMCPTab: React.FC<PlatformMCPTabProps> = ({ accessToken }) => {
       console.error("Failed to update Platform MCP enabled setting:", error);
     } finally {
       setSavingEnabled(false);
-    }
-  };
-
-  const handleSaveThreshold = async () => {
-    if (!accessToken) return;
-    setSavingThreshold(true);
-    try {
-      await updateConfigFieldSetting(accessToken, PLATFORM_MCP_THRESHOLD_FIELD, threshold);
-    } catch (error) {
-      console.error("Failed to update Platform MCP threshold:", error);
-    } finally {
-      setSavingThreshold(false);
     }
   };
 
@@ -105,42 +84,24 @@ const PlatformMCPTab: React.FC<PlatformMCPTabProps> = ({ accessToken }) => {
       <div>
         <Text className="text-lg font-semibold">Platform MCP</Text>
         <p className="mt-1 text-sm text-gray-500">
-          When enabled, LiteLLM compresses aggregate MCP tools/list responses only after the caller&apos;s filtered tool
-          count is over the configured threshold.
+          When enabled, LiteLLM exposes platform-managed MCP discovery and tool calling through the proxy.
         </p>
       </div>
 
       <Card>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <Text className="font-medium">Enable Platform MCP compression</Text>
+            <Text className="font-medium">Enable Platform MCP</Text>
             <p className="mb-0 mt-1 text-sm text-gray-500">
-              Disabled returns the current full tool list. Enabled keeps the full tool list at or below the threshold,
-              then returns only list_servers and enable_server above it.
+              Disabled leaves existing MCP behavior unchanged. Enabled makes list_servers, get_server_tools, and
+              call_tool available for keys with platform_mcp access.
             </p>
           </div>
-          <Switch checked={enabled} loading={savingEnabled} onChange={handleToggle} />
+          <Switch aria-label="Enable Platform MCP" checked={enabled} loading={savingEnabled} onChange={handleToggle} />
         </div>
       </Card>
 
-      <Card>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <Text className="font-medium">Compression threshold</Text>
-            <p className="mb-0 mt-1 text-sm text-gray-500">
-              Default is 10 tools. Compression starts when the final accessible tool count is greater than this value.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <InputNumber min={1} value={threshold} onChange={(value) => setThreshold(Number(value || 1))} />
-            <Button type="primary" icon={<SaveOutlined />} loading={savingThreshold} onClick={handleSaveThreshold}>
-              Save
-            </Button>
-          </div>
-        </div>
-      </Card>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card>
           <div className="flex items-start gap-3">
             <ToolOutlined className="mt-1 text-gray-500" />
@@ -156,9 +117,20 @@ const PlatformMCPTab: React.FC<PlatformMCPTabProps> = ({ accessToken }) => {
           <div className="flex items-start gap-3">
             <ToolOutlined className="mt-1 text-gray-500" />
             <div>
-              <Text className="font-mono font-semibold text-blue-600">enable_server</Text>
+              <Text className="font-mono font-semibold text-blue-600">get_server_tools</Text>
               <p className="mb-0 mt-1 text-sm text-gray-500">
                 Returns full tool definitions for one accessible MCP server.
+              </p>
+            </div>
+          </div>
+        </Card>
+        <Card>
+          <div className="flex items-start gap-3">
+            <ToolOutlined className="mt-1 text-gray-500" />
+            <div>
+              <Text className="font-mono font-semibold text-blue-600">call_tool</Text>
+              <p className="mb-0 mt-1 text-sm text-gray-500">
+                Calls a tool on an accessible MCP server through the platform.
               </p>
             </div>
           </div>

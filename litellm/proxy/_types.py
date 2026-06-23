@@ -2341,11 +2341,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     platform_mcp_enabled: Optional[bool] = Field(
         False,
-        description="If True, enables Platform MCP staged tool loading for aggregate MCP tools/list responses.",
-    )
-    platform_mcp_tool_threshold: Optional[int] = Field(
-        10,
-        description="When Platform MCP is enabled, aggregate MCP tools/list responses with more than this many tools are compressed to Platform MCP meta-tools.",
+        description="If True, enables the built-in Platform MCP server.",
     )
     mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
         None,

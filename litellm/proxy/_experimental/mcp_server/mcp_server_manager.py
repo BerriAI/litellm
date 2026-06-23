@@ -569,6 +569,12 @@ class MCPServerManager:
             as the cooldown avoids reconnecting on every gateway initialize when
             upstream returns empty or fails).
         """
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            is_platform_mcp_server,
+        )
+
+        if is_platform_mcp_server(server):
+            return
         if server.spec_path:
             return
         if server.instructions and server.instructions.strip():
@@ -636,7 +642,16 @@ class MCPServerManager:
         """
         Get the registered MCP Servers from the registry and union with the config MCP Servers
         """
-        return self.config_mcp_servers | self.registry
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            PLATFORM_MCP_SERVER_ID,
+            build_platform_mcp_server,
+        )
+
+        return (
+            self.config_mcp_servers
+            | self.registry
+            | {PLATFORM_MCP_SERVER_ID: build_platform_mcp_server()}
+        )
 
     async def load_servers_from_config(
         self,
@@ -1391,6 +1406,18 @@ class MCPServerManager:
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
 
+            from litellm.proxy._experimental.mcp_server.platform_mcp import (
+                get_platform_mcp_enabled,
+                is_platform_mcp_server_identifier,
+            )
+
+            if not await get_platform_mcp_enabled():
+                combined_servers = {
+                    server_id
+                    for server_id in combined_servers
+                    if not is_platform_mcp_server_identifier(server_id)
+                }
+
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
             # These servers handle their own auth at the upstream level, so
@@ -2054,6 +2081,10 @@ class MCPServerManager:
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            build_platform_mcp_tools,
+            is_platform_mcp_server,
+        )
 
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
@@ -2061,6 +2092,13 @@ class MCPServerManager:
         client = None
 
         try:
+            if is_platform_mcp_server(server):
+                return self._create_prefixed_tools(
+                    build_platform_mcp_tools(),
+                    server,
+                    add_prefix=add_prefix,
+                )
+
             # Tool *listing* must not be blocked by missing per-user env vars —
             # the server's tools should still appear so the client connects. The
             # friendly "missing vars" error is raised only on the tool-*call*
@@ -3689,6 +3727,9 @@ class MCPServerManager:
         """
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            is_platform_mcp_server,
+        )
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -3725,6 +3766,25 @@ class MCPServerManager:
         oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(
             mcp_server, oauth2_headers, user_api_key_auth
         )
+
+        if is_platform_mcp_server(mcp_server):
+            from litellm.proxy._experimental.mcp_server.platform_mcp import (
+                normalize_platform_mcp_tool_name,
+            )
+            from litellm.proxy._experimental.mcp_server.server import (
+                _handle_platform_mcp_tool_call,
+            )
+
+            return await _handle_platform_mcp_tool_call(
+                name=normalize_platform_mcp_tool_name(name),
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=[mcp_server.server_id],
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
@@ -4249,6 +4309,19 @@ class MCPServerManager:
                 status="unknown",
                 health_check_error="Server not found",
                 last_health_check=datetime.now(),
+            )
+
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            is_platform_mcp_server,
+        )
+
+        if is_platform_mcp_server(server):
+            return self._build_mcp_server_table(server).model_copy(
+                update={
+                    "status": "healthy",
+                    "health_check_error": None,
+                    "last_health_check": datetime.now(),
+                }
             )
 
         status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
