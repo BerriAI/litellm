@@ -15,32 +15,41 @@ Respect the current package boundaries:
 litellm/proxy/_experimental/mcp_server/
   AGENTS.md
   CLAUDE.md
-  server.py                  # ASGI/MCP route handling, sessions, tool calls
-  mcp_server_manager.py       # upstream server registry, clients, tool routing
+  server.py                  # ASGI/MCP route handling, sessions, tool calls   [PR7: 7-arm only — move BYOK/OAuth pre-fetch into resolver]
+  mcp_server_manager.py      # upstream server registry, clients, tool routing  [PR7: _create_mcp_client swaps resolve_mcp_auth -> resolve_credentials]
   auth/
-    user_api_key_auth_mcp.py  # LiteLLM admission auth and MCP request headers
-    token_exchange.py         # OAuth token exchange handling
-    litellm_auth_handler.py   # authenticated-user adapter for MCP sessions
-  discoverable_endpoints.py   # MCP OAuth metadata, authorize, token, callback
-  byok_oauth_endpoints.py     # BYOK OAuth UI/API flow
-  oauth_utils.py              # redirect URI and proxy base URL validation
-  oauth2_token_cache.py       # OAuth2 and per-user token resolution/cache
-  db.py                       # MCP server, credential, env var, submission DB access
-  toolset_db.py               # MCP toolset DB access
-  rest_endpoints.py           # proxy REST facade for listing/calling MCP tools
-  openapi_to_mcp_generator.py # OpenAPI spec to MCP tool generation
-  sampling_handler.py         # MCP sampling to LiteLLM completion flow
-  elicitation_handler.py      # MCP elicitation relay flow
-  semantic_tool_filter.py     # semantic filtering of available MCP tools
+    user_api_key_auth_mcp.py # LiteLLM admission auth and MCP request headers
+    token_exchange.py        # OAuth token exchange handling                    [unchanged; V1TokenExchangeAdapter delegates here]
+    litellm_auth_handler.py  # authenticated-user adapter for MCP sessions
+  outbound_credentials/      # NEW — typed upstream-credential resolution (resolve_credentials + arms)
+    __init__.py              # public surface: resolve_credentials, the configs, CredError
+    result.py                # Ok | Error union (pure stdlib)
+    types.py                 # AuthConfig union, CredError, Subject, ServerSpec
+    httpx_auth.py            # NoOpAuth, StaticHeaderAuth (every mode -> one httpx.Auth)
+    resolver.py              # resolve_credentials(): exhaustive per-mode match + assert_never
+    seams.py                 # injected Protocols (one per cache-touching mode)
+    v1_adapters.py           # v1-backed seam bodies; delegate to auth/oauth2/db owners
+    adapter.py               # to_subject / to_server_spec / raise_public (v1 <-> v2 boundary)
+  discoverable_endpoints.py  # MCP OAuth metadata, authorize, token, callback
+  byok_oauth_endpoints.py    # BYOK OAuth UI/API flow
+  oauth_utils.py             # redirect URI and proxy base URL validation
+  oauth2_token_cache.py      # OAuth2 and per-user token resolution/cache        [PR7: resolve_mcp_auth removed; cache class stays, V1OAuth2CacheAdapter delegates to async_get_token]
+  db.py                      # MCP server, credential, env var, submission DB access  [unchanged; V1ByokStore delegates to _get_byok_credential / get_user_credential]
+  toolset_db.py              # MCP toolset DB access
+  rest_endpoints.py          # proxy REST facade for listing/calling MCP tools   [PR7: 7-arm only — pass identity + inbound token down instead of mcp_auth_header]
+  openapi_to_mcp_generator.py# OpenAPI spec to MCP tool generation
+  sampling_handler.py        # MCP sampling to LiteLLM completion flow
+  elicitation_handler.py     # MCP elicitation relay flow
+  semantic_tool_filter.py    # semantic filtering of available MCP tools
   guardrail_translation/
-    handler.py                # MCP guardrail result translation
-  sse_transport.py            # SSE transport implementation
-  mcp_context.py              # contextvars for MCP request/session metadata
-  mcp_debug.py                # debug helpers
-  tool_registry.py            # in-memory MCP tool registry helpers
-  cost_calculator.py          # MCP tool cost calculation
-  ui_session_utils.py         # dashboard session auth context helpers
-  utils.py                    # shared primitives used by several modules
+    handler.py               # MCP guardrail result translation
+  sse_transport.py           # SSE transport implementation
+  mcp_context.py             # contextvars for MCP request/session metadata
+  mcp_debug.py               # debug helpers
+  tool_registry.py           # in-memory MCP tool registry helpers
+  cost_calculator.py         # MCP tool cost calculation
+  ui_session_utils.py        # dashboard session auth context helpers
+  utils.py                   # shared primitives used by several modules
 ```
 
 Do not add broad catch-all modules. Prefer the existing owner above, and add a
