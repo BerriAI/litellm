@@ -178,7 +178,7 @@ class MavvrikFocusLogger(FocusLogger):
         last_ingested = _parse_metrics_marker(marker)
 
         # Catch up missed dates, capped at _MAX_CATCHUP_DAYS.
-        # last_ingested=None means metricsMarker=0 (fresh connector, never ingested) --
+        # last_ingested=None means metricsMarker=0 (fresh connector, never ingested) —
         # treat the same as being _MAX_CATCHUP_DAYS behind so we export all available history.
         earliest_catchup = yesterday - timedelta(days=self._MAX_CATCHUP_DAYS - 1)
         if last_ingested is None or last_ingested < yesterday:
@@ -188,7 +188,10 @@ class MavvrikFocusLogger(FocusLogger):
                 else max(last_ingested + timedelta(days=1), earliest_catchup)
             )
 
-            if last_ingested is not None and last_ingested + timedelta(days=1) < earliest_catchup:
+            if (
+                last_ingested is not None
+                and last_ingested + timedelta(days=1) < earliest_catchup
+            ):
                 verbose_proxy_logger.warning(
                     "Mavvrik FOCUS export: metricsMarker is more than %d days behind "
                     "(%s). Catching up from %s only; earlier data will not be re-exported.",
@@ -210,10 +213,13 @@ class MavvrikFocusLogger(FocusLogger):
                 await self._export_window(window=window, limit=None)
                 catch_up_date += timedelta(days=1)
 
-        # Export yesterday's window (the normal daily run)
+        # Export yesterday's window (the normal daily run).
+        # Use `now` as end_time so spend rows flushed after midnight are included.
+        # LiteLLM's DailyUserSpend rows for a given date keep getting updated_at
+        # bumped as the flush job runs; capping at midnight would miss those updates.
         window = FocusTimeWindow(
             start_time=yesterday,
-            end_time=yesterday + timedelta(days=1),
+            end_time=now,
             frequency="daily",
         )
         await self._export_window(window=window, limit=None)
