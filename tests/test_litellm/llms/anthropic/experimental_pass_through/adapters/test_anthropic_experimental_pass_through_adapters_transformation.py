@@ -2384,6 +2384,45 @@ def test_translate_streaming_openai_response_to_anthropic_cache_tokens_from_hidd
     assert message_delta["usage"]["cache_creation_input_tokens"] == 20
 
 
+def test_translate_streaming_openai_response_to_anthropic_cache_tokens_with_applied_edits():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message_delta = adapter.translate_streaming_openai_response_to_anthropic(
+        response=response,
+        current_content_block_index=0,
+        applied_edits=[{"type": "compact_20260112"}],
+    )
+
+    assert message_delta["usage"]["input_tokens"] == 70
+    assert message_delta["usage"]["output_tokens"] == 50
+    assert message_delta["usage"]["cache_read_input_tokens"] == 30
+    assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+    assert message_delta["context_management"]["applied_edits"][0]["type"] == (
+        "compact_20260112"
+    )
+
+
 # =====================================================================
 # Web Search Tool Transformation Tests
 # =====================================================================
