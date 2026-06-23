@@ -1,0 +1,18 @@
+[package]
+name = "litellm-ai-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "litellm-ai-gateway"
+path = "src/main.rs"
+
+[dependencies]
+litellm-core.workspace = true
+litellm-router.workspace = true
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+serde.workspace = true
+serde_json.workspace = true
