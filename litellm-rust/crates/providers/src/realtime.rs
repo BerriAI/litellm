@@ -1,15 +1,17 @@
 //! End-to-end OpenAI realtime invocation.
 //!
 //! The host-facing entry point, mirroring `providers::ocr::run_ocr`: open the
-//! WebSocket to OpenAI, drive it through the pure `OPENAI_REALTIME_CONFIG`
-//! transforms, and collect the response events. Network, auth header, and key
-//! resolution live here so the `transformation` module stays pure.
+//! WebSocket to OpenAI, drive typed events through the pure
+//! `OPENAI_REALTIME_CONFIG` transforms, and collect the response events.
+//! Network, auth header, key resolution, and wire (de)serialization live here so
+//! the `transformation` module stays pure and typed.
 
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::error::CoreError;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
+use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::CoreResult;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -44,35 +46,27 @@ fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
 }
 
 /// True for events that end a realtime turn: a completed response or an error.
-fn is_terminal_event(event_json: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(event_json)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .is_some_and(|event_type| event_type == "response.done" || event_type == "error")
+fn is_terminal_event(event: &RealtimeEvent) -> bool {
+    event.event_type == "response.done" || event.event_type == "error"
 }
 
 /// Invoke the OpenAI realtime API end to end over a WebSocket.
 ///
-/// Sends each entry of `input_events` (a client event already encoded as a JSON
-/// string) after passing it through `transform_realtime_request`, then collects
-/// backend events — each passed through `transform_realtime_response` — until a
-/// terminal event (`response.done` / `error`) arrives, the socket closes, or the
-/// `timeout` elapses. Returns the transformed backend events in arrival order.
+/// Sends each `input_events` entry after passing it through
+/// `transform_realtime_request`, then collects backend events — each passed
+/// through `transform_realtime_response` — until a terminal event
+/// (`response.done` / `error`) arrives, the socket closes, or the `timeout`
+/// elapses. Returns the transformed backend events in arrival order.
 ///
 /// Mirrors `run_ocr`: pure transforms come from `core`/`providers`; the network,
-/// auth header, and key resolution are owned here in the route module.
+/// auth header, key resolution, and JSON (de)serialization are owned here.
 pub async fn realtime(
     model: &str,
-    input_events: Vec<String>,
+    input_events: Vec<RealtimeEvent>,
     api_key: Option<&str>,
     api_base: Option<&str>,
     timeout: Option<Duration>,
-) -> CoreResult<Vec<String>> {
+) -> CoreResult<Vec<RealtimeEvent>> {
     let config = &OPENAI_REALTIME_CONFIG;
     let api_key = resolve_api_key(api_key)?;
     let url = config.complete_url(api_base, model);
@@ -95,24 +89,25 @@ pub async fn realtime(
         .map_err(|err| CoreError::Network(err.to_string()))?;
 
     for event in &input_events {
-        for outbound in config.transform_realtime_request(event, model)?.messages {
-            ws.send(Message::Text(outbound))
+        for outbound in config.transform_realtime_request(event, model)?.events {
+            let payload = serde_json::to_string(&outbound)
+                .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+            ws.send(Message::Text(payload))
                 .await
                 .map_err(|err| CoreError::Network(err.to_string()))?;
         }
     }
 
     let deadline = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
-    let mut received: Vec<String> = Vec::new();
+    let mut received: Vec<RealtimeEvent> = Vec::new();
 
     let collect = async {
         while let Some(message) = ws.next().await {
             match message.map_err(|err| CoreError::Network(err.to_string()))? {
                 Message::Text(text) => {
-                    for outbound in config
-                        .transform_realtime_response(text.as_str(), model)?
-                        .messages
-                    {
+                    let event: RealtimeEvent = serde_json::from_str(text.as_str())
+                        .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                    for outbound in config.transform_realtime_response(&event, model)?.events {
                         let terminal = is_terminal_event(&outbound);
                         received.push(outbound);
                         if terminal {
@@ -138,6 +133,10 @@ pub async fn realtime(
 mod tests {
     use super::*;
 
+    fn event(raw: &str) -> RealtimeEvent {
+        serde_json::from_str(raw).expect("valid event json")
+    }
+
     #[test]
     fn resolve_api_key_prefers_param_then_blank_falls_through() {
         assert_eq!(resolve_api_key(Some("sk-test")).unwrap(), "sk-test");
@@ -149,10 +148,11 @@ mod tests {
 
     #[test]
     fn is_terminal_event_matches_done_and_error_only() {
-        assert!(is_terminal_event(r#"{"type":"response.done"}"#));
-        assert!(is_terminal_event(r#"{"type":"error","error":{}}"#));
-        assert!(!is_terminal_event(r#"{"type":"response.text.delta"}"#));
-        assert!(!is_terminal_event("not json"));
+        assert!(is_terminal_event(&event(r#"{"type":"response.done"}"#)));
+        assert!(is_terminal_event(&event(r#"{"type":"error","error":{}}"#)));
+        assert!(!is_terminal_event(&event(
+            r#"{"type":"response.output_text.delta"}"#
+        )));
     }
 
     /// Live end-to-end check against OpenAI. Ignored by default (CI never runs
@@ -164,14 +164,9 @@ mod tests {
         let key =
             std::env::var(OPENAI_API_KEY_ENV).expect("set OPENAI_API_KEY to run this ignored test");
 
-        let response_create = serde_json::json!({
-            "type": "response.create",
-            "response": {
-                "output_modalities": ["text"],
-                "instructions": "Respond with exactly: hello world"
-            }
-        })
-        .to_string();
+        let response_create = event(
+            r#"{"type":"response.create","response":{"output_modalities":["text"],"instructions":"Respond with exactly: hello world"}}"#,
+        );
 
         let events = realtime(
             "gpt-realtime",
@@ -183,30 +178,16 @@ mod tests {
         .await
         .expect("realtime call should succeed");
 
-        let types: Vec<String> = events
-            .iter()
-            .filter_map(|event| {
-                serde_json::from_str::<serde_json::Value>(event)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("type")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    })
-            })
-            .collect();
-
+        let types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
         eprintln!("received {} events: {:?}", events.len(), types);
+
         assert!(
-            types.iter().any(|event_type| event_type == "response.done"),
+            types.contains(&"response.done"),
             "expected a response.done event, got: {types:?}"
         );
         assert!(
-            events
-                .iter()
-                .any(|event| event.contains("response.text.delta") || event.contains("output_text")),
-            "expected text output in the response, got types: {types:?}"
+            types.contains(&"response.output_text.delta"),
+            "expected streamed text output, got: {types:?}"
         );
     }
 }
