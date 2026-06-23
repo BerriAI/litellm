@@ -4241,7 +4241,7 @@ def completion(  # type: ignore
                 api_base
                 or litellm.api_base
                 or get_secret("CLOUDFLARE_API_BASE")
-                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
             )
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
