@@ -570,6 +570,20 @@ class ProxyExtrasDBManager:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
 
+                    # Concurrent `migrate deploy` (multiple proxy instances
+                    # booting against one DB) can deadlock on Prisma's advisory
+                    # lock, and Postgres aborts one side. This is transient, so
+                    # back off and retry instead of failing fast as if it were
+                    # an unrecoverable migration error.
+                    if "deadlock detected" in stderr:
+                        logger.info(
+                            f"prisma migrate deploy attempt {attempt + 1} "
+                            "deadlocked on the migration advisory lock "
+                            "(concurrent migrate deploy), retrying"
+                        )
+                        time.sleep(random.randrange(5, 15))
+                        continue
+
                     if "P3005" in stderr and "database schema is not empty" in stderr:
                         logger.info(
                             "Schema exists but no migrations ledger — creating baseline"

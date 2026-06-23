@@ -77,6 +77,48 @@ def test_v2_non_idempotent_p3009_raises_runtime_error(monkeypatch, tmp_path):
             ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
 
 
+def test_v2_retries_transient_advisory_lock_deadlock(monkeypatch, tmp_path):
+    """v2: a deadlock on Prisma's migration advisory lock (two instances racing
+    to migrate the same DB) is transient and must be retried, not raised. Without
+    the retry, the losing instance exits and never binds its port, which is what
+    broke the multi-instance CI job when v2 became the default."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+
+    deadlock_stderr = (
+        "Error: ERROR: deadlock detected\n"
+        "DETAIL: Process 277 waits for ExclusiveLock on advisory lock "
+        "[17556,0,72707369,1]; blocked by process 278.\n"
+        "Process 278 waits for ShareLock on virtual transaction 3/1041; "
+        "blocked by process 277."
+    )
+
+    class _Applied:
+        stdout = "All migrations have been successfully applied."
+        returncode = 0
+
+    calls = {"n": 0}
+
+    def _run(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=args[0], stderr=deadlock_stderr, output=""
+            )
+        return _Applied()
+
+    with patch("subprocess.run", side_effect=_run):
+        ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert ok is True
+    assert calls["n"] == 2
+
+
 def test_v2_db_push_wraps_subprocess_error_as_runtime_error(monkeypatch, tmp_path):
     """v2: a failing `prisma db push` must raise RuntimeError, not leak
     CalledProcessError past proxy_cli.py's `except RuntimeError`."""
