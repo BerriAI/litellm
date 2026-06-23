@@ -5203,8 +5203,8 @@ class ProxyConfig:
         for m in db_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, dict):
-                _litellm_params = LiteLLM_Params(
-                    **decrypt_and_resolve_litellm_params(_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(
+                    decrypt_and_resolve_litellm_params(_litellm_params)
                 )
 
             else:
@@ -5235,8 +5235,8 @@ class ProxyConfig:
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
-                _litellm_params = LiteLLM_Params(
-                    **decrypt_and_resolve_litellm_params(_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(
+                    decrypt_and_resolve_litellm_params(_litellm_params)
                 )
             else:
                 verbose_proxy_logger.error(
