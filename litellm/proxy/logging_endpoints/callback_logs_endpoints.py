@@ -16,7 +16,7 @@ self-describing `StandardLoggingPayload`, so completions/responses can use it to
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -53,7 +53,7 @@ class CallbackLogsReplayer:
         return datetime.now(tz=timezone.utc)
 
     @staticmethod
-    def _build_logging_obj(payload: Dict[str, Any]) -> LiteLLMLogging:
+    def _build_logging_obj(payload: dict[str, Any]) -> LiteLLMLogging:
         """
         Reconstruct a `Logging` object from a finished payload and seed
         `model_call_details` with exactly what the success/failure callbacks
@@ -79,8 +79,8 @@ class CallbackLogsReplayer:
             function_id="",
         )
 
-        metadata: Dict[str, Any] = payload.get("metadata") or {}
-        litellm_metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = payload.get("metadata") or {}
+        litellm_metadata: dict[str, Any] = {
             "user_api_key": metadata.get("user_api_key_hash"),
             "user_api_key_alias": metadata.get("user_api_key_alias"),
             "user_api_key_user_id": metadata.get("user_api_key_user_id"),
@@ -104,7 +104,7 @@ class CallbackLogsReplayer:
         return logging_obj
 
     @staticmethod
-    def _response_obj_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _response_obj_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         """Minimal response object so usage-derived spend-log fields resolve."""
         return {
             "id": payload.get("id"),
@@ -146,7 +146,7 @@ class CallbackLogsReplayer:
             )
 
     async def replay_batch(
-        self, records: List[CallbackLogRecord]
+        self, records: list[CallbackLogRecord]
     ) -> CallbackLogsResponse:
         """Replay a batch; a single bad record never sinks the rest."""
         processed = 0
