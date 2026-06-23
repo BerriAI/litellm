@@ -419,8 +419,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         for i, message in enumerate(messages):
             messages[i] = cast(
-                AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),  # type: ignore
+                AllMessageValues, filter_value_from_dict(message, "cache_control")  # type: ignore
             )
         if tools is not None:
             for i, tool in enumerate(tools):
@@ -480,7 +479,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if tools is not None and len(tools) > 0:
                 optional_params["tools"] = tools
 
-        optional_params = self._filter_agentic_internal_params(optional_params)
         optional_params.pop("max_retries", None)
 
         return {
@@ -513,7 +511,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
             if tools is not None and len(tools) > 0:
                 optional_params["tools"] = tools
-        optional_params = self._filter_agentic_internal_params(optional_params)
         if self.__class__._is_base_class:
             return {
                 "model": model,
@@ -525,34 +522,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return self.transform_request(
                 model, messages, optional_params, litellm_params, headers
             )
-
-    @staticmethod
-    def _filter_agentic_internal_params(optional_params: dict) -> dict:
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if not OpenAIGPTConfig._is_agentic_internal_param(k)
-        }
-        extra_body = filtered_params.get("extra_body")
-        if isinstance(extra_body, dict):
-            extra_body = {
-                k: v
-                for k, v in extra_body.items()
-                if not OpenAIGPTConfig._is_agentic_internal_param(k)
-            }
-            if extra_body:
-                filtered_params["extra_body"] = extra_body
-            else:
-                filtered_params.pop("extra_body", None)
-        return filtered_params
-
-    @staticmethod
-    def _is_agentic_internal_param(key: str) -> bool:
-        return (
-            key.startswith("_code_interpreter_interception")
-            or key.startswith("_agentic_loop")
-            or key == "max_agentic_loops"
-        )
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None

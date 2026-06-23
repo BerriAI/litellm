@@ -25,7 +25,6 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -86,9 +85,6 @@ from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
-    CHAT_COMPLETION_AGENTIC_SURFACE,
-    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
-    is_interception_internal_key,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -146,7 +142,6 @@ from .http_handler import get_shared_realtime_ssl_context
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
-    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.types.llms.openai_evals import (
@@ -485,10 +480,6 @@ class BaseLLMHTTPHandler:
             logging_obj.model_call_details[
                 "websearch_interception_converted_stream"
             ] = True
-        if litellm_params.get("_code_interpreter_interception_converted_stream", False):
-            logging_obj.model_call_details[
-                "code_interpreter_interception_converted_stream"
-            ] = True
 
         if acompletion is True:
             if stream is True:
@@ -610,7 +601,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             logging_obj=logging_obj,
         )
-        initial_response = provider_config.transform_response(
+        return provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -623,19 +614,6 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=json_mode,
         )
-        final_response = run_async_function(
-            self._call_agentic_chat_completion_hooks,
-            response=initial_response,
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            logging_obj=logging_obj,
-            stream=False,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=litellm_params,
-        )
-        result = final_response if final_response is not None else initial_response
-        return result
 
     def make_sync_call(
         self,
@@ -2436,35 +2414,10 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
         )
-        final_response = run_async_function(
-            self._call_agentic_completion_hooks,
-            response=initial_response,
-            model=model,
-            messages=(
-                input
-                if isinstance(input, list)
-                else [{"role": "user", "content": input}]
-            ),
-            anthropic_messages_provider_config=responses_api_provider_config,
-            anthropic_messages_optional_request_params=response_api_optional_request_params,
-            logging_obj=logging_obj,
-            stream=False,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=dict(litellm_params),
-            api_surface="responses",
-        )
-        result = final_response if final_response is not None else initial_response
-        if litellm_params.get(
-            "_code_interpreter_interception_converted_stream"
-        ) and not litellm_params.get("_agentic_loop_depth"):
-            return self._wrap_responses_response_as_fake_stream(
-                result=result,
-                model=model,
-                responses_api_provider_config=responses_api_provider_config,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-            )
-        return result
+        # Responses agentic interception (e.g. code interpreter) runs the follow-up
+        # loop via the async hook, so it is async-only for now; the sync path returns
+        # the initial response unchanged.
+        return initial_response
 
     async def async_response_api_handler(
         self,
@@ -4918,23 +4871,16 @@ class BaseLLMHTTPHandler:
         if max_tokens is None:
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
-        internal_keys = {"litellm_logging_obj", "acompletion"}
+        internal_keys = {"litellm_logging_obj"}
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not is_interception_internal_key(k)
+            if not k.startswith("_websearch_interception")
+            and not k.startswith("_compression_interception")
             and k not in internal_keys
             and k not in optional_params
         }
-        kwargs_for_followup.update(
-            {
-                k: v
-                for k, v in patch.kwargs.items()
-                if not is_interception_internal_key(k)
-                and k not in internal_keys
-                and k not in optional_params
-            }
-        )
+        kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
@@ -4988,35 +4934,23 @@ class BaseLLMHTTPHandler:
         optional_params.update(patch.optional_params)
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
-            if "tool_choice" not in patch.optional_params:
-                optional_params.pop("tool_choice", None)
         optional_params = {
             k: v
             for k, v in optional_params.items()
             if k != "stream" and k != "_code_interpreter_interception_converted_stream"
         }
 
-        internal_keys = {"litellm_logging_obj", "acompletion"}
+        internal_keys = {"litellm_logging_obj"}
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not is_interception_internal_key(
-                k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
-            )
+            if not k.startswith("_websearch_interception")
+            and not k.startswith("_compression_interception")
+            and k != "_code_interpreter_interception_converted_stream"
             and k not in internal_keys
             and k not in optional_params
         }
-        kwargs_for_followup.update(
-            {
-                k: v
-                for k, v in patch.kwargs.items()
-                if not is_interception_internal_key(
-                    k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
-                )
-                and k not in internal_keys
-                and k not in optional_params
-            }
-        )
+        kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
@@ -5111,15 +5045,13 @@ class BaseLLMHTTPHandler:
         model: str,
         messages: List[Dict],
         optional_params: Dict,
-        logging_obj: "LiteLLMLoggingObj",
         kwargs: Dict,
         custom_llm_provider: str,
         depth: int,
         max_loops: int,
         fingerprints: List[str],
         fingerprint: str,
-        callback: Optional["CustomLogger"] = None,
-    ) -> object:
+    ) -> Any:
         patch = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
@@ -5132,10 +5064,9 @@ class BaseLLMHTTPHandler:
         optional_params_for_followup.update(patch.optional_params)
         if patch.tools is not None:
             optional_params_for_followup["tools"] = patch.tools
-            if "tool_choice" not in patch.optional_params:
-                optional_params_for_followup.pop("tool_choice", None)
 
         internal_params = {
+            "_websearch_interception",
             "acompletion",
             "litellm_logging_obj",
             "custom_llm_provider",
@@ -5146,75 +5077,21 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not is_interception_internal_key(
-                k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
-            )
+            if not k.startswith("_websearch_interception")
+            and not k.startswith("_compression_interception")
             and k not in internal_params
         }
-        kwargs_for_followup.update(
-            {
-                k: v
-                for k, v in patch.kwargs.items()
-                if not is_interception_internal_key(
-                    k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
-                )
-                and k not in internal_params
-                and k not in optional_params_for_followup
-            }
-        )
+        kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
-        self._add_agentic_loop_metadata(kwargs_for_followup)
 
-        try:
-            response = await litellm.acompletion(
-                model=full_model_name,
-                messages=patch.messages,
-                **optional_params_for_followup,
-                **kwargs_for_followup,
-            )
-            if callback is not None:
-                try:
-                    response = await callback.async_post_agentic_loop_response_hook(
-                        response=response, plan=plan, kwargs=kwargs
-                    )
-                except Exception as e:
-                    _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
-                    verbose_logger.exception(
-                        "LiteLLM.AgenticHookError: Exception in "
-                        "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
-                        _call_id,
-                        model,
-                        str(e),
-                    )
-            if self._should_wrap_chat_completion_response_as_fake_stream(
-                kwargs=kwargs, logging_obj=None
-            ):
-                return self._wrap_chat_completion_response_as_fake_stream(response)
-            return response
-        finally:
-            if callback is not None:
-                await self._run_agentic_loop_cleanup(
-                    callback=callback,
-                    plan=plan,
-                    kwargs=kwargs,
-                    logging_obj=logging_obj,
-                    model=model,
-                )
-
-    @staticmethod
-    def _add_agentic_loop_metadata(kwargs_for_followup: Dict) -> None:
-        metadata = kwargs_for_followup.get("litellm_metadata")
-        metadata = dict(metadata) if isinstance(metadata, dict) else {}
-        for key, value in kwargs_for_followup.items():
-            if (
-                key.startswith("_agentic_loop")
-                or key == "max_agentic_loops"
-                or is_interception_internal_key(key)
-            ):
-                metadata[key] = value
-        kwargs_for_followup["litellm_metadata"] = metadata
+        return await litellm.acompletion(
+            model=full_model_name,
+            messages=patch.messages,
+            **optional_params_for_followup,
+            **kwargs_for_followup,
+        )
 
     async def _call_agentic_completion_hooks(
         self,
@@ -5425,8 +5302,8 @@ class BaseLLMHTTPHandler:
         """
         Call agentic chat completion hooks for all custom loggers (Chat Completions API).
 
-        Prefer the shared agentic-loop hook used by Responses. Fall back to the
-        legacy chat-completion hook for callbacks that still override it.
+        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
 
         Returns the response from agentic loop, or None if no hook runs.
         """
@@ -5440,57 +5317,28 @@ class BaseLLMHTTPHandler:
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
                 continue
+            if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
+                continue
 
             should_run: bool = False
             tool_calls: Any = None
-            use_shared_agentic_hook = False
-            shared_gate_overridden = (
-                callback.__class__.async_should_run_agentic_loop
-                is not CustomLogger.async_should_run_agentic_loop
-            )
-            legacy_chat_gate_overridden = (
-                callback.__class__.async_should_run_chat_completion_agentic_loop
-                is not CustomLogger.async_should_run_chat_completion_agentic_loop
-            )
-            if not shared_gate_overridden and not legacy_chat_gate_overridden:
-                continue
-
             try:
-                if shared_gate_overridden:
-                    kwargs_with_surface = kwargs.copy() if kwargs else {}
-                    kwargs_with_surface["_agentic_loop_api_surface"] = (
-                        CHAT_COMPLETION_AGENTIC_SURFACE
-                    )
-                    should_run, tool_calls = (
-                        await callback.async_should_run_agentic_loop(
-                            response=response,
-                            model=model,
-                            messages=messages,
-                            tools=tools,
-                            stream=stream,
-                            custom_llm_provider=custom_llm_provider,
-                            kwargs=kwargs_with_surface,
-                        )
-                    )
-                    use_shared_agentic_hook = should_run
-
-                if not should_run and legacy_chat_gate_overridden:
-                    (
-                        should_run,
-                        tool_calls,
-                    ) = await callback.async_should_run_chat_completion_agentic_loop(
-                        response=response,
-                        model=model,
-                        messages=messages,
-                        tools=tools,
-                        stream=stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
-                    )
+                (
+                    should_run,
+                    tool_calls,
+                ) = await callback.async_should_run_chat_completion_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    stream=stream,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                )
             except Exception as e:
                 verbose_logger.exception(
                     "LiteLLM.AgenticHookError: Exception in "
-                    "chat completion agentic gate: %s",
+                    "async_should_run_chat_completion_agentic_loop: %s",
                     str(e),
                 )
                 continue
@@ -5511,56 +5359,12 @@ class BaseLLMHTTPHandler:
             try:
                 kwargs_with_provider = kwargs.copy() if kwargs else {}
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                if use_shared_agentic_hook:
-                    kwargs_with_provider["_agentic_loop_api_surface"] = (
-                        CHAT_COMPLETION_AGENTIC_SURFACE
-                    )
-                    build_plan_overridden = (
-                        callback.__class__.async_build_agentic_loop_plan
-                        is not CustomLogger.async_build_agentic_loop_plan
-                    )
-                    if not build_plan_overridden:
-                        return await callback.async_run_agentic_loop(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            anthropic_messages_provider_config=None,
-                            anthropic_messages_optional_request_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
-                        )
-
-                    plan = await callback.async_build_agentic_loop_plan(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        anthropic_messages_provider_config=None,
-                        anthropic_messages_optional_request_params=optional_params,
-                        logging_obj=logging_obj,
-                        stream=stream,
-                        kwargs=kwargs_with_provider,
-                    )
-                else:
-                    build_plan_overridden = (
-                        callback.__class__.async_build_chat_completion_agentic_loop_plan
-                        is not CustomLogger.async_build_chat_completion_agentic_loop_plan
-                    )
-                    if not build_plan_overridden:
-                        return await callback.async_run_chat_completion_agentic_loop(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            optional_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
-                        )
-
-                    plan = await callback.async_build_chat_completion_agentic_loop_plan(
+                build_plan_overridden = (
+                    callback.__class__.async_build_chat_completion_agentic_loop_plan
+                    is not CustomLogger.async_build_chat_completion_agentic_loop_plan
+                )
+                if not build_plan_overridden:
+                    return await callback.async_run_chat_completion_agentic_loop(
                         tools=tool_calls,
                         model=model,
                         messages=messages,
@@ -5570,6 +5374,17 @@ class BaseLLMHTTPHandler:
                         stream=stream,
                         kwargs=kwargs_with_provider,
                     )
+
+                plan = await callback.async_build_chat_completion_agentic_loop_plan(
+                    tools=tool_calls,
+                    model=model,
+                    messages=messages,
+                    response=response,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=stream,
+                    kwargs=kwargs_with_provider,
+                )
 
                 if plan.response_override is not None:
                     return plan.response_override
@@ -5588,61 +5403,48 @@ class BaseLLMHTTPHandler:
                     model=model,
                     messages=messages,
                     optional_params=optional_params,
-                    logging_obj=logging_obj,
                     kwargs=kwargs_with_provider,
                     custom_llm_provider=custom_llm_provider,
                     depth=depth,
                     max_loops=max_loops,
                     fingerprints=fingerprints,
                     fingerprint=fingerprint,
-                    callback=callback,
                 )
             except Exception as e:
                 verbose_logger.exception(
                     f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {str(e)}"
                 )
 
-        if self._should_wrap_chat_completion_response_as_fake_stream(
-            kwargs=kwargs, logging_obj=logging_obj
-        ):
-            verbose_logger.debug(
-                "Agentic interception: converting non-streaming chat completion to fake stream"
+        # Check if we need to convert response to fake stream for chat completions
+        # This happens when:
+        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 2. No agentic loop ran (LLM didn't use the tool)
+        # 3. We have a non-streaming response that needs to be converted to streaming
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get(
+                "websearch_interception_converted_stream", False
             )
-            return self._wrap_chat_completion_response_as_fake_stream(response)
+            if logging_obj is not None
+            else False
+        )
+
+        if websearch_converted_stream:
+            from litellm._logging import verbose_logger
+            from litellm.llms.base_llm.base_model_iterator import (
+                convert_model_response_to_streaming,
+            )
+
+            verbose_logger.debug(
+                "WebSearchInterception: No tool call made, converting non-streaming chat completion to fake stream"
+            )
+
+            # Convert the non-streaming ModelResponse to a fake stream
+            if hasattr(response, "choices"):
+                # Use the existing converter for ModelResponse
+                fake_stream = convert_model_response_to_streaming(response)
+                return fake_stream
 
         return None
-
-    @staticmethod
-    def _should_wrap_chat_completion_response_as_fake_stream(
-        kwargs: dict[str, Any], logging_obj: Optional["LiteLLMLoggingObj"]
-    ) -> bool:
-        if kwargs.get("_agentic_loop_depth"):
-            return False
-        if kwargs.get("_websearch_interception_converted_stream") or kwargs.get(
-            "_code_interpreter_interception_converted_stream"
-        ):
-            return True
-        details = (
-            getattr(logging_obj, "model_call_details", {})
-            if logging_obj is not None
-            else {}
-        )
-        return bool(
-            details.get("websearch_interception_converted_stream")
-            or details.get("code_interpreter_interception_converted_stream")
-        )
-
-    @staticmethod
-    def _wrap_chat_completion_response_as_fake_stream(response: object) -> object:
-        if getattr(response, "object", None) == "chat.completion.chunk":
-            return response
-        if not hasattr(response, "choices"):
-            return response
-        from litellm.llms.base_llm.base_model_iterator import (
-            convert_model_response_to_streaming,
-        )
-
-        return convert_model_response_to_streaming(cast(ModelResponse, response))
 
     def _handle_error(
         self,

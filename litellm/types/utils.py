@@ -3148,8 +3148,19 @@ class CustomPricingLiteLLMParams(BaseModel):
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
 
+agentic_loop_internal_litellm_params = [
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_agentic_loop_api_surface",
+    "max_agentic_loops",
+    "_code_interpreter_interception_active",
+    "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_converted_stream",
+]
+
 all_litellm_params = (
-    [
+    agentic_loop_internal_litellm_params
+    + [
         "metadata",
         "litellm_metadata",
         "litellm_trace_id",

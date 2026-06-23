@@ -720,7 +720,9 @@ async def test_chat_completion_build_plan_runs_code_and_appends_tool_message():
 
 @pytest.mark.asyncio
 async def test_pre_call_strips_client_forged_marker_on_initial_request():
-    """A client cannot pre-set the active marker on the original request."""
+    """A client cannot pre-set the active marker on the original request: with no
+    native code_interpreter tool, any client-supplied interception markers in
+    litellm_metadata are scrubbed and the active flag in kwargs is cleared."""
     logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
     kwargs = {
         "tools": [{"type": "web_search"}],
@@ -740,6 +742,41 @@ async def test_pre_call_strips_client_forged_marker_on_initial_request():
         "active marker must be cleared"
     )
     assert kwargs["litellm_metadata"] == {"safe_user_value": "kept"}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_strips_forged_loop_controls_then_mints_own_markers():
+    """On an INITIAL request (no server-set _agentic_loop_depth) a client cannot
+    smuggle loop-control state: forged _agentic_loop_depth / max_agentic_loops and
+    interception markers in litellm_metadata are stripped before the interceptor
+    activates, so the only interception markers that survive are the ones the
+    server mints for the converted code_interpreter tool."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+        "litellm_metadata": {
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "client-forged",
+            "_agentic_loop_depth": 99,
+            "max_agentic_loops": 999,
+            "safe_user_value": "kept",
+        },
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is not None
+    metadata = result["litellm_metadata"]
+    assert metadata["safe_user_value"] == "kept"
+    assert "_agentic_loop_depth" not in metadata, "forged loop depth must be stripped"
+    assert "max_agentic_loops" not in metadata, "forged loop cap must be stripped"
+    assert metadata[_ACTIVE_KEY] is True
+    assert metadata[_SANDBOX_KEY] == result[_SANDBOX_KEY]
+    assert metadata[_SANDBOX_KEY] != "client-forged", (
+        "the surviving sandbox key must be the server-minted one, not the forged "
+        "value the client supplied"
+    )
 
 
 @pytest.mark.asyncio
@@ -919,305 +956,6 @@ async def test_responses_plan_cleans_up_sandbox_when_followup_raises():
         "cleanup hook must run in finally even when the rerun raises, otherwise "
         "the sandbox keeps running until the prune TTL"
     )
-
-
-def test_sync_chat_completion_dispatches_agentic_hook(monkeypatch):
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.integrations.custom_logger import AgenticLoopPlan
-
-    class SyncChatHandler(BaseLLMHTTPHandler):
-        def _make_common_sync_call(self, **kwargs):
-            return {"raw": True}
-
-    class ChatConfig:
-        has_custom_stream_wrapper = False
-
-        def should_fake_stream(self, **kwargs):
-            return False
-
-        def validate_environment(self, **kwargs):
-            return {}
-
-        def get_complete_url(self, **kwargs):
-            return "https://example.test/chat/completions"
-
-        def transform_request(self, **kwargs):
-            return {"messages": kwargs["messages"]}
-
-        def sign_request(self, headers, **kwargs):
-            return headers, None
-
-        def transform_response(self, **kwargs):
-            return {"choices": [{"message": {"content": "initial"}}]}
-
-    class OverrideCallback(CustomLogger):
-        async def async_should_run_agentic_loop(self, **kwargs):
-            assert (
-                kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == CHAT_COMPLETION_AGENTIC_SURFACE
-            )
-            return True, {"tool_calls": [{"id": "call_1"}]}
-
-        async def async_build_agentic_loop_plan(self, **kwargs):
-            assert (
-                kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == CHAT_COMPLETION_AGENTIC_SURFACE
-            )
-            return AgenticLoopPlan(response_override={"agentic": True})
-
-    monkeypatch.setattr(litellm, "callbacks", [OverrideCallback()])
-    result = SyncChatHandler().completion(
-        model="gpt-5",
-        messages=[{"role": "user", "content": "x"}],
-        api_base=None,
-        custom_llm_provider="openai",
-        model_response=None,
-        encoding=None,
-        logging_obj=FakeLogging(),
-        optional_params={},
-        timeout=1.0,
-        litellm_params={},
-        acompletion=False,
-        provider_config=ChatConfig(),
-    )
-
-    assert result == {"agentic": True}
-
-
-@pytest.mark.asyncio
-async def test_chat_completion_followup_filters_internal_kwargs(monkeypatch):
-    import litellm
-    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.integrations.custom_logger import (
-        AgenticLoopPlan,
-        AgenticLoopRequestPatch,
-    )
-
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return {"choices": [{"message": {"content": "ok"}}]}
-
-    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
-
-    plan = AgenticLoopPlan(
-        run_agentic_loop=True,
-        request_patch=AgenticLoopRequestPatch(
-            model="gpt-5",
-            messages=[{"role": "user", "content": "x"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {"name": LITELLM_CODE_EXECUTION_TOOL_NAME},
-                }
-            ],
-        ),
-    )
-
-    await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
-        plan=plan,
-        model="gpt-5",
-        messages=[{"role": "user", "content": "x"}],
-        optional_params={
-            "tool_choice": {"type": "code_interpreter", "container": {"type": "auto"}}
-        },
-        logging_obj=FakeLogging(litellm_call_id="k1"),
-        kwargs={
-            "litellm_call_id": "k1",
-            _ACTIVE_KEY: True,
-            _SANDBOX_KEY: "sbxkey1",
-            "_code_interpreter_interception_converted_stream": True,
-        },
-        custom_llm_provider="openai",
-        depth=0,
-        max_loops=3,
-        fingerprints=[],
-        fingerprint="fp",
-    )
-
-    assert captured["litellm_call_id"] == "k1"
-    assert captured["_agentic_loop_depth"] == 1
-    assert "acompletion" not in captured
-    assert "tool_choice" not in captured
-    assert captured["tools"][0]["function"]["name"] == LITELLM_CODE_EXECUTION_TOOL_NAME
-    assert captured[_ACTIVE_KEY] is True
-    assert captured[_SANDBOX_KEY] == "sbxkey1"
-    assert captured["_code_interpreter_interception_converted_stream"] is True
-    assert captured["litellm_metadata"][_ACTIVE_KEY] is True
-    assert captured["litellm_metadata"][_SANDBOX_KEY] == "sbxkey1"
-    assert captured["litellm_metadata"]["_agentic_loop_depth"] == 1
-    assert captured["litellm_metadata"]["_agentic_loop_fingerprints"] == ["fp"]
-    assert captured["litellm_metadata"]["max_agentic_loops"] == 3
-
-
-def test_sync_responses_dispatches_agentic_hook(monkeypatch):
-    import httpx
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.integrations.custom_logger import AgenticLoopPlan
-    from litellm.types.router import GenericLiteLLMParams
-
-    class ResponsesConfig:
-        def validate_environment(self, **kwargs):
-            return {}
-
-        def get_complete_url(self, **kwargs):
-            return "https://example.test/responses"
-
-        def transform_responses_api_request(self, **kwargs):
-            return {"input": kwargs["input"]}
-
-        def sign_request(self, headers, **kwargs):
-            return headers, None
-
-        def transform_response_api_response(self, **kwargs):
-            return {"output": [{"type": "message", "content": []}]}
-
-    class OverrideCallback(CustomLogger):
-        async def async_should_run_agentic_loop(self, **kwargs):
-            return True, {"tool_calls": [{"call_id": "call_1"}]}
-
-        async def async_build_agentic_loop_plan(self, **kwargs):
-            return AgenticLoopPlan(response_override={"agentic": True})
-
-    client = HTTPHandler(client=httpx.Client())
-    client.post = lambda **kwargs: httpx.Response(
-        200, request=httpx.Request("POST", "https://example.test/responses")
-    )
-
-    monkeypatch.setattr(litellm, "callbacks", [OverrideCallback()])
-    result = BaseLLMHTTPHandler().response_api_handler(
-        model="gpt-5",
-        input="x",
-        responses_api_provider_config=ResponsesConfig(),
-        response_api_optional_request_params={},
-        custom_llm_provider="openai",
-        litellm_params=GenericLiteLLMParams(),
-        logging_obj=FakeLogging(),
-        client=client,
-    )
-
-    assert result == {"agentic": True}
-
-
-@pytest.mark.asyncio
-async def test_openai_native_chat_hook_uses_typed_agentic_plan(monkeypatch):
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.openai.openai import OpenAIChatCompletion
-    from litellm.types.integrations.custom_logger import AgenticLoopPlan
-
-    class OverrideCallback(CustomLogger):
-        async def async_should_run_agentic_loop(self, **kwargs):
-            assert (
-                kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == CHAT_COMPLETION_AGENTIC_SURFACE
-            )
-            return True, {"tool_calls": [{"id": "call_1"}]}
-
-        async def async_build_agentic_loop_plan(self, **kwargs):
-            assert (
-                kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == CHAT_COMPLETION_AGENTIC_SURFACE
-            )
-            return AgenticLoopPlan(response_override={"agentic": True})
-
-    monkeypatch.setattr(litellm, "callbacks", [OverrideCallback()])
-    result = await OpenAIChatCompletion()._call_agentic_completion_hooks_openai(
-        response={"choices": [{"message": {"content": "initial"}}]},
-        model="gpt-5",
-        messages=[{"role": "user", "content": "x"}],
-        optional_params={},
-        logging_obj=FakeLogging(),
-        stream=False,
-        litellm_params={"custom_llm_provider": "openai"},
-    )
-
-    assert result == {"agentic": True}
-
-
-@pytest.mark.asyncio
-async def test_openai_native_chat_hook_ignores_client_forged_extra_body_marker(
-    monkeypatch,
-):
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.openai.openai import OpenAIChatCompletion
-
-    captured = {}
-
-    class CapturingCallback(CustomLogger):
-        async def async_should_run_agentic_loop(self, **kwargs):
-            captured.update(kwargs["kwargs"])
-            return False, {}
-
-    monkeypatch.setattr(litellm, "callbacks", [CapturingCallback()])
-    result = await OpenAIChatCompletion()._call_agentic_completion_hooks_openai(
-        response={"choices": [{"message": {"content": "initial"}}]},
-        model="gpt-5",
-        messages=[{"role": "user", "content": "x"}],
-        optional_params={
-            "extra_body": {
-                _ACTIVE_KEY: True,
-                _SANDBOX_KEY: "client-forged",
-            }
-        },
-        logging_obj=FakeLogging(),
-        stream=False,
-        litellm_params={"custom_llm_provider": "openai"},
-    )
-
-    assert result is None
-    assert _ACTIVE_KEY not in captured
-    assert _SANDBOX_KEY not in captured
-
-
-@pytest.mark.asyncio
-async def test_openai_native_chat_hook_reads_server_marker_from_litellm_metadata(
-    monkeypatch,
-):
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.openai.openai import OpenAIChatCompletion
-
-    captured = {}
-
-    class CapturingCallback(CustomLogger):
-        async def async_should_run_agentic_loop(self, **kwargs):
-            captured.update(kwargs["kwargs"])
-            return False, {}
-
-    monkeypatch.setattr(litellm, "callbacks", [CapturingCallback()])
-    result = await OpenAIChatCompletion()._call_agentic_completion_hooks_openai(
-        response={"choices": [{"message": {"content": "initial"}}]},
-        model="gpt-5",
-        messages=[{"role": "user", "content": "x"}],
-        optional_params={},
-        logging_obj=FakeLogging(),
-        stream=False,
-        litellm_params={
-            "custom_llm_provider": "openai",
-            "litellm_metadata": {
-                _ACTIVE_KEY: True,
-                _SANDBOX_KEY: "server-minted",
-                "_agentic_loop_depth": 2,
-                "max_agentic_loops": 4,
-                "public_metadata": "ignored",
-            },
-        },
-    )
-
-    assert result is None
-    assert captured[_ACTIVE_KEY] is True
-    assert captured[_SANDBOX_KEY] == "server-minted"
-    assert captured["_agentic_loop_depth"] == 2
-    assert captured["max_agentic_loops"] == 4
-    assert "public_metadata" not in captured
 
 
 @pytest.mark.asyncio

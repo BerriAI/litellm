@@ -15,6 +15,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
 
 class TestOpenAIGPTConfig:
@@ -705,37 +706,6 @@ class TestCacheControlPreservationForCustomEndpoint:
             "openai", "http://localhost:4000/v1", optional_params={"tools": tools}
         )
         assert "cache_control" in body["tools"][0]
-
-    def test_transform_request_strips_code_interpreter_internal_params(self):
-        body = self.config.transform_request(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "hi"}],
-            optional_params={
-                "temperature": 0,
-                "_code_interpreter_interception_active": True,
-                "_code_interpreter_interception_sandbox_key": "sbxkey1",
-                "_agentic_loop_depth": 1,
-                "_agentic_loop_fingerprints": ["fp"],
-                "max_agentic_loops": 3,
-                "extra_body": {
-                    "_code_interpreter_interception_active": True,
-                    "_code_interpreter_interception_sandbox_key": "sbxkey1",
-                    "_agentic_loop_depth": 1,
-                    "_agentic_loop_fingerprints": ["fp"],
-                    "max_agentic_loops": 3,
-                },
-            },
-            litellm_params={"custom_llm_provider": "openai", "api_base": None},
-            headers={},
-        )
-
-        assert body["temperature"] == 0
-        assert "_code_interpreter_interception_active" not in body
-        assert "_code_interpreter_interception_sandbox_key" not in body
-        assert "_agentic_loop_depth" not in body
-        assert "_agentic_loop_fingerprints" not in body
-        assert "max_agentic_loops" not in body
-        assert "extra_body" not in body
 
     @pytest.mark.asyncio
     async def test_async_transform_request_preserves_for_custom_api_base(self):
