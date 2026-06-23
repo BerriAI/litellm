@@ -1197,6 +1197,136 @@ class TestListMCPServers:
         # Non-admin viewers get no env var config at all (not even names).
         assert result.env_vars is None
 
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_sanitizes_for_view_only_admin(self):
+        """PROXY_ADMIN_VIEW_ONLY must NOT see credential-bearing fields.
+
+        It previously passed the _user_has_admin_view gate (which also grants view-only
+        admins) and only had the explicit `credentials` field cleared, leaking secrets
+        embedded in url/static_headers/env_vars. Only a FULL PROXY_ADMIN may see those.
+        This test exercises the real role helpers (no patching of the gate)."""
+        mock_server = LiteLLM_MCPServerTable.model_construct(
+            server_id="leaky-server",
+            server_name="Leaky Server",
+            alias="Leaky Server",
+            transport=MCPTransport.http,
+            url="https://leaky.example.com/mcp?api_key=sk-embedded-in-url",
+            static_headers={"Authorization": "Bearer sk-secret-header"},
+            env={"UPSTREAM_TOKEN": "sk-secret-env"},
+            env_vars=[
+                {"name": "GLOBAL_KEY", "value": "super-secret", "scope": "global"},
+            ],
+            credentials={"auth_value": "sk-explicit-credential"},
+        )
+
+        mock_prisma_client = MagicMock()
+
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="leaky-server", alias="Leaky Server"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.health_check_server = AsyncMock(return_value=mock_health_result)
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="leaky-server",
+                user_api_key_dict=mock_user_auth,
+            )
+
+        assert result.server_id == "leaky-server"
+        assert result.credentials is None
+        assert result.url is None
+        assert result.static_headers is None
+        assert result.env == {}
+        assert result.env_vars is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_full_admin_still_sees_secrets(self):
+        """the fix must not over-redact for FULL PROXY_ADMIN,
+        who needs url/static_headers/env to populate the edit form."""
+        mock_server = LiteLLM_MCPServerTable.model_construct(
+            server_id="admin-server",
+            server_name="Admin Server",
+            alias="Admin Server",
+            transport=MCPTransport.http,
+            url="https://admin.example.com/mcp",
+            static_headers={"Authorization": "Bearer sk-secret-header"},
+            credentials={"auth_value": "sk-explicit-credential"},
+        )
+
+        mock_prisma_client = MagicMock()
+
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="admin-server", alias="Admin Server"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.health_check_server = AsyncMock(return_value=mock_health_result)
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="admin-server",
+                user_api_key_dict=mock_user_auth,
+            )
+
+        # credentials field is always redacted; the rest must survive for full admin.
+        assert result.credentials is None
+        assert result.url == "https://admin.example.com/mcp"
+        assert result.static_headers == {"Authorization": "Bearer sk-secret-header"}
+
 
 class TestTeamScopedMCPServerAccess:
     """Tests for cross-team information disclosure and restricted key bypass fixes."""
@@ -3693,18 +3823,12 @@ def _server_with_env_vars(server_id: str = "srv-env"):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "user_role, expected_global_value",
-    [
-        (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
-        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
-    ],
-)
-async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
-    user_role, expected_global_value
-):
-    """Read-only admins must not receive admin-supplied global env var secrets;
-    full admins still see them so the edit form can pre-fill."""
+async def test_fetch_single_mcp_server_env_vars_full_admin_vs_view_only():
+    """full admins see admin-supplied global env var secrets so the edit
+    form can pre-fill; read-only admins now go through the non-admin sanitizer, which
+    drops env_vars entirely (the names alone, e.g. ADMIN_API_KEY, leak what secrets the
+    admin configured). Previously the view-only case merely blanked the global value
+    while keeping the names, which still leaked configuration metadata."""
     server = _server_with_env_vars()
 
     health_result = generate_mock_mcp_server_db_record(server_id=server.server_id)
@@ -3712,34 +3836,39 @@ async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
     health_result.last_health_check = datetime.now()
     health_result.health_check_error = None
 
-    with (
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=server),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
-            AsyncMock(return_value=None),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
-            AsyncMock(return_value=health_result),
-        ),
-    ):
-        result = await mgmt_endpoints.fetch_mcp_server(
-            request=_make_mock_request(),
-            server_id=server.server_id,
-            user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
-        )
+    async def _fetch(user_role):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=health_result),
+            ),
+        ):
+            return await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=server.server_id,
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+            )
 
-    by_name = {ev.name: ev for ev in result.env_vars}
-    assert by_name["ADMIN_API_KEY"].value == expected_global_value
-    # Per-user placeholders are always preserved.
+    full_admin = await _fetch(LitellmUserRoles.PROXY_ADMIN)
+    by_name = {ev.name: ev for ev in full_admin.env_vars}
+    assert by_name["ADMIN_API_KEY"].value == "super-secret"
     assert by_name["USER_TOKEN"].value == "placeholder-hint"
+
+    view_only = await _fetch(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    assert view_only.env_vars is None
+
     # The source record must never be mutated.
     assert {ev.name: ev.value for ev in server.env_vars}[
         "ADMIN_API_KEY"
@@ -3747,18 +3876,67 @@ async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "user_role, expected_global_value",
-    [
-        (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
-        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
-    ],
-)
-async def test_fetch_all_mcp_servers_redacts_global_env_for_view_only_admin(
-    user_role, expected_global_value
-):
+async def test_fetch_all_mcp_servers_env_vars_full_admin_vs_view_only():
+    """same posture as the single-server fetch. Full admins
+    keep the env var values; view-only admins get env_vars dropped via the non-admin
+    sanitizer rather than only having the global value blanked."""
     server = _server_with_env_vars()
 
+    async def _fetch_all(user_role):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_mcp_servers_unfiltered",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                None,
+            ),
+        ):
+            return await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+            )
+
+    full_admin = await _fetch_all(LitellmUserRoles.PROXY_ADMIN)
+    by_name = {ev.name: ev for ev in full_admin[0].env_vars}
+    assert by_name["ADMIN_API_KEY"].value == "super-secret"
+    assert by_name["USER_TOKEN"].value == "placeholder-hint"
+
+    view_only = await _fetch_all(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    assert view_only[0].env_vars is None
+
+    assert {ev.name: ev.value for ev in server.env_vars}[
+        "ADMIN_API_KEY"
+    ] == "super-secret"
+
+
+def _leaky_list_server() -> "LiteLLM_MCPServerTable":
+    """A server whose url/static_headers/env carry embedded secrets, for the
+    list-endpoint sanitization tests. ``model_construct`` skips validation so
+    the raw values survive verbatim."""
+    return LiteLLM_MCPServerTable.model_construct(
+        server_id="leaky-list-server",
+        server_name="Leaky List Server",
+        alias="Leaky List Server",
+        transport=MCPTransport.http,
+        url="https://leaky.example.com/mcp?api_key=sk-embedded-in-url",
+        static_headers={"Authorization": "Bearer sk-secret-header"},
+        env={"UPSTREAM_TOKEN": "sk-secret-env"},
+        env_vars=[
+            {"name": "GLOBAL_KEY", "value": "super-secret", "scope": "global"},
+        ],
+        credentials={"auth_value": "sk-explicit-credential"},
+    )
+
+
+async def _fetch_all_via_view_all(user_role: LitellmUserRoles):
+    """Drive GET /v1/mcp/server in view_all mode for the given role using the
+    real role helpers (the full-admin gate is never patched)."""
+    server = _leaky_list_server()
     with (
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
@@ -3776,13 +3954,46 @@ async def test_fetch_all_mcp_servers_redacts_global_env_for_view_only_admin(
         result = await mgmt_endpoints.fetch_all_mcp_servers(
             user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
         )
+    return server, result
 
-    by_name = {ev.name: ev for ev in result[0].env_vars}
-    assert by_name["ADMIN_API_KEY"].value == expected_global_value
-    assert by_name["USER_TOKEN"].value == "placeholder-hint"
-    assert {ev.name: ev.value for ev in server.env_vars}[
-        "ADMIN_API_KEY"
-    ] == "super-secret"
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_sanitized_for_view_only_admin():
+    """PROXY_ADMIN_VIEW_ONLY listing servers must go through the non-admin
+    sanitizer: url and static_headers cleared, env emptied, env_vars dropped.
+    A mutation swapping _user_is_full_admin() back to _user_has_admin_view()
+    (which also grants view-only admins) would return the raw url/headers and
+    fail this. The real role helpers are exercised; the gate is not patched."""
+    source, result = await _fetch_all_via_view_all(
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+
+    assert len(result) == 1
+    sanitized = result[0]
+    assert sanitized.server_id == "leaky-list-server"
+    assert sanitized.url is None
+    assert sanitized.static_headers is None
+    assert sanitized.env == {}
+    assert sanitized.env_vars is None
+    assert sanitized.credentials is None
+
+    # The source record must never be mutated by sanitization.
+    assert source.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+    assert source.static_headers == {"Authorization": "Bearer sk-secret-header"}
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_full_admin_still_sees_secrets():
+    """The view-only redaction must not over-redact for a FULL PROXY_ADMIN,
+    who needs url/static_headers to populate the edit form. Only the explicit
+    credentials field is cleared for full admins on the list endpoint."""
+    _, result = await _fetch_all_via_view_all(LitellmUserRoles.PROXY_ADMIN)
+
+    assert len(result) == 1
+    raw = result[0]
+    assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+    assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
+    assert raw.credentials is None
 
 
 def _make_env_var_server(
