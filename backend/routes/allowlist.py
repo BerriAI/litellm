@@ -83,6 +83,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Callbacks / hooks
     "/active/callbacks",
     "/callbacks",
+    "/v1/callbacks/",
     "/team_callback",
     # Alerting / email / IP allowlist
     "/alerting/",
