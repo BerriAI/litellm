@@ -261,6 +261,36 @@ def ocr(
         if dynamic_api_base:
             api_base = dynamic_api_base
 
+        # Mistral OCR is served by the native Rust engine (see litellm-rust/):
+        # provider routing + request/response translation + the upstream HTTP
+        # call all run in Rust. Auth, logging and spend tracking stay in Python
+        # via the @client decorator that wraps ocr()/aocr(). When called through
+        # aocr(), this runs inside run_in_executor, so the blocking call is off
+        # the event loop.
+        if custom_llm_provider == "mistral":
+            optional_params = {
+                p: kwargs[p]
+                for p in BaseOCRConfig().get_supported_ocr_params(model=model)
+                if p in kwargs
+            }
+            litellm_logging_obj.update_from_kwargs(
+                kwargs=kwargs,
+                model=model,
+                optional_params=optional_params,
+                litellm_params={
+                    "litellm_call_id": litellm_call_id,
+                    "api_base": api_base,
+                },
+                custom_llm_provider=custom_llm_provider,
+            )
+            return _ocr_via_rust(
+                model=model,
+                document=document,
+                api_key=api_key,
+                api_base=api_base,
+                optional_params=optional_params,
+            )
+
         # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
             ProviderConfigManager.get_provider_ocr_config(
@@ -339,6 +369,42 @@ def ocr(
 #################################################
 # Public utilities — used by the SDK and the proxy
 #################################################
+
+
+def _ocr_via_rust(
+    model: str,
+    document: Dict[str, Any],
+    api_key: Optional[str],
+    api_base: Optional[str],
+    optional_params: Dict[str, Any],
+) -> OCRResponse:
+    """
+    Run Mistral OCR through the native ``litellm_rust`` engine.
+
+    Provider routing, request/response translation and the upstream HTTP call
+    are all implemented in Rust (see ``litellm-rust/``). This replaces the Python
+    ``MistralOCRConfig`` + ``BaseLLMHTTPHandler`` path for Mistral.
+    """
+    # litellm_rust is an optional compiled extension. Import it lazily so a
+    # missing build does not break `import litellm` for non-OCR users.
+    try:
+        import litellm_rust  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ImportError(
+            "Mistral OCR is served by the native `litellm_rust` engine, which is "
+            "not installed. Build it with `maturin develop --features python` from "
+            "the `litellm-rust/` directory."
+        ) from e
+
+    result = litellm_rust.ocr(
+        model=model,
+        document=document,
+        api_key=api_key,
+        api_base=api_base,
+        optional_params=optional_params,
+    )
+    return OCRResponse(**result)
+
 
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
 

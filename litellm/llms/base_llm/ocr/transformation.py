@@ -96,10 +96,26 @@ class BaseOCRConfig:
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
-        Get supported OCR parameters for this provider.
-        Override this method in provider-specific implementations.
+        Get supported OCR parameters.
+
+        Defaults to the standard (Mistral-format) OCR parameter set, which is the
+        canonical format other providers (Azure AI, Vertex AI) inherit. Override
+        in provider-specific implementations to narrow/extend.
         """
-        return []
+        return [
+            "pages",
+            "include_image_base64",
+            "image_limit",
+            "image_min_size",
+            "bbox_annotation_format",
+            "document_annotation_format",
+            "document_annotation_prompt",
+            "extract_header",
+            "extract_footer",
+            "table_format",
+            "confidence_scores_granularity",
+            "id",
+        ]
 
     def map_ocr_params(
         self,
@@ -107,8 +123,18 @@ class BaseOCRConfig:
         optional_params: dict,
         model: str,
     ) -> dict:
-        """Map OCR parameters to provider-specific parameters."""
-        return optional_params
+        """
+        Map OCR parameters to the provider format.
+
+        The standard format accepts these parameters directly, so this just
+        filters out anything not in the supported list.
+        """
+        supported_params = self.get_supported_ocr_params(model=model)
+        mapped_params = {**optional_params}
+        for param, value in non_default_params.items():
+            if param in supported_params:
+                mapped_params[param] = value
+        return mapped_params
 
     def validate_environment(
         self,
@@ -164,9 +190,14 @@ class BaseOCRConfig:
         Returns:
             OCRRequestData with data and files fields
         """
-        raise NotImplementedError(
-            "transform_ocr_request must be implemented by provider"
-        )
+        if not isinstance(document, dict):
+            raise ValueError(f"Expected document dict, got {type(document)}")
+
+        # The standard format passes the (already-normalized) document dict
+        # through verbatim, then merges in the already-mapped optional params.
+        data: Dict[str, Any] = {"model": model, "document": document}
+        data.update(optional_params)
+        return OCRRequestData(data=data, files=None)
 
     async def async_transform_ocr_request(
         self,
@@ -209,11 +240,18 @@ class BaseOCRConfig:
         **kwargs,
     ) -> OCRResponse:
         """
-        Transform provider-specific OCR response to standard format.
-        Override in provider-specific implementations.
+        Transform a provider OCR response into the standard format.
+
+        Defaults to the standard (Mistral-format) response, where the upstream
+        body already matches OCRResponse. Override for providers that differ.
         """
-        raise NotImplementedError(
-            "transform_ocr_response must be implemented by provider"
+        response_json = raw_response.json()
+        return OCRResponse(
+            pages=response_json.get("pages", []),
+            model=response_json.get("model", model),
+            document_annotation=response_json.get("document_annotation"),
+            usage_info=response_json.get("usage_info"),
+            object="ocr",
         )
 
     async def async_transform_ocr_response(

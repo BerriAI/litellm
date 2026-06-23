@@ -309,7 +309,6 @@ if TYPE_CHECKING:
     )
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
     from litellm.llms.cohere.common_utils import CohereModelInfo
-    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 
     # Type stubs for lazy-loaded functions and classes
     from litellm.litellm_core_utils.cached_imports import (
@@ -9661,14 +9660,9 @@ class ProviderConfigManager:
                 return ReductoParseLegacyConfig()
             return None
 
-        MistralOCRConfig = getattr(sys.modules[__name__], "MistralOCRConfig")
-        PROVIDER_TO_CONFIG_MAP = {
-            litellm.LlmProviders.MISTRAL: MistralOCRConfig,
-        }
-        config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
-        if config_class is None:
-            return None
-        return config_class()
+        # Mistral OCR is served by the native litellm_rust engine, routed in
+        # litellm/ocr/main.py before reaching this resolver
+        return None
 
     @staticmethod
     def get_provider_search_config(

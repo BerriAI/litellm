@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5"]
+build-backend = "maturin"
+
+[project]
+name = "litellm_rust"
+version = "0.1.0"
+requires-python = ">=3.8"
+description = "Rust port of LiteLLM's Mistral OCR transforms (PyO3 extension)."
+
+[tool.maturin]
+features = ["python"]
+module-name = "litellm_rust"

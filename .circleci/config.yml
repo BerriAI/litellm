@@ -1044,6 +1044,27 @@ jobs:
           paths:
             - ocr_coverage.xml
             - ocr_coverage
+  rust_lint:
+    docker:
+      - image: cimg/rust:1.81.0@sha256:481ed74dedc5adf6f818141e902a8c20084e127c5f3e9f5dc06bee5646bd4624
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Rust format check
+          command: |
+            cd litellm-rust
+            cargo fmt --check
+      - run:
+          name: Clippy (pure crate + standalone server)
+          command: |
+            cd litellm-rust
+            cargo clippy --all-targets -- -D warnings
+      - run:
+          name: Clippy (PyO3 extension)
+          command: |
+            cd litellm-rust
+            PYO3_PYTHON=$(which python3) cargo clippy --lib --features python -- -D warnings
   search_testing:
     docker:
       - *python312_image
@@ -3001,6 +3022,8 @@ workflows:
       - llm_responses_api_testing:
           filters: *main_branches
       - ocr_testing:
+          filters: *main_branches
+      - rust_lint:
           filters: *main_branches
       - search_testing:
           filters: *main_branches

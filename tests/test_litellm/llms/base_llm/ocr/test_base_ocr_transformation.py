@@ -1,5 +1,9 @@
 """
-Unit tests for MistralOCRConfig transformation.
+Unit tests for BaseOCRConfig transformation.
+
+BaseOCRConfig holds the standard (Mistral-format) OCR transform logic that
+providers like Azure AI and Vertex AI inherit. (The Mistral provider itself is
+now served by the native litellm_rust engine.)
 
 Tests the supported OCR parameters and their mapping behaviour.
 No real API calls are made — all tests are fully mocked/local.
@@ -7,29 +11,29 @@ No real API calls are made — all tests are fully mocked/local.
 
 import pytest
 
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 
 
 @pytest.fixture
-def config() -> MistralOCRConfig:
-    return MistralOCRConfig()
+def config() -> BaseOCRConfig:
+    return BaseOCRConfig()
 
 
 MODEL = "mistral-ocr-latest"
 
 
 class TestGetSupportedOcrParams:
-    def test_extract_header_in_supported_params(self, config: MistralOCRConfig) -> None:
+    def test_extract_header_in_supported_params(self, config: BaseOCRConfig) -> None:
         """extract_header must be in the Mistral OCR supported params list."""
         supported = config.get_supported_ocr_params(model=MODEL)
         assert "extract_header" in supported
 
-    def test_extract_footer_in_supported_params(self, config: MistralOCRConfig) -> None:
+    def test_extract_footer_in_supported_params(self, config: BaseOCRConfig) -> None:
         """extract_footer must be in the Mistral OCR supported params list."""
         supported = config.get_supported_ocr_params(model=MODEL)
         assert "extract_footer" in supported
 
-    def test_existing_params_still_present(self, config: MistralOCRConfig) -> None:
+    def test_existing_params_still_present(self, config: BaseOCRConfig) -> None:
         """Ensure the previously supported params were not accidentally removed."""
         supported = config.get_supported_ocr_params(model=MODEL)
         for param in [
@@ -46,7 +50,7 @@ class TestGetSupportedOcrParams:
 
 
 class TestMapOcrParams:
-    def test_extract_header_passed_through(self, config: MistralOCRConfig) -> None:
+    def test_extract_header_passed_through(self, config: BaseOCRConfig) -> None:
         """extract_header=True must survive the map_ocr_params filter."""
         result = config.map_ocr_params(
             non_default_params={"extract_header": True},
@@ -55,7 +59,7 @@ class TestMapOcrParams:
         )
         assert result == {"extract_header": True}
 
-    def test_extract_footer_passed_through(self, config: MistralOCRConfig) -> None:
+    def test_extract_footer_passed_through(self, config: BaseOCRConfig) -> None:
         """extract_footer=True must survive the map_ocr_params filter."""
         result = config.map_ocr_params(
             non_default_params={"extract_footer": True},
@@ -64,7 +68,7 @@ class TestMapOcrParams:
         )
         assert result == {"extract_footer": True}
 
-    def test_extract_header_and_footer_together(self, config: MistralOCRConfig) -> None:
+    def test_extract_header_and_footer_together(self, config: BaseOCRConfig) -> None:
         """Both params can be passed together and are both forwarded."""
         result = config.map_ocr_params(
             non_default_params={"extract_header": True, "extract_footer": False},
@@ -73,7 +77,7 @@ class TestMapOcrParams:
         )
         assert result == {"extract_header": True, "extract_footer": False}
 
-    def test_unknown_param_is_dropped(self, config: MistralOCRConfig) -> None:
+    def test_unknown_param_is_dropped(self, config: BaseOCRConfig) -> None:
         """Parameters not in the supported list must be silently dropped."""
         result = config.map_ocr_params(
             non_default_params={"extract_header": True, "unsupported_param": "value"},
@@ -97,7 +101,7 @@ class TestNewSupportedParams:
         ],
     )
     def test_new_param_in_supported_list(
-        self, config: MistralOCRConfig, param_name: str
+        self, config: BaseOCRConfig, param_name: str
     ) -> None:
         supported = config.get_supported_ocr_params(model=MODEL)
         assert param_name in supported
@@ -118,7 +122,7 @@ class TestNewParamsMapOcr:
         ],
     )
     def test_new_param_passed_through(
-        self, config: MistralOCRConfig, param_name: str, param_value: str
+        self, config: BaseOCRConfig, param_name: str, param_value: str
     ) -> None:
         result = config.map_ocr_params(
             non_default_params={param_name: param_value},
@@ -148,7 +152,7 @@ class TestTransformOcrRequest:
         ],
     )
     def test_param_included_in_request_body(
-        self, config: MistralOCRConfig, param_name: str, param_value
+        self, config: BaseOCRConfig, param_name: str, param_value
     ) -> None:
         result = config.transform_ocr_request(
             model=MODEL,
@@ -161,7 +165,7 @@ class TestTransformOcrRequest:
         assert result.data["document"] == self.SAMPLE_DOCUMENT
         assert result.files is None
 
-    def test_multiple_new_params_together(self, config: MistralOCRConfig) -> None:
+    def test_multiple_new_params_together(self, config: BaseOCRConfig) -> None:
         """Multiple new params can be passed together in a single request."""
         optional_params = {
             "table_format": "html",
