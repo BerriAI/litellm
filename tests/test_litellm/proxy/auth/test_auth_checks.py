@@ -462,6 +462,9 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     # CLI session tokens carry no per-key budget; spend is enforced via the
     # shared team/user counters. The $0.25 UI session cap must not leak in.
     assert token_data.get("max_budget") is None
+    # is_session_token=True causes key_management_endpoints to use the team
+    # budget as the delegation ceiling instead of treating None as unlimited.
+    assert token_data.get("is_session_token") is True
 
     # Verify expiration time is set to 24 hours (default)
     assert "expires" in token_data
