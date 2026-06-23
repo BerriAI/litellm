@@ -1,15 +1,34 @@
+import importlib
+
 import httpx
 import pytest
 
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-from litellm.llms.mistral.ocr.rust_provider import MistralRustOcrProvider
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+import litellm
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.llms.mistral.ocr.rust_provider import (
+    MistralRustOcrProvider,
+    get_mistral_rust_ocr_provider,
+)
 from litellm.rust_bridge import loader
-from litellm.rust_bridge import ocr as rust_ocr
 from litellm.rust_bridge.ocr import providers
-from litellm.rust_bridge.ocr.config import RustOCRProviderConfig
+
+ocr_main = importlib.import_module("litellm.ocr.main")
 
 MODEL = "mistral-ocr-latest"
+SUPPORTED_PARAMS = {
+    "pages",
+    "include_image_base64",
+    "image_limit",
+    "image_min_size",
+    "bbox_annotation_format",
+    "document_annotation_format",
+    "document_annotation_prompt",
+    "extract_header",
+    "extract_footer",
+    "table_format",
+    "confidence_scores_granularity",
+    "id",
+}
 DOCUMENT = {
     "type": "document_url",
     "document_url": "https://example.com/doc.pdf",
@@ -36,7 +55,7 @@ class _FakeRustModule:
             return {
                 key: value
                 for key, value in payload["non_default_params"].items()
-                if key != "unsupported_param"
+                if key in SUPPORTED_PARAMS
             }
         if operation == "transform_request":
             return {
@@ -59,31 +78,34 @@ class _FakeRustModule:
         raise AssertionError(f"Unexpected operation: {operation}")
 
 
-class _FakeLoggingObj:
-    pass
+class _FakeHTTPClient:
+    def __init__(self):
+        self.requests = []
 
-
-class _InheritedMistralOCRConfig(MistralOCRConfig):
-    pass
+    def post(self, url, headers, json, timeout):
+        self.requests.append(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "pages": [{"index": 0, "markdown": "hello"}],
+                "model": "mistral-ocr-2505-completion",
+                "document_annotation": None,
+                "usage_info": {"pages_processed": 1},
+            },
+        )
 
 
 def test_mistral_rust_ocr_provider_enum_is_owned_by_mistral():
     assert MistralRustOcrProvider.MISTRAL.value == "mistral"
-    assert (
-        MistralOCRConfig().get_rust_ocr_provider(model=MODEL)
-        == MistralRustOcrProvider.MISTRAL.value
-    )
-
-
-def test_inherited_mistral_ocr_provider_uses_python_fallback():
-    fallback_config = _InheritedMistralOCRConfig()
-
-    config = rust_ocr.get_rust_ocr_provider_config(
-        model=MODEL,
-        fallback_config=fallback_config,
-    )
-
-    assert config is fallback_config
+    assert get_mistral_rust_ocr_provider("mistral") == "mistral"
+    assert get_mistral_rust_ocr_provider("azure_ai") is None
 
 
 def test_rust_ocr_provider_returns_none_when_scope_disabled(monkeypatch):
@@ -119,92 +141,75 @@ def test_mistral_ocr_map_params_uses_provider_gated_rust(monkeypatch):
     assert result == {"extract_header": True}
 
 
-def test_mistral_ocr_provider_wrapper_uses_rust_when_enabled(monkeypatch):
-    loader.set_rust_core_enabled("ocr:mistral")
+def test_litellm_rust_ocr_calls_rust_bridge(monkeypatch):
+    fake_client = _FakeHTTPClient()
     monkeypatch.setattr(loader, "_load_rust_module", lambda: _FakeRustModule)
+    monkeypatch.setattr(ocr_main, "_get_httpx_client", lambda: fake_client)
 
-    config = rust_ocr.get_rust_ocr_provider_config(
-        model=MODEL,
-        fallback_config=MistralOCRConfig(),
-    )
-
-    assert isinstance(config, BaseOCRConfig)
-    assert isinstance(config, RustOCRProviderConfig)
-
-    request = config.transform_ocr_request(
-        model=MODEL,
+    response = litellm.rust_ocr(
+        model="mistral/mistral-ocr-latest",
         document=DOCUMENT,
-        optional_params={"include_image_base64": True},
-        headers={},
-    )
-    assert request.data == {
-        "model": MODEL,
-        "document": DOCUMENT,
-        "include_image_base64": True,
-    }
-    assert request.files is None
-
-    response = config.transform_ocr_response(
-        model=MODEL,
-        raw_response=httpx.Response(
-            200,
-            json={
-                "pages": [{"index": 0, "markdown": "hello"}],
-                "model": "mistral-ocr-2505-completion",
-                "document_annotation": None,
-                "usage_info": {"pages_processed": 1},
-            },
-        ),
-        logging_obj=_FakeLoggingObj(),
+        api_key="test-key",
+        pages=[0],
+        include_image_base64=False,
+        unsupported_param="drop",
     )
 
     assert response.pages[0].index == 0
     assert response.model == "mistral-ocr-2505-completion"
     assert response.usage_info.pages_processed == 1
-
-
-def test_mistral_ocr_provider_wrapper_falls_back_when_rust_module_missing(
-    monkeypatch,
-):
-    loader.set_rust_core_enabled("ocr:mistral")
-    monkeypatch.setattr(loader, "_load_rust_module", lambda: None)
-
-    config = rust_ocr.get_rust_ocr_provider_config(
-        model=MODEL,
-        fallback_config=MistralOCRConfig(),
-    )
-
-    result = config.transform_ocr_request(
-        model=MODEL,
-        document=DOCUMENT,
-        optional_params={"include_image_base64": True},
-        headers={},
-    )
-
-    assert result.data == {
+    assert len(fake_client.requests) == 1
+    request = fake_client.requests[0]
+    assert request["url"] == "https://api.mistral.ai/v1/ocr"
+    assert request["headers"] == {"Authorization": "Bearer test-key"}
+    assert request["json"] == {
         "model": MODEL,
         "document": DOCUMENT,
-        "include_image_base64": True,
+        "pages": [0],
+        "include_image_base64": False,
     }
 
 
-def test_inherited_mistral_ocr_config_does_not_use_mistral_rust(monkeypatch):
+def test_litellm_ocr_routes_to_rust_when_mistral_scope_enabled(monkeypatch):
+    fake_client = _FakeHTTPClient()
     loader.set_rust_core_enabled("ocr:mistral")
     monkeypatch.setattr(loader, "_load_rust_module", lambda: _FakeRustModule)
+    monkeypatch.setattr(ocr_main, "_get_httpx_client", lambda: fake_client)
 
-    config = rust_ocr.get_rust_ocr_provider_config(
-        model=MODEL,
-        fallback_config=_InheritedMistralOCRConfig(),
+    response = litellm.ocr(
+        model="mistral/mistral-ocr-latest",
+        document=DOCUMENT,
+        api_key="test-key",
+        pages=[0],
+        include_image_base64=False,
     )
 
-    assert isinstance(config, _InheritedMistralOCRConfig)
-    result = config.map_ocr_params(
-        non_default_params={
-            "extract_header": True,
-            "unsupported_param": "value",
-        },
-        optional_params={},
-        model=MODEL,
+    assert response.pages[0].markdown == "hello"
+    assert len(fake_client.requests) == 1
+
+
+def test_litellm_ocr_uses_python_path_when_rust_scope_disabled(monkeypatch):
+    fake_client = _FakeHTTPClient()
+    monkeypatch.setattr(ocr_main, "_get_httpx_client", lambda: fake_client)
+    monkeypatch.setattr(
+        ocr_main.base_llm_http_handler,
+        "ocr",
+        lambda **kwargs: OCRResponse(
+            pages=[{"index": 0, "markdown": "python"}],
+            model="mistral-ocr-2505-completion",
+            document_annotation=None,
+            usage_info={"pages_processed": 1},
+            object="ocr",
+        ),
     )
 
-    assert result == {"extract_header": True}
+    response = litellm.ocr(
+        model="mistral/mistral-ocr-latest",
+        document=DOCUMENT,
+        api_key="test-key",
+        pages=[0],
+        include_image_base64=False,
+    )
+
+    assert response.pages[0].markdown == "python"
+    assert fake_client.requests == []

@@ -101,12 +101,6 @@ class BaseOCRConfig:
         """
         return []
 
-    def get_rust_ocr_provider(self, model: str) -> Optional[str]:
-        """
-        Return the Rust OCR provider id for providers that explicitly opt in.
-        """
-        return None
-
     def map_ocr_params(
         self,
         non_default_params: dict,

@@ -1,14 +1,14 @@
 import importlib
 from functools import lru_cache
 from types import ModuleType
-from typing import Any, Iterable, Optional, Union
+from typing import Any, Iterable, Union
 
 _enabled_rust_core_scopes: set[str] = set()
 _rust_core_strict = False
 
 
 @lru_cache(maxsize=1)
-def _load_rust_module() -> Optional[ModuleType]:
+def _load_rust_module() -> ModuleType | None:
     try:
         return importlib.import_module("litellm_python_bridge")
     except Exception:
@@ -48,7 +48,7 @@ def set_rust_core_strict(enabled: bool) -> None:
     _rust_core_strict = enabled
 
 
-def call_rust_function(function_name: str, *args: Any) -> Optional[Any]:
+def call_rust_function(function_name: str, *args: Any) -> Any | None:
     module = _load_rust_module()
     if module is None:
         return None

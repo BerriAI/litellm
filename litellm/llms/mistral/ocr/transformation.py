@@ -13,7 +13,6 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRRequestData,
     OCRResponse,
 )
-from litellm.llms.mistral.ocr.rust_provider import get_mistral_rust_ocr_provider
 from litellm.secret_managers.main import get_secret_str
 
 
@@ -26,9 +25,6 @@ class MistralOCRConfig(BaseOCRConfig):
 
     def __init__(self) -> None:
         super().__init__()
-
-    def get_rust_ocr_provider(self, model: str) -> Optional[str]:
-        return get_mistral_rust_ocr_provider(type(self))
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
