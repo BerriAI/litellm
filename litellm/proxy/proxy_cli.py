@@ -857,9 +857,20 @@ class ProxyInitializationHelpers:
     is_flag=True,
     default=False,
     help=(
-        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
-        "path that can cause schema thrashing during rolling deploys where two "
-        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+        "Deprecated and ignored: the v2 migration resolver is now the default, "
+        "so this flag has no effect. It is still accepted for backwards "
+        "compatibility. Pass --use_legacy_migration_resolver to opt back into v1."
+    ),
+)
+@click.option(
+    "--use_legacy_migration_resolver",
+    is_flag=True,
+    default=False,
+    help=(
+        "Fall back to the legacy v1 migration resolver. By default the proxy "
+        "uses the v2 resolver, which avoids the diff-and-force recovery path "
+        "that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB."
     ),
 )
 @click.option(
@@ -915,6 +926,7 @@ def run_server(
     max_requests_before_restart_jitter: Optional[int],
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
+    use_legacy_migration_resolver: bool,
     reload: bool,
 ):
     if cli_args:
@@ -1250,6 +1262,14 @@ def run_server(
                     should_update_prisma_schema,
                 )
 
+                if use_v2_migration_resolver:
+                    print(
+                        "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is deprecated "
+                        "and has no effect — the v2 migration resolver is now the default. "
+                        "You can safely remove the flag. To opt back into the legacy v1 "
+                        "resolver, pass --use_legacy_migration_resolver.\033[0m"
+                    )
+
                 if (
                     should_update_prisma_schema(
                         general_settings.get("disable_prisma_schema_update")
@@ -1258,23 +1278,24 @@ def run_server(
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not use_v2_migration_resolver:
+                    if use_legacy_migration_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
-                            "If your deployment has seen schema thrashing during rolling "
-                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
-                            "diff-and-force recovery that caused the thrash).\033[0m"
+                            "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration resolver "
+                            "via --use_legacy_migration_resolver. The default v2 resolver is safer: "
+                            "it avoids the diff-and-force recovery that caused schema thrashing "
+                            "during rolling deploys.\033[0m"
                         )
                     try:
                         setup_ok = PrismaManager.setup_database(
                             use_migrate=not use_prisma_db_push,
-                            use_v2_resolver=use_v2_migration_resolver,
+                            use_v2_resolver=not use_legacy_migration_resolver,
                         )
                     except RuntimeError as e:
-                        # v2 resolver raises on unrecoverable migration errors
-                        # (e.g. non-idempotent failures, permission issues).
-                        # v1 never raises here, so this only fires when the
-                        # operator opted into v2.
+                        # v2 resolver (the default) raises on unrecoverable
+                        # migration errors (e.g. non-idempotent failures,
+                        # permission issues). v1 never raises here, so this only
+                        # fires unless the operator opted into v1 via
+                        # --use_legacy_migration_resolver.
                         print(
                             "\033[1;31mLiteLLM Proxy: Database migration cannot proceed. "
                             f"{e}\033[0m",

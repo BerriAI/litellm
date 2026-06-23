@@ -1620,8 +1620,40 @@ class TestRunServerDbSetup:
             # errors in CI environments (Click 8.3.x stream lifecycle issue).
 
             # Test 1: Without --use_prisma_db_push flag (default behavior)
-            # use_prisma_db_push should be False (default), so use_migrate should be True
+            # use_prisma_db_push should be False (default), so use_migrate should be True.
+            # The v2 migration resolver is now the default, so use_v2_resolver should be True.
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            mock_setup_database.assert_called_with(
+                use_migrate=True, use_v2_resolver=True
+            )
+
+            # Reset mocks
+            mock_setup_database.reset_mock()
+            mock_should_update_schema.reset_mock()
+            mock_should_update_schema.return_value = True
+
+            # Test 2: With --use_prisma_db_push flag set
+            # use_prisma_db_push should be True, so use_migrate should be False.
+            # The resolver default is unchanged by db_push, so use_v2_resolver stays True.
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_prisma_db_push"],
+                standalone_mode=False,
+            )
+            mock_setup_database.assert_called_with(
+                use_migrate=False, use_v2_resolver=True
+            )
+
+            # Reset mocks
+            mock_setup_database.reset_mock()
+            mock_should_update_schema.reset_mock()
+            mock_should_update_schema.return_value = True
+
+            # Test 3: With --use_legacy_migration_resolver flag set
+            # The operator opts back into the legacy resolver, so use_v2_resolver should be False.
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_legacy_migration_resolver"],
+                standalone_mode=False,
+            )
             mock_setup_database.assert_called_with(
                 use_migrate=True, use_v2_resolver=False
             )
@@ -1631,14 +1663,15 @@ class TestRunServerDbSetup:
             mock_should_update_schema.reset_mock()
             mock_should_update_schema.return_value = True
 
-            # Test 2: With --use_prisma_db_push flag set
-            # use_prisma_db_push should be True, so use_migrate should be False
+            # Test 4: With the deprecated --use_v2_migration_resolver flag set
+            # It is still accepted for backwards compatibility (no startup error)
+            # and is a no-op: v2 is the default, so use_v2_resolver stays True.
             run_server.main(
-                ["--local", "--skip_server_startup", "--use_prisma_db_push"],
+                ["--local", "--skip_server_startup", "--use_v2_migration_resolver"],
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -1705,7 +1738,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
