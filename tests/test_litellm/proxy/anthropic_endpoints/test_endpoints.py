@@ -69,6 +69,134 @@ class TestAnthropicEndpoints(unittest.TestCase):
         )  # Called twice, once for each dict object
 
 
+class TestBlockedResponseUsage:
+    """Token usage on synthetic guardrail-blocked responses."""
+
+    def test_blocked_response_reports_nonzero_token_counts(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _get_blocked_response_usage,
+        )
+
+        # Distinct deterministic counts for the messages vs text calls so the
+        # assertions don't depend on a real tokenizer (mock-only test folder).
+        def fake_counter(*, model, messages=None, text=None):
+            return 11 if messages is not None else 7
+
+        with patch("litellm.token_counter", side_effect=fake_counter):
+            usage = _get_blocked_response_usage(
+                model="claude-3-5-sonnet-20240620",
+                messages=[{"role": "user", "content": "Tell me something harmful"}],
+                block_message="This request was blocked by a content guardrail.",
+            )
+
+        assert usage == {"input_tokens": 11, "output_tokens": 7}
+
+    def test_blocked_response_output_tokens_match_block_message(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _get_blocked_response_usage,
+        )
+
+        block_message = "Blocked: this content violates policy."
+
+        with patch("litellm.token_counter", return_value=42) as mock_counter:
+            usage = _get_blocked_response_usage(
+                model="claude-3-5-sonnet-20240620",
+                messages=[{"role": "user", "content": "hi"}],
+                block_message=block_message,
+            )
+
+        assert usage["output_tokens"] == 42
+        mock_counter.assert_any_call(
+            model="claude-3-5-sonnet-20240620", text=block_message
+        )
+
+    def test_blocked_response_input_tokens_include_system_prompt(self):
+        """The Anthropic top-level `system` field must be counted as input."""
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _get_blocked_response_usage,
+        )
+
+        with patch("litellm.token_counter", return_value=0) as mock_counter:
+            _get_blocked_response_usage(
+                model="claude-3-5-sonnet-20240620",
+                messages=[{"role": "user", "content": "hi"}],
+                block_message="blocked",
+                system="You are a helpful assistant.",
+            )
+
+        # The messages-based call must include the system prompt, prepended.
+        messages_calls = [
+            c for c in mock_counter.call_args_list if "messages" in c.kwargs
+        ]
+        assert messages_calls, "expected a messages-based token_counter call"
+        counted_messages = messages_calls[0].kwargs["messages"]
+        assert counted_messages[0] == {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        }
+
+    def test_blocked_response_usage_falls_back_to_zero_on_error(self):
+        from unittest.mock import patch
+
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _get_blocked_response_usage,
+        )
+
+        with patch(
+            "litellm.token_counter", side_effect=RuntimeError("boom")
+        ):
+            usage = _get_blocked_response_usage(
+                model="claude-3-5-sonnet-20240620",
+                messages=[{"role": "user", "content": "hi"}],
+                block_message="blocked",
+            )
+
+        assert usage == {"input_tokens": 0, "output_tokens": 0}
+
+    @pytest.mark.asyncio
+    async def test_blocked_endpoint_response_carries_real_usage(self):
+        """Drive the /v1/messages handler's ModifyResponseException branch so the
+        synthesized block response (and its usage call site) is exercised."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        exc = ModifyResponseException(
+            message="blocked by guardrail",
+            model="claude-3-5-sonnet-20240620",
+            request_data={
+                "messages": [{"role": "user", "content": "hi"}],
+                "system": "be safe",
+            },
+            guardrail_name="rubrik",
+        )
+
+        with patch.object(
+            ep, "_read_request_body", new=AsyncMock(return_value={})
+        ), patch.object(
+            ep.ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            new=AsyncMock(side_effect=exc),
+        ), patch.object(
+            proxy_server, "proxy_logging_obj"
+        ) as mock_logging, patch(
+            "litellm.token_counter", return_value=4
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert response["content"][0]["text"] == "blocked by guardrail"
+        assert response["usage"]["input_tokens"] == 4
+        assert response["usage"]["output_tokens"] == 4
+        mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 
