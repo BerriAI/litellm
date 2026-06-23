@@ -1,8 +1,10 @@
+from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import (
@@ -13,6 +15,14 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.management_endpoints.customer_endpoints import router
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
+from litellm.types.proxy.management_endpoints.customer_endpoints import (
+    BlockUsersResponse,
+    DeleteCustomersResponse,
+    UnblockUsersResponse,
+)
 
 app = FastAPI()
 
@@ -315,6 +325,93 @@ def test_customer_endpoints_error_schema_consistency(
     for key in ["message", "type", "code"]:
         assert isinstance(error1[key], str), f"error1[{key}] should be a string"
         assert isinstance(error2[key], str), f"error2[{key}] should be a string"
+
+
+EXPECTED_RESPONSE_MODELS = {
+    "/customer/block": BlockUsersResponse,
+    "/customer/unblock": UnblockUsersResponse,
+    "/customer/new": LiteLLM_EndUserTable,
+    "/customer/update": LiteLLM_EndUserTable,
+    "/customer/delete": DeleteCustomersResponse,
+    "/customer/info": LiteLLM_EndUserTable,
+    "/customer/list": List[LiteLLM_EndUserTable],
+    "/customer/daily/activity": SpendAnalyticsPaginatedResponse,
+}
+
+
+@pytest.mark.parametrize("path, expected_model", EXPECTED_RESPONSE_MODELS.items())
+def test_customer_routes_declare_response_model(path, expected_model):
+    """
+    Every public /customer/* operation must declare a typed response_model so
+    the generated OpenAPI schema documents the response body. Regression for the
+    OpenAPI response-type coverage goal: drop a response_model and this fails.
+    """
+    route = next(r for r in router.routes if isinstance(r, APIRoute) and r.path == path)
+    assert route.response_model == expected_model
+
+
+def test_customer_new_documented_in_openapi_schema():
+    """
+    The response_model must surface in the OpenAPI schema as a concrete ref, not
+    an empty/default response. This is what the coverage metric measures.
+    """
+    schema = app.openapi()["paths"]["/customer/new"]["post"]
+    json_schema = schema["responses"]["200"]["content"]["application/json"]["schema"]
+    assert json_schema["$ref"].endswith("/LiteLLM_EndUserTable")
+
+
+def test_block_customer_success_serializes_through_response_model(
+    mock_prisma_client, mock_user_api_key_auth
+):
+    """
+    /customer/block returns {"blocked_users": [<end user rows>]}. With
+    response_model=BlockUsersResponse, a shape mismatch would raise a 500
+    ResponseValidationError, so a clean 200 proves the model matches runtime output.
+    """
+    blocked_row = LiteLLM_EndUserTable(user_id="blocked-1", blocked=True)
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=blocked_row
+    )
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["blocked_users"][0]["user_id"] == "blocked-1"
+    assert body["blocked_users"][0]["blocked"] is True
+
+
+def test_delete_customer_success_serializes_through_response_model(
+    mock_prisma_client, mock_user_api_key_auth
+):
+    """
+    /customer/delete returns {"deleted_customers": <int>, "message": <str>}.
+    response_model=DeleteCustomersResponse enforces that exact shape.
+    """
+    existing = [
+        LiteLLM_EndUserTable(user_id="u1", blocked=False),
+        LiteLLM_EndUserTable(user_id="u2", blocked=False),
+    ]
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=existing
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=2)
+
+    response = client.post(
+        "/customer/delete",
+        json={"user_ids": ["u1", "u2"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted_customers": 2,
+        "message": "Successfully deleted customers with ids: ['u1', 'u2']",
+    }
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,11 @@ from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.proxy.management_endpoints.customer_endpoints import (
+    BlockUsersResponse,
+    DeleteCustomersResponse,
+    UnblockUsersResponse,
+)
 
 router = APIRouter()
 
@@ -46,6 +51,7 @@ router = APIRouter()
     "/customer/block",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=BlockUsersResponse,
 )
 async def block_user(data: BlockUsers):
     """
@@ -100,6 +106,7 @@ async def block_user(data: BlockUsers):
     "/customer/unblock",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UnblockUsersResponse,
 )
 async def unblock_user(data: BlockUsers):
     """
@@ -222,6 +229,7 @@ async def _handle_customer_object_permission_update(
     "/customer/new",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_EndUserTable,
 )
 async def new_end_user(
     data: NewCustomerRequest,
@@ -489,6 +497,7 @@ async def end_user_info(
     "/customer/update",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_EndUserTable,
 )
 @router.post(
     "/end_user/update",
@@ -697,6 +706,7 @@ async def update_end_user(
     "/customer/delete",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=DeleteCustomersResponse,
 )
 @router.post(
     "/end_user/delete",
