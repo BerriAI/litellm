@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use litellm_ai_gateway::ocr::run_ocr;
 use litellm_core::error::CoreError;
-use litellm_providers::ocr::run_ocr;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
