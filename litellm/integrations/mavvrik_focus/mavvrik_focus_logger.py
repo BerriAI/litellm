@@ -253,6 +253,19 @@ class MavvrikFocusLogger(FocusLogger):
             )
             if type(cb) is MavvrikFocusLogger
         ]
+        if not loggers and "mavvrik" in litellm.callbacks:
+            # The logger is registered as the string "mavvrik" but hasn't been
+            # instantiated yet (lazy init happens on first LLM call). Force it now
+            # so the scheduler can register the daily export job at startup.
+            from litellm.litellm_core_utils.litellm_logging import (  # noqa: PLC0415
+                _init_custom_logger_compatible_class,
+            )
+
+            instance = _init_custom_logger_compatible_class(
+                logging_integration="mavvrik"
+            )
+            if isinstance(instance, MavvrikFocusLogger):
+                loggers = [instance]
         if not loggers:
             verbose_proxy_logger.debug(
                 "No MavvrikFocusLogger registered; skipping scheduler"
