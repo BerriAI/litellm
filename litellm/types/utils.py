@@ -3148,6 +3148,19 @@ class CustomPricingLiteLLMParams(BaseModel):
     search_context_cost_per_query: Optional[Dict[str, Any]] = None
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
+    cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
+    input_cost_per_image_token: Optional[float] = None
+    input_cost_per_token_above_272k_tokens: Optional[float] = None
+    input_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_cost_per_token_above_272k_tokens: Optional[float] = None
+    output_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_vector_size: Optional[int] = None
+    ocr_cost_per_page: Optional[float] = None
+    ocr_cost_per_credit: Optional[float] = None
+    annotation_cost_per_page: Optional[float] = None
+    regional_processing_uplift_multiplier_eu: Optional[float] = None
+    regional_processing_uplift_multiplier_us: Optional[float] = None
 
 
 all_litellm_params = (
