@@ -29,6 +29,14 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
 
     max_results: int  # Optional - maximum number of results (1-20), default 10
     search_domain_filter: List[str]  # Optional - list of domains to filter (max 20)
+    search_recency_filter: str  # Optional - hour | day | week | month | year
+    search_after_date_filter: str  # Optional - publish date >= MM/DD/YYYY
+    search_before_date_filter: str  # Optional - publish date <= MM/DD/YYYY
+    last_updated_after_filter: str  # Optional - last-updated date >= MM/DD/YYYY
+    last_updated_before_filter: str  # Optional - last-updated date <= MM/DD/YYYY
+    search_language_filter: list[str]  # Optional - ISO 639-1 codes (max 20)
+    search_context_size: str  # Optional - low | medium | high
+    max_tokens: int  # Optional - max tokens across results
     max_tokens_per_page: int  # Optional - max tokens per page, default 1024
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
 
@@ -90,45 +98,33 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         Transform Search request to Perplexity API format.
 
-        Note: LiteLLM's native spec is the perplexity search spec.
-
-        There's no transformation needed for the request data.
+        Perplexity's native parameter names match LiteLLM's unified search spec,
+        so every set optional parameter is passed through as-is rather than an
+        arbitrary subset. None-valued params are omitted.
 
         https://docs.perplexity.ai/api-reference/search-post
 
         Args:
             query: Search query (string or list of strings)
-            optional_params: Optional parameters for the request
-                - max_results: Maximum number of search results (1-20)
-                - search_domain_filter: List of domains to filter (max 20)
-                - max_tokens_per_page: Max tokens per page (default 1024)
-                - country: Country code filter (e.g., 'US', 'GB', 'DE')
+            optional_params: Optional Perplexity Search API parameters, forwarded
+                as-is (e.g. max_results, search_domain_filter, country,
+                max_tokens_per_page, search_recency_filter, search_after_date_filter,
+                search_before_date_filter, last_updated_after_filter,
+                last_updated_before_filter, search_language_filter,
+                search_context_size, max_tokens)
 
         Returns:
-            Dict with typed request data following PerplexitySearchRequest spec
+            Dict with the Perplexity Search request body
         """
-        request_data: PerplexitySearchRequest = {
-            "query": query,
+        request_data: PerplexitySearchRequest = {"query": query}
+
+        forwarded = {
+            key: value
+            for key, value in optional_params.items()
+            if value is not None and key != "query"
         }
 
-        # Add optional parameters following Perplexity API spec (only if not None)
-        max_results = optional_params.get("max_results")
-        if max_results is not None:
-            request_data["max_results"] = max_results
-
-        search_domain_filter = optional_params.get("search_domain_filter")
-        if search_domain_filter is not None:
-            request_data["search_domain_filter"] = search_domain_filter
-
-        max_tokens_per_page = optional_params.get("max_tokens_per_page")
-        if max_tokens_per_page is not None:
-            request_data["max_tokens_per_page"] = max_tokens_per_page
-
-        country = optional_params.get("country")
-        if country is not None:
-            request_data["country"] = country
-
-        return dict(request_data)
+        return dict(request_data, **forwarded)
 
     def transform_search_response(
         self,
