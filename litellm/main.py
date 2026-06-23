@@ -1645,6 +1645,9 @@ def completion(  # type: ignore
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            _agentic_loop_depth=kwargs.get("_agentic_loop_depth"),
+            _agentic_loop_fingerprints=kwargs.get("_agentic_loop_fingerprints"),
+            max_agentic_loops=kwargs.get("max_agentic_loops"),
             _code_interpreter_interception_active=kwargs.get(
                 "_code_interpreter_interception_active"
             ),
