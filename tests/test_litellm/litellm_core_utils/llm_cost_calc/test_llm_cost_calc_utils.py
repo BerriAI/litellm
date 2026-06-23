@@ -1683,3 +1683,45 @@ def test_zai_glm_5_2_pricing_in_model_cost_map():
     assert model_info["litellm_provider"] == "zai"
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_prompt_caching"] is True
+
+
+
+def test_azure_gpt_realtime_mini_2025_12_15_in_model_cost_map():
+    """Test that azure/gpt-realtime-mini-2025-12-15 is present in the model cost map."""
+    from pathlib import Path
+
+    cost_map_path = Path(__file__).parent.parent.parent.parent.parent / "model_prices_and_context_window.json"
+    with open(cost_map_path) as f:
+        model_cost = json.load(f)
+
+    model = "azure/gpt-realtime-mini-2025-12-15"
+    assert model in model_cost, f"{model} not found in model cost map"
+
+    model_info = model_cost[model]
+    assert model_info["input_cost_per_token"] == 6e-07
+    assert model_info["output_cost_per_token"] == 2.4e-06
+    assert model_info["input_cost_per_audio_token"] == 1e-05
+    assert model_info["output_cost_per_audio_token"] == 2e-05
+    assert model_info["litellm_provider"] == "azure"
+    assert model_info["mode"] == "chat"
+    assert "/v1/realtime" in model_info["supported_endpoints"]
+
+
+def test_gemini_live_2_5_flash_native_audio_in_model_cost_map():
+    """Test that gemini-live-2.5-flash-native-audio is present in the model cost map."""
+    from pathlib import Path
+
+    cost_map_path = Path(__file__).parent.parent.parent.parent.parent / "model_prices_and_context_window.json"
+    with open(cost_map_path) as f:
+        model_cost = json.load(f)
+
+    model = "gemini-live-2.5-flash-native-audio"
+    assert model in model_cost, f"{model} not found in model cost map"
+
+    model_info = model_cost[model]
+    assert model_info["input_cost_per_token"] == 3e-07
+    assert model_info["output_cost_per_token"] == 2e-06
+    assert model_info["input_cost_per_audio_token"] == 3e-06
+    assert model_info["output_cost_per_audio_token"] == 1.2e-05
+    assert model_info["litellm_provider"] == "vertex_ai-language-models"
+    assert model_info["mode"] == "realtime"
