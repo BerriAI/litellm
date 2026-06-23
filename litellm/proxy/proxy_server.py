@@ -15472,8 +15472,6 @@ async def get_config():
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
-        import base64
-
         all_available_callbacks = AllCallbacks()
 
         config_data = await proxy_config.get_config()
@@ -15539,18 +15537,10 @@ async def get_config():
             _slack_vars = [
                 "SLACK_WEBHOOK_URL",
             ]
-            _slack_env_vars = {}
-            for _var in _slack_vars:
-                env_variable = environment_variables.get(_var, None)
-                if env_variable is None:
-                    _value = os.getenv("SLACK_WEBHOOK_URL", None)
-                    _slack_env_vars[_var] = _value
-                else:
-                    # decode + decrypt the value
-                    _decrypted_value = decrypt_value_helper(
-                        value=env_variable, key=_var
-                    )
-                    _slack_env_vars[_var] = _decrypted_value
+            _slack_env_vars = {
+                _var: environment_variables.get(_var) or os.getenv(_var)
+                for _var in _slack_vars
+            }
             _slack_env_vars = mask_sensitive_keys(
                 _slack_env_vars, _ALERTING_SENSITIVE_VARS
             )
@@ -15581,15 +15571,9 @@ async def get_config():
             "EMAIL_LOGO_URL",
             "EMAIL_SUPPORT_CONTACT",
         ]
-        _email_env_vars = {}
-        for _var in _email_vars:
-            env_variable = environment_variables.get(_var, None)
-            if env_variable is None:
-                _email_env_vars[_var] = None
-            else:
-                # decode + decrypt the value
-                _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
-                _email_env_vars[_var] = _decrypted_value
+        _email_env_vars = {
+            _var: environment_variables.get(_var) for _var in _email_vars
+        }
         _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
