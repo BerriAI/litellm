@@ -11199,7 +11199,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body:
-            data = _merge_extra_body_preserving_model(data, extra_body)
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -11314,7 +11314,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body:
-            data = _merge_extra_body_preserving_model(data, extra_body)
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
