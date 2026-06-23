@@ -55,7 +55,14 @@ class TritonConfig(BaseConfig):
         return {"Content-Type": "application/json"}
 
     def get_supported_openai_params(self, model: str) -> List:
-        return ["max_tokens", "max_completion_tokens"]
+        return [
+            "max_tokens",
+            "max_completion_tokens",
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+        ]
 
     def map_openai_params(
         self,
@@ -66,6 +73,18 @@ class TritonConfig(BaseConfig):
     ) -> Dict:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
+                # Triton's /generate and /infer endpoints expect `max_tokens`,
+                # so normalize `max_completion_tokens` to it instead of
+                # forwarding an unrecognized key.
+                optional_params["max_tokens"] = value
+            elif param in (
+                "temperature",
+                "top_p",
+                "frequency_penalty",
+                "presence_penalty",
+            ):
+                # These sampling params share the same name across the Triton
+                # TensorRT-LLM and vLLM backends, so forward them as-is.
                 optional_params[param] = value
         return optional_params
 
