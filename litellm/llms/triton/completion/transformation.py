@@ -204,7 +204,14 @@ class TritonGenerateConfig(TritonConfig):
             },
             "stream": bool(stream),
         }
-        data_for_triton["parameters"].update(inference_params)
+        for k, v in inference_params.items():
+            if isinstance(v, (dict, list)):
+                # Triton's `parameters` field only accepts int/bool/string values.
+                # JSON-encode nested structures (e.g. chat_template_kwargs) so they
+                # survive the round trip; backends can json.loads() them back.
+                data_for_triton["parameters"][k] = json.dumps(v)
+            else:
+                data_for_triton["parameters"][k] = v
         return data_for_triton
 
     def transform_response(

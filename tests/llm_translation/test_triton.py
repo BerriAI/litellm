@@ -371,6 +371,36 @@ async def test_triton_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_triton_generate_request_serializes_dict_params():
+    """
+    Triton's `parameters` field only accepts int/bool/string values.
+    Nested dict/list params (e.g. chat_template_kwargs, used to disable
+    thinking) must be JSON-encoded rather than forwarded as raw objects,
+    otherwise Triton rejects the request with an invalid type error.
+    """
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    data_for_triton = config.transform_request(
+        model="triton/qwen3.6-27b",
+        messages=[{"role": "user", "content": "test?"}],
+        optional_params={
+            "max_tokens": 10,
+            "temperature": 0.7,
+            "chat_template_kwargs": {"enable_thinking": False},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert data_for_triton["parameters"]["max_tokens"] == 10
+    assert data_for_triton["parameters"]["temperature"] == 0.7
+    assert isinstance(data_for_triton["parameters"]["chat_template_kwargs"], str)
+    assert json.loads(data_for_triton["parameters"]["chat_template_kwargs"]) == {
+        "enable_thinking": False
+    }
+
+
 def test_triton_generate_raw_request():
     from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
