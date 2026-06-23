@@ -986,7 +986,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_masked_api_base(additional_args.get("api_base", ""))
         )
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+    def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -2119,7 +2119,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_success_handler(result=complete_streaming_response)
         return
 
-    def success_handler(  # noqa: PLR0915
+    def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(
@@ -2584,7 +2584,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             )
 
-    async def async_success_handler(  # noqa: PLR0915
+    async def async_success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -2975,7 +2975,12 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
-        self.model_call_details["response_cost"] = 0
+        # A stream interrupted mid-flight still billed the provider for the
+        # chunks already delivered; the router stashes that recovered usage as
+        # ``combined_usage_object`` and pre-computes its cost, so preserve it
+        # here instead of zeroing the spend on an otherwise-failed request.
+        if self.model_call_details.get("combined_usage_object") is None:
+            self.model_call_details["response_cost"] = 0
 
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):
             self.model_call_details.setdefault("litellm_params", {})
@@ -3036,7 +3041,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(  # noqa: PLR0915
+    def failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -3753,7 +3758,7 @@ def _get_masked_values(
     }
 
 
-def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
+def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
@@ -3854,7 +3859,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     return None
 
 
-def _init_custom_logger_compatible_class(  # noqa: PLR0915
+def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -4611,7 +4616,7 @@ def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
         )
 
 
-def get_custom_logger_compatible_class(  # noqa: PLR0915
+def get_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     try:
@@ -5416,19 +5421,20 @@ class StandardLoggingPayloadSetup:
                     tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
                 )  # Limit to first 100 lines
 
+        # Prefer the `.message` attribute (set by ProxyException and every
+        # litellm.exceptions.* class) over str(exc); ProxyException does not
+        # call super().__init__() nor define __str__, so str() on it returns
+        # an empty string, which used to silently strip the human-readable
+        # message from spend_logs.metadata.error_information.
+        # Use isinstance, not truthiness: an explicit empty string on
+        # `.message` is a deliberate value and must not be replaced by
+        # `str(exc)`.
         explicit_message = getattr(original_exception, "message", None)
-        error_message = (
-            explicit_message
-            if isinstance(explicit_message, str) and explicit_message
-            else str(original_exception)
-        )
+        if isinstance(explicit_message, str):
+            error_message = explicit_message
+        else:
+            error_message = str(original_exception) if original_exception else ""
 
-        # Duck-typed read so bare-Exception subclasses like
-        # `litellm.BudgetExceededError` can participate without joining the
-        # RateLimitError hierarchy (which would break `except BudgetExceededError`).
-        # Validated against the enum value sets so a third-party exception that
-        # happens to declare a `.category` or `.rate_limit_type` string attribute
-        # can't leak garbage into the payload or Prometheus label cardinality.
         rate_limit_category = validate_rate_limit_category(
             getattr(original_exception, "category", None)
         )
@@ -5441,10 +5447,41 @@ class StandardLoggingPayloadSetup:
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
             traceback=traceback_info,
-            error_message=error_message if original_exception else "",
+            error_message=error_message,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
         )
+
+    @staticmethod
+    def get_error_information_for_logging_payload(
+        metadata: dict,
+        original_exception: Exception | None,
+        error_str: str | None,
+    ) -> tuple[StandardLoggingPayloadErrorInformation, str | None]:
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+        )
+        if not metadata.get("client_disconnected"):
+            return error_information, error_str
+
+        client_disconnect_error = metadata.get("error_information")
+        if isinstance(client_disconnect_error, dict):
+            error_information = cast(
+                StandardLoggingPayloadErrorInformation,
+                client_disconnect_error,
+            )
+        else:
+            error_information = cast(
+                StandardLoggingPayloadErrorInformation,
+                {
+                    "error_code": "499",
+                    "error_message": "Client disconnected the request",
+                    "error_class": "ClientDisconnected",
+                },
+            )
+        if not error_str:
+            error_str = "Client disconnected the request"
+        return error_information, error_str
 
     @staticmethod
     def get_response_time(
@@ -5773,8 +5810,12 @@ def get_standard_logging_object_payload(
             api_base=litellm_params.get("api_base"),
         )
 
-        error_information = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=original_exception,
+        error_information, error_str = (
+            StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+                metadata=metadata,
+                original_exception=original_exception,
+                error_str=error_str,
+            )
         )
 
         ## get final response object ##
@@ -5893,7 +5934,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4))  # noqa
+        print(json.dumps(payload, indent=4))  # noqa: T201
 
 
 def get_standard_logging_metadata(

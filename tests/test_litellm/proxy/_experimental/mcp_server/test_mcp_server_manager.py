@@ -2949,6 +2949,41 @@ class TestMCPServerManager:
             assert "test_server_2" in result
 
     @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_blocks_allow_all_keys(self):
+        """A key scoped to no-mcp-servers gets zero servers even when allow_all_keys
+        servers exist, and the inner resolver is never consulted."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with patch.object(
+            manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+        ), patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=["leaked-server"],
+        ) as mock_inner:
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
         """Anonymous delegated auth listing should only include oauth2 servers."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (

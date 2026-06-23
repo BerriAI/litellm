@@ -1060,7 +1060,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  # noqa: PLR0915
+async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
     """
     Test that pass_through_request (parent method) correctly includes proxy_server_request
     in kwargs passed to the success handler.
@@ -2682,15 +2682,19 @@ async def test_add_litellm_data_to_request_adds_headers_to_metadata():
         version="1.0",
     )
 
-    # Verify headers are added to metadata for guardrails
-    assert "metadata" in result, "metadata should be present in result"
-    assert "headers" in result["metadata"], "headers should be present in metadata"
+    # Verify headers are added to litellm_metadata for guardrails.
+    # Bedrock passthrough uses litellm_metadata to prevent key-level
+    # tags from leaking into the provider payload (GH#30629).
+    assert "litellm_metadata" in result, "litellm_metadata should be present in result"
+    assert (
+        "headers" in result["litellm_metadata"]
+    ), "headers should be present in litellm_metadata"
     assert isinstance(
-        result["metadata"]["headers"], dict
+        result["litellm_metadata"]["headers"], dict
     ), "headers should be a dictionary"
 
     # Verify specific headers are accessible (important for guardrails)
-    headers = result["metadata"]["headers"]
+    headers = result["litellm_metadata"]["headers"]
     assert (
         "user-agent" in headers or "User-Agent" in headers
     ), "User-Agent header should be accessible in metadata"

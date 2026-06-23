@@ -61,6 +61,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
@@ -519,7 +520,7 @@ MODEL_DISCOVERY_ROUTES = frozenset(
 )
 
 
-async def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -698,6 +699,11 @@ async def common_checks(  # noqa: PLR0915
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+                request_data=request_body,
+                route=route,
+            )
+
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
                 user_api_key_dict=valid_token,
@@ -725,6 +731,7 @@ async def common_checks(  # noqa: PLR0915
             user_spend = await get_current_spend(
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
+                max_budget=user_budget,
             )
             if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
@@ -1127,6 +1134,8 @@ async def _check_end_user_budget(
     end_user_spend = await get_current_spend(
         counter_key=f"spend:end_user:{end_user_obj.user_id}",
         fallback_spend=end_user_obj.spend or 0.0,
+        max_budget=end_user_budget,
+        fallback_authoritative=True,
     )
     if end_user_spend > end_user_budget:
         raise litellm.BudgetExceededError(
@@ -3615,6 +3624,7 @@ async def _virtual_key_max_budget_check(
         spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=fallback_spend,
+            max_budget=valid_token.max_budget,
         )
 
         ####################################
@@ -3653,9 +3663,18 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            # name the key in the error so operators don't have to reverse-map
+            # spend back to a key; key_name is the masked form (last 4 chars)
+            key_label = valid_token.key_alias or "key"
+            key_descriptor = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 
@@ -3684,6 +3703,10 @@ async def _virtual_key_multi_budget_check(
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="Key",
+            window_entity_id=valid_token.token,
+            window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
@@ -3938,6 +3961,7 @@ async def _check_team_member_budget(
             team_member_spend = await get_current_spend(
                 counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
                 fallback_spend=team_member_spend,
+                max_budget=team_member_budget,
             )
 
             if (
@@ -4023,6 +4047,7 @@ async def _team_max_budget_check(
         spend = await get_current_spend(
             counter_key=f"spend:team:{team_object.team_id}",
             fallback_spend=team_object.spend or 0.0,
+            max_budget=team_object.max_budget,
         )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
@@ -4072,6 +4097,10 @@ async def _team_multi_budget_check(
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="Team",
+            window_entity_id=team_object.team_id,
+            window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
@@ -4377,6 +4406,7 @@ async def _organization_max_budget_check(
     org_spend = await get_current_spend(
         counter_key=f"spend:org:{org_id}",
         fallback_spend=org_table.spend or 0.0,
+        max_budget=org_max_budget,
     )
 
     # Check if organization spend exceeds max budget
@@ -4454,6 +4484,8 @@ async def _tag_max_budget_check(
             tag_spend = await get_current_spend(
                 counter_key=f"spend:tag:{tag_name}",
                 fallback_spend=tag_object.spend or 0.0,
+                max_budget=tag_object.litellm_budget_table.max_budget,
+                fallback_authoritative=True,
             )
             if tag_spend <= tag_object.litellm_budget_table.max_budget:
                 continue

@@ -63,9 +63,13 @@ class MockAiohttpResponse:
     ):
         self.status = status
         self.headers = headers or {}
+        self.closed = False
         self.content = MockContent(
             content_chunks, exception_to_raise, exception_at_chunk
         )
+
+    def close(self):
+        self.closed = True
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
@@ -613,3 +617,64 @@ async def test_handle_session_closed_during_request():
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_error():
+    """
+    Regression test for #30192: when body iteration ends with an error, the
+    underlying aiohttp response must be closed so its connector slot is
+    released. Leaked slots exhaust the pool and every later request times
+    out (408) until the proxy restarts, even after the backend recovers.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2"],
+        exception_to_raise=aiohttp.ServerTimeoutError("read timeout"),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    with pytest.raises(httpx.TimeoutException):
+        async for _ in stream:
+            pass
+
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_cancellation():
+    """
+    Regression test for #30192: a task cancelled mid-stream (e.g. the caller
+    disconnects during a traffic spike) must not leak its aiohttp connection.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
+        exception_to_raise=asyncio.CancelledError(),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in stream:
+            pass
+
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_generator_exit():
+    """
+    Regression test for #30192: when the consumer stops iterating early and the
+    stream generator is closed (GeneratorExit), the underlying aiohttp response
+    must still be closed so its connector slot is released.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    iterator = stream.__aiter__()
+    assert await iterator.__anext__() == b"chunk1"
+    await iterator.aclose()
+
+    assert mock_response.closed is True

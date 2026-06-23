@@ -154,7 +154,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def get_llm_provider(  # noqa: PLR0915
+def get_llm_provider(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -334,6 +334,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "dashscope-intl.aliyuncs.com/compatible-mode/v1":
                         custom_llm_provider = "dashscope"
                         dynamic_api_key = get_secret_str("DASHSCOPE_API_KEY")
+                    elif endpoint == "https://api-inference.modelscope.cn/v1":
+                        custom_llm_provider = "modelscope"
+                        dynamic_api_key = get_secret_str("MODELSCOPE_API_KEY")
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
@@ -385,6 +388,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif endpoint == "https://pinstripes.io/v1":
+                        custom_llm_provider = "pinstripes"
+                        dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -526,11 +532,11 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "sap"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
-                print()  # noqa
-                print(  # noqa
-                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa
-                )  # noqa
-                print()  # noqa
+                print()  # noqa: T201
+                print(  # noqa: T201
+                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
+                )
+                print()  # noqa: T201
             error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
             # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
             raise litellm.exceptions.BadRequestError(  # type: ignore
@@ -565,7 +571,7 @@ def get_llm_provider(  # noqa: PLR0915
             )
 
 
-def _get_openai_compatible_provider_info(  # noqa: PLR0915
+def _get_openai_compatible_provider_info(
     model: str,
     api_base: Optional[str],
     api_key: Optional[str],
@@ -638,7 +644,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key, litellm_params=litellm_params
+            api_base, api_key, litellm_params=litellm_params, model=model
         )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
@@ -925,6 +931,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "modelscope":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ModelScopeChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "moonshot":

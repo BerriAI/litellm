@@ -967,9 +967,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               const deleteKeyCount = teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0;
               return deleteKeyCount === 0
                 ? undefined
-                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`;
+                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys, along with any models created for this team. This action is irreversible.`;
             })()}
-            message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
+            message="Are you sure you want to delete this team, all its keys, and any models created for it? This action cannot be undone."
             resourceInformationTitle="Team Information"
             resourceInformation={[
               { label: "Team ID", value: teamToDelete?.team_id, code: true },

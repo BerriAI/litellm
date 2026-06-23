@@ -1954,7 +1954,7 @@ class JWTAuthManager:
             return None, None, None
 
     @staticmethod
-    async def auth_builder(  # noqa: PLR0915
+    async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
         request_data: dict,
