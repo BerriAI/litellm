@@ -116,6 +116,9 @@ class BasePassthroughLoggingHandler(ABC):
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
+            # the pass-through success path reads spend from
+            # model_call_details["response_cost"], not from kwargs
+            logging_obj.model_call_details["response_cost"] = response_cost
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )
