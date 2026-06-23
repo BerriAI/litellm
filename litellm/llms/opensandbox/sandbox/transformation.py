@@ -6,7 +6,6 @@ from typing import Union, cast
 import httpx
 
 from litellm.constants import (
-    OPEN_SANDBOX_API_BASE,
     OPEN_SANDBOX_API_BASE_ENV_VAR,
     OPEN_SANDBOX_API_KEY_ENV_VAR,
     OPEN_SANDBOX_DEFAULT_CPU_LIMIT,
@@ -433,11 +432,13 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
 
     @staticmethod
     def _api_base(api_base: str | None) -> str:
-        return (
-            api_base
-            or get_secret_str(OPEN_SANDBOX_API_BASE_ENV_VAR)
-            or OPEN_SANDBOX_API_BASE
-        ).rstrip("/")
+        base = api_base or get_secret_str(OPEN_SANDBOX_API_BASE_ENV_VAR)
+        if not base:
+            raise ValueError(
+                "OpenSandbox api_base is required. Pass api_base or set "
+                f"{OPEN_SANDBOX_API_BASE_ENV_VAR}."
+            )
+        return str(base).rstrip("/")
 
     @staticmethod
     def _lifecycle_headers(api_key: str) -> dict[str, str]:

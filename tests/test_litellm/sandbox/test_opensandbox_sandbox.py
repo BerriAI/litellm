@@ -4,15 +4,15 @@ import httpx
 import pytest
 
 import litellm
-from litellm.constants import _parse_open_sandbox_entrypoint
 from litellm.llms.base_llm.sandbox.transformation import ContainerHandle
 from litellm.llms.opensandbox.sandbox.transformation import (
     MAX_OUTPUT_BYTES,
-    OPEN_SANDBOX_API_BASE,
     OPEN_SANDBOX_DEFAULT_TEMPLATE,
     OpenSandboxSandboxConfig,
 )
 from litellm.utils import ProviderConfigManager
+
+TEST_API_BASE = "https://sandbox.test/v1"
 
 
 def http_status_error(status_code, url="http://test"):
@@ -215,9 +215,16 @@ def test_parse_sse_lines_maps_fallback_shapes():
 
 
 def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
+    def fake_secret(key):
+        if key == "OPEN_SANDBOX_API_KEY":
+            return "env-key"
+        if key == "OPEN_SANDBOX_API_BASE":
+            return TEST_API_BASE
+        return None
+
     monkeypatch.setattr(
         "litellm.llms.opensandbox.sandbox.transformation.get_secret_str",
-        lambda key: "env-key" if key == "OPEN_SANDBOX_API_KEY" else None,
+        fake_secret,
     )
     config = OpenSandboxSandboxConfig()
     handle = ContainerHandle(id="osb", provider="opensandbox", domain="http://x/v1")
@@ -244,16 +251,6 @@ def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
     )
     assert body["networkPolicy"] == {"egress": [{"domain": "example.com"}]}
     assert body["secureAccess"] is True
-    assert _parse_open_sandbox_entrypoint('["/bin/sh", "-lc", "echo a,b"]') == (
-        "/bin/sh",
-        "-lc",
-        "echo a,b",
-    )
-    assert _parse_open_sandbox_entrypoint("/bin/sh\n-lc\necho ok") == (
-        "/bin/sh",
-        "-lc",
-        "echo ok",
-    )
 
     other_body = config._create_body(
         template=None,
@@ -275,6 +272,8 @@ def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
     assert config._endpoint_base_url("http://execd.local", "https://api/v1") == (
         "http://execd.local"
     )
+    assert config._api_base(None) == TEST_API_BASE
+    assert config._api_base("https://direct.test/v1/") == "https://direct.test/v1"
     assert config._as_int("9") == 9
     assert config._as_int("nope") is None
     assert config._as_int(None) is None
@@ -284,15 +283,27 @@ def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
     )
 
 
+def test_api_base_requires_kwarg_or_env(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.llms.opensandbox.sandbox.transformation.get_secret_str",
+        lambda key: None,
+    )
+
+    with pytest.raises(ValueError, match="api_base is required"):
+        OpenSandboxSandboxConfig._api_base(None)
+
+
 @pytest.mark.asyncio
 async def test_create_posts_default_body_and_omits_empty_api_key():
     client = FakeHTTPClient()
 
-    handle = await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", client=client)
+    handle = await OpenSandboxSandboxConfig().acreate_sandbox(
+        api_key="", api_base=TEST_API_BASE, client=client
+    )
 
     method, url, headers, body, _ = client.calls[0]
     assert method == "POST"
-    assert url == f"{OPEN_SANDBOX_API_BASE}/sandboxes"
+    assert url == f"{TEST_API_BASE}/sandboxes"
     assert "OPEN-SANDBOX-API-KEY" not in headers
     assert body["image"] == {"uri": OPEN_SANDBOX_DEFAULT_TEMPLATE}
     assert body["entrypoint"] == ["/opt/code-interpreter/code-interpreter.sh"]
@@ -308,7 +319,10 @@ async def test_create_can_opt_into_internet_access():
     client = FakeHTTPClient()
 
     await OpenSandboxSandboxConfig().acreate_sandbox(
-        api_key="", allow_internet_access=True, client=client
+        api_key="",
+        api_base=TEST_API_BASE,
+        allow_internet_access=True,
+        client=client,
     )
 
     _, _, _, body, _ = client.calls[0]
@@ -394,6 +408,7 @@ async def test_create_waits_across_pending_state(monkeypatch):
 
     handle = await OpenSandboxSandboxConfig().acreate_sandbox(
         api_key="",
+        api_base=TEST_API_BASE,
         ready_timeout=1,
         poll_interval=0.01,
         client=client,
@@ -413,7 +428,9 @@ async def test_create_raises_for_terminal_state():
     )
 
     with pytest.raises(ValueError, match="entered Failed"):
-        await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", client=client)
+        await OpenSandboxSandboxConfig().acreate_sandbox(
+            api_key="", api_base=TEST_API_BASE, client=client
+        )
 
 
 @pytest.mark.asyncio
@@ -428,6 +445,7 @@ async def test_create_times_out_waiting_for_running():
     with pytest.raises(TimeoutError, match="was not Running"):
         await OpenSandboxSandboxConfig().acreate_sandbox(
             api_key="",
+            api_base=TEST_API_BASE,
             ready_timeout=0,
             poll_interval=0,
             client=client,
@@ -438,7 +456,7 @@ async def test_create_times_out_waiting_for_running():
 async def test_create_waits_for_endpoint_resolution(monkeypatch):
     client = FakeHTTPClient(
         endpoint_responses=[
-            http_status_error(404, f"{OPEN_SANDBOX_API_BASE}/sandboxes/osb_123"),
+            http_status_error(404, f"{TEST_API_BASE}/sandboxes/osb_123"),
             {
                 "endpoint": "execd.local:44772",
                 "headers": {"X-EXECD-ACCESS-TOKEN": "execd-token"},
@@ -456,6 +474,7 @@ async def test_create_waits_for_endpoint_resolution(monkeypatch):
 
     handle = await OpenSandboxSandboxConfig().acreate_sandbox(
         api_key="",
+        api_base=TEST_API_BASE,
         ready_timeout=1,
         poll_interval=0.01,
         client=client,
@@ -473,7 +492,7 @@ async def test_create_raises_when_endpoint_is_missing():
 
     with pytest.raises(TimeoutError, match="execd endpoint.*not ready"):
         await OpenSandboxSandboxConfig().acreate_sandbox(
-            api_key="", ready_timeout=0, client=client
+            api_key="", api_base=TEST_API_BASE, ready_timeout=0, client=client
         )
 
 
@@ -482,7 +501,9 @@ async def test_create_reraises_non_404_endpoint_error():
     client = FakeHTTPClient(endpoint_responses=[http_status_error(500)])
 
     with pytest.raises(httpx.HTTPStatusError):
-        await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", client=client)
+        await OpenSandboxSandboxConfig().acreate_sandbox(
+            api_key="", api_base=TEST_API_BASE, client=client
+        )
 
 
 @pytest.mark.asyncio
@@ -585,7 +606,7 @@ async def test_public_lifecycle_create_run_delete():
     )
 
     container = await litellm.acreate_sandbox(
-        provider="opensandbox", api_key="", client=client
+        provider="opensandbox", api_key="", api_base=TEST_API_BASE, client=client
     )
     result = await litellm.arun_code(
         provider="opensandbox",
@@ -615,6 +636,7 @@ async def test_code_interpreter_tool_deletes_even_when_run_raises():
             provider="opensandbox",
             code="1/0",
             api_key="",
+            api_base=TEST_API_BASE,
             client=client,
         )
 

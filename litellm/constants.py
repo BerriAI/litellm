@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 from typing import List, Literal, Optional
@@ -204,34 +203,8 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
 XAI_API_BASE = "https://api.x.ai/v1"
 OPEN_SANDBOX_API_BASE_ENV_VAR = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR = "OPEN_SANDBOX_API_KEY"
-OPEN_SANDBOX_API_BASE = str(
-    os.getenv(OPEN_SANDBOX_API_BASE_ENV_VAR, "http://localhost:8080/v1")
-)
 OPEN_SANDBOX_DEFAULT_TEMPLATE = "opensandbox/code-interpreter:v1.1.0"
 _OPEN_SANDBOX_FALLBACK_ENTRYPOINT = "/opt/code-interpreter/code-interpreter.sh"
-
-
-def _parse_open_sandbox_entrypoint(entrypoint_env: str) -> tuple[str, ...]:
-    try:
-        parsed = json.loads(entrypoint_env)
-    except json.JSONDecodeError:
-        return tuple(
-            entrypoint.strip()
-            for entrypoint in entrypoint_env.splitlines()
-            if entrypoint.strip()
-        ) or (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
-
-    if isinstance(parsed, str):
-        return (parsed,) if parsed else (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
-    if not isinstance(parsed, list):
-        return (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
-    return tuple(
-        entrypoint
-        for entrypoint in parsed
-        if isinstance(entrypoint, str) and entrypoint
-    ) or (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
-
-
 OPEN_SANDBOX_DEFAULT_ENTRYPOINT = (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
 OPEN_SANDBOX_DEFAULT_LANGUAGE = "python"
 OPEN_SANDBOX_DEFAULT_CPU_LIMIT = "1"
