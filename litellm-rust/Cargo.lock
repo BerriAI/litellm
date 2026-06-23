@@ -563,6 +563,7 @@ dependencies = [
  "axum",
  "litellm-core",
  "litellm-router",
+ "pyo3",
  "serde",
  "serde_json",
  "tokio",
