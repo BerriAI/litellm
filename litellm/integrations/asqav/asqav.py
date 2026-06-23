@@ -10,6 +10,13 @@ Design goals (matching the on-device ask from litellm#25329):
 - Never breaks an LLM call: every code path is wrapped fail-soft.
 - Does not log message content by default; logs content digests so
   auditors can prove a payload was present without reconstructing it.
+
+Optional cloud signing: when ASQAV_API_KEY and ASQAV_AGENT_ID are set, each
+record is also signed by the asqav agent sign endpoint and the returned
+signature id / verification url are recorded onto the local line.  The cloud
+call sends only the digests the local record already computes, never raw
+content, and is fail-soft.  With the key unset the behavior is the pure local
+hash chain, unchanged.
 """
 
 from __future__ import annotations
@@ -34,6 +41,13 @@ _GENESIS_HASH = "0" * 64
 
 # Default log path; can be overridden via ASQAV_LOG_PATH.
 _DEFAULT_LOG_PATH = os.path.join(os.path.expanduser("~"), ".litellm_asqav_audit.jsonl")
+
+# Default asqav API base for the optional cloud-sign path.
+_DEFAULT_ASQAV_API_BASE = "https://api.asqav.com"
+
+# Cloud-sign request timeout (seconds). Kept short so a slow endpoint never
+# stalls the callback; any timeout falls through to the local-only record.
+_CLOUD_SIGN_TIMEOUT = 5.0
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -192,6 +206,33 @@ def _extract_loggable(
     }
 
 
+def _cloud_sign_payload(record: dict[str, Any]) -> dict[str, Any]:
+    """Build the digests-only body for the agent sign endpoint.
+
+    Binds the messages digest as the hashed payload and carries the response
+    digest plus call metadata alongside.  Raw prompt/response text is never
+    included; only digests the local record already holds.
+    """
+    messages_digest = record.get("messages_digest")
+    metadata: dict[str, Any] = {
+        "source": "litellm",
+        "call_id": record.get("call_id"),
+        "model": record.get("model"),
+        "status": record.get("status"),
+        "response_content_digest": record.get("response_content_digest"),
+        "record_hash": record.get("record_hash"),
+        "seq": record.get("seq"),
+    }
+    body: dict[str, Any] = {
+        "action_type": "litellm:completion",
+        "metadata": {k: v for k, v in metadata.items() if v is not None},
+    }
+    if messages_digest:
+        body["hash"] = f"sha256:{messages_digest}"
+        body["hash_algo"] = "sha256"
+    return body
+
+
 class AsqavLogger(CustomLogger):
     """Tamper-evident local-first audit-log callback for LiteLLM.
 
@@ -203,6 +244,16 @@ class AsqavLogger(CustomLogger):
     ASQAV_REDACT_CONTENT
         Set to "false" to store message/response content in the clear instead
         of as SHA-256 digests.  Defaults to "true" (digest only).
+
+    ASQAV_API_KEY, ASQAV_AGENT_ID
+        Set both to opt into cloud signing.  After the local record is built,
+        the digests it already holds are POSTed to the asqav agent sign
+        endpoint and the returned signature id / verification url are recorded
+        onto the local line.  With either unset, the logger is pure local hash
+        chain and never reaches the network.
+
+    ASQAV_API_BASE
+        Override the cloud-sign base URL.  Defaults to https://api.asqav.com.
 
     Multi-worker limitation: this logger is designed for a single audit writer
     per log file.  The threading.Lock serializes concurrent threads within one
@@ -228,6 +279,13 @@ class AsqavLogger(CustomLogger):
             if log_path is None
             else redact_content
         )
+
+        # Optional cloud signing. Active only when both env vars are present.
+        self._cloud_api_key: Optional[str] = os.environ.get("ASQAV_API_KEY") or None
+        self._cloud_agent_id: Optional[str] = os.environ.get("ASQAV_AGENT_ID") or None
+        self._cloud_api_base: str = (
+            os.environ.get("ASQAV_API_BASE") or _DEFAULT_ASQAV_API_BASE
+        ).rstrip("/")
 
         self._lock: threading.Lock = threading.Lock()
         self._call_count: int = 0
@@ -318,6 +376,14 @@ class AsqavLogger(CustomLogger):
                     "prev_hash": self._prev_hash,
                     **loggable,
                 }
+
+                # Opt-in cloud signing binds into the chain: the returned
+                # receipt is part of the hashed record, so verify_chain still
+                # passes and the signature cannot be swapped after the fact.
+                cloud = self._maybe_cloud_sign({**hashable, "seq": seq})
+                if cloud is not None:
+                    hashable["asqav_cloud"] = cloud
+
                 record_hash = _sha256_hex(_canonical_bytes(hashable))
 
                 if not self._write_record({**hashable, "record_hash": record_hash}):
@@ -364,6 +430,54 @@ class AsqavLogger(CustomLogger):
                 f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}"
             )
             return False
+
+    # ------------------------------------------------------------------
+    # Optional cloud signing
+    # ------------------------------------------------------------------
+
+    def _maybe_cloud_sign(self, record: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """POST the record's digests to the asqav sign endpoint, fail-soft.
+
+        Returns the receipt fields to bind into the local record, or None when
+        cloud signing is off or any step fails.  A missing key, network error,
+        non-2xx, or timeout never raises and never blocks the local write.
+        """
+        if not self._cloud_api_key or not self._cloud_agent_id:
+            return None
+        try:
+            # Use litellm's own httpx handler so no new dependency is added.
+            from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+
+            client = _get_httpx_client()
+            url = (
+                f"{self._cloud_api_base}/api/v1/agents/"
+                f"{self._cloud_agent_id}/sign"
+            )
+            resp = client.post(
+                url,
+                json=_cloud_sign_payload(record),
+                headers={"X-API-Key": self._cloud_api_key},
+                timeout=_CLOUD_SIGN_TIMEOUT,
+            )
+            status_code = getattr(resp, "status_code", 0)
+            if status_code and not (200 <= status_code < 300):
+                verbose_logger.debug(
+                    f"[AsqavLogger] cloud sign returned HTTP {status_code}"
+                )
+                return None
+            data = resp.json()
+            receipt = {
+                "signature_id": data.get("signature_id"),
+                "verification_url": data.get("verification_url"),
+                "action_id": data.get("action_id"),
+                "mode": data.get("mode"),
+            }
+            return {k: v for k, v in receipt.items() if v is not None} or None
+        except Exception:
+            verbose_logger.debug(
+                f"[AsqavLogger] cloud sign skipped: {traceback.format_exc()}"
+            )
+            return None
 
     # ------------------------------------------------------------------
     # CustomLogger hooks

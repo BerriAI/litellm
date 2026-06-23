@@ -109,6 +109,7 @@ _GENESIS_HASH = _asqav_module._GENESIS_HASH
 _canonical_bytes = _asqav_module._canonical_bytes
 _content_digest = _asqav_module._content_digest
 _sha256_hex = _asqav_module._sha256_hex
+_cloud_sign_payload = _asqav_module._cloud_sign_payload
 
 
 # ---------------------------------------------------------------------------
@@ -677,3 +678,221 @@ def test_multiworker_flock_guard_documented_or_implemented(tmp_path) -> None:
     assert (
         "single" in doc.lower() or "flock" in doc.lower() or "worker" in doc.lower()
     ), "AsqavLogger docstring must document the single-writer / multi-worker limitation"
+
+
+# ---------------------------------------------------------------------------
+# Optional cloud signing (opt-in; default off)
+#
+# These tests stub litellm's _get_httpx_client so no real network is touched.
+# The local hash chain stays the source of truth; the cloud receipt is bound
+# into the record when the opt-in env vars are set.
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+_HTTP_HANDLER_MOD = "litellm.llms.custom_httpx.http_handler"
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload: dict) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeHttpxClient:
+    """Records the last POST and returns a canned response or raises."""
+
+    def __init__(self, response=None, raise_exc=None) -> None:
+        self._response = response
+        self._raise_exc = raise_exc
+        self.calls: list = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.calls.append(
+            {"url": url, "json": json, "headers": headers, "timeout": timeout}
+        )
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._response
+
+
+@pytest.fixture
+def _patch_httpx(monkeypatch):
+    """Install a fake _get_httpx_client on the stubbed http_handler module."""
+    mod = sys.modules[_HTTP_HANDLER_MOD]
+
+    def _install(client: _FakeHttpxClient) -> _FakeHttpxClient:
+        monkeypatch.setattr(
+            mod, "_get_httpx_client", lambda *a, **k: client, raising=False
+        )
+        return client
+
+    return _install
+
+
+@pytest.fixture
+def _cloud_env(monkeypatch):
+    monkeypatch.setenv("ASQAV_API_KEY", "sk_test_fake")
+    monkeypatch.setenv("ASQAV_AGENT_ID", "agent-123")
+    monkeypatch.delenv("ASQAV_API_BASE", raising=False)
+
+
+def _cloud_logger(path: str) -> AsqavLogger:
+    # log_path passed positionally so redact stays the env-driven default (True).
+    return AsqavLogger(log_path=path)
+
+
+def test_cloud_sign_payload_carries_digests_not_content() -> None:
+    record = {
+        "messages_digest": "a" * 64,
+        "response_content_digest": "b" * 64,
+        "call_id": "call-1",
+        "model": "gpt-4o",
+        "status": "success",
+        "seq": 0,
+    }
+    body = _cloud_sign_payload(record)
+    raw = json.dumps(body)
+    assert body["action_type"] == "litellm:completion"
+    assert body["hash"] == "sha256:" + "a" * 64
+    assert body["hash_algo"] == "sha256"
+    assert body["metadata"]["response_content_digest"] == "b" * 64
+    # No raw prompt/response text ever leaves; only digests.
+    assert "hello" not in raw
+    assert "world" not in raw
+
+
+def test_cloud_sign_records_signature_when_key_set(
+    tmp_path, _cloud_env, _patch_httpx
+) -> None:
+    path = str(tmp_path / "audit.jsonl")
+    resp = _FakeResponse(
+        201,
+        {
+            "signature_id": "sig-abc",
+            "verification_url": "https://api.asqav.com/v/sig-abc",
+            "action_id": "act-xyz",
+            "mode": "hash",
+        },
+    )
+    client = _patch_httpx(_FakeHttpxClient(response=resp))
+
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    logger.log_success_event(
+        kwargs=_make_kwargs(content="secret prompt"),
+        response_obj=_make_response(content="secret response"),
+        start_time=start,
+        end_time=end,
+    )
+
+    records = _read_records(path)
+    assert len(records) == 1
+    cloud = records[0]["asqav_cloud"]
+    assert cloud["signature_id"] == "sig-abc"
+    assert cloud["verification_url"] == "https://api.asqav.com/v/sig-abc"
+
+    # Exactly one POST, to the agent sign endpoint, with the X-API-Key header.
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["url"] == "https://api.asqav.com/api/v1/agents/agent-123/sign"
+    assert call["headers"]["X-API-Key"] == "sk_test_fake"
+
+    # Digests-only on the wire; no raw content.
+    sent = json.dumps(call["json"])
+    assert "secret prompt" not in sent
+    assert "secret response" not in sent
+    assert call["json"]["hash"].startswith("sha256:")
+
+    # The bound receipt does not break the local hash chain.
+    ok, msg = logger.verify_chain(path)
+    assert ok is True, msg
+
+
+def test_cloud_sign_fail_soft_on_raise(tmp_path, _cloud_env, _patch_httpx) -> None:
+    path = str(tmp_path / "audit.jsonl")
+    _patch_httpx(_FakeHttpxClient(raise_exc=RuntimeError("connection refused")))
+
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    # Must not raise; the local line is still written.
+    logger.log_success_event(
+        kwargs=_make_kwargs(),
+        response_obj=_make_response(),
+        start_time=start,
+        end_time=end,
+    )
+
+    records = _read_records(path)
+    assert len(records) == 1
+    assert records[0]["status"] == "success"
+    assert "asqav_cloud" not in records[0]
+    ok, msg = logger.verify_chain(path)
+    assert ok is True, msg
+
+
+def test_cloud_sign_fail_soft_on_non_2xx(tmp_path, _cloud_env, _patch_httpx) -> None:
+    path = str(tmp_path / "audit.jsonl")
+    resp = _FakeResponse(401, {"detail": "invalid api key"})
+    _patch_httpx(_FakeHttpxClient(response=resp))
+
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    logger.log_success_event(
+        kwargs=_make_kwargs(),
+        response_obj=_make_response(),
+        start_time=start,
+        end_time=end,
+    )
+
+    records = _read_records(path)
+    assert len(records) == 1
+    assert "asqav_cloud" not in records[0]
+    ok, msg = logger.verify_chain(path)
+    assert ok is True, msg
+
+
+def test_default_off_is_byte_identical_without_key(
+    tmp_path, monkeypatch, _patch_httpx
+) -> None:
+    """With no key, the record carries no cloud field and never calls httpx."""
+    monkeypatch.delenv("ASQAV_API_KEY", raising=False)
+    monkeypatch.delenv("ASQAV_AGENT_ID", raising=False)
+    client = _patch_httpx(_FakeHttpxClient(raise_exc=AssertionError("must not call")))
+
+    path = str(tmp_path / "audit.jsonl")
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    logger.log_success_event(
+        kwargs=_make_kwargs(),
+        response_obj=_make_response(),
+        start_time=start,
+        end_time=end,
+    )
+
+    records = _read_records(path)
+    assert len(records) == 1
+    assert "asqav_cloud" not in records[0]
+    # Same field set a pure-local logger would write.
+    assert set(records[0]) == {
+        "seq",
+        "ts",
+        "prev_hash",
+        "call_id",
+        "model",
+        "status",
+        "latency_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "finish_reason",
+        "provider_request_id",
+        "messages_digest",
+        "response_content_digest",
+        "metadata",
+        "record_hash",
+    }
+    assert len(client.calls) == 0
