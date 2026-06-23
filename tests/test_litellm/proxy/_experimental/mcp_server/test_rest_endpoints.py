@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+import sys
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,6 +21,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
+
+if sys.version_info >= (3, 11):
+    from builtins import BaseExceptionGroup
+else:
+    from exceptiongroup import BaseExceptionGroup
 
 
 def _build_request(
@@ -150,6 +156,56 @@ class TestExecuteWithMcpClient:
         assert captured["extra_headers"] == {
             "X-OAuth": "1",
             "Authorization": "STATIC token",
+        }
+
+    @pytest.mark.asyncio
+    async def test_resolves_static_header_env_vars(self, monkeypatch):
+        """UI test calls resolve os.environ/ static header values before forwarding."""
+        captured: dict = {}
+        monkeypatch.setenv("MCP_STATIC_HEADER_SECRET", "resolved-secret")
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["extra_headers"] = kwargs.get("extra_headers")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.none,
+            static_headers={
+                "Authorization": "os.environ/MCP_STATIC_HEADER_SECRET",
+                "X-Static": "literal",
+            },
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+        )
+
+        assert result["status"] == "ok"
+        assert captured["extra_headers"] == {
+            "Authorization": "resolved-secret",
+            "X-Static": "literal",
         }
 
     @pytest.mark.asyncio
@@ -2410,7 +2466,7 @@ class TestPreviewOpenAPITools:
     async def test_preview_sanitizes_slash_in_operation_id(self, monkeypatch):
         import re
 
-        async def fake_load_spec(spec_path):  # noqa: ANN001
+        async def fake_load_spec(spec_path):
             return {
                 "paths": {
                     "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
@@ -2487,7 +2543,7 @@ class TestPreviewOpenAPITools:
             }
         }
 
-        async def fake_load_spec(spec_path):  # noqa: ANN001
+        async def fake_load_spec(spec_path):
             return spec
 
         monkeypatch.setattr(
