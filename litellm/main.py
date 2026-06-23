@@ -86,6 +86,9 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -5285,7 +5288,7 @@ def completion(  # type: ignore
             timeout,
             kwargs,
             custom_llm_provider,
-            global_timeout=getattr(litellm, "request_timeout", None),
+            global_timeout=get_configured_request_timeout(),
             supports_httpx_timeout=supports_httpx_timeout,
         )
 
