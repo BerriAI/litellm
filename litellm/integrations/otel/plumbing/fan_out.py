@@ -10,9 +10,10 @@ gen-AI LLM-call span and its MCP-tool sibling) reach tenant backends through
 the clone's own exporters; the clone's provider has its own processor list and
 does NOT carry this fan-out processor, so a span is exported once per backend.
 
-Identical ``(trace_id, span_id)`` deduplication on the OTLP receiver collapses
-the rare overlap into one span per backend (e.g. when the configured global
-exporter and a per-tenant destination point at the same vendor account).
+Each backend often requires backend-specific Resource attributes (Arize rejects
+spans missing ``model_id`` / ``arize.project.name``), so the fan-out wraps each
+forwarded span with the destination's expected Resource before handing it to
+the per-destination exporter.
 """
 
 from __future__ import annotations
@@ -20,7 +21,10 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+import os
+
 from opentelemetry.context import Context
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from litellm._logging import verbose_logger
@@ -63,14 +67,27 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         destinations = request_destinations()
         if not destinations:
             return
+        # The gen-AI LLM-call span (and the MCP tool-call sibling) is already
+        # routed to per-tenant destinations by the per-backend v2 logger via
+        # ``TenantTracerCache`` -- the logger picks the right attribute mapper
+        # (OpenInference for arize, GenAI semconv for langfuse_otel) and ships
+        # through the clone provider's appended exporter. Forwarding it here too
+        # would deliver a SECOND copy with the wrong vocabulary and a fresh
+        # span_id, surfacing in the destination as an orphaned duplicate. Skip.
+        if _is_genai_span(span):
+            return
+        # Proxy-internal spans (FastAPI server, ``auth`` phase, postgres lookups,
+        # post-call cost ledger) are generic OTel semantic-convention spans with
+        # no backend-specific vocabulary, so they ship to EVERY admin-resolved
+        # destination this request fans out to, regardless of the destination's
+        # ``callback_name``. The owner discriminator only matters for the gen-AI
+        # span (handled by the skip above).
         for destination in destinations:
-            if destination.callback_name != self._owner:
-                continue
             processor = self._processor_for(destination)
             if processor is None:
                 continue
             try:
-                processor.on_end(span)
+                processor.on_end(_with_destination_resource(span, destination))
             except Exception as exc:
                 verbose_logger.debug(
                     "OTel V2 fan-out: forwarding span to %s failed: %s",
@@ -141,3 +158,62 @@ _GRPC_BACKENDS = frozenset({"arize"})
 
 def _resolve_kind(destination: "OtelDestination") -> str:
     return "otlp_grpc" if destination.callback_name in _GRPC_BACKENDS else "otlp_http"
+
+
+# Attribute set on every gen-AI LLM-call span by the v2 emitter. Used as the
+# unambiguous skip signal: only the LLM-call span carries this, and the
+# per-backend v2 logger already routes it to per-tenant destinations through
+# the TenantTracerCache clone provider's appended exporter.
+_GENAI_SPAN_ATTR = "gen_ai.operation.name"
+
+
+def _is_genai_span(span: ReadableSpan) -> bool:
+    attributes = span.attributes or {}
+    return _GENAI_SPAN_ATTR in attributes
+
+
+# Backend-specific Resource attributes required by the destination. Arize
+# rejects spans missing ``model_id`` (or the alternative ``arize.project.name``
+# span attribute); other backends accept the proxy's default Resource.
+def _destination_resource_attrs(destination: "OtelDestination") -> dict[str, str]:
+    if destination.callback_name == "arize":
+        project = os.environ.get("ARIZE_PROJECT_NAME")
+        if project:
+            return {"model_id": project, "arize.project.name": project}
+    return {}
+
+
+def _with_destination_resource(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+    """Return ``span`` with its Resource augmented by the destination's required
+    attributes. The original span object is left untouched; a shallow wrapper
+    reuses every other field and only swaps the ``resource`` property."""
+    extra = _destination_resource_attrs(destination)
+    if not extra:
+        return span
+    merged = Resource.create({**dict(span.resource.attributes), **extra})
+    return _ResourceWrappedReadableSpan(span, merged)
+
+
+class _ResourceWrappedReadableSpan(ReadableSpan):
+    """A ``ReadableSpan`` view whose ``resource`` is overridden.
+
+    The OTLP exporter reads each span's ``resource`` when serializing; for
+    backend-specific attributes (Arize's ``model_id``) we substitute the
+    destination's expected Resource without mutating the underlying span.
+    """
+
+    def __init__(self, inner: ReadableSpan, resource: Resource) -> None:
+        super().__init__(
+            name=inner.name,
+            context=inner.context,
+            parent=inner.parent,
+            resource=resource,
+            attributes=inner.attributes,
+            events=inner.events,
+            links=inner.links,
+            kind=inner.kind,
+            status=inner.status,
+            start_time=inner.start_time,
+            end_time=inner.end_time,
+            instrumentation_scope=inner.instrumentation_scope,
+        )

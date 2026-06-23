@@ -57,13 +57,9 @@ def _build_provider_with_fan_out(
     test by an injected SimpleSpanProcessor against an in-memory exporter via
     ``monkeypatch`` so the test can read what was forwarded."""
     cfg = OpenTelemetryV2Config(exporter="in_memory")
-    provider = providers.build_tracer_provider(
-        cfg, exporter=exporter, tenant_fan_out_owner=owner
-    )
+    provider = providers.build_tracer_provider(cfg, exporter=exporter, tenant_fan_out_owner=owner)
     fan_out = next(
-        p
-        for p in provider._active_span_processor._span_processors
-        if isinstance(p, TenantFanOutSpanProcessor)
+        p for p in provider._active_span_processor._span_processors if isinstance(p, TenantFanOutSpanProcessor)
     )
     return provider, fan_out
 
@@ -76,14 +72,13 @@ def test_fan_out_forwards_span_to_matching_destination(monkeypatch):
     provider, fan_out = _build_provider_with_fan_out("langfuse_otel", main_exporter)
 
     tenant_exporter = InMemorySpanExporter()
+
     # Swap the lazy per-destination processor build for an in-memory one so we
     # don't actually hit the network.
     def _stub_processor_for(self, destination):
         return SimpleSpanProcessor(tenant_exporter)
 
-    monkeypatch.setattr(
-        TenantFanOutSpanProcessor, "_processor_for", _stub_processor_for
-    )
+    monkeypatch.setattr(TenantFanOutSpanProcessor, "_processor_for", _stub_processor_for)
 
     set_request_destinations(
         (
@@ -104,13 +99,15 @@ def test_fan_out_forwards_span_to_matching_destination(monkeypatch):
     assert "auth /chat/completions" in tenant_names
 
 
-def test_fan_out_skips_destinations_for_other_backends(monkeypatch):
-    """Each fan-out processor owns ONE backend; a destination tagged for a
-    different backend is skipped, so the wrong exporter never sees the span."""
+def test_fan_out_forwards_proxy_internal_spans_to_every_destination(monkeypatch):
+    """Proxy-internal spans (server, auth phase, postgres, post-call ledger)
+    are generic OTel semconv with no backend-specific vocabulary, so they ship
+    to every admin-resolved destination regardless of its ``callback_name``.
+    The owner discriminator is only used to skip the gen-AI span (the v2 logger
+    routes that itself through TenantTracerCache to avoid wrong-vocabulary
+    duplicates)."""
     main_exporter = InMemorySpanExporter()
-    _provider, _fan_out = _build_provider_with_fan_out(
-        "langfuse_otel", main_exporter
-    )
+    _provider, _ = _build_provider_with_fan_out("langfuse_otel", main_exporter)
 
     tenant_exporter = InMemorySpanExporter()
     monkeypatch.setattr(
@@ -119,6 +116,8 @@ def test_fan_out_skips_destinations_for_other_backends(monkeypatch):
         lambda self, destination: SimpleSpanProcessor(tenant_exporter),
     )
 
+    # Destination is tagged for a DIFFERENT backend (``arize``) than the
+    # owner (``langfuse_otel``). Proxy-internal spans must still forward.
     set_request_destinations(
         (
             OtelDestination(
@@ -132,7 +131,46 @@ def test_fan_out_skips_destinations_for_other_backends(monkeypatch):
     with tracer.start_as_current_span("auth"):
         pass
 
-    assert tenant_exporter.get_finished_spans() == ()
+    names = [s.name for s in tenant_exporter.get_finished_spans()]
+    assert "auth" in names
+
+
+def test_fan_out_skips_genai_span_to_avoid_double_export(monkeypatch):
+    """The gen-AI LLM-call span is routed by the v2 logger through
+    ``TenantTracerCache`` to per-tenant exporters with the right attribute
+    mapper. Forwarding it here too would deliver a duplicate with the wrong
+    vocabulary, surfacing in the destination as an orphaned second span."""
+    main_exporter = InMemorySpanExporter()
+    _provider, _ = _build_provider_with_fan_out("langfuse_otel", main_exporter)
+
+    tenant_exporter = InMemorySpanExporter()
+    monkeypatch.setattr(
+        TenantFanOutSpanProcessor,
+        "_processor_for",
+        lambda self, destination: SimpleSpanProcessor(tenant_exporter),
+    )
+
+    set_request_destinations(
+        (
+            OtelDestination(
+                callback_name="arize",
+                endpoint="https://otlp.arize.com/v1",
+                headers={},
+            ),
+        )
+    )
+    tracer = _provider.get_tracer("test")
+    # A gen-AI span sets ``gen_ai.operation.name`` (the v2 emitter does this
+    # via the SpanRole.LLM_CALL mapper). Fake it explicitly here.
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+    # A proxy-internal span also fires.
+    with tracer.start_as_current_span("auth /v1/chat/completions"):
+        pass
+
+    names = [s.name for s in tenant_exporter.get_finished_spans()]
+    assert "auth /v1/chat/completions" in names
+    assert "chat gpt-4o" not in names  # gen-AI skipped
 
 
 def test_fan_out_noop_when_no_destinations(monkeypatch):
@@ -183,12 +221,8 @@ def test_fan_out_caches_processor_per_destination_key(monkeypatch):
 
     monkeypatch.setattr(TenantFanOutSpanProcessor, "_processor_for", _stub)
 
-    dest_a = OtelDestination(
-        callback_name="langfuse_otel", endpoint="https://a/", headers={"k": "1"}
-    )
-    dest_b = OtelDestination(
-        callback_name="langfuse_otel", endpoint="https://b/", headers={"k": "1"}
-    )
+    dest_a = OtelDestination(callback_name="langfuse_otel", endpoint="https://a/", headers={"k": "1"})
+    dest_b = OtelDestination(callback_name="langfuse_otel", endpoint="https://b/", headers={"k": "1"})
     set_request_destinations((dest_a,))
     tracer = _provider.get_tracer("test")
     with tracer.start_as_current_span("s1"):
