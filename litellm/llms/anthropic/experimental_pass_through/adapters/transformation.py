@@ -1410,7 +1410,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @classmethod
     def _first_positive_usage_value(
-        cls, usage: Usage, field_names: Tuple[str, ...]
+        cls, usage: Usage, field_names: tuple[str, ...]
     ) -> int:
         for field_name in field_names:
             value = cls._positive_int(getattr(usage, field_name, None))
@@ -1420,7 +1420,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @classmethod
     def _first_positive_prompt_tokens_detail_value(
-        cls, usage: Usage, field_names: Tuple[str, ...]
+        cls, usage: Usage, field_names: tuple[str, ...]
     ) -> int:
         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
         if prompt_tokens_details is None:
@@ -1444,9 +1444,7 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         if explicit_value > 0:
             return explicit_value
-        return cls._first_positive_prompt_tokens_detail_value(
-            usage, ("cached_tokens",)
-        )
+        return cls._first_positive_prompt_tokens_detail_value(usage, ("cached_tokens",))
 
     @classmethod
     def _get_cache_creation_input_tokens(cls, usage: Usage) -> int:
@@ -1483,9 +1481,7 @@ class LiteLLMAnthropicMessagesAdapter:
         return usage_delta
 
     @classmethod
-    def _translate_openai_usage_to_anthropic_usage(
-        cls, usage: Usage
-    ) -> AnthropicUsage:
+    def _translate_openai_usage_to_anthropic_usage(cls, usage: Usage) -> AnthropicUsage:
         return cast(
             AnthropicUsage,
             cls._translate_openai_usage_to_anthropic_usage_delta(usage),
