@@ -205,9 +205,12 @@ class MavvrikFocusLogger(FocusLogger):
                     "Mavvrik FOCUS export: catching up missed date %s",
                     catch_up_date.date(),
                 )
+                # Use now as end_time for catch-up windows too — rows for old dates
+                # may have been flushed to DB well after their calendar day ended.
+                catch_up_end = min(catch_up_date + timedelta(days=1), now)
                 window = FocusTimeWindow(
                     start_time=catch_up_date,
-                    end_time=catch_up_date + timedelta(days=1),
+                    end_time=catch_up_end,
                     frequency="daily",
                 )
                 await self._export_window(window=window, limit=None)
