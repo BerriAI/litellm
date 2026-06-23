@@ -80,6 +80,7 @@ from litellm.constants import (
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
+    request_timeout_explicitly_set as request_timeout_explicitly_set,
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,

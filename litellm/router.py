@@ -61,6 +61,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -565,6 +568,12 @@ class Router:
 
         self._explicit_timeout = timeout  # None when user did not pass timeout
         self.timeout = timeout or litellm.request_timeout
+        # Per-attempt request_timeout, independent of router_settings.timeout.
+        # Only stored when a router timeout is also set, since otherwise
+        # request_timeout already flows through self.timeout above.
+        self.request_timeout = (
+            get_configured_request_timeout() if timeout is not None else None
+        )
         self.stream_timeout = stream_timeout
 
         self.retry_after = retry_after
@@ -3391,6 +3400,7 @@ class Router:
                 "stream_timeout", None
             )  # timeout set on litellm_params for this deployment
             or self.stream_timeout  # timeout set on router
+            or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
             or self.default_litellm_params.get("stream_timeout", None)
         )
 
@@ -3407,7 +3417,8 @@ class Router:
             or data.get(
                 "request_timeout", None
             )  # timeout set on litellm_params for this deployment
-            or self.timeout  # timeout set on router
+            or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
+            or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
         return timeout

@@ -4463,6 +4463,8 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                    if key == "request_timeout":
+                        litellm.request_timeout_explicitly_set = True
                     if key in {"s3_audit_callback_params", "s3_callback_params"}:
                         from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
                         from litellm.litellm_core_utils.litellm_logging import (
