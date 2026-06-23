@@ -15094,21 +15094,32 @@ def _is_secret_general_setting_field(field_name: str) -> bool:
     )
 
 
-def _redact_secret_values_in_obj(value: JsonValue) -> JsonValue:
+# Matches the cap on _redact_sensitive_litellm_params (the closest analog in the
+# proxy). Past this depth we fail closed by returning "REDACTED" for the whole
+# subtree rather than recursing further — better to over-redact a pathological
+# config than to silently return a deeply-nested credential verbatim
+_REDACT_SECRET_MAX_DEPTH = 10
+
+
+def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
     """Recursively redact secret leaves inside a structured field so a nested
     credential (e.g. aws_web_identity_token under database_args) is never
-    returned to a non-admin, while non-secret siblings stay visible"""
+    returned to a non-admin, while non-secret siblings stay visible. At
+    _REDACT_SECRET_MAX_DEPTH the whole subtree is replaced with "REDACTED"
+    so depth-overrun fails closed."""
+    if depth >= _REDACT_SECRET_MAX_DEPTH:
+        return "REDACTED"
     if isinstance(value, dict):
         return {
             key: (
                 "REDACTED"
                 if _is_secret_general_setting_field(key)
-                else _redact_secret_values_in_obj(sub)
+                else _redact_secret_values_in_obj(sub, depth + 1)
             )
             for key, sub in value.items()
         }
     if isinstance(value, list):
-        return [_redact_secret_values_in_obj(item) for item in value]
+        return [_redact_secret_values_in_obj(item, depth + 1) for item in value]
     return value
 
 

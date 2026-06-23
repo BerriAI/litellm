@@ -353,6 +353,34 @@ def test_redact_general_setting_value_recurses_list_of_dicts():
     )
 
 
+def test_redact_secret_values_in_obj_fails_closed_at_max_depth():
+    """Past _REDACT_SECRET_MAX_DEPTH the whole subtree is replaced with
+    "REDACTED" rather than returned verbatim, so a secret buried below the cap
+    can never leak via depth-overrun. A future refactor that flips the cap
+    branch to fail-open would surface here."""
+    from litellm.proxy import proxy_server as ps
+
+    # build a non-secret-keyed wrap chain deeper than the cap, with a real
+    # secret at the bottom. Using a non-secret key ("wrap") forces the
+    # recursor down the recursion branch instead of short-circuiting on the
+    # key name itself.
+    nested: object = {"aws_web_identity_token": "sk-leak-bottom"}
+    for _ in range(ps._REDACT_SECRET_MAX_DEPTH + 2):
+        nested = {"wrap": nested}
+
+    out = ps._redact_general_setting_value(
+        "some_struct_field", nested, is_full_admin=False
+    )
+    # the secret must not survive anywhere in the returned tree
+    assert "sk-leak-bottom" not in repr(out)
+
+    # full admin is unaffected by the cap — the value comes back untouched
+    admin_out = ps._redact_general_setting_value(
+        "some_struct_field", nested, is_full_admin=True
+    )
+    assert admin_out is nested
+
+
 def test_config_list_redacts_pass_through_secret_for_view_only(
     client, auth_as, mock_prisma, monkeypatch
 ):
