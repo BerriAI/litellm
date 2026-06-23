@@ -1028,6 +1028,7 @@ def test_track_deployment_metrics(model_list):
             "ContentPolicyViolationError",
             7,
         ),
+        (litellm.exceptions.PermissionDeniedError, "PermissionDeniedError", 0),
     ],
 )
 def test_get_num_retries_from_retry_policy(
