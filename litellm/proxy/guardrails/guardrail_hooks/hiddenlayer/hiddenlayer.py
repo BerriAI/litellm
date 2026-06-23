@@ -156,13 +156,15 @@ class HiddenlayerGuardrail(CustomGuardrail):
             last_msg = scan_params[-1]
             content = last_msg.get("content")
             scan_contents = []
-
             # Remove images
             if content and isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and not item.get("type") == "image_url":
                         scan_contents.append(item)
-                
+                effective_content = str(scan_contents) if scan_contents else ""
+            else:
+                effective_content = str(content or "")
+
             result = await self._call_hiddenlayer(
                 project_id,
                 hl_request_metadata,
@@ -170,7 +172,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     "messages": [
                         {
                             "role": last_msg.get("role", "user"),
-                            "content": str(scan_contents or "") if isinstance(content, list) else str(content or "")
+                            "content": effective_content
                         }
                     ]
                 },
