@@ -747,7 +747,24 @@ async def _common_key_generation_helper(
     )
     # Session tokens (lite login) carry max_budget=None to avoid a per-session
     # LLM spend cap, but that None must not be read as "unlimited delegation
-    # authority". Use the team budget as the effective ceiling instead.
+    # authority". A personal key (no team) has no team-budget enforcement at
+    # request time, so a session token cannot delegate any budget for one.
+    if (
+        user_api_key_dict.is_session_token
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not is_ui_session_team_key
+        and _requested_max_budget is not None
+        and team_table is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"max_budget ({_requested_max_budget}) cannot be set without "
+                    "specifying team_id when using a CLI session token."
+                )
+            },
+        )
     delegation_ceiling = (
         user_api_key_dict.max_budget
         if user_api_key_dict.max_budget is not None
