@@ -17,6 +17,101 @@ else:
     LitellmRouter = Any
 
 
+MID_STREAM_CONTINUATION_SYSTEM_PROMPT = "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: "
+
+
+def _prefill_explicitly_unsupported(model_group: str | None) -> bool:
+    """True only when the model registry explicitly marks the model as NOT
+    supporting assistant prefill (``supports_assistant_prefill: false``).
+
+    Absent/unknown capability returns False so models without registry data keep
+    the legacy prefill behavior — only models that would reject the prefill with
+    a 400 anyway are routed to the user-message continuation.
+    """
+    if model_group is None:
+        return False
+    try:
+        from litellm.utils import get_model_info
+
+        model_info = get_model_info(model=model_group)
+        return model_info.get("supports_assistant_prefill") is False
+    except Exception:
+        return False
+
+
+def build_mid_stream_continuation_messages(
+    messages: list[Any],
+    generated_content: str,
+    model_group: str | None,
+    fallbacks: list[Any] | None = None,
+) -> list[Any]:
+    """Build the message list a mid-stream fallback uses to resume an interrupted stream.
+
+    By default the partial response is appended as a prefixed assistant message,
+    so the fallback model continues the text exactly where the stream died.
+
+    Anthropic removed assistant prefill starting with Claude Sonnet 4.6 / Opus 4.6 —
+    a prefilled assistant message returns a 400 error, which made every mid-stream
+    fallback for those models fail deterministically. For models the registry
+    explicitly marks as not supporting prefill, the partial response is quoted in
+    a trailing USER message instead — the continuation pattern Anthropic's
+    migration guide documents:
+    https://platform.claude.com/docs/en/about-claude/models/migration-guide
+
+    The same continuation messages are sent to every deployment the fallback
+    chain tries, so the safe pattern engages when the primary model OR any
+    configured fallback target for this model group is explicitly marked as
+    not supporting prefill.
+    """
+    candidate_models: list[str | None] = [model_group]
+    if fallbacks is not None and model_group is not None:
+        if fallbacks and all(isinstance(f, str) for f in fallbacks):
+            # Flat string-format lists (["model-a", "model-b", ...]) are tried in
+            # order for every model_group. get_fallback_model_group surfaces only
+            # ONE entry from them — it pops a single string mid-iteration and
+            # leaves the rest hidden — so a prefill-rejecting model at a non-first
+            # position would slip through, and the once-built continuation that is
+            # reused across every hop would 400 when the chain reaches it. Check
+            # every entry directly instead.
+            candidate_models.extend(fallbacks)
+        else:
+            try:
+                # list() copy: get_fallback_model_group POPS string entries from a
+                # mixed fallbacks list while iterating — mutating the live list
+                # here would silently drop a fallback target before the actual
+                # fallback execution runs.
+                fallback_model_group, _ = get_fallback_model_group(
+                    fallbacks=list(fallbacks), model_group=model_group
+                )
+                if fallback_model_group:
+                    candidate_models.extend(fallback_model_group)
+            except Exception:
+                pass
+
+    if any(_prefill_explicitly_unsupported(m) for m in candidate_models):
+        return messages + [
+            {
+                "role": "user",
+                "content": (
+                    "Your previous response was interrupted and ended with:\n"
+                    f"{generated_content}\n"
+                    "Continue from where you left off. Do not repeat the content already generated."
+                ),
+            }
+        ]
+    return messages + [
+        {
+            "role": "system",
+            "content": MID_STREAM_CONTINUATION_SYSTEM_PROMPT,
+        },
+        {
+            "role": "assistant",
+            "content": generated_content,
+            "prefix": True,
+        },
+    ]
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
