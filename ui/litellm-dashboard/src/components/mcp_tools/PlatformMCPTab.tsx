@@ -97,8 +97,8 @@ const PlatformMCPTab: React.FC<PlatformMCPTabProps> = ({ accessToken }) => {
       <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
         <ExperimentOutlined className="flex-shrink-0 text-amber-600" />
         <span>
-          Platform MCP is a pre-v0 feature. The dashboard control is only available to proxy admins and should not be
-          used in production.
+          Platform MCP is a pre-v0 feature. This can change unexpectedly. Do not use this in production. If you have
+          feedback, please email product@berri.ai.
         </span>
       </div>
 

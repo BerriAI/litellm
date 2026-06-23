@@ -26,7 +26,8 @@ describe("PlatformMCPTab", () => {
   it("shows the pre-v0 warning and v0 meta-tools", async () => {
     render(<PlatformMCPTab accessToken="token" />);
 
-    expect(await screen.findByText(/Platform MCP is a pre-v0 feature/i)).toBeInTheDocument();
+    expect(await screen.findByText(/This can change unexpectedly/i)).toBeInTheDocument();
+    expect(screen.getByText(/product@berri.ai/i)).toBeInTheDocument();
     expect(screen.getByText(/tools\/list responses/i)).toBeInTheDocument();
     expect(screen.getByText("list_servers")).toBeInTheDocument();
     expect(screen.getByText("enable_server")).toBeInTheDocument();
