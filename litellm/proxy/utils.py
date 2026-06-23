@@ -3792,6 +3792,10 @@ class PrismaClient:
             db_data["members_with_roles"], list
         ):
             db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
+        if db_data.get("budget_limits", None) is not None and isinstance(
+            db_data["budget_limits"], list
+        ):
+            db_data["budget_limits"] = json.dumps(db_data["budget_limits"])
         return db_data
 
     # Define a retrying strategy with exponential backoff
