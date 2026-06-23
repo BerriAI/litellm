@@ -36158,7 +36158,7 @@
         "input_cost_per_token": 1.4e-06,
         "output_cost_per_token": 4.4e-06,
         "litellm_provider": "zai",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_function_calling": true,
