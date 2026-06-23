@@ -281,8 +281,8 @@ class AsqavLogger(CustomLogger):
         )
 
         # Optional cloud signing. Active only when both env vars are present.
-        self._cloud_api_key: Optional[str] = os.environ.get("ASQAV_API_KEY") or None
-        self._cloud_agent_id: Optional[str] = os.environ.get("ASQAV_AGENT_ID") or None
+        self._cloud_api_key: str | None = os.environ.get("ASQAV_API_KEY") or None
+        self._cloud_agent_id: str | None = os.environ.get("ASQAV_AGENT_ID") or None
         self._cloud_api_base: str = (
             os.environ.get("ASQAV_API_BASE") or _DEFAULT_ASQAV_API_BASE
         ).rstrip("/")
@@ -435,7 +435,7 @@ class AsqavLogger(CustomLogger):
     # Optional cloud signing
     # ------------------------------------------------------------------
 
-    def _maybe_cloud_sign(self, record: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _maybe_cloud_sign(self, record: dict[str, Any]) -> dict[str, Any] | None:
         """POST the record's digests to the asqav sign endpoint, fail-soft.
 
         Returns the receipt fields to bind into the local record, or None when
@@ -472,7 +472,7 @@ class AsqavLogger(CustomLogger):
                 "mode": data.get("mode"),
             }
             return {k: v for k, v in receipt.items() if v is not None} or None
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-soft, never break logging
             verbose_logger.debug(
                 f"[AsqavLogger] cloud sign skipped: {traceback.format_exc()}"
             )
