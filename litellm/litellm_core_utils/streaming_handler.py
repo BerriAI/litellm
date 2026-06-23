@@ -1529,7 +1529,6 @@ class CustomStreamWrapper:
                     )
         return _ProviderChunkParsed(response_obj)
 
-
     def chunk_creator(self, chunk: Any):  # type: ignore
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
