@@ -30,6 +30,7 @@ import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
+from litellm.rag.ingestion.milvus_ingestion import MilvusRAGIngestion
 from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 from litellm.rag.ingestion.vertex_ai_ingestion import VertexAIRAGIngestion
@@ -52,6 +53,7 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "gemini": GeminiRAGIngestion,
     "s3_vectors": S3VectorsRAGIngestion,
     "vertex_ai": VertexAIRAGIngestion,
+    "milvus": MilvusRAGIngestion,
 }
 
 

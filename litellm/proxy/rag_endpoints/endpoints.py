@@ -28,6 +28,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.rag.main import get_ingestion_class
 
 router = APIRouter()
 
@@ -92,6 +93,32 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     return vector_store_ids
 
 
+def _normalize_collection_name_as_vector_store_id(
+    ingest_options: dict[str, Any],
+) -> None:
+    """
+    Normalize provider-native write targets to `vector_store_id` for authorization.
+
+    The proxy authorizes ingestion by the `vector_store_id` key, but some
+    providers resolve their real write target from a different field (e.g. Milvus
+    uses `collection_name`). Each ingestion class owns that knowledge via
+    `normalize_authorized_vector_store_id`, so dispatch to it instead of hardcoding
+    provider-specific logic here. This closes the bypass where a caller pairs a
+    write target they cannot access with a `vector_store_id` they can.
+    """
+    vector_store_opts = ingest_options.get("vector_store")
+    if not isinstance(vector_store_opts, dict):
+        return
+    provider = vector_store_opts.get("custom_llm_provider")
+    if not provider:
+        return
+    try:
+        ingestion_class = get_ingestion_class(provider)
+    except ValueError:
+        return
+    ingestion_class.normalize_authorized_vector_store_id(vector_store_opts)
+
+
 async def _authorize_nested_vector_store_ids(
     payload: Any,
     user_api_key_dict: UserAPIKeyAuth,
@@ -100,6 +127,68 @@ async def _authorize_nested_vector_store_ids(
         await assert_user_can_access_vector_store_id(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
+        )
+
+
+def _ingestion_can_auto_create_vector_store(
+    vector_store_opts: dict[str, Any],
+) -> bool:
+    """
+    Whether this ingestion could create a brand-new vector store on write.
+
+    Each ingestion class owns that knowledge via `can_auto_create_vector_store`,
+    so dispatch to it instead of hardcoding provider-specific logic here.
+    """
+    provider = vector_store_opts.get("custom_llm_provider")
+    if not provider:
+        return False
+    try:
+        ingestion_class = get_ingestion_class(provider)
+    except ValueError:
+        return False
+    return ingestion_class.can_auto_create_vector_store(vector_store_opts)
+
+
+async def _assert_view_only_role_cannot_create_vector_store(
+    ingest_options: dict[str, Any],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    INTERNAL_USER_VIEW_ONLY may ingest into an existing vector store but may not
+    create a new one.
+
+    The role must always name a `vector_store_id`. Beyond that, only providers
+    that auto-create the store on ingest (e.g. Milvus with `auto_create_collection`)
+    can let a view-only caller bring a brand-new store into existence; for those,
+    the id must resolve to an existing managed vector store. Providers that only
+    write to a pre-existing store (OpenAI, Bedrock, ...) keep accepting their
+    provider-native ids unchanged.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value:
+        return
+    vector_store_opts = ingest_options.get("vector_store") or {}
+    vector_store_id = vector_store_opts.get("vector_store_id")
+    if not vector_store_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "internal_user_viewer role can only ingest files to an existing vector store. "
+                "Provide 'vector_store_id' in ingest_options.vector_store."
+            },
+        )
+    if not _ingestion_can_auto_create_vector_store(vector_store_opts):
+        return
+    existing_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if existing_vector_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "internal_user_viewer role cannot create a new vector store. "
+                f"'{vector_store_id}' does not resolve to an existing managed vector store."
+            },
         )
 
 
@@ -390,6 +479,8 @@ async def parse_rag_ingest_request(
                     },
                 )
 
+    _normalize_collection_name_as_vector_store_id(ingest_options)
+
     return ingest_options, file_data, file_url, file_id
 
 
@@ -455,17 +546,11 @@ async def rag_ingest(
         # Parse request
         ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
 
-        # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
-        if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and not ingest_options.get(
-            "vector_store", {}
-        ).get("vector_store_id"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "internal_user_viewer role can only ingest files to an existing vector store. "
-                    "Provide 'vector_store_id' in ingest_options.vector_store."
-                },
-            )
+        # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores, but cannot create new ones
+        await _assert_view_only_role_cannot_create_vector_store(
+            ingest_options=ingest_options,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         await _authorize_nested_vector_store_ids(
             payload=ingest_options,

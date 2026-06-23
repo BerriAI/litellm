@@ -83,7 +83,10 @@ class BaseRAGIngestion(ABC):
             credential_values = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 return
+            protected_fields = self.credential_protected_fields()
             for key, value in credential_values.items():
+                if key in protected_fields:
+                    continue
                 self.vector_store_config[key] = value
             for key in (
                 "api_base",
@@ -97,6 +100,45 @@ class BaseRAGIngestion(ABC):
     def custom_llm_provider(self) -> str:
         """Get the vector store provider."""
         return self.vector_store_config.get("custom_llm_provider", "openai")
+
+    @classmethod
+    def normalize_authorized_vector_store_id(
+        cls, vector_store_opts: dict[str, object]
+    ) -> None:
+        """
+        Rewrite the vector_store config so `vector_store_id` matches the actual
+        write target before the proxy authorizes it.
+
+        The proxy authorizes ingestion by the `vector_store_id` key. Providers
+        whose real write target is a different field (e.g. Milvus uses
+        `collection_name`) must override this so authorization covers the target
+        that will actually be written to. Default: no-op.
+        """
+        return None
+
+    @classmethod
+    def credential_protected_fields(cls) -> frozenset[str]:
+        """
+        Vector-store config keys that credential hydration must never override.
+
+        The proxy authorizes ingestion against `vector_store_id`, so letting a
+        stored credential redefine the write target after authorization would
+        bypass the access check. Providers whose real write target is a different
+        field (e.g. Milvus `collection_name`) must extend this set.
+        """
+        return frozenset({"vector_store_id"})
+
+    @classmethod
+    def can_auto_create_vector_store(cls, vector_store_opts: dict[str, object]) -> bool:
+        """
+        Whether ingesting can bring a brand-new vector store into existence.
+
+        Providers that only write to a pre-existing store return False. Providers
+        that create the store on demand (e.g. Milvus `auto_create_collection`)
+        must override this so the proxy can stop a view-only caller from creating
+        one. Default: False.
+        """
+        return False
 
     async def upload(
         self,

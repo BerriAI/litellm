@@ -173,12 +173,48 @@ class S3VectorsVectorStoreOptions(TypedDict, total=False):
     aws_external_id: Optional[str]
 
 
+class MilvusVectorStoreOptions(TypedDict, total=False):
+    """
+    Milvus (self-hostable open-source vector database) configuration.
+
+    Example (auto-create collection):
+        {"custom_llm_provider": "milvus", "collection_name": "my_docs",
+         "api_base": "http://localhost:19530"}
+
+    Example (existing collection, no auth):
+        {"custom_llm_provider": "milvus", "collection_name": "my_docs",
+         "api_base": "http://localhost:19530", "auto_create_collection": False}
+
+    Embeddings are generated using LiteLLM's embedding API (supports any provider).
+    When the collection does not exist it is created with the Milvus REST
+    "quick setup" API (dynamic fields enabled so chunk text + metadata are
+    stored alongside the vector).
+    """
+
+    custom_llm_provider: Literal["milvus"]
+    collection_name: str  # Target Milvus collection (alias: vector_store_id)
+    vector_store_id: Optional[str]  # Alternative to collection_name
+
+    # Connection
+    api_base: Optional[str]  # Milvus REST base URL (or MILVUS_API_BASE env)
+    api_key: Optional[str]  # Milvus token (or MILVUS_API_KEY env); optional if no auth
+
+    # Schema / collection config (used for auto-creation)
+    vector_field: Optional[str]  # Embedding field name (default: "vector")
+    text_field: Optional[str]  # Chunk text field name (default: "text")
+    metric_type: Optional[str]  # Distance metric (default: "COSINE")
+    auto_create_collection: Optional[
+        bool
+    ]  # Create collection if missing (default: True)
+
+
 # Union type for vector store options
 RAGIngestVectorStoreOptions = Union[
     OpenAIVectorStoreOptions,
     BedrockVectorStoreOptions,
     VertexAIVectorStoreOptions,
     S3VectorsVectorStoreOptions,
+    MilvusVectorStoreOptions,
 ]
 
 
