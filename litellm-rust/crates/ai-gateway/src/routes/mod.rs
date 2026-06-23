@@ -1,0 +1,18 @@
+//! HTTP routes. One module per route so adding a route is a local change here.
+
+pub mod health;
+pub mod realtime;
+
+use axum::routing::{get, post};
+use axum::Router as AxumRouter;
+
+use crate::state::AppState;
+
+/// Assemble the HTTP router from the per-route handlers.
+pub fn app(state: AppState) -> AxumRouter {
+    AxumRouter::new()
+        .route("/health/liveness", get(health::liveness))
+        .route("/health/readiness", get(health::readiness))
+        .route("/v1/realtime", post(realtime::invoke))
+        .with_state(state)
+}
