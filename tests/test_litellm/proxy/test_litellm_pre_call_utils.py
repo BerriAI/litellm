@@ -4933,11 +4933,12 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(
     data: dict = {}
     await _apply_admin_logging_exporters(data, _auth(team_exporters=["langfuse-eu"]))
 
-    assert data["otel_destinations"][0]["callback_name"] == "langfuse_otel"
-    assert (
-        data["otel_destinations"][0]["endpoint"]
-        == "https://cloud.langfuse.com/api/public/otel"
-    )
+    # destinations live under litellm_metadata so the body does not leak an
+    # unknown top-level key to the provider; the top-level key stays absent
+    assert "otel_destinations" not in data
+    destinations = data["litellm_metadata"]["otel_destinations"]
+    assert destinations[0]["callback_name"] == "langfuse_otel"
+    assert destinations[0]["endpoint"] == "https://cloud.langfuse.com/api/public/otel"
     # the backend is activated for the request
     assert "langfuse_otel" in data["success_callback"]
 

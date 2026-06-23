@@ -36,10 +36,11 @@ def test_resolves_plain_values_from_metadata():
     assert params.get("langfuse_host") == "https://test.langfuse.com"
 
 
-def test_otel_destinations_read_from_top_level_only():
-    """The admin-resolved OTEL destinations are carried server-side on top-level
-    kwargs (the proxy strips any client value first). They must surface on the
-    dynamic params so the v2 logger can fan out to them."""
+def test_otel_destinations_read_from_litellm_metadata_only():
+    """The admin-resolved OTEL destinations are carried server-side under
+    ``litellm_metadata`` (a known internal key, scrubbed from the provider body) --
+    NOT as a top-level kwarg, since an unknown top-level key would leak to providers.
+    They must surface on the dynamic params so the v2 logger can fan out to them."""
     destinations = [
         {
             "callback_name": "langfuse_otel",
@@ -49,10 +50,21 @@ def test_otel_destinations_read_from_top_level_only():
     ]
 
     params = initialize_standard_callback_dynamic_params(
-        {"otel_destinations": destinations}
+        {"litellm_metadata": {"otel_destinations": destinations}}
     )
 
     assert params.get("otel_destinations") == destinations
+
+
+def test_otel_destinations_top_level_kwarg_is_ignored():
+    """A top-level ``otel_destinations`` kwarg is intentionally NOT read. The proxy
+    stashes admin-resolved destinations under ``litellm_metadata`` to keep unknown
+    keys out of the body forwarded to the provider; reading the top-level key would
+    re-open that surface and is therefore ignored."""
+    params = initialize_standard_callback_dynamic_params(
+        {"otel_destinations": [{"callback_name": "langfuse_otel"}]}
+    )
+    assert params.get("otel_destinations") is None
 
 
 def test_otel_destinations_never_read_from_request_metadata():

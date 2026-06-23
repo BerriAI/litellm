@@ -630,7 +630,7 @@ async def _resolve_logging_exporters(
     headers). The request never names or supplies a destination. Returns ([], []) only
     when nothing is selected (default-deny).
     """
-    from litellm.integrations.otel.destinations import build_destination
+    from litellm.integrations.otel.presets.destinations import build_destination
 
     names = await _union_logging_exporter_names(user_api_key_dict)
     team_id, org_id = user_api_key_dict.team_id, user_api_key_dict.org_id
@@ -685,12 +685,21 @@ async def _apply_admin_logging_exporters(
     data: dict, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
     """Stamp the resolved fan-out destinations onto ``data`` and activate their
-    backends. A client value was already stripped by the caller; default-deny means
-    an identity with no assignment gets no per-tenant destination here."""
+    backends.
+
+    The destinations live under ``data["litellm_metadata"]`` (in
+    ``all_litellm_params``, so scrubbed from the provider request body), not a
+    top-level key, so an unknown field cannot leak to the provider. Default-deny
+    means an identity with no assignment gets no per-tenant destination here.
+    """
     destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
     if not destinations:
         return
-    data["otel_destinations"] = destinations
+    proxy_metadata = data.get("litellm_metadata")
+    if not isinstance(proxy_metadata, dict):
+        proxy_metadata = {}
+    proxy_metadata["otel_destinations"] = destinations
+    data["litellm_metadata"] = proxy_metadata
     existing = data.get("success_callback") or []
     data["success_callback"] = list(dict.fromkeys([*existing, *backends]))
 
@@ -1983,8 +1992,13 @@ async def add_litellm_data_to_request(
 
     # Team Callbacks controls
     # A client must never set or override OTEL destinations; they are admin-owned and
-    # resolved server-side below, so drop any value carried in the request.
+    # resolved server-side below. Drop any value carried in the request at either the
+    # top level OR inside litellm_metadata (the resolver stashes admin-resolved values
+    # in litellm_metadata.otel_destinations; we wipe the client's first so injection
+    # via either spot is inert).
     data.pop("otel_destinations", None)
+    if isinstance(data.get("litellm_metadata"), dict):
+        data["litellm_metadata"].pop("otel_destinations", None)
     callback_settings_obj = _get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )

@@ -50,7 +50,9 @@ def test_destination_routable_presets_tag_exporter_with_matching_owner(monkeypat
     that integration's admin destination at its own exporter only and never
     rewrites a co-configured backend's exporter.
     """
-    from litellm.integrations.otel.destinations import OTEL_V2_DESTINATION_CALLBACKS
+    from litellm.integrations.otel.presets.destinations import (
+        OTEL_V2_DESTINATION_CALLBACKS,
+    )
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     monkeypatch.setenv("ARIZE_SPACE_ID", "S")

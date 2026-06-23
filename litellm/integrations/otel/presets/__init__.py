@@ -9,7 +9,7 @@ the factory in ``litellm_logging`` can resolve a name and build a single
 
 Per-key/team routing does not live here. A trace destination is admin-owned
 infrastructure config, resolved server-side from a named credential into an
-``OtelDestination`` (see ``litellm.integrations.otel.destinations`` and
+``OtelDestination`` (see ``litellm.integrations.otel.presets.destinations`` and
 ``plumbing.routing``); nothing in this package reads vendor credentials or a
 host off a request.
 """

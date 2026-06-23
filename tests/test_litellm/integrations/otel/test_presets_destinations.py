@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.otel.destinations import (
+from litellm.integrations.otel.presets.destinations import (
     OTEL_V2_DESTINATION_CALLBACKS,
     build_destination,
 )
