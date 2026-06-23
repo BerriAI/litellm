@@ -1,5 +1,5 @@
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
-use litellm_core::realtime::types::RealtimeTransformResult;
+use litellm_core::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 use litellm_core::CoreResult;
 
 /// Default OpenAI API base, used when the caller does not override `api_base`.
@@ -65,33 +65,33 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
 
     fn transform_realtime_request(
         &self,
-        message: &str,
+        event: &RealtimeEvent,
         _model: &str,
     ) -> CoreResult<RealtimeTransformResult> {
-        Ok(RealtimeTransformResult::passthrough(message))
+        Ok(RealtimeTransformResult::passthrough(event.clone()))
     }
 
     fn transform_realtime_response(
         &self,
-        message: &str,
+        event: &RealtimeEvent,
         _model: &str,
     ) -> CoreResult<RealtimeTransformResult> {
-        Ok(RealtimeTransformResult::passthrough(message))
+        Ok(RealtimeTransformResult::passthrough(event.clone()))
     }
 }
 
 pub fn transform_realtime_request(
-    message: &str,
+    event: &RealtimeEvent,
     model: &str,
 ) -> CoreResult<RealtimeTransformResult> {
-    OPENAI_REALTIME_CONFIG.transform_realtime_request(message, model)
+    OPENAI_REALTIME_CONFIG.transform_realtime_request(event, model)
 }
 
 pub fn transform_realtime_response(
-    message: &str,
+    event: &RealtimeEvent,
     model: &str,
 ) -> CoreResult<RealtimeTransformResult> {
-    OPENAI_REALTIME_CONFIG.transform_realtime_response(message, model)
+    OPENAI_REALTIME_CONFIG.transform_realtime_response(event, model)
 }
 
 #[cfg(test)]
@@ -147,18 +147,22 @@ mod tests {
     }
 
     #[test]
-    fn transform_realtime_request_passthrough_preserves_bytes() {
-        let message = r#"{"type":"session.update","session":{"voice":"alloy"}}"#;
-        let result = transform_realtime_request(message, "gpt-4o-realtime-preview")
-            .expect("passthrough is infallible");
-        assert_eq!(result.messages, vec![message.to_string()]);
+    fn transform_realtime_request_passthrough_preserves_event() {
+        let event: RealtimeEvent =
+            serde_json::from_str(r#"{"type":"session.update","session":{"voice":"alloy"}}"#)
+                .expect("valid event");
+        let result =
+            transform_realtime_request(&event, "gpt-realtime").expect("passthrough is infallible");
+        assert_eq!(result.events, vec![event]);
     }
 
     #[test]
-    fn transform_realtime_response_passthrough_preserves_bytes() {
-        let message = r#"{"type":"response.audio.delta","delta":"abc=="}"#;
-        let result = transform_realtime_response(message, "gpt-4o-realtime-preview")
-            .expect("passthrough is infallible");
-        assert_eq!(result.messages, vec![message.to_string()]);
+    fn transform_realtime_response_passthrough_preserves_event() {
+        let event: RealtimeEvent =
+            serde_json::from_str(r#"{"type":"response.output_audio.delta","delta":"abc=="}"#)
+                .expect("valid event");
+        let result =
+            transform_realtime_response(&event, "gpt-realtime").expect("passthrough is infallible");
+        assert_eq!(result.events, vec![event]);
     }
 }
