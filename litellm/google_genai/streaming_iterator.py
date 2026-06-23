@@ -2,6 +2,8 @@ import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import httpx
+
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -92,7 +94,7 @@ class GoogleGenAIGenerateContentStreamingIterator(
 
     def __init__(
         self,
-        response,
+        response: httpx.Response,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
@@ -153,7 +155,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(
 
     def __init__(
         self,
-        response,
+        response: httpx.Response,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
