@@ -5537,9 +5537,7 @@ class BaseLLMHTTPHandler:
         import websockets
         from websockets.asyncio.client import ClientConnection
 
-        url = self._append_query_params(
-            provider_config.get_complete_url(api_base, model, api_key), query_params
-        )
+        url = provider_config.get_complete_url(api_base, model, api_key)
         headers = provider_config.validate_environment(
             headers=headers,
             model=model,
