@@ -197,10 +197,12 @@ class ExaAISearchConfig(BaseSearchConfig):
             )
             results.append(search_result)
 
+        extra: dict = {}
+        if "output" in response_json:
+            extra["output"] = response_json["output"]
         search_response = SearchResponse(
             results=results,
             object="search",
+            **extra,
         )
-        if "output" in response_json:
-            search_response.output = response_json["output"]
         return search_response
