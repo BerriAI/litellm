@@ -264,7 +264,7 @@ class CloudflareChatResponseIterator(BaseModelResponseIterator):
             # ModelResponseStream so reasoning lands on the redaction-covered
             # delta.reasoning_content. (A nested provider_specific_fields entry
             # is NOT scrubbed by message-log redaction, so it must not be used.)
-            streaming_choices: List[StreamingChoices] = []
+            streaming_choices: list[StreamingChoices] = []
             for choice in chunk.get("choices") or []:
                 if not isinstance(choice, dict):
                     continue
