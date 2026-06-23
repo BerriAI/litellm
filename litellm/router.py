@@ -1991,7 +1991,11 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    if e.is_pre_first_chunk or not e.generated_content or initial_kwargs.get("tools"):
+                    if (
+                        e.is_pre_first_chunk
+                        or not e.generated_content
+                        or initial_kwargs.get("tools")
+                    ):
                         # Retry with the original messages when:
                         # - no content was generated before the error
                         # - the error happened before the first chunk
@@ -2548,7 +2552,11 @@ class Router:
                         router_self.content_policy_fallbacks,
                     )
                     initial_kwargs["original_function"] = router_self._completion
-                    if e.is_pre_first_chunk or not e.generated_content or initial_kwargs.get("tools"):
+                    if (
+                        e.is_pre_first_chunk
+                        or not e.generated_content
+                        or initial_kwargs.get("tools")
+                    ):
                         initial_kwargs["messages"] = messages
                     else:
                         initial_kwargs["messages"] = messages + [
