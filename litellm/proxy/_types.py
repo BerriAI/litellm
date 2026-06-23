@@ -361,6 +361,16 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        # realtime (GA WebRTC HTTP routes)
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
         # responses API
         "/responses",
         "/v1/responses",
@@ -373,6 +383,8 @@ class LiteLLMRoutes(enum.Enum):
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
+        "/vector_stores/{vector_store_id}",
+        "/v1/vector_stores/{vector_store_id}",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
         "/vector_stores/{vector_store_id}/files",
@@ -2130,6 +2142,20 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
 UserMCPManagementMode = Literal["restricted", "view_all"]
 
 
+class PluginConfig(LiteLLMPydanticObjectBase):
+    """A single external service registered as an embeddable UI plugin."""
+
+    name: str = Field(description="unique plugin identifier (kebab-case)")
+    display_name: str | None = Field(
+        None, description="human-readable label shown in the UI view switcher"
+    )
+    url: str = Field(description="base URL of the plugin service")
+    plugin_key: str | None = Field(
+        None,
+        description="plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls",
+    )
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2137,6 +2163,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
 
     completion_model: Optional[str] = Field(
         None, description="proxy level default model for all chat completion calls"
+    )
+    plugins: list[PluginConfig] | None = Field(
+        None, description="external services registered as embeddable UI plugins"
     )
     key_management_system: Optional[KeyManagementSystem] = Field(
         None, description="key manager to load keys from / decrypt keys with"
@@ -2149,6 +2178,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     master_key: Optional[str] = Field(
         None, description="require a key for all calls to proxy"
+    )
+    allow_cli_sso_verification_uri_complete: bool | None = Field(
+        None,
+        description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
     )
     database_url: Optional[str] = Field(
         None,
@@ -2942,6 +2975,10 @@ class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
     no_default_models = "no-default-models"
+
+
+class SpecialMCPServerNames(enum.Enum):
+    no_mcp_servers = "no-mcp-servers"
 
 
 class SpecialProxyStrings(enum.Enum):
@@ -3791,6 +3828,28 @@ class SpecialHeaders(enum.Enum):
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
     mcp_access_groups = "x-mcp-access-groups"
+
+    @classmethod
+    def litellm_credential_header_names(cls) -> "frozenset[str]":
+        """Lowercased header names user_api_key_auth accepts as a litellm key.
+
+        Every header here authenticates the caller, so any code that forwards a
+        request onward (e.g. the plugin reverse proxy) must strip all of them to
+        avoid leaking the caller's litellm credential downstream. The static
+        custom-key header (general_settings.litellm_key_header_name) is runtime
+        config and must be added on top of this set by the caller.
+        """
+        return frozenset(
+            header.value.lower()
+            for header in (
+                cls.openai_authorization,
+                cls.azure_authorization,
+                cls.anthropic_authorization,
+                cls.google_ai_studio_authorization,
+                cls.azure_apim_authorization,
+                cls.custom_litellm_api_key,
+            )
+        )
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):

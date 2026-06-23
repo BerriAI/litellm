@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -22,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._types import LiteLLM_VerificationTokenView
 from litellm.proxy.utils import PrismaClient
 
 
@@ -476,3 +478,62 @@ async def test_get_data_logs_and_raises_on_db_error(
     )
     with pytest.raises(RuntimeError, match="network split"):
         await prisma_client.get_data(token="sk-broken", table_name="key")
+
+
+@pytest.mark.asyncio
+async def test_get_data_combined_view_returns_view_for_deprecated_key(
+    prisma_client: PrismaClient,
+) -> None:
+    """Grace-period rotation, full get_data flow: the old hash misses the
+    combined view, the deprecated-key table resolves it to the active token,
+    and get_data must return the recursive lookup's finished view instead of
+    re-running dict normalization on it (which raised TypeError and turned
+    every grace-period request into a 401)."""
+    old_hash = "hashed-old-token-grace-e2e"
+    active_hash = "hashed-active-token-grace-e2e"
+    active_row = {
+        "token": active_hash,
+        "team_models": None,
+        "team_blocked": None,
+        "team_members_with_roles": None,
+        "user_id": None,
+        "expires": None,
+    }
+    prisma_client.db.query_first = AsyncMock(side_effect=[None, active_row])
+    prisma_client.db.litellm_deprecatedverificationtoken = MagicMock()
+    prisma_client.db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(
+            active_token_id=active_hash,
+            revoke_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+    )
+
+    response = await prisma_client.get_data(
+        token=old_hash, table_name="combined_view", query_type="find_unique"
+    )
+
+    assert isinstance(response, LiteLLM_VerificationTokenView)
+    assert response.token == active_hash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [5, None])
+async def test_get_data_team_keys_forward_limit_as_take(
+    prisma_client: PrismaClient, limit: Any
+) -> None:
+    """The /team/info ``key_limit`` must reach Prisma as ``take`` so the
+    database caps how many of a team's keys come back.
+    ``limit=None`` leaves ``take`` unset so every key is returned.
+    """
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    await prisma_client.get_data(
+        team_id="team-1",
+        table_name="key",
+        query_type="find_all",
+        limit=limit,
+    )
+    assert prisma_client.db.litellm_verificationtoken.find_many.await_args.kwargs == {
+        "take": limit,
+        "where": {"team_id": "team-1"},
+        "include": {"litellm_budget_table": True},
+    }

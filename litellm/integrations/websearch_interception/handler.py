@@ -1128,7 +1128,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             raise
 
-    async def _execute_chat_completion_agentic_loop(  # noqa: PLR0915
+    async def _execute_chat_completion_agentic_loop(
         self,
         model: str,
         messages: List[Dict],
@@ -1159,7 +1159,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             **request_patch.kwargs,
         )
 
-    async def _build_chat_completion_request_patch(  # noqa: PLR0915
+    async def _build_chat_completion_request_patch(
         self,
         model: str,
         messages: List[Dict],

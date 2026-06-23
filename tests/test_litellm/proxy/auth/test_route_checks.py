@@ -460,6 +460,32 @@ def test_mcp_inference_routes_classified_as_llm_api(route):
     assert RouteChecks.is_management_route(route=route) is False
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
+    ],
+)
+def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
+    """GA Realtime WebRTC HTTP routes must be classified as LLM API routes so
+    non-admin virtual keys can call them instead of hitting the admin-only
+    401 branch in non_proxy_admin_allowed_routes_check.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/29923
+    """
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
@@ -1400,6 +1426,65 @@ def test_rag_routes_accessible_to_internal_user_viewer():
         )
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/vector_stores/vs_123",
+        "/v1/vector_stores/vs_123",
+        "/vector_stores/vs_123/search",
+        "/v1/vector_stores/vs_123/search",
+        "/vector_stores/vs_123/files",
+        "/v1/vector_stores/vs_123/files",
+    ],
+)
+def test_vector_store_routes_are_llm_api_routes(route):
+    """Retrieve/update/delete on a single vector store must classify as LLM API routes.
+
+    Regression for the missing bare `/v1/vector_stores/{vector_store_id}` entry in
+    `openai_routes` that left retrieve/update/delete blocked for internal roles
+    while `/search` and `/files` sub-routes worked.
+    """
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("GET", "/v1/vector_stores/vs_123"),
+        ("POST", "/v1/vector_stores/vs_123"),
+        ("DELETE", "/v1/vector_stores/vs_123"),
+    ],
+)
+def test_vector_store_crud_accessible_to_internal_roles(user_role, method, route):
+    """Internal user and internal viewer must reach vector store retrieve/update/delete.
+
+    Object-level access is still gated by `assert_user_can_access_vector_store`;
+    this only verifies the route gate no longer 403s these roles.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = method
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role),
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.
@@ -1900,7 +1985,6 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 # corners of the codebase and represent the long tail of GETs we'd otherwise
 # need to enumerate manually. Default-allow makes them all work.
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
-    "/in_product_nudges",
     "/health/latest",
     "/credentials",
     "/v1/mcp/network/client-ip",

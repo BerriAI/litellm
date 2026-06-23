@@ -17,10 +17,12 @@ from typing import (
     Union,
 )
 
+import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
@@ -29,6 +31,7 @@ from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
@@ -65,7 +68,12 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    StandardLoggingPayloadErrorInformation,
+    Usage,
+)
 
 # Datadog streaming spans are a no-op when ddtrace is not enabled, but the
 # ``with tracer.trace(...)`` context manager still allocates a NullSpan and
@@ -73,6 +81,63 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 # the per-chunk hot path can skip the context manager entirely when tracing
 # is off (the default).
 _DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
+
+
+_CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation = {
+    "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+    "error_message": "Client disconnected the request",
+    "error_class": "ClientDisconnected",
+}
+
+
+def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> None:
+    target_metadata["client_disconnected"] = True
+    target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
+
+
+async def _record_streaming_client_disconnect_if_needed(
+    request: Request | None,
+    request_data: dict,
+    client_disconnected: bool = False,
+) -> bool:
+    if not client_disconnected:
+        if request is None:
+            return False
+        try:
+            disconnected = await request.is_disconnected()
+        except Exception:  # noqa: BLE001
+            return False
+        if not disconnected:
+            return False
+
+    logging_obj = request_data.get("litellm_logging_obj")
+    if logging_obj is not None:
+        litellm_params = logging_obj.model_call_details.setdefault("litellm_params", {})
+        _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
+        _apply_client_disconnect_metadata(
+            logging_obj.model_call_details.setdefault("metadata", {})
+        )
+
+    _apply_client_disconnect_metadata(request_data.setdefault("metadata", {}))
+    litellm_params = request_data.setdefault("litellm_params", {})
+    _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
+
+    verbose_proxy_logger.debug(
+        "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
+        request_data.get("litellm_call_id"),
+    )
+    return True
+
+
+async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
+    pending_tasks = [task for task in tasks if not task.done()]
+    for task in pending_tasks:
+        task.cancel()
+    for task in pending_tasks:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
 
 def _serialize_http_exception_detail(
@@ -240,7 +305,51 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
-async def create_response(  # noqa: PLR0915
+class _UpstreamClosingStreamingResponse(StreamingResponse):
+    """StreamingResponse that always closes its body iterator and the wrapped
+    upstream generator.
+
+    When the client disconnects mid-stream, Starlette abandons the body
+    iterator without calling aclose(), leaving the upstream LLM connection
+    open until garbage collection; the backend (e.g. vLLM) keeps generating
+    into a dead pipe. The upstream generator is closed directly (not via the
+    body iterator) because aclose() on a never-started generator skips its
+    body, so a cascade through it would be a no-op if the client disconnects
+    before the first chunk is sent.
+    """
+
+    def __init__(
+        self,
+        content: AsyncGenerator[str, None],
+        *,
+        media_type: Optional[str] = None,
+        headers: Optional[dict] = None,
+        status_code: int = status.HTTP_200_OK,
+        upstream_generator: Optional[AsyncGenerator[str, None]] = None,
+    ) -> None:
+        super().__init__(
+            content, status_code=status_code, headers=headers, media_type=media_type
+        )
+        self._upstream_generator = upstream_generator
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                for target in (self.body_iterator, self._upstream_generator):
+                    aclose = getattr(target, "aclose", None)
+                    if aclose is None:
+                        continue
+                    try:
+                        await aclose()
+                    except BaseException as e:
+                        verbose_proxy_logger.debug(
+                            "error closing streaming generator: %s", e
+                        )
+
+
+async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
@@ -366,11 +475,12 @@ async def create_response(  # noqa: PLR0915
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
-    return StreamingResponse(
+    return _UpstreamClosingStreamingResponse(
         combined_generator(),
         media_type=media_type,
         headers=streaming_headers,
         status_code=final_status_code,
+        upstream_generator=generator,
     )
 
 
@@ -1087,7 +1197,7 @@ class ProxyBaseLLMRequestProcessing:
                 _payload_str,
             )
 
-    async def base_process_llm_request(  # noqa: PLR0915
+    async def base_process_llm_request(
         self,
         request: Request,
         fastapi_response: Response,
@@ -1277,19 +1387,22 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        tasks.append(llm_call)
+        llm_call_task = asyncio.create_task(llm_call)
+        tasks.append(llm_call_task)
 
-        # wait for call to end
         llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        if general_settings.get("cancel_on_disconnect", False):
-            responses = await _await_llm_call_cancelling_on_disconnect(
-                request, llm_responses
-            )
-        else:
-            responses = await llm_responses
+        try:
+            if general_settings.get("cancel_on_disconnect", False):
+                responses = await _await_llm_call_cancelling_on_disconnect(
+                    request, llm_responses
+                )
+            else:
+                responses = await llm_responses
+        finally:
+            await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
 
@@ -1465,6 +1578,7 @@ class ProxyBaseLLMRequestProcessing:
                                 user_api_key_dict=user_api_key_dict,
                                 request_data=self.data,
                                 proxy_logging_obj=proxy_logging_obj,
+                                request=request,
                             )
                         )
                         return await create_response(
@@ -1478,6 +1592,7 @@ class ProxyBaseLLMRequestProcessing:
                         response=response,
                         user_api_key_dict=user_api_key_dict,
                         request_data=self.data,
+                        request=request,
                     )
                     if route_type == "aresponses":
                         # Streaming /v1/responses returns here without
@@ -1701,6 +1816,23 @@ class ProxyBaseLLMRequestProcessing:
                     await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
                         response=completed_obj,
                         user_api_key_dict=user_api_key_dict,
+                    )
+                else:
+                    # Silent skip caused #30210: the proxy's Router wrapper
+                    # of the responses streaming iterator wasn't propagating
+                    # ``completed_response``, so this hook recorded nothing
+                    # and follow-up /v1/containers/<id>/files calls 403'd
+                    # for non-admin keys with no proxy-side hint. Log a
+                    # warning so future regressions of the same shape
+                    # surface in operator logs.
+                    verbose_proxy_logger.warning(
+                        "Container ownership recording skipped on streaming "
+                        "/v1/responses: no completed_response on stream "
+                        "iterator %s. If this stream created any tool "
+                        "container (e.g. code_interpreter), follow-up "
+                        "/v1/containers/<id>/files calls will 403 for "
+                        "non-admin keys.",
+                        type(original_stream_response).__name__,
                     )
             except Exception as e:
                 verbose_proxy_logger.exception(
@@ -2217,6 +2349,13 @@ class ProxyBaseLLMRequestProcessing:
 
         self._apply_router_cooldown_retry_after(headers, e)
 
+        if isinstance(e, ProxyException):
+            e.headers = {
+                **e.headers,
+                **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
+            }
+            raise e
+
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
             message, structured_fields = _serialize_http_exception_detail(raw_detail)
@@ -2306,6 +2445,39 @@ class ProxyBaseLLMRequestProcessing:
             return chunk
 
     @staticmethod
+    async def _finalize_streaming_generator_cleanup(
+        request: Request | None,
+        request_data: dict,
+        response: Any,
+        stream_completed: bool = False,
+        client_disconnected: bool = False,
+    ) -> None:
+        with anyio.CancelScope(shield=True):
+            should_record_client_disconnect = client_disconnected or (
+                not stream_completed
+            )
+            recorded_client_disconnect = False
+            if should_record_client_disconnect:
+                recorded_client_disconnect = (
+                    await _record_streaming_client_disconnect_if_needed(
+                        request,
+                        request_data,
+                        client_disconnected,
+                    )
+                )
+            if recorded_client_disconnect:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
+
+            if hasattr(response, "aclose"):
+                try:
+                    await response.aclose()
+                except BaseException as e:  # noqa: BLE001
+                    verbose_proxy_logger.debug(
+                        "async_streaming_data_generator: error closing response stream: %s",
+                        e,
+                    )
+
+    @staticmethod
     async def async_streaming_data_generator(
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2314,6 +2486,7 @@ class ProxyBaseLLMRequestProcessing:
         *,
         serialize_chunk: StreamChunkSerializer,
         serialize_error: StreamErrorSerializer,
+        request: Request | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -2338,6 +2511,9 @@ class ProxyBaseLLMRequestProcessing:
             and not cost_injection_enabled
         )
         debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
+        stream_completed = False
+        client_disconnected = False
+        delivered_chunk = False
         try:
             str_so_far = ""
             async for (
@@ -2354,37 +2530,40 @@ class ProxyBaseLLMRequestProcessing:
                         "async_data_generator: received streaming chunk - %s", chunk
                     )
 
-                if fast_path:
-                    yield serialize_chunk(chunk)
-                    continue
+                if not fast_path:
+                    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        response=chunk,
+                        data=request_data,
+                        str_so_far=str_so_far,
+                    )
 
-                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=chunk,
-                    data=request_data,
-                    str_so_far=str_so_far,
-                )
+                    if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                        response_str = litellm.get_response_string(response_obj=chunk)
+                        str_so_far += response_str
+                    elif hasattr(chunk, "model_dump"):
+                        try:
+                            d = chunk.model_dump(mode="json", exclude_none=True)
+                            if isinstance(d, dict):
+                                str_so_far += str(d.get("content", ""))
+                        except Exception:
+                            pass
+                    elif isinstance(chunk, dict):
+                        str_so_far += str(chunk.get("content", ""))
 
-                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                    response_str = litellm.get_response_string(response_obj=chunk)
-                    str_so_far += response_str
-                elif hasattr(chunk, "model_dump"):
-                    try:
-                        d = chunk.model_dump(mode="json", exclude_none=True)
-                        if isinstance(d, dict):
-                            str_so_far += str(d.get("content", ""))
-                    except Exception:
-                        pass
-                elif isinstance(chunk, dict):
-                    str_so_far += str(chunk.get("content", ""))
-
-                model_name = request_data.get("model", "")
-                chunk = (
-                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                    model_name = request_data.get("model", "")
+                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
                     )
-                )
+
+                # Set before the yield: an async generator suspends at the yield,
+                # so a GeneratorExit on client disconnect is raised there and any
+                # statement after the yield never runs. The slow-path hook is
+                # awaited above, so a cancellation during it still leaves this
+                # False and refunds.
+                delivered_chunk = True
                 yield serialize_chunk(chunk)
+            stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
@@ -2392,9 +2571,19 @@ class ProxyBaseLLMRequestProcessing:
             # release it here. This is the outermost generator Starlette closes
             # on disconnect, so the nested iterator hook (which only sees
             # GeneratorExit on GC) cannot own the refund.
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
-                user_api_key_dict
-            )
+            if not stream_completed:
+                proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+                client_disconnected = True
+            if not delivered_chunk:
+                from litellm.proxy.spend_tracking.budget_reservation import (
+                    release_budget_reservation_on_cancel,
+                )
+
+                await release_budget_reservation_on_cancel(
+                    getattr(user_api_key_dict, "budget_reservation", None)
+                )
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -2423,7 +2612,16 @@ class ProxyBaseLLMRequestProcessing:
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+            stream_completed = True
             yield serialize_error(proxy_exception)
+        finally:
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=request,
+                request_data=request_data,
+                response=response,
+                stream_completed=stream_completed,
+                client_disconnected=client_disconnected,
+            )
 
     @staticmethod
     def async_sse_data_generator(
@@ -2431,6 +2629,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
+        request: Request | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
@@ -2449,6 +2648,7 @@ class ProxyBaseLLMRequestProcessing:
             serialize_error=lambda proxy_exc: (
                 f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
             ),
+            request=request,
         )
 
     @staticmethod

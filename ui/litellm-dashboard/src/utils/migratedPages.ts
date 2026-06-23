@@ -9,6 +9,8 @@ import { serverRootPath } from "@/components/networking";
  * legacy `?page=` URL; remove it to roll back.
  */
 export const MIGRATED_PAGES: Record<string, string> = {
+  "api-keys": "api-keys",
+  models: "models-and-endpoints",
   api_ref: "api-reference",
   // Legacy alias: older bookmarks used the hyphenated ?page=api-reference form.
   "api-reference": "api-reference",
@@ -30,6 +32,22 @@ export const MIGRATED_PAGES: Record<string, string> = {
   skills: "skills",
   // Legacy alias: the old switch matched ?page=claude-code-plugins for the same panel.
   "claude-code-plugins": "skills",
+  caching: "caching",
+  "cost-tracking": "cost-tracking",
+  "transform-request": "transform-request",
+  "ui-theme": "ui-theme",
+  logs: "logs",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  // The modern usage dashboard; the legacy ?page=usage report routes to /old-usage.
+  new_usage: "usage",
+  usage: "old-usage",
+  agents: "agents",
+  "router-settings": "router-settings",
+  users: "users",
+  teams: "teams",
+  organizations: "organizations",
 };
 
 function uiBase(): string {

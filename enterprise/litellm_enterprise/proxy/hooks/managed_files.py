@@ -1,9 +1,9 @@
 # What is this?
 ## This hook is used to check for LiteLLM managed files in the request body, and replace them with model-specific file id
 
-import asyncio
 import base64
 import json
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
@@ -412,7 +412,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
                     )
 
-    async def async_pre_call_hook(  # noqa: PLR0915
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -1472,8 +1472,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 error_message += f" (showing {MAX_BATCHES_IN_ERROR} most recent): {', '.join(batch_statuses)}. "
 
             error_message += (
-                f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
-                f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
+                "To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
+                "Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
 
             # Record blocked deletion metric
@@ -1550,9 +1550,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if specific_model_file_id_mapping:
             exception_dict = {}
-            for model_id, file_id in specific_model_file_id_mapping.items():
+            for model_id, provider_file_id in specific_model_file_id_mapping.items():
                 try:
-                    return await llm_router.afile_content(model=model_id, file_id=file_id, **data)  # type: ignore
+                    # Cloud-storage providers (e.g. Bedrock S3) validate file ids
+                    # against the deployment's configured bucket, which they only
+                    # trust from this immutable server-side snapshot, never from
+                    # request params.
+                    credentials = llm_router.get_deployment_credentials_with_provider(
+                        model_id=model_id
+                    )
+                    if credentials is not None:
+                        data["_litellm_internal_model_credentials"] = cast(
+                            Dict, MappingProxyType(dict(credentials))
+                        )
+                    else:
+                        data.pop("_litellm_internal_model_credentials", None)
+                    return await llm_router.afile_content(model=model_id, file_id=provider_file_id, **data)  # type: ignore
                 except Exception as e:
                     exception_dict[model_id] = str(e)
             raise Exception(
