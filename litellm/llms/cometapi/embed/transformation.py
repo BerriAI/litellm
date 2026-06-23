@@ -9,11 +9,14 @@ import httpx
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import CometAPIException
+from ..common_utils import (
+    CometAPIException,
+    get_cometapi_complete_url,
+    require_cometapi_api_key,
+)
 
 
 class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
@@ -39,11 +42,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for the CometAPI embedding endpoint.
         """
-        api_base = (
-            "https://api.cometapi.com/v1" if api_base is None else api_base.rstrip("/")
-        )
-        complete_url = f"{api_base}/embeddings"
-        return complete_url
+        return get_cometapi_complete_url(api_base, "embeddings", api_key=api_key)
 
     def validate_environment(
         self,
@@ -58,11 +57,10 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Validate and set up authentication headers for CometAPI.
         """
-        if api_key is None:
-            api_key = get_secret_str("COMETAPI_KEY")
+        final_api_key = require_cometapi_api_key(api_key)
 
         default_headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {final_api_key}",
             "accept": "application/json",
             "Content-Type": "application/json",
         }

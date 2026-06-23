@@ -152,6 +152,10 @@ def image_generation(
     model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    background: Optional[str] = None,
+    moderation: Optional[str] = None,
+    output_compression: Optional[int] = None,
+    output_format: Optional[str] = None,
     response_format: Optional[str] = None,
     size: Optional[str] = None,
     style: Optional[str] = None,
@@ -176,6 +180,10 @@ def image_generation(
     model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    background: Optional[str] = None,
+    moderation: Optional[str] = None,
+    output_compression: Optional[int] = None,
+    output_format: Optional[str] = None,
     response_format: Optional[str] = None,
     size: Optional[str] = None,
     style: Optional[str] = None,
@@ -200,6 +208,10 @@ def image_generation(
     model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    background: Optional[str] = None,
+    moderation: Optional[str] = None,
+    output_compression: Optional[int] = None,
+    output_format: Optional[str] = None,
     response_format: Optional[str] = None,
     size: Optional[str] = None,
     style: Optional[str] = None,
@@ -270,6 +282,14 @@ def image_generation(
         non_default_params = {
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
+        for param_name, param_value in {
+            "background": background,
+            "moderation": moderation,
+            "output_compression": output_compression,
+            "output_format": output_format,
+        }.items():
+            if param_value is not None:
+                non_default_params[param_name] = param_value
 
         image_generation_config: Optional[BaseImageGenerationConfig] = None
         if (
@@ -404,6 +424,7 @@ def image_generation(
         elif custom_llm_provider in (
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
+            litellm.LlmProviders.COMETAPI,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
             litellm.LlmProviders.STABILITY,
@@ -417,8 +438,21 @@ def image_generation(
                     f"image generation config is not supported for {custom_llm_provider}"
                 )
 
-            # Resolve api_base from litellm.api_base if not explicitly provided
             _api_base = api_base or litellm.api_base
+            if custom_llm_provider == litellm.LlmProviders.COMETAPI:
+                from litellm.llms.cometapi.common_utils import (
+                    get_cometapi_api_base,
+                    require_cometapi_api_key,
+                )
+
+                cometapi_request_api_key = api_key or dynamic_api_key
+                _api_base = get_cometapi_api_base(
+                    api_base, api_key=cometapi_request_api_key
+                )
+                api_key = require_cometapi_api_key(
+                    cometapi_request_api_key or litellm.cometapi_key
+                )
+                litellm_params_dict.pop("api_key", None)
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
@@ -493,7 +527,6 @@ def image_generation(
         ):
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
-            # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Optional[str] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
                 model=model,

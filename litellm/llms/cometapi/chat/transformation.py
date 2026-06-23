@@ -5,17 +5,17 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import CometAPIException
+from ..common_utils import CometAPIException, get_cometapi_complete_url
 
 
 class CometAPIConfig(OpenAIGPTConfig):
@@ -25,47 +25,6 @@ class CometAPIConfig(OpenAIGPTConfig):
     Since CometAPI is OpenAI-compatible API, we inherit from OpenAIGPTConfig
     and only need to override necessary methods to handle CometAPI-specific features
     """
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        """
-        Map OpenAI format parameters to CometAPI format
-        """
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
-
-        # CometAPI-specific parameters (if any)
-        extra_body: dict[str, Any] = {}
-        # TODO: Add CometAPI-specific parameter handling here
-        # Example:
-        # custom_param = non_default_params.pop("custom_param", None)
-        # if custom_param is not None:
-        #     extra_body["custom_param"] = custom_param
-
-        if extra_body:
-            mapped_openai_params["extra_body"] = extra_body
-
-        return mapped_openai_params
-
-    def remove_cache_control_flag_from_messages_and_tools(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
-        """
-        Remove cache control flags from messages and tools if not supported
-        """
-        # For CometAPI, use default behavior (remove cache control)
-        return super().remove_cache_control_flag_from_messages_and_tools(
-            model, messages, tools
-        )
 
     def transform_request(
         self,
@@ -81,7 +40,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
@@ -103,30 +62,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             str: The complete URL for the API call.
         """
-        # Default base
-        if api_base is None:
-            api_base = "https://api.cometapi.com/v1"
-        endpoint = "chat/completions"
-
-        # Normalize
-        api_base = api_base.rstrip("/")
-
-        # If endpoint already present, return as-is
-        if endpoint in api_base:
-            return api_base
-
-        # Ensure we include /v1 prefix when missing
-        if api_base.endswith("/v1"):
-            return f"{api_base}/{endpoint}"
-        if api_base.endswith("/v1/"):
-            return f"{api_base}{endpoint}"
-        # If user provided https://api.cometapi.com, add /v1
-        if api_base == "https://api.cometapi.com":
-            return f"{api_base}/v1/{endpoint}"
-        # Generic fallback: if '/v1' not in path, add it
-        if "/v1" not in api_base.split("//", 1)[-1]:
-            return f"{api_base}/v1/{endpoint}"
-        return f"{api_base}/{endpoint}"
+        return get_cometapi_complete_url(api_base, "chat/completions", api_key=api_key)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

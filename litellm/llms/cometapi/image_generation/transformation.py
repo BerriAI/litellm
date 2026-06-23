@@ -1,16 +1,23 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import ImageResponse
+from litellm.utils import convert_to_model_response_object
+
+from ..common_utils import (
+    CometAPIException,
+    get_cometapi_complete_url,
+    require_cometapi_api_key,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -21,8 +28,28 @@ else:
 
 
 class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
-    DEFAULT_BASE_URL: str = "https://api.cometapi.com"
-    IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
+    @staticmethod
+    def _normalize_image_usage(response_data: dict) -> None:
+        usage = response_data.get("usage")
+        if not isinstance(usage, dict):
+            return
+
+        if usage.get("input_tokens") is None:
+            usage["input_tokens"] = 0
+        if usage.get("output_tokens") is None:
+            usage["output_tokens"] = 0
+        if usage.get("total_tokens") is None:
+            usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+
+        input_tokens_details = usage.get("input_tokens_details")
+        if not isinstance(input_tokens_details, dict):
+            usage["input_tokens_details"] = {"image_tokens": 0, "text_tokens": 0}
+            return
+
+        if input_tokens_details.get("image_tokens") is None:
+            input_tokens_details["image_tokens"] = 0
+        if input_tokens_details.get("text_tokens") is None:
+            input_tokens_details["text_tokens"] = 0
 
     def get_supported_openai_params(
         self, model: str
@@ -31,11 +58,16 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         return [
+            "background",
+            "moderation",
             "n",
+            "output_compression",
+            "output_format",
             "quality",
             "response_format",
             "size",
             "style",
+            "user",
         ]
 
     def map_openai_params(
@@ -50,7 +82,6 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         for k in non_default_params.keys():
             if k not in optional_params.keys():
                 if k in supported_params:
-                    # CometAPI uses OpenAI-compatible parameters, so we can pass them directly
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
                     pass
@@ -73,16 +104,9 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete url for the request
         """
-        complete_url: str = (
-            api_base
-            or get_secret_str("COMETAPI_BASE_URL")
-            or get_secret_str("COMETAPI_API_BASE")
-            or self.DEFAULT_BASE_URL
+        return get_cometapi_complete_url(
+            api_base, "images/generations", api_key=api_key
         )
-
-        complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
 
     def validate_environment(
         self,
@@ -94,13 +118,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("COMETAPI_KEY")
-            or get_secret_str("COMETAPI_API_KEY")
-        )
-        if not final_api_key:
-            raise ValueError("COMETAPI_KEY or COMETAPI_API_KEY is not set")
+        final_api_key = require_cometapi_api_key(api_key)
 
         headers["Authorization"] = f"Bearer {final_api_key}"
         headers["Content-Type"] = "application/json"
@@ -119,7 +137,6 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
 
         https://api.cometapi.com/v1/images/generations
         """
-        # CometAPI uses OpenAI-compatible format
         request_body = {
             "prompt": prompt,
             "model": model,
@@ -154,17 +171,50 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
                 headers=raw_response.headers,
             )
 
-        if not model_response.data:
-            model_response.data = []
+        if raw_response.status_code >= 400:
+            error_data = response_data.get("error", response_data)
+            error_message = (
+                error_data.get("message")
+                if isinstance(error_data, dict)
+                else str(error_data)
+            )
+            raise self.get_error_class(
+                error_message=error_message or str(response_data),
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
 
-        # CometAPI returns OpenAI-compatible format
-        # Expected format: {"created": timestamp, "data": [{"url": "...", "b64_json": "..."}]}
-        if "data" in response_data:
-            for image_data in response_data["data"]:
-                image_obj = ImageObject(
-                    b64_json=image_data.get("b64_json"),
-                    url=image_data.get("url"),
-                )
-                model_response.data.append(image_obj)
+        self._normalize_image_usage(response_data)
+        logging_obj.post_call(
+            input=request_data.get("prompt", ""),
+            api_key=api_key,
+            additional_args={"complete_input_dict": request_data},
+            original_response=response_data,
+        )
+        response_data.update(
+            {
+                key: value
+                for key, value in {
+                    "size": optional_params.get("size"),
+                    "quality": optional_params.get("quality"),
+                    "output_format": optional_params.get(
+                        "output_format", optional_params.get("response_format")
+                    ),
+                }.items()
+                if value is not None
+            }
+        )
+        image_response: ImageResponse = convert_to_model_response_object(  # type: ignore
+            response_object=response_data,
+            model_response_object=model_response,
+            response_type="image_generation",
+        )
 
-        return model_response
+        return image_response
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return CometAPIException(
+            message=error_message, status_code=status_code, headers=headers
+        )

@@ -3235,6 +3235,10 @@ def get_optional_params_image_gen(
     model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[str] = None,
+    background: Optional[str] = None,
+    moderation: Optional[str] = None,
+    output_compression: Optional[int] = None,
+    output_format: Optional[str] = None,
     response_format: Optional[str] = None,
     size: Optional[str] = None,
     style: Optional[str] = None,
@@ -3270,7 +3274,11 @@ def get_optional_params_image_gen(
         passed_params[k] = v
 
     default_params = {
+        "background": None,
+        "moderation": None,
         "n": None,
+        "output_compression": None,
+        "output_format": None,
         "quality": None,
         "response_format": None,
         "size": None,

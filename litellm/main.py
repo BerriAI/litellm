@@ -109,6 +109,10 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
+from litellm.llms.cometapi.common_utils import (
+    get_cometapi_api_base,
+    require_cometapi_api_key,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -322,6 +326,7 @@ heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
+
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
 ####### COMPLETION ENDPOINTS ################
@@ -2554,19 +2559,9 @@ def completion(  # type: ignore
                 stream=stream,
             )
         elif custom_llm_provider == "cometapi":
-            api_key = (
-                api_key
-                or litellm.cometapi_key
-                or get_secret_str("COMETAPI_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("COMETAPI_API_BASE")
-                or "https://api.cometapi.com/v1"
-            )
+            cometapi_request_api_key = api_key
+            api_key = require_cometapi_api_key(api_key or litellm.cometapi_key)
+            api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
 
             ## COMPLETION CALL
             response = base_llm_http_handler.completion(
@@ -5909,18 +5904,9 @@ def embedding(
                 litellm_params={},
             )
         elif custom_llm_provider == "cometapi":
-            api_key = (
-                api_key
-                or litellm.cometapi_key
-                or get_secret_str("COMETAPI_KEY")
-                or litellm.api_key
-            )
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("COMETAPI_API_BASE")
-                or "https://api.cometapi.com/v1"
-            )
+            cometapi_request_api_key = api_key
+            api_key = require_cometapi_api_key(api_key or litellm.cometapi_key)
+            api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -6488,16 +6474,43 @@ def adapter_completion(
 def moderation(
     input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
 ) -> OpenAIModerationResponse:
-    # only supports open ai for now
-    api_key = (
-        api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
-    )
-
-    # Extract api_base from kwargs
     api_base = kwargs.get("api_base", None)
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    _dynamic_api_key = None
+    _dynamic_api_base = None
+    try:
+        (
+            model,
+            custom_llm_provider,
+            _dynamic_api_key,
+            _dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model or "",
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    except litellm.BadRequestError:
+        pass
+
+    if custom_llm_provider == "cometapi":
+        cometapi_request_api_key = api_key or _dynamic_api_key
+        cometapi_request_api_base = api_base or _dynamic_api_base
+        api_key = require_cometapi_api_key(
+            cometapi_request_api_key or litellm.cometapi_key
+        )
+        api_base = get_cometapi_api_base(
+            cometapi_request_api_base, api_key=cometapi_request_api_key
+        )
+    else:
+        api_key = (
+            api_key
+            or _dynamic_api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        api_base = api_base or _dynamic_api_base
 
     openai_client = kwargs.get("client", None)
     if openai_client is None:
@@ -6527,17 +6540,12 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    # only supports open ai for now
-    api_key = (
-        api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
-    )
     optional_params = GenericLiteLLMParams(**kwargs)
     litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
         "litellm_logging_obj", None
     )
+    _dynamic_api_key = None
+    api_base: Optional[str] = None
     _dynamic_api_base = None
     try:
         (
@@ -6555,6 +6563,25 @@ async def amoderation(
         # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
         pass
 
+    if custom_llm_provider == "cometapi":
+        cometapi_request_api_key = api_key or _dynamic_api_key
+        cometapi_request_api_base = optional_params.api_base or _dynamic_api_base
+        api_key = require_cometapi_api_key(
+            cometapi_request_api_key or litellm.cometapi_key
+        )
+        api_base = get_cometapi_api_base(
+            cometapi_request_api_base, api_key=cometapi_request_api_key
+        )
+    else:
+        api_key = (
+            api_key
+            or _dynamic_api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        api_base = optional_params.api_base or _dynamic_api_base
+
     openai_client = kwargs.get("client", None)
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
@@ -6562,7 +6589,7 @@ async def amoderation(
         _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(  # type: ignore
             is_async=True,
             api_key=api_key,
-            api_base=optional_params.api_base or _dynamic_api_base,
+            api_base=api_base,
         )
     else:
         _openai_client = openai_client
@@ -6664,7 +6691,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
 
 @client
-def transcription(
+def transcription(  # noqa: PLR0915
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
@@ -6802,6 +6829,26 @@ def transcription(
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
         )
+    elif custom_llm_provider == "cometapi":
+        cometapi_request_api_key = api_key
+        api_key = require_cometapi_api_key(api_key or litellm.cometapi_key)
+        api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
+        response = openai_audio_transcriptions.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            model_response=model_response,
+            atranscription=atranscription,
+            client=client,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+            max_retries=max_retries,
+            api_base=api_base,
+            api_key=api_key,
+            provider_config=provider_config,
+            litellm_params=litellm_params_dict,
+            shared_session=shared_session,
+        )
     elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
     ):
@@ -6817,8 +6864,6 @@ def transcription(
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
-        # set API KEY
-
         api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
@@ -7059,7 +7104,35 @@ def speech(
         Coroutine[Any, Any, HttpxBinaryResponseContent],
         None,
     ] = None
-    if (
+    if custom_llm_provider == "cometapi":
+        if voice is None or not (isinstance(voice, str)):
+            raise litellm.BadRequestError(
+                message="'voice' is required to be passed as a string for OpenAI TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        cometapi_request_api_key = api_key or dynamic_api_key
+        api_key = require_cometapi_api_key(
+            cometapi_request_api_key or litellm.cometapi_key
+        )
+        api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
+        headers = headers or litellm.headers
+        response = openai_chat_completions.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            organization=None,
+            project=None,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,  # pass AsyncOpenAI, OpenAI client
+            aspeech=aspeech,
+            shared_session=shared_session,
+        )
+    elif (
         custom_llm_provider == "openai"
         or custom_llm_provider in litellm.openai_compatible_providers
     ):
@@ -7076,7 +7149,6 @@ def speech(
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )  # type: ignore
-        # set API KEY
         api_key = (
             api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
