@@ -1,0 +1,171 @@
+"""
+Ingest pre-built logging payloads from external producers and replay them
+through LiteLLM's standard success/failure callback fan-out.
+
+This exists for hosts that own a request outside the Python process — e.g. the
+`litellm-rust` gateway proxying realtime websockets. Those hosts can't use the
+in-process logging object, so they POST a finished `StandardLoggingPayload` here
+and Python replays it through the exact same path a normal completion uses:
+`Logging.async_success_handler` / `async_failure_handler`. Every registered
+callback (spend logs, Langfuse, Datadog, ...) fires unchanged — there is no
+spend-logs-specific or callback-specific code here, only the replay.
+
+The endpoint is generic: realtime is the first producer, but the contract is the
+self-describing `StandardLoggingPayload`, so completions/responses can use it too.
+"""
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+router = APIRouter()
+
+
+class CallbackLogRecord(BaseModel):
+    status: Literal["success", "failure"]
+    standard_logging_payload: Dict[str, Any]
+    error: Optional[str] = None
+
+
+class CallbackLogsRequest(BaseModel):
+    records: List[CallbackLogRecord]
+
+
+class CallbackLogsResponse(BaseModel):
+    processed: int
+    failed: int
+
+
+def _epoch_to_datetime(value: Any) -> datetime:
+    """`StandardLoggingPayload` stores startTime/endTime as float epoch seconds."""
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+    if isinstance(value, datetime):
+        return value
+    return datetime.now(tz=timezone.utc)
+
+
+def _build_logging_obj(payload: Dict[str, Any]) -> LiteLLMLogging:
+    """
+    Reconstruct a `Logging` object from a finished payload and seed
+    `model_call_details` with exactly what the success/failure callbacks read:
+    the prebuilt `standard_logging_object`, the resolved `response_cost`, and the
+    `litellm_params.metadata` keys used for cost attribution. Setting
+    `standard_logging_object` up front makes the handler skip rebuilding it.
+    """
+    model = payload.get("model") or ""
+    call_type = payload.get("call_type") or "acompletion"
+    start_time = _epoch_to_datetime(payload.get("startTime"))
+    call_id = payload.get("litellm_call_id") or payload.get("id") or str(uuid.uuid4())
+
+    logging_obj = LiteLLMLogging(
+        model=model,
+        messages=payload.get("messages") or [],
+        stream=bool(payload.get("stream") or False),
+        call_type=call_type,
+        start_time=start_time,
+        litellm_call_id=call_id,
+        function_id="",
+    )
+
+    metadata: Dict[str, Any] = payload.get("metadata") or {}
+    litellm_metadata: Dict[str, Any] = {
+        "user_api_key": metadata.get("user_api_key_hash"),
+        "user_api_key_alias": metadata.get("user_api_key_alias"),
+        "user_api_key_user_id": metadata.get("user_api_key_user_id"),
+        "user_api_key_team_id": metadata.get("user_api_key_team_id"),
+        "user_api_key_org_id": metadata.get("user_api_key_org_id"),
+        "user_api_key_end_user_id": metadata.get("user_api_key_end_user_id"),
+        "spend_logs_metadata": metadata.get("spend_logs_metadata"),
+    }
+
+    logging_obj.model_call_details.update(
+        {
+            "model": model,
+            "call_type": call_type,
+            "custom_llm_provider": payload.get("custom_llm_provider"),
+            "response_cost": payload.get("response_cost") or 0.0,
+            "standard_logging_object": payload,
+            "litellm_params": {"metadata": litellm_metadata},
+            "cache_hit": payload.get("cache_hit") or False,
+        }
+    )
+    return logging_obj
+
+
+def _response_obj_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Minimal response object so usage-derived spend-log fields resolve."""
+    return {
+        "id": payload.get("id"),
+        "usage": {
+            "prompt_tokens": payload.get("prompt_tokens", 0),
+            "completion_tokens": payload.get("completion_tokens", 0),
+            "total_tokens": payload.get("total_tokens", 0),
+        },
+    }
+
+
+async def _replay_record(record: CallbackLogRecord) -> None:
+    payload = record.standard_logging_payload
+    logging_obj = _build_logging_obj(payload)
+    start_time = _epoch_to_datetime(payload.get("startTime"))
+    end_time = _epoch_to_datetime(payload.get("endTime"))
+
+    if record.status == "success":
+        await logging_obj.async_success_handler(
+            result=_response_obj_from_payload(payload),
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        error_str = record.error or payload.get("error_str") or "replayed failure"
+        await logging_obj.async_failure_handler(
+            Exception(error_str),
+            traceback_exception="",
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+
+@router.post(
+    "/v1/callbacks/logs",
+    tags=["logging"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def ingest_callback_logs(
+    body: CallbackLogsRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> CallbackLogsResponse:
+    """
+    Replay a batch of finished logging payloads through the callback fan-out.
+
+    Admin-only: the payloads write spend logs and trigger every callback, so this
+    is a trusted internal route, not a public surface.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="/v1/callbacks/logs is admin-only (proxy admin key required).",
+        )
+
+    processed = 0
+    failed = 0
+    for record in body.records:
+        try:
+            await _replay_record(record)
+            processed += 1
+        except Exception as e:
+            failed += 1
+            verbose_proxy_logger.exception(
+                "ingest_callback_logs: failed to replay a record: %s", str(e)
+            )
+
+    return CallbackLogsResponse(processed=processed, failed=failed)
