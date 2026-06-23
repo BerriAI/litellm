@@ -3936,3 +3936,32 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_init_custom_logger_compatible_class_asqav_singleton(monkeypatch, tmp_path):
+    """callbacks=["asqav"] constructs one AsqavLogger and reuses it on re-init."""
+    monkeypatch.setenv("ASQAV_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    from litellm.integrations.asqav import AsqavLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        first = logging_module._init_custom_logger_compatible_class(
+            logging_integration="asqav",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+        second = logging_module._init_custom_logger_compatible_class(
+            logging_integration="asqav",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+
+        assert type(first) is AsqavLogger
+        assert second is first
+        assert any(
+            isinstance(cb, AsqavLogger) for cb in logging_module._in_memory_loggers
+        )
+    finally:
+        logging_module._in_memory_loggers.clear()

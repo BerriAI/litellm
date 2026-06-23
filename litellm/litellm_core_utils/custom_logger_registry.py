@@ -12,6 +12,7 @@ from typing import Union
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
+from litellm.integrations.asqav import AsqavLogger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
@@ -108,6 +109,7 @@ class CustomLoggerRegistry:
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
         "newrelic": NewRelicLogger,
+        "asqav": AsqavLogger,
     }
 
     try:
