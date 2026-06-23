@@ -133,7 +133,7 @@ model_list:
   # realtime models
   - model_name: openai-realtime
     litellm_params:
-      model: openai/gpt-realtime-2
+      model: openai/gpt-realtime
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: realtime
