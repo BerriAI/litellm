@@ -98,12 +98,19 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   // causes the useEffect in useFilterLogic to fire on every render → infinite loop.
   const keysList = useMemo(() => keys?.keys ?? [], [keys?.keys]);
 
-  const { filters, filteredKeys, filteredTotalCount, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
-    useFilterLogic({
-      keys: keysList,
-      teams,
-      organizations,
-    });
+  const {
+    filters,
+    filteredKeys,
+    filteredTotalCount,
+    allTeams,
+    allOrganizations,
+    handleFilterChange,
+    handleFilterReset,
+  } = useFilterLogic({
+    keys: keysList,
+    teams,
+    organizations,
+  });
 
   // Defer the transition so the button stays in loading state until the table
   // has rendered with the new data (mirrors the spend-logs pattern)

@@ -44,10 +44,9 @@ describe("useFilterLogic – stability", () => {
     // must not treat every new-reference empty array as a change that requires
     // another setFilteredKeys call, which would re-render the consumer, which
     // would produce yet another new `[]`, ad infinitum.
-    const { result, rerender } = renderHook(
-      ({ keys }) => useFilterLogic({ keys, teams: [], organizations: [] }),
-      { initialProps: { keys: [] as any[] } },
-    );
+    const { result, rerender } = renderHook(({ keys }) => useFilterLogic({ keys, teams: [], organizations: [] }), {
+      initialProps: { keys: [] as any[] },
+    });
 
     // Simulate the || [] pattern: each rerender gets a brand-new [] literal
     act(() => {
@@ -62,10 +61,9 @@ describe("useFilterLogic – stability", () => {
   });
 
   it("should update filteredKeys when keys prop changes from empty to populated", async () => {
-    const { result, rerender } = renderHook(
-      ({ keys }) => useFilterLogic({ keys, teams: [], organizations: [] }),
-      { initialProps: { keys: [] as any[] } },
-    );
+    const { result, rerender } = renderHook(({ keys }) => useFilterLogic({ keys, teams: [], organizations: [] }), {
+      initialProps: { keys: [] as any[] },
+    });
 
     expect(result.current.filteredKeys).toEqual([]);
 
