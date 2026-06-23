@@ -72,7 +72,7 @@ export enum Providers {
   OPENAI_LIKE = "Openai Like",
   OpenAI_Compatible = "OpenAI-Compatible Chat Completions (Together AI, vLLM, etc.)",
   OpenAI_Text = "OpenAI Text Completion",
-  OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion (legacy /v1/completions)",
+  OpenAI_Text_Compatible = "OpenAI-Compatible Completions (legacy /v1/completions)",
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
