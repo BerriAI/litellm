@@ -1,5 +1,5 @@
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
 FROM $UV_IMAGE AS uvbin
@@ -35,7 +35,7 @@ COPY --from=uvbin /uv /uvx /usr/local/bin/
 # instead of nodeenv downloading one whose dynamic deps may not be in Wolfi
 # (e.g. Node 26.2.0 needs libatomic). Retry for transient apk.cgr.dev flakes.
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm && break; \
+      apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm libatomic && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
