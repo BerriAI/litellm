@@ -3792,3 +3792,54 @@ async def test_inference_route_still_enforces_team_budget():
             valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
             request=MagicMock(),
         )
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_error_names_the_key():
+    """BudgetExceededError for a virtual key must name the key (alias + masked key)
+    so operators don't have to reverse-map a spend figure back to a key."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_alias="payments-prod",
+        key_name="sk-...um_g",
+        max_budget=10.0,
+        spend=0.0,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=25.0),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    message = str(exc_info.value)
+    assert "payments-prod" in message
+    assert "sk-...um_g" in message
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_not_exceeded_does_not_raise():
+    """Spend below the configured budget must not raise."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_alias="payments-prod",
+        max_budget=10.0,
+        spend=0.0,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=1.0),
+    ):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
