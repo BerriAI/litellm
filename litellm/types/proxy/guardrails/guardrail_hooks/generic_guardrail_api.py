@@ -54,11 +54,12 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
 
     streaming_sampling_rate: Optional[int] = Field(
         default=None,
+        ge=1,
         description=(
             "When streaming_end_of_stream_only is False, the guardrail runs every Nth "
             "streamed chunk. Ignored when streaming_end_of_stream_only is True. "
-            "Defaults to 5 in GenericGuardrailAPI.__init__ when None so unset "
-            "optional_params does not shadow top-level litellm_params."
+            "Must be >= 1 when set. Defaults to 5 in GenericGuardrailAPI.__init__ "
+            "when None so unset optional_params does not shadow top-level litellm_params."
         ),
     )
 

@@ -233,6 +233,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             if streaming_end_of_stream_only is None
             else streaming_end_of_stream_only
         )
+        if streaming_sampling_rate is not None and streaming_sampling_rate < 1:
+            raise ValueError(
+                "streaming_sampling_rate must be >= 1 "
+                f"(got {streaming_sampling_rate})"
+            )
         self.streaming_sampling_rate: int = (
             5 if streaming_sampling_rate is None else streaming_sampling_rate
         )
