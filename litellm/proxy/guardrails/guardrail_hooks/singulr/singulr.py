@@ -1,4 +1,3 @@
-
 """
 Singulr guardrail integration for LiteLLM.
 
@@ -42,11 +41,6 @@ _DEFAULT_API_BASE = "http://localhost:8000"
 _GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
 
 
-class SingulrMissingCredentials(Exception):
-    """Custom exception for missing Singulr secrets."""
-    pass
-
-
 class SingulrGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -66,9 +60,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.enforcement_entity_id = enforcement_entity_id or os.environ.get(
             "SINGULR_ENFORCEMENT_ENTITY_ID"
         )
-        self.guardrail_id = guardrail_id or os.environ.get(
-            "SINGULR_GUARDRAIL_ID"
-        )
+        self.guardrail_id = guardrail_id or os.environ.get("SINGULR_GUARDRAIL_ID")
 
         if block_on_error is None:
             env = os.environ.get("SINGULR_BLOCK_ON_ERROR", "true")
@@ -140,7 +132,6 @@ class SingulrGuardrail(CustomGuardrail):
             "Singulr: %s",
             endpoint,
         )
-
 
         try:
             response = await self.async_handler.post(
