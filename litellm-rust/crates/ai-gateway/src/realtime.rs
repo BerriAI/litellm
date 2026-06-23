@@ -1,6 +1,6 @@
 //! End-to-end OpenAI realtime invocation.
 //!
-//! The host-facing entry point, mirroring `providers::ocr::run_ocr`: open the
+//! The host-facing entry point, mirroring `ocr::run_ocr`: open the
 //! WebSocket to OpenAI, drive typed events through the pure
 //! `OPENAI_REALTIME_CONFIG` transforms, and collect the response events.
 //! Network, auth header, key resolution, and wire (de)serialization live here so
@@ -19,7 +19,7 @@ use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
+use litellm_core::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -58,7 +58,7 @@ fn is_terminal_event(event: &RealtimeEvent) -> bool {
 /// (`response.done` / `error`) arrives, the socket closes, or the `timeout`
 /// elapses. Returns the transformed backend events in arrival order.
 ///
-/// Mirrors `run_ocr`: pure transforms come from `core`/`providers`; the network,
+/// Mirrors `run_ocr`: pure transforms come from `core`; the network,
 /// auth header, key resolution, and JSON (de)serialization are owned here.
 pub async fn realtime(
     model: &str,
@@ -157,7 +157,7 @@ mod tests {
 
     /// Live end-to-end check against OpenAI. Ignored by default (CI never runs
     /// it); run explicitly with `OPENAI_API_KEY` set:
-    ///   `cargo test -p litellm-providers realtime_invokes_openai -- --ignored --nocapture`
+    ///   `cargo test -p litellm-ai-gateway realtime_invokes_openai -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "hits the live OpenAI realtime API; needs OPENAI_API_KEY"]
     async fn realtime_invokes_openai_and_responds() {
