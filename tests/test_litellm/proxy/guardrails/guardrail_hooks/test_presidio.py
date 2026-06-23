@@ -556,6 +556,61 @@ async def test_both_messages_and_input_are_masked(
 
 
 @pytest.mark.asyncio
+async def test_non_text_call_type_input_is_not_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Embedding/moderation calls also expose `data['input']`, but the masking
+    path rewrites text in place and must not mutate non-text payloads. The
+    pre-refactor hook skipped these implicitly by reading only `messages`;
+    the call-type guard preserves that (issue #30728 review feedback)."""
+    test_data = {
+        "input": ["My email is test@example.com", "card 4111-1111-1111-1111"],
+        "model": "text-embedding-3-small",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        raise AssertionError("check_pii should not run for embedding call_type")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aembedding",
+    )
+    # Payload returned untouched.
+    assert result["input"] == [
+        "My email is test@example.com",
+        "card 4111-1111-1111-1111",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_input_is_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """`/v1/messages` (call_type 'anthropic_messages') carries chat text and must
+    be masked — it is part of the text-content call-type set."""
+    test_data = {
+        "messages": [{"role": "user", "content": "Contact me at test@example.com"}],
+        "model": "claude-3-opus-20240229",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("test@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="anthropic_messages",
+    )
+    assert result["messages"][0]["content"] == "Contact me at [EMAIL]"
+    assert "test@example.com" not in result["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_logging_hook_multimodal_message_format(presidio_guardrail):
     """
     Test Presidio async_logging_hook with multimodal message format for completion call type.

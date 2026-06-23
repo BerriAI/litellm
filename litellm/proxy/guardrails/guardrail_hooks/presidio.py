@@ -44,6 +44,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
+    is_text_content_call_type,
     iter_message_text,
     walk_user_text,
 )
@@ -747,6 +748,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
 
         try:
+            # Only mask request types that carry free-form prompt text
+            # (chat completions, Responses API, Anthropic messages). Embedding,
+            # moderation, and audio payloads also expose `input`, but the
+            # masking path below rewrites text fragments in place — running it
+            # on an embedding `input` would silently mutate the payload. This is
+            # the shared gate used by the other text guardrails; the pre-refactor
+            # hook got this implicitly by reading only `data["messages"]`.
+            if not is_text_content_call_type(call_type):
+                return data
+
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)

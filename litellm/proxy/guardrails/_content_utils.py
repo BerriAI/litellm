@@ -18,13 +18,14 @@ from typing import Any, Callable, Dict, FrozenSet, Iterator, List
 #
 #   /v1/chat/completions   -> "acompletion"
 #   /v1/responses          -> "aresponses"
+#   /v1/messages           -> "anthropic_messages"
 #
 # ``"completion"`` is included for SDK / internal callers that invoke
 # ``pre_call_hook`` directly with the sync name. Embedding, moderation,
 # audio, and transcription endpoints are deliberately excluded — text
 # guardrails on those paths are a separate scope.
 TEXT_CONTENT_CALL_TYPES: FrozenSet[str] = frozenset(
-    {"completion", "acompletion", "aresponses"}
+    {"completion", "acompletion", "aresponses", "anthropic_messages"}
 )
 
 
