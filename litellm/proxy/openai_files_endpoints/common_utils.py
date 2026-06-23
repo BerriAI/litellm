@@ -14,6 +14,8 @@ from litellm.types.utils import SpecialEnums
 if TYPE_CHECKING:
     from fastapi import Request
 
+    from litellm.router import Router
+
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
     # Ensure b64_uid is a string and not a mock object
@@ -298,6 +300,92 @@ def get_credentials_for_model(
         )
 
     return credentials
+
+
+def get_team_provider_credentials(
+    llm_router: Optional["Router"],
+    team_models: List[str],
+    custom_llm_provider: str,
+    team_id: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Resolve upstream credentials for a provider-scoped file operation
+    (e.g. GET /v1/files), which doesn't pin a model.
+
+    Priority:
+    1. The team's own (BYOK) deployment for this provider — a deployment whose
+       ``model_info.team_id`` matches ``team_id``. This keeps team-scoped listings
+       on the team's own provider account/key instead of a shared global one.
+    2. Fallback: any deployment the team is granted access to for this provider,
+       expanding wildcard routes and the all-proxy-models sentinel.
+
+    Credential lookup is always scoped to the team's allowlist, so a team can
+    never resolve a provider key for a deployment it isn't authorized to use.
+    Returns None when the router is unavailable or no authorized deployment
+    matches, so the caller can fall back to default credential resolution.
+    """
+    if llm_router is None:
+        return None
+
+    def _provider_credentials(model_id: str) -> Optional[dict]:
+        credentials = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_id
+        )
+        if (
+            credentials is not None
+            and credentials.get("custom_llm_provider") == custom_llm_provider
+        ):
+            return credentials
+        return None
+
+    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
+    if team_id is not None:
+        for deployment in llm_router.model_list or []:
+            model_info = deployment.get("model_info") or {}
+            if model_info.get("team_id") != team_id:
+                continue
+            deployment_id = model_info.get("id")
+            if deployment_id is None:
+                continue
+            credentials = _provider_credentials(deployment_id)
+            if credentials is not None:
+                return credentials
+
+    # 2. Fall back to deployments the team is allowed to access. The
+    #    all-proxy-models sentinel isn't expanded by get_complete_model_list, so
+    #    normalize it to an empty allowlist, which defers to the team-scoped
+    #    proxy model list. A team with a restricted allowlist (e.g. anthropic
+    #    only) therefore never resolves another provider's key.
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    grants_all_models = SpecialModelNames.all_proxy_models.value in team_models
+    effective_team_models = [] if grants_all_models else team_models
+
+    proxy_model_list = llm_router.get_model_names(team_id=team_id)
+    model_access_groups = llm_router.get_model_access_groups()
+    models_to_try = list(
+        dict.fromkeys(
+            get_complete_model_list(
+                key_models=[],
+                team_models=effective_team_models,
+                proxy_model_list=proxy_model_list,
+                user_model=None,
+                infer_model_from_keys=False,
+                return_wildcard_routes=True,
+                llm_router=llm_router,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=True,
+                team_id=team_id,
+            )
+        )
+    )
+    for model_name in models_to_try:
+        credentials = _provider_credentials(model_name)
+        if credentials is not None:
+            return credentials
+
+    return None
 
 
 def prepare_data_with_credentials(
@@ -619,8 +707,10 @@ async def extract_file_creation_params(
     # Extract target_storage (simplified - just use form parameter)
     target_storage = _extract_target_storage_simple(target_storage_form)
 
-    # Extract target_model_names (simplified - just use form parameter)
+    # Extract target_model_names from the form field, then fall back to the raw form
     target_model_names = _extract_target_model_names_simple(target_model_names_form)
+    if not target_model_names:
+        target_model_names = await _extract_target_model_names_from_form(request)
 
     # Extract model parameter
     model = _extract_model_param(request, request_body)
@@ -665,6 +755,77 @@ def _extract_target_model_names_simple(
         return [str(name).strip() for name in target_model_names_form if name]
 
     return []
+
+
+def _is_target_model_names_key(key: str) -> bool:
+    return key == "target_model_names" or (
+        key.startswith("target_model_names[") and key.endswith("]")
+    )
+
+
+async def _extract_target_model_names_from_form(request: "Request") -> List[str]:
+    """
+    Collect target_model_names from the raw multipart form.
+
+    Reads ``request.form()`` directly instead of the parsed request body, which is
+    built via ``dict(form_data)`` and keeps only the last value for repeated keys.
+    The OpenAI SDK sends a list ``extra_body`` as repeated ``target_model_names[]``
+    fields, so reading the form preserves every value instead of truncating to one.
+    Indexed keys like ``target_model_names[0]`` are handled the same way.
+    """
+    form_data = await request.form()
+
+    names: List[str] = []
+    for key, value in form_data.multi_items():
+        if _is_target_model_names_key(key) and isinstance(value, str):
+            names.extend(_extract_target_model_names_simple(value))
+
+    seen = set()
+    result: List[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
+def validate_managed_files_requirement(
+    target_model_names: List[str],
+    model: Optional[str] = None,
+) -> None:
+    """
+    Enforce proxy-level managed files when litellm.require_managed_files is enabled.
+
+    Raises:
+        HTTPException: 400 if the upload would bypass the managed-files flow, i.e.
+            target_model_names is missing or a model parameter routes the request
+            through the direct provider path instead of the managed-files hook.
+    """
+    import litellm
+    from fastapi import HTTPException
+
+    if litellm.require_managed_files is not True:
+        return
+
+    if not target_model_names:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "target_model_names is required when require_managed_files is enabled "
+                "in litellm_settings. Provide one or more model aliases via the "
+                "target_model_names form field (e.g. target_model_names=my-model-alias)."
+            ),
+        )
+
+    if model:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "model is not allowed when require_managed_files is enabled in "
+                "litellm_settings. Uploads must go through managed files using "
+                "target_model_names instead of the model parameter."
+            ),
+        )
 
 
 def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:

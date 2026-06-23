@@ -18,17 +18,6 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
-export const getInProductNudgesCall = async (accessToken: string) => {
-  /**
-   * Get in-product nudges configuration.
-   */
-  try {
-    return await apiClient.get(`/in_product_nudges`, { accessToken });
-  } catch (error) {
-    console.error("Failed to get in-product nudges:", error);
-    throw error;
-  }
-};
 /**
  * Helper file for calls being made to proxy
  */
@@ -285,6 +274,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
 }
@@ -2452,6 +2442,9 @@ export const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // /key/list is exact by default; opt in so the key-list search box keeps
+        // matching partial user_id/key_alias.
+        substring_matching: "true",
       },
     });
   } catch (error) {
@@ -5230,11 +5223,16 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string, customHeaders?: Record<string, string>) => {
-  // Construct base URL
-  let url = proxyBaseUrl
-    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-    : `/mcp-rest/tools/list?server_id=${serverId}`;
+export const listMCPTools = async (
+  accessToken: string,
+  serverId: string,
+  customHeaders?: Record<string, string>,
+  includeDisabledTools?: boolean,
+) => {
+  // Construct base URL. include_disabled_tools returns the full server catalog
+  // (admin-only, backend-enforced) so the settings UI can configure the allowlist.
+  const query = `server_id=${serverId}${includeDisabledTools ? "&include_disabled_tools=true" : ""}`;
+  let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/list?${query}` : `/mcp-rest/tools/list?${query}`;
 
   console.log("Fetching MCP tools from:", url);
 
@@ -5611,13 +5609,27 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 };
 
 /**
- * Get all spend logs for a particular session
+ * Get a page of spend logs for a particular session.
+ *
+ * The backend paginates this endpoint (page / page_size, returning
+ * { data, total, page, page_size, total_pages }). Callers that need the whole
+ * session should page through total_pages and accumulate the results.
  */
-export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string,
+  page: number = 1,
+  page_size: number = 100,
+) => {
   try {
+    const params = new URLSearchParams({
+      session_id,
+      page: String(page),
+      page_size: String(page_size),
+    });
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
-      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+      ? `${proxyBaseUrl}/spend/logs/session/ui?${params.toString()}`
+      : `/spend/logs/session/ui?${params.toString()}`;
 
     const response = await fetch(url, {
       method: "GET",

@@ -97,7 +97,7 @@ def _read_summary_max_tokens_setting() -> int:
     return COMPACT_SUMMARY_MAX_TOKENS
 
 
-async def _check_summary_model_access(  # noqa: PLR0915
+async def _check_summary_model_access(
     user_api_key_auth: Any,
     summary_model: str,
     llm_router: Any,
@@ -970,7 +970,7 @@ def apply_client_compaction_block_history(
     )
 
 
-async def apply_compact_20260112(  # noqa: PLR0915
+async def apply_compact_20260112(
     *,
     model: str,
     messages: List[Dict[str, Any]],

@@ -1,0 +1,52 @@
+model_list:
+  # ---------- Anthropic native ----------
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---------- Bedrock ----------
+  - model_name: "bedrock/*"
+    litellm_params:
+      model: "bedrock/*"
+      aws_region_name: us-east-1
+
+  # ---------- Vertex AI ----------
+  - model_name: "vertex_ai/*"
+    litellm_params:
+      model: "vertex_ai/*"
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+
+  # ---------- Azure AI Foundry ----------
+  - model_name: "azure_ai/*"
+    litellm_params:
+      model: "azure_ai/*"
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+
+  # ---------- Azure OpenAI ----------
+  - model_name: "azure/*"
+    litellm_params:
+      model: "azure/*"
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+
+  # ---------- Gemini ----------
+  - model_name: "gemini/*"
+    litellm_params:
+      model: "gemini/*"
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ---------- OpenAI ----------
+  - model_name: "openai/*"
+    litellm_params:
+      model: "openai/*"
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: True
+  telemetry: False

@@ -471,7 +471,7 @@ def _should_convert_tool_call_to_json_mode(
     return False
 
 
-def convert_to_model_response_object(  # noqa: PLR0915
+def convert_to_model_response_object(
     response_object: Optional[dict] = None,
     model_response_object: Optional[
         Union[
@@ -632,11 +632,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     if "thinking_blocks" in choice["message"]:
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
-
-                    if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
 
                     message = Message(
                         content=content,

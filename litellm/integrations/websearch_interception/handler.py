@@ -1128,7 +1128,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             raise
 
-    async def _execute_chat_completion_agentic_loop(  # noqa: PLR0915
+    async def _execute_chat_completion_agentic_loop(
         self,
         model: str,
         messages: List[Dict],
@@ -1159,7 +1159,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             **request_patch.kwargs,
         )
 
-    async def _build_chat_completion_request_patch(  # noqa: PLR0915
+    async def _build_chat_completion_request_patch(
         self,
         model: str,
         messages: List[Dict],
@@ -1339,8 +1339,13 @@ class WebSearchInterceptionLogger(CustomLogger):
         websearch_params: WebSearchInterceptionConfig = {}
         if "websearch_interception_params" in litellm_settings:
             websearch_params = litellm_settings["websearch_interception_params"]
-        elif "websearch_interception" in callback_specific_params:
-            websearch_params = callback_specific_params["websearch_interception"]
+        elif "websearch_interception" in callback_specific_params and isinstance(
+            callback_specific_params["websearch_interception"], dict
+        ):
+            websearch_params = cast(
+                WebSearchInterceptionConfig,
+                callback_specific_params["websearch_interception"],
+            )
 
         # Use classmethod to initialize from config
         return WebSearchInterceptionLogger.from_config_yaml(websearch_params)
