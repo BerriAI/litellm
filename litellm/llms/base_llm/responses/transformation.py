@@ -239,6 +239,39 @@ class BaseResponsesAPIConfig(ABC):
         return False
 
     #########################################################
+    ########## RESPONSES SURFACE FALLBACK (opt-in) ##########
+    #########################################################
+    def get_responses_surface_fallbacks(
+        self, model: str
+    ) -> List["BaseResponsesAPIConfig"]:
+        """Ordered list of responses configs to try for ``model`` (opt-in).
+
+        Some providers expose the same model across multiple responses surfaces
+        (different URLs/wire variants) where not every surface serves every model.
+        Returning a non-empty ordered chain lets ``litellm.responses()`` try each
+        surface in turn — retrying the next one when a surface rejects the model
+        (see :meth:`should_fallback_on_responses_error`) — and, if the whole chain
+        is exhausted, fall through to chat-completions emulation.
+
+        The returned list is the COMPLETE chain (typically with this config's
+        primary surface first). Return ``[]`` (default) to opt out: ``responses()``
+        then uses this single config with no fallback (the behavior for every
+        provider that does not override this). Only consulted for non-streaming
+        requests.
+        """
+        return []
+
+    def should_fallback_on_responses_error(self, exc: Exception) -> bool:
+        """Return True if ``exc`` means "this surface does not serve this model"
+        (so the next surface in :meth:`get_responses_surface_fallbacks` should be
+        tried), as opposed to a genuine error that would fail on every surface.
+
+        Default: ``False`` (never fall back). Only consulted when
+        :meth:`get_responses_surface_fallbacks` returned a non-empty chain.
+        """
+        return False
+
+    #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################
     @abstractmethod

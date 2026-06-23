@@ -8745,6 +8745,13 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            if "claude" in model_lower:
+                from litellm.llms.databricks.anthropic_messages.transformation import (
+                    DatabricksAnthropicMessagesConfig,
+                )
+
+                return DatabricksAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -8907,10 +8914,32 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
-            # Databricks Responses API is only compatible with OpenAI GPT models
-            if model and "gpt" in model.lower():
+            # Family-routed responses() (surfaces verified live, see
+            # _local/litellm-unity-ai-gateway/probes):
+            #   gpt-N (non-oss) -> native OpenAI Responses  (/ai-gateway/openai/v1/responses)
+            #   claude          -> Supervisor (ai-gateway)  (/ai-gateway/mlflow/v1/responses)
+            #   gemini + open    -> Open Responses (serving) (/serving-endpoints/open-responses)
+            #     (gpt-oss/qwen/llama/gemma)
+            # An error-driven fallback chain (qwen35->Supervisor, older OSS->chat)
+            # is layered on top of these defaults at the responses() call site.
+            if not model:
+                return None
+            from litellm.llms.databricks.ai_gateway import (
+                ProviderFamily,
+                detect_family,
+            )
+            from litellm.llms.databricks.responses.transformation import (
+                DatabricksOpenResponsesAPIConfig,
+                DatabricksSupervisorResponsesAPIConfig,
+            )
+
+            family = detect_family(model)
+            if family == ProviderFamily.OPENAI_RESPONSES:
                 return litellm.DatabricksResponsesAPIConfig()
-            return None
+            if family == ProviderFamily.ANTHROPIC:
+                return DatabricksSupervisorResponsesAPIConfig()
+            # GEMINI + OPENAI catch-all (gpt-oss, qwen, llama, gemma, …)
+            return DatabricksOpenResponsesAPIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
@@ -9633,6 +9662,13 @@ class ProviderConfigManager:
             # This is for Vertex `gemini` models
             #########################################################
             return VertexAIGoogleGenAIConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            if "gemini" in model.lower():
+                from litellm.llms.databricks.google_genai.transformation import (
+                    DatabricksGoogleGenAIConfig,
+                )
+
+                return DatabricksGoogleGenAIConfig()
         return None
 
 

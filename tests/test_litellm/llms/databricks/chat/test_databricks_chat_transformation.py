@@ -260,3 +260,82 @@ def test_transform_messages_sanitizes_empty_content():
     )
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
+
+
+HOST = "https://my.workspace.cloud.databricks.com"
+
+
+def _get_url(config, api_base, litellm_params=None, optional_params=None):
+    return config.get_complete_url(
+        api_base=api_base,
+        api_key="dapi-test",
+        model="databricks/databricks-claude-3-7-sonnet",
+        optional_params=optional_params or {},
+        litellm_params=litellm_params or {},
+        stream=False,
+    )
+
+
+def test_get_complete_url_explicit_serving_endpoints_unchanged():
+    """Existing convention: explicit /serving-endpoints base stays serving-endpoints."""
+    config = DatabricksConfig()
+    url = _get_url(config, f"{HOST}/serving-endpoints")
+    assert url == f"{HOST}/serving-endpoints/chat/completions"
+
+
+def test_get_complete_url_explicit_gateway_base():
+    config = DatabricksConfig()
+    url = _get_url(config, f"{HOST}/ai-gateway")
+    assert url == f"{HOST}/ai-gateway/mlflow/v1/chat/completions"
+
+
+def test_get_complete_url_custom_path_used_verbatim():
+    """A custom (non-surface) path is opaque and used as-is (strict Q4)."""
+    config = DatabricksConfig()
+    custom = f"{HOST}/my/custom/route"
+    url = _get_url(config, custom)
+    assert url == f"{custom}/chat/completions"
+
+
+def test_get_complete_url_bare_host_defaults_to_gateway():
+    """A bare workspace host defaults to the AI Gateway (flag=auto, forced True
+    to avoid a live probe in the unit test)."""
+    config = DatabricksConfig()
+    url = _get_url(
+        config, HOST, litellm_params={"databricks_use_ai_gateway": True}
+    )
+    assert url == f"{HOST}/ai-gateway/mlflow/v1/chat/completions"
+
+
+def test_get_complete_url_flag_false_forces_serving_endpoints():
+    config = DatabricksConfig()
+    url = _get_url(
+        config, HOST, litellm_params={"databricks_use_ai_gateway": False}
+    )
+    assert url == f"{HOST}/serving-endpoints/chat/completions"
+
+
+def test_get_complete_url_auto_mode_probes_and_falls_back():
+    """In auto mode a bare host probes the gateway; a 404 falls back to serving."""
+    from litellm.llms.databricks import ai_gateway
+
+    ai_gateway.clear_gateway_cache()
+    with patch.object(
+        ai_gateway, "default_gateway_probe", return_value=False
+    ) as mock_probe:
+        config = DatabricksConfig()
+        url = _get_url(config, HOST)
+    assert url == f"{HOST}/serving-endpoints/chat/completions"
+    mock_probe.assert_called_once()
+    ai_gateway.clear_gateway_cache()
+
+
+def test_get_complete_url_auto_mode_uses_gateway_when_probe_succeeds():
+    from litellm.llms.databricks import ai_gateway
+
+    ai_gateway.clear_gateway_cache()
+    with patch.object(ai_gateway, "default_gateway_probe", return_value=True):
+        config = DatabricksConfig()
+        url = _get_url(config, HOST)
+    assert url == f"{HOST}/ai-gateway/mlflow/v1/chat/completions"
+    ai_gateway.clear_gateway_cache()
