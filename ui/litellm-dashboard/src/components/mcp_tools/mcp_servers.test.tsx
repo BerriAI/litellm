@@ -96,6 +96,23 @@ describe("MCPServers", () => {
     });
   });
 
+  it("should not show a new badge on the Submitted MCPs tab", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Submitted MCPs" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("tab", { name: /Submitted MCPs\s+New/i })).not.toBeInTheDocument();
+  });
+
   it("should render mocked MCP servers data in the table", async () => {
     // Mock MCP servers data
     const mockServers = [

@@ -501,11 +501,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
             {isAdminRole(userRole) && (
-              <Tab>
-                <span className="flex items-center gap-2">
-                  Submitted MCPs <NewBadge />
-                </span>
-              </Tab>
+              <Tab>Submitted MCPs</Tab>
             )}
             {isProxyAdminRole(userRole) && (
               <Tab>
