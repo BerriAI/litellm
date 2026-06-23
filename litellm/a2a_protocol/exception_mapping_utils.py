@@ -197,23 +197,14 @@ async def handle_a2a_localhost_retry(
     # Fix the agent card URL
     set_agent_card_url(agent_card, error.base_url)
 
-    httpx_client = None
-    transport = getattr(a2a_client, "_transport", None)
-    if transport is not None:
-        httpx_client = getattr(transport, "httpx_client", None) or getattr(
-            transport, "_httpx_client", None
-        )
-    if httpx_client is None:
-        config = getattr(a2a_client, "_config", None)
-        if config is not None:
-            httpx_client = getattr(config, "httpx_client", None)
-    if httpx_client is None:
-        transport_client = getattr(a2a_client, "_transport", None)
-        httpx_client = getattr(transport_client, "client", None)
-
+    # Reuse the httpx client LiteLLM attached at creation. It carries this agent's
+    # trace-id and auth headers, so a fresh client would drop them. Only clients built
+    # by ``create_a2a_client`` have it; an externally-supplied client cannot be retried.
+    httpx_client = getattr(a2a_client, "_litellm_httpx_client", None)
     if httpx_client is None:
         raise RuntimeError(
-            "Could not recover httpx client while retrying A2A localhost URL fix."
+            "Cannot retry A2A localhost URL fix: the client was not created by "
+            "create_a2a_client, so no LiteLLM httpx client is attached."
         )
 
     return await create_client(

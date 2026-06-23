@@ -736,6 +736,10 @@ async def create_a2a_client(
             streaming=streaming,
         ),
     )
+    # Stash LiteLLM-owned handles on the client so the localhost-retry path can reuse
+    # the configured httpx client (with this agent's trace-id/auth headers) without
+    # excavating a2a-sdk private internals.
+    a2a_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
     agent_card = getattr(a2a_client, "_card", None)
     if agent_card is not None:
         a2a_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
