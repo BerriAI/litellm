@@ -1747,6 +1747,102 @@ async def test_acompletion_streaming_iterator():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_tools_skip_continuation():
+    """When tools are present, mid-stream fallback should retry with original messages instead of continuation prompt."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key-2"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+    )
+
+    messages = [{"role": "user", "content": "What is the weather in London?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    initial_kwargs = {
+        "model": "gpt-4",
+        "stream": True,
+        "tools": tools,
+    }
+
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Let me check that for you",
+    )
+
+    class AsyncIteratorWithError:
+        def __init__(self):
+            self.index = 0
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index == 0:
+                self.index += 1
+                return MagicMock(choices=[MagicMock(delta=MagicMock(content="Let me"))])
+            raise error
+
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    mock_response = AsyncIteratorWithError()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=EmptyAsyncIterator(),
+    ) as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        async for _ in iterator:
+            pass
+
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+
+        # Tools present -> should retry with original messages, no continuation prompt
+        assert fallback_kwargs["messages"] == messages
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_edge_cases():
     """Test edge cases for _acompletion_streaming_iterator."""
     from unittest.mock import MagicMock
@@ -1953,6 +2049,92 @@ def test_completion_streaming_iterator_fallback_on_429():
         assert call_kwargs.kwargs.get("original_function") == router._completion
 
 
+def test_completion_streaming_iterator_tools_skip_continuation():
+    """Sync streaming: when tools are present, mid-stream fallback should retry with original messages instead of continuation prompt."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "What is the weather in London?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    initial_kwargs = {
+        "model": "gpt-4",
+        "stream": True,
+        "tools": tools,
+    }
+
+    midstream_error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Let me check that for you",
+        is_pre_first_chunk=False,
+    )
+
+    class SyncIteratorWithError:
+        def __init__(self):
+            self.index = 0
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.index == 0:
+                self.index += 1
+                return MagicMock(choices=[MagicMock(delta=MagicMock(content="Let me"))])
+            raise midstream_error
+
+    mock_response = SyncIteratorWithError()
+
+    mock_fallback_response = MagicMock()
+    mock_fallback_response.__iter__ = MagicMock(return_value=iter([]))
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+        return_value=mock_fallback_response,
+    ) as mock_fallback:
+        iterator = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        list(iterator)
+
+        assert mock_fallback.called
+        call_kwargs = mock_fallback.call_args.kwargs
+
+        # Tools present -> should retry with original messages, no continuation prompt
+        assert call_kwargs["messages"] == messages
+
+        
 def test_completion_streaming_iterator_preserves_hidden_params():
     """SyncFallbackStreamWrapper must copy _hidden_params from original response."""
     from unittest.mock import MagicMock

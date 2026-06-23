@@ -1991,11 +1991,12 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    if e.is_pre_first_chunk or not e.generated_content:
-                        # No content was generated before the error (e.g. a
-                        # rate-limit 429 on the very first chunk).  Retry with
-                        # the original messages — adding a continuation prompt
-                        # would waste tokens and confuse the model.
+                    if e.is_pre_first_chunk or not e.generated_content or initial_kwargs.get("tools"):
+                        # Retry with the original messages when:
+                        # - no content was generated before the error
+                        # - the error happened before the first chunk
+                        # - this is a tool-calling request, where continuation prompts can
+                        #   corrupt tool-calling context and cause prose instead of tool calls
                         initial_kwargs["messages"] = messages
                     else:
                         initial_kwargs["messages"] = messages + [
@@ -2547,7 +2548,7 @@ class Router:
                         router_self.content_policy_fallbacks,
                     )
                     initial_kwargs["original_function"] = router_self._completion
-                    if e.is_pre_first_chunk or not e.generated_content:
+                    if e.is_pre_first_chunk or not e.generated_content or initial_kwargs.get("tools"):
                         initial_kwargs["messages"] = messages
                     else:
                         initial_kwargs["messages"] = messages + [
