@@ -8,12 +8,12 @@ from fastapi import HTTPException
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+    CallbackLogsReplayer,
+    ingest_callback_logs,
+)
+from litellm.types.proxy.callback_logs_endpoints import (
     CallbackLogRecord,
     CallbackLogsRequest,
-    _build_logging_obj,
-    _epoch_to_datetime,
-    _response_obj_from_payload,
-    ingest_callback_logs,
 )
 
 REQ_ID = "cb-logs-unit-test-1"
@@ -45,14 +45,14 @@ def _sample_payload(**overrides):
 
 
 def test_epoch_to_datetime_handles_float_and_fallback():
-    dt = _epoch_to_datetime(1_700_000_000.5)
+    dt = CallbackLogsReplayer._epoch_to_datetime(1_700_000_000.5)
     assert dt.year == 2023
     # Non-numeric input must not raise — falls back to "now".
-    assert _epoch_to_datetime(None) is not None
+    assert CallbackLogsReplayer._epoch_to_datetime(None) is not None
 
 
 def test_build_logging_obj_seeds_model_call_details():
-    obj = _build_logging_obj(_sample_payload())
+    obj = CallbackLogsReplayer._build_logging_obj(_sample_payload())
     details = obj.model_call_details
     # Prebuilt payload is set so the handler skips rebuilding it.
     assert details["standard_logging_object"]["id"] == REQ_ID
@@ -66,7 +66,7 @@ def test_build_logging_obj_seeds_model_call_details():
 
 
 def test_response_obj_carries_usage():
-    obj = _response_obj_from_payload(_sample_payload())
+    obj = CallbackLogsReplayer._response_obj_from_payload(_sample_payload())
     assert obj["usage"]["total_tokens"] == 42
     assert obj["usage"]["prompt_tokens"] == 30
     assert obj["usage"]["completion_tokens"] == 12
