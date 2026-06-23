@@ -14,6 +14,7 @@ interface ModelSelectorProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
+  allowClear?: boolean;
 }
 
 const ModelSelector: React.FC<ModelSelectorProps> = ({
@@ -26,6 +27,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   className,
   showLabel = true,
   labelText = "Select Model",
+  allowClear = false,
 }) => {
   const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
@@ -55,16 +57,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     loadModels();
   }, [accessToken]);
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value?: string) => {
     if (value === "custom") {
       setShowCustomModelInput(true);
       setSelectedModel(undefined);
-    } else {
-      setShowCustomModelInput(false);
-      setSelectedModel(value);
-      if (onChange) {
-        onChange(value);
-      }
+      return;
+    }
+    setShowCustomModelInput(false);
+    setSelectedModel(value);
+    if (onChange) {
+      onChange(value ?? "");
     }
   };
 
@@ -103,6 +105,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         ]}
         style={{ width: "100%", ...style }}
         showSearch={true}
+        allowClear={allowClear}
         className={`rounded-md ${className || ""}`}
         disabled={disabled}
       />

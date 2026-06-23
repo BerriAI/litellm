@@ -33,9 +33,71 @@ _AGENT_ONLY_PARAMS = frozenset(
         "agent_name",
         "agent_id",
         "agent_card_params",
+        "enable_mcp_tools",
+        "user_api_key_auth",
+        "callable_agents",
+        "call_agent",
         A2A_USER_API_KEY_HASH_PARAM,
     }
 )
+
+
+def _mcp_tools_for_agent(litellm_params: dict[str, Any]) -> Optional[list]:
+    """Expose the proxy MCP tool for an MCP-entitled agent. Which servers the
+    agent can actually reach is enforced downstream by ``user_api_key_auth``."""
+    if not litellm_params.get("enable_mcp_tools"):
+        return None
+    return [{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}]
+
+
+async def _run_completion(
+    completion_params: dict[str, Any],
+    litellm_params: dict[str, Any],
+):
+    """Run the model call, routing to the agentic loop when the agent can call
+    other agents, to ``acompletion_with_mcp`` when it only has MCP tools, or a
+    plain completion otherwise."""
+    callable_agents = litellm_params.get("callable_agents")
+    call_agent = litellm_params.get("call_agent")
+    if callable_agents and call_agent is not None:
+        from litellm.a2a_protocol.litellm_completion_bridge.agentic_loop import (
+            run_agentic_loop,
+        )
+
+        loop_kwargs = dict(completion_params)
+        model = loop_kwargs.pop("model")
+        messages = loop_kwargs.pop("messages")
+        loop_kwargs.pop("stream", None)
+        # The loop owns the tool list (MCP tools + agent-as-tools), so drop any
+        # tools/tool_choice carried in from the agent's litellm_params or they
+        # collide with the explicit tools= the loop passes.
+        loop_kwargs.pop("tools", None)
+        loop_kwargs.pop("tool_choice", None)
+        return await run_agentic_loop(
+            model=model,
+            messages=messages,
+            completion_kwargs=loop_kwargs,
+            callable_agents=callable_agents,
+            call_agent=call_agent,
+            user_api_key_auth=litellm_params.get("user_api_key_auth"),
+            enable_mcp_tools=bool(litellm_params.get("enable_mcp_tools")),
+        )
+
+    mcp_tools = _mcp_tools_for_agent(litellm_params)
+    if mcp_tools is None:
+        return await litellm.acompletion(**completion_params)
+
+    from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
+
+    # Same collision guard: acompletion_with_mcp passes its own tools= explicitly.
+    mcp_kwargs = {
+        k: v for k, v in completion_params.items() if k not in ("tools", "tool_choice")
+    }
+    return await acompletion_with_mcp(
+        tools=mcp_tools,
+        user_api_key_auth=litellm_params.get("user_api_key_auth"),
+        **mcp_kwargs,
+    )
 
 
 class A2ACompletionBridgeHandler:
@@ -46,13 +108,13 @@ class A2ACompletionBridgeHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
         api_base: Optional[str] = None,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
+        agent_extra_headers: Optional[dict[str, str]] = None,
         *,
         _skip_a2a_provider_routing: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Handle non-streaming A2A request via litellm.acompletion.
 
@@ -139,8 +201,8 @@ class A2ACompletionBridgeHandler:
                 static_headers=completion_params.get("extra_headers"),
             )
 
-        # Call litellm.acompletion
-        response = await litellm.acompletion(**completion_params)
+        # Call the model (auto-executing MCP tools in a loop if the agent has any)
+        response = await _run_completion(completion_params, litellm_params)
 
         # Transform response to A2A format
         a2a_response = (
@@ -278,24 +340,31 @@ class A2ACompletionBridgeHandler:
         )
         yield working_event
 
-        # Call litellm.acompletion with streaming
-        response = await litellm.acompletion(**completion_params)
+        # Call the model with streaming (auto-executing MCP tools if the agent has any)
+        response = await _run_completion(completion_params, litellm_params)
 
-        # 3. Accumulate content and emit artifact update
+        # 3. Accumulate content and emit artifact update. The agentic loop / MCP
+        # tool execution resolve to a single non-streamed response; only a plain
+        # completion yields an async stream, so handle both shapes.
         accumulated_text = ""
         chunk_count = 0
-        async for chunk in response:  # type: ignore[union-attr]
-            chunk_count += 1
+        if hasattr(response, "__aiter__"):
+            async for chunk in response:  # type: ignore[union-attr]
+                chunk_count += 1
 
-            # Extract delta content
-            content = ""
-            if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
-                choice = chunk.choices[0]
-                if hasattr(choice, "delta") and choice.delta:
-                    content = choice.delta.content or ""
+                content = ""
+                if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
+                    choice = chunk.choices[0]
+                    if hasattr(choice, "delta") and choice.delta:
+                        content = choice.delta.content or ""
 
-            if content:
-                accumulated_text += content
+                if content:
+                    accumulated_text += content
+        else:
+            chunk_count = 1
+            choices = getattr(response, "choices", None)
+            if choices:
+                accumulated_text = getattr(choices[0].message, "content", None) or ""
 
         # Emit artifact update with accumulated content
         if accumulated_text:

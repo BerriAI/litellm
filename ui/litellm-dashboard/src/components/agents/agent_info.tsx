@@ -3,7 +3,7 @@ import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabP
 import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
+import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo, getPromptsList } from "../networking";
 import { Agent } from "./types";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
@@ -28,6 +28,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const [form] = Form.useForm();
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
   const [detectedAgentType, setDetectedAgentType] = useState<string>("a2a");
+  const [promptOptions, setPromptOptions] = useState<string[]>([]);
   const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] = useState<DiscoveredAgentCardSelection | null>(
     null,
   );
@@ -43,6 +44,13 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     };
     fetchMetadata();
   }, []);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    getPromptsList(accessToken)
+      .then((res) => setPromptOptions(res.prompts.map((p) => p.prompt_id)))
+      .catch((error) => console.error("Error fetching prompts:", error));
+  }, [accessToken]);
 
   useEffect(() => {
     fetchAgentInfo();
@@ -350,11 +358,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                     </Form.Item>
 
                     {detectedAgentType === "a2a" ? (
-                      <AgentFormFields showAgentName={true} />
+                      <AgentFormFields showAgentName={true} promptOptions={promptOptions} />
                     ) : selectedAgentTypeInfo ? (
                       <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
                     ) : (
-                      <AgentFormFields showAgentName={true} />
+                      <AgentFormFields showAgentName={true} promptOptions={promptOptions} />
                     )}
 
                     {discoveryRequest && (

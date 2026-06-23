@@ -6,6 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -494,6 +495,144 @@ async def get_agent_card(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _resolve_model_and_provider(
+    litellm_params: dict[str, Any],
+    model_list: Optional[list[dict[str, Any]]],
+) -> tuple[dict[str, Any], Optional[str]]:
+    """A completion-bridge agent needs a provider-prefixed model and a
+    custom_llm_provider. A UI-created agent may carry a bare proxy model-list
+    alias (e.g. "gemini-flash") with no provider; resolve the alias against the
+    model list, then derive the provider from the "provider/model" prefix so the
+    bridge can route without a URL."""
+    custom_llm_provider = litellm_params.get("custom_llm_provider")
+    if custom_llm_provider:
+        return litellm_params, custom_llm_provider
+
+    agent_model = litellm_params.get("model")
+    if isinstance(agent_model, str) and "/" not in agent_model:
+        for deployment in model_list or []:
+            if deployment.get("model_name") == agent_model:
+                resolved = (deployment.get("litellm_params") or {}).get("model")
+                if isinstance(resolved, str):
+                    agent_model = resolved
+                break
+        litellm_params = {**litellm_params, "model": agent_model}
+
+    if isinstance(agent_model, str) and "/" in agent_model:
+        custom_llm_provider = agent_model.split("/", 1)[0]
+        litellm_params = {**litellm_params, "custom_llm_provider": custom_llm_provider}
+
+    return litellm_params, custom_llm_provider
+
+
+def _scope_auth_to_agent(user_api_key_auth: Any, agent_id: str) -> Any:
+    """Bind the caller's auth to ``agent_id`` so the MCP permission handler applies
+    the agent's own object_permission (caller perms intersected with the agent's
+    allowlist). Without ``agent_id`` set only the caller's key/team perms gate MCP,
+    which would let an agent reach tools its own permissions exclude. Returns a
+    copy so the shared caller auth object is never mutated."""
+    if user_api_key_auth is not None and hasattr(user_api_key_auth, "model_copy"):
+        return user_api_key_auth.model_copy(update={"agent_id": agent_id})
+    return user_api_key_auth
+
+
+async def _source_agent_allowed_targets(source_auth: Any) -> set | None:
+    """Agent ids the source agent itself may call, from its own
+    object_permission.agents plus agents resolved from its access groups. None
+    means the source agent has no agent restriction. Delegation targets are
+    intersected with this (not only the caller's perms), so a prompt-injected
+    delegation cannot exceed what the source agent was granted."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+
+    obj_perm = await MCPRequestHandler._get_agent_object_permission(
+        user_api_key_auth=source_auth
+    )
+    if obj_perm is None:
+        return None
+
+    allowed = set(getattr(obj_perm, "agents", None) or [])
+    allowed |= set(
+        await AgentRequestHandler._get_agents_from_access_groups(
+            getattr(obj_perm, "agent_access_groups", None) or []
+        )
+    )
+    return allowed or None
+
+
+async def _delegate_to_agent(
+    *,
+    target_id: str,
+    message: str,
+    allowed_agent_ids: set,
+    get_agent: Callable[[str], Any],
+    user_api_key_auth: Any,
+    send_message: Callable[..., Awaitable[Any]],
+) -> str:
+    """Dispatch a sub-agent call and return its text reply.
+
+    The target id comes from a model tool call, so it is attacker-influenceable
+    via prompt injection, and ``send_message`` bypasses the endpoint's auth gate.
+    The auth-filtered ``allowed_agent_ids`` whitelist is therefore re-enforced
+    here so a caller can never reach an agent it was not granted."""
+    if target_id not in allowed_agent_ids:
+        return f"Agent '{target_id}' is not available."
+
+    target = get_agent(target_id)
+    if target is None:
+        return f"Agent '{target_id}' not found."
+
+    # The target's proxy-side guardrails are enforced by the endpoint request
+    # pipeline, which this direct dispatch bypasses. Rather than return output a
+    # guardrail would have blocked on a direct call, refuse to delegate to a
+    # guarded agent (it can still be invoked directly).
+    if (target.litellm_params or {}).get("guardrails"):
+        return f"Agent '{target_id}' cannot be called indirectly."
+
+    from uuid import uuid4
+
+    from a2a.types import MessageSendParams, SendMessageRequest
+
+    target_card = target.agent_card_params or {}
+    # Strip delegation flags so a sub-agent cannot recurse into further
+    # agent-to-agent calls (one level of delegation).
+    target_params = {
+        k: v
+        for k, v in (target.litellm_params or {}).items()
+        if k not in ("enable_agent_calls", "callable_agents", "call_agent")
+    }
+    target_params["user_api_key_auth"] = _scope_auth_to_agent(
+        user_api_key_auth, target.agent_id
+    )
+    sub_request = SendMessageRequest(
+        id="",
+        params=MessageSendParams(
+            message={
+                "role": "user",
+                "parts": [{"kind": "text", "text": message}],
+                "messageId": uuid4().hex,
+            }
+        ),
+    )
+    sub_response = await send_message(
+        request=sub_request,
+        api_base=target_card.get("url"),
+        litellm_params=target_params,
+        agent_id=target.agent_id,
+    )
+    dumped = (
+        sub_response.model_dump()
+        if hasattr(sub_response, "model_dump")
+        else sub_response
+    )
+    parts = ((dumped or {}).get("result") or {}).get("parts") or []
+    return "\n".join(p.get("text", "") for p in parts if p.get("kind") == "text")
+
+
 @router.post(
     "/a2a/{agent_id}",
     tags=["[beta] A2A Agents"],
@@ -594,7 +733,12 @@ async def invoke_agent_a2a(
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params = agent.litellm_params or {}
-        custom_llm_provider = litellm_params.get("custom_llm_provider")
+        from litellm.proxy.proxy_server import llm_router
+
+        litellm_params, custom_llm_provider = _resolve_model_and_provider(
+            litellm_params,
+            llm_router.model_list if llm_router is not None else None,
+        )
 
         # Hand the authenticated key hash to the completion bridge so provider
         # configs can scope provider-side session state per key (e.g. LangFlow
@@ -607,6 +751,72 @@ async def invoke_agent_a2a(
             litellm_params = {
                 **litellm_params,
                 A2A_USER_API_KEY_HASH_PARAM: user_api_key_dict.api_key,
+            }
+
+        # MCP tools and/or agent-to-agent delegation both run inside the completion
+        # bridge; hand the caller's auth bound to this agent so MCP tools are scoped
+        # to the caller's perms intersected with the agent's own allowlist.
+        if custom_llm_provider and (
+            litellm_params.get("enable_mcp_tools")
+            or litellm_params.get("enable_agent_calls")
+        ):
+            litellm_params = {
+                **litellm_params,
+                "user_api_key_auth": _scope_auth_to_agent(
+                    user_api_key_dict, agent.agent_id
+                ),
+            }
+
+        # Agents-as-tools: expose the other agents this caller may reach, and
+        # dispatch each call as a real A2A message/send to the target agent.
+        if custom_llm_provider and litellm_params.get("enable_agent_calls"):
+            from litellm.a2a_protocol import asend_message
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+
+            source_allowed_targets = await _source_agent_allowed_targets(
+                _scope_auth_to_agent(user_api_key_dict, agent.agent_id)
+            )
+
+            callable_agents: list[dict[str, Any]] = []
+            for other in global_agent_registry.get_agent_list():
+                if other.agent_id == agent.agent_id:
+                    continue
+                if not await AgentRequestHandler.is_agent_allowed(
+                    agent_id=other.agent_id, user_api_key_auth=user_api_key_dict
+                ):
+                    continue
+                if (
+                    source_allowed_targets is not None
+                    and other.agent_id not in source_allowed_targets
+                ):
+                    continue
+                other_card = other.agent_card_params or {}
+                callable_agents.append(
+                    {
+                        "agent_id": other.agent_id,
+                        "name": other_card.get("name", other.agent_id),
+                        "description": other_card.get("description", ""),
+                    }
+                )
+
+            allowed_agent_ids = {a["agent_id"] for a in callable_agents}
+
+            async def _call_agent(target_id: str, message: str) -> str:
+                return await _delegate_to_agent(
+                    target_id=target_id,
+                    message=message,
+                    allowed_agent_ids=allowed_agent_ids,
+                    get_agent=_get_agent,
+                    user_api_key_auth=user_api_key_dict,
+                    send_message=asend_message,
+                )
+
+            litellm_params = {
+                **litellm_params,
+                "callable_agents": callable_agents,
+                "call_agent": _call_agent,
             }
 
         # URL is required unless using completion bridge with a provider that derives endpoint from model

@@ -23,7 +23,9 @@ export const extractVariables = (prompt: PromptType): string[] => {
 
 export const convertToDotPrompt = (prompt: PromptType): string => {
   const variables = extractVariables(prompt);
-  let result = `---\nmodel: ${prompt.model}\n`;
+  // No model means "use the calling agent's / request model": omit it from the
+  // frontmatter so prompt management does not override the caller's model.
+  let result = prompt.model ? `---\nmodel: ${prompt.model}\n` : `---\n`;
 
   // Add temperature if set
   if (prompt.config.temperature !== undefined) {
@@ -237,7 +239,7 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
 
   return {
     name: baseName,
-    model: parsedFrontmatter.model || "gpt-4o",
+    model: parsedFrontmatter.model || "",
     config: parsedFrontmatter.config,
     tools: parsedFrontmatter.tools,
     developerMessage: parsedBody.developerMessage,

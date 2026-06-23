@@ -9,6 +9,7 @@ import {
   createAgentCall,
   getAgentCreateMetadata,
   getAgentsList,
+  getPromptsList,
   keyCreateForAgentCall,
   keyListCall,
   keyUpdateCall,
@@ -60,6 +61,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   const [loadingModels, setLoadingModels] = useState(false);
   const [availableAgents, setAvailableAgents] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(false);
+  const [promptOptions, setPromptOptions] = useState<string[]>([]);
 
   // Step 4: results
   const [createdAgentName, setCreatedAgentName] = useState<string>("");
@@ -94,6 +96,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
     };
     fetchMetadata();
   }, []);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    getPromptsList(accessToken)
+      .then((res) => setPromptOptions(res.prompts.map((p) => p.prompt_id)))
+      .catch((error) => console.error("Error fetching prompts:", error));
+  }, [accessToken]);
 
   // Fetch existing keys when Agent Management step becomes active (step 3)
   useEffect(() => {
@@ -748,10 +757,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             </Form.Item>
           </div>
         ) : agentType === "a2a" ? (
-          <AgentFormFields showAgentName={true} />
+          <AgentFormFields showAgentName={true} promptOptions={promptOptions} />
         ) : selectedAgentTypeInfo?.use_a2a_form_fields ? (
           <>
-            <AgentFormFields showAgentName={true} />
+            <AgentFormFields showAgentName={true} promptOptions={promptOptions} />
             {selectedAgentTypeInfo.credential_fields.length > 0 && (
               <div className="mt-4 p-4 border border-gray-200 rounded-lg">
                 <h4 className="text-sm font-medium text-gray-700 mb-3">
