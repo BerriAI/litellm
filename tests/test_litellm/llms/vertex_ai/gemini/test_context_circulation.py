@@ -62,6 +62,7 @@ class TestExtractServerSideToolInvocations:
         assert result[0]["args"] == {"queries": ["weather Buenos Aires"]}
         assert result[0]["response"] == {"weather": "Sunny, 20°C"}
         assert result[0]["thought_signature"] == "sig_call_1"
+        assert result[0]["response_thought_signature"] == "sig_resp_1"
 
     def test_returns_none_when_no_server_side_tools(self):
         """No toolCall/toolResponse parts → returns None."""
@@ -176,6 +177,27 @@ class TestExtractServerSideToolInvocations:
         assert result[0]["thought_signature"] == "sig_call_1"
         assert result[0]["response_thought_signature"] == "sig_resp_1"
 
+    def test_orphan_response_signature_extraction(self):
+        """Orphan toolResponse is captured and has response_thought_signature set."""
+        parts: List[HttpxPartType] = [
+            {
+                "thoughtSignature": "sig_resp_1",
+                "toolResponse": {
+                    "toolType": "GOOGLE_SEARCH_WEB",
+                    "id": "orphan123",
+                    "response": {"result": "some response"},
+                },
+            },
+        ]
+
+        result = VertexGeminiConfig._extract_server_side_tool_invocations(parts)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["id"] == "orphan123"
+        assert result[0]["response"] == {"result": "some response"}
+        assert result[0]["response_thought_signature"] == "sig_resp_1"
+
 
 # --- Input re-injection tests ---
 
@@ -268,6 +290,38 @@ class TestReInjectServerSideToolInvocations:
 
         assert len(tool_response_parts) == 1
         assert tool_response_parts[0]["thoughtSignature"] == "sig_resp"
+
+    def test_roundtrip_orphan_response_signature(self):
+        """Orphan response signature is preserved and re-injected into toolResponse part."""
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "It's sunny in Buenos Aires.",
+                "provider_specific_fields": {
+                    "server_side_tool_invocations": [
+                        {
+                            "tool_type": "GOOGLE_SEARCH_WEB",
+                            "id": "orphan123",
+                            "response": {"result": "some response"},
+                            "response_thought_signature": "sig_orphan_resp",
+                        }
+                    ]
+                },
+            },
+            {"role": "user", "content": "Thanks!"},
+        ]
+
+        contents = _gemini_convert_messages_with_history(messages)
+
+        model_turn = [c for c in contents if c["role"] == "model"]
+        assert len(model_turn) == 1
+
+        parts = model_turn[0]["parts"]
+        tool_response_parts = [p for p in parts if "toolResponse" in p]
+
+        assert len(tool_response_parts) == 1
+        assert tool_response_parts[0]["thoughtSignature"] == "sig_orphan_resp"
 
     def test_no_invocations_no_extra_parts(self):
         """Without server_side_tool_invocations, no extra parts are added."""

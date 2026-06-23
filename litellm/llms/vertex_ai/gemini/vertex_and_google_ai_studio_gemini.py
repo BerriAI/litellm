@@ -1639,6 +1639,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Any orphan responses (shouldn't happen, but be safe)
         for resp_id, resp_entry in tool_responses_by_id.items():
+            if "thought_signature" in resp_entry:
+                resp_entry["response_thought_signature"] = resp_entry[
+                    "thought_signature"
+                ]
             invocations.append(resp_entry)
 
         return invocations if invocations else None
