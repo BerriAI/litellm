@@ -1097,3 +1097,52 @@ describe("OldTeams - delete team warning copy", () => {
     );
   });
 });
+
+describe("OldTeams - LIT-2530 organization stays optional for proxy admin with a single org", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "No Org Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    mockUseOrganizations.mockReturnValue({
+      data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }],
+    });
+  });
+
+  it("creates a team with no organization when exactly one organization exists", async () => {
+    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "No Org Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({ team_alias: "No Org Team", organization_id: null }),
+      );
+    });
+  });
+});
