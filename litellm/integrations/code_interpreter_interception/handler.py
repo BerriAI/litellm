@@ -493,7 +493,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def _build_chat_completion_tool_result(
         self,
-        container: Any,
+        container: object,
         params: dict[str, Any] | None,
         tool_call: CodeExecutionToolCall,
         container_id: str | None,
@@ -709,7 +709,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return []
 
     def _extract_code_execution_tool_calls(
-        self, response: Any
+        self, response: object
     ) -> list[CodeExecutionToolCall]:
         if isinstance(response, dict):
             output = response.get("output", [])

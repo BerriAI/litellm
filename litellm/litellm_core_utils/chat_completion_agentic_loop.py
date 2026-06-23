@@ -23,7 +23,7 @@ interception prefixes before recursing.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -68,14 +68,23 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
-def _agentic_loop_settings(kwargs: Dict[str, Any]) -> Tuple[int, int, List[str]]:
-    depth = int(kwargs.get("_agentic_loop_depth", 0) or 0)
-    max_loops = max(int(kwargs.get("max_agentic_loops", 3) or 3), 1)
-    fingerprints = list(kwargs.get("_agentic_loop_fingerprints", []) or [])
+def _coerce_int(value: object, default: int) -> int:
+    return int(value) if isinstance(value, (int, str)) else default
+
+
+def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[str]]:
+    depth = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
+    max_loops = max(_coerce_int(kwargs.get("max_agentic_loops"), 3), 1)
+    raw_fingerprints = kwargs.get("_agentic_loop_fingerprints")
+    fingerprints = (
+        [str(fp) for fp in raw_fingerprints]
+        if isinstance(raw_fingerprints, list)
+        else []
+    )
     return depth, max_loops, fingerprints
 
 
-def _fingerprint_tools(tool_calls: Any) -> str:
+def _fingerprint_tools(tool_calls: object) -> str:
     try:
         return json.dumps(tool_calls, sort_keys=True, default=str)
     except Exception:
@@ -83,8 +92,8 @@ def _fingerprint_tools(tool_calls: Any) -> str:
 
 
 def _check_agentic_loop_safety(
-    tool_calls: Any,
-    fingerprints: List[str],
+    tool_calls: object,
+    fingerprints: list[str],
     depth: int,
     max_loops: int,
     model: str,
@@ -111,7 +120,7 @@ def _wrap_response_as_fake_stream(response: object) -> object:
     return convert_model_response_to_streaming(cast(ModelResponse, response))
 
 
-def _add_agentic_loop_metadata(kwargs_for_followup: Dict[str, Any]) -> None:
+def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
     metadata = kwargs_for_followup.get("litellm_metadata")
     metadata = dict(metadata) if isinstance(metadata, dict) else {}
     for key, value in kwargs_for_followup.items():
@@ -124,7 +133,7 @@ def _add_agentic_loop_metadata(kwargs_for_followup: Dict[str, Any]) -> None:
     kwargs_for_followup["litellm_metadata"] = metadata
 
 
-def _filter_followup_kwargs(source: Dict[str, Any]) -> Dict[str, Any]:
+def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
     return {
         k: v
         for k, v in source.items()
@@ -140,13 +149,13 @@ async def _execute_chat_completion_agentic_plan(
     plan: AgenticLoopPlan,
     callback: CustomLogger,
     model: str,
-    optional_params: Dict[str, Any],
-    kwargs: Dict[str, Any],
-    logging_obj: Any,
+    optional_params: dict[str, object],
+    kwargs: dict[str, object],
+    logging_obj: object,
     custom_llm_provider: str,
     depth: int,
     max_loops: int,
-    fingerprints: List[str],
+    fingerprints: list[str],
     fingerprint: str,
 ) -> object:
     import litellm
@@ -225,10 +234,10 @@ async def maybe_run_chat_completion_agentic_loop(
     messages: list,
     optional_params: dict,
     kwargs: dict,
-    logging_obj: Any,
+    logging_obj: object,
     custom_llm_provider: str,
     stream: bool,
-) -> Optional[Union[ModelResponse, CustomStreamWrapper]]:
+) -> ModelResponse | CustomStreamWrapper | None:
     import litellm
 
     callbacks = litellm.callbacks + (
@@ -339,7 +348,7 @@ async def maybe_run_chat_completion_agentic_loop(
         and hasattr(response, "choices")
     ):
         return cast(
-            Union[ModelResponse, CustomStreamWrapper],
+            "ModelResponse | CustomStreamWrapper",
             _wrap_response_as_fake_stream(response),
         )
     return None
