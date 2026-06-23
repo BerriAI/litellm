@@ -16,3 +16,9 @@ axum.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 serde.workspace = true
 serde_json.workspace = true
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
+
+[features]
+# Build the gateway's config from the proxy YAML via an embedded Python
+# interpreter (links libpython; requires `litellm` importable at runtime).
+python-config = ["dep:pyo3"]
