@@ -2635,28 +2635,28 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
 
-            elif should_compute_batch_data:
-                try:
-                    (
-                        response_cost,
-                        batch_usage,
-                        batch_models,
-                    ) = await _handle_completed_batch(
-                        batch=result,
-                        custom_llm_provider=self.custom_llm_provider,
-                        litellm_params=self.litellm_params,
-                    )
+            # elif should_compute_batch_data:
+            #     try:
+            #         (
+            #             response_cost,
+            #             batch_usage,
+            #             batch_models,
+            #         ) = await _handle_completed_batch(
+            #             batch=result,
+            #             custom_llm_provider=self.custom_llm_provider,
+            #             litellm_params=self.litellm_params,
+            #         )
 
-                    result._hidden_params["response_cost"] = response_cost
-                    result._hidden_params["batch_models"] = batch_models
-                    result.usage = batch_usage
-                except Exception as e:
-                    verbose_logger.exception(
-                        f"Error computing batch cost in async_success_handler: {str(e)}"
-                    )
-                    result._hidden_params["response_cost"] = None
-                    result._hidden_params["batch_models"] = None
-                    result.usage = None
+            #         result._hidden_params["response_cost"] = response_cost
+            #         result._hidden_params["batch_models"] = batch_models
+            #         result.usage = batch_usage
+            #     except Exception as e:
+            #         verbose_logger.exception(
+            #             f"Error computing batch cost in async_success_handler: {str(e)}"
+            #         )
+            #         result._hidden_params["response_cost"] = None
+            #         result._hidden_params["batch_models"] = None
+            #         result.usage = None
 
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,

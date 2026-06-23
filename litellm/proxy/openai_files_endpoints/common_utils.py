@@ -1128,8 +1128,8 @@ async def update_batch_in_database(
         # completes reliably.  Setting the flag here unblocks file deletion
         # which queries batch_processed=False.  CheckBatchCost acts as a
         # safety net for the rare case where the callback fails.
-        if db_status == "complete":
-            update_data["batch_processed"] = True
+        # if db_status == "complete":
+        #     update_data["batch_processed"] = True
 
         try:
             await ManagedObjectRepository(prisma_client).table.update(

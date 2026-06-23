@@ -224,9 +224,9 @@ async def _get_batch_output_file_content_as_dictionary(
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
     )
-
-    if custom_llm_provider == "vertex_ai":
-        raise ValueError("Vertex AI does not support file content retrieval")
+    print("BATCH,", batch)
+    # if custom_llm_provider == "vertex_ai":
+    #     raise ValueError("Vertex AI does not support file content retrieval")
 
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
@@ -257,7 +257,14 @@ async def _get_batch_output_file_content_as_dictionary(
     file_content_kwargs.update(credentials)
 
     _file_content = await afile_content(**file_content_kwargs)  # type: ignore[reportArgumentType]
-    return _get_file_content_as_dictionary(_file_content.content)
+    # Access content - handle both direct attribute and method call
+    if hasattr(_file_content, 'content'):
+        content_bytes = _file_content.content  # type: ignore[union-attr]
+    elif hasattr(_file_content, 'read'):
+        content_bytes = await _file_content.read()  # type: ignore[misc]
+    else:
+        content_bytes = _file_content  # type: ignore[assignment]
+    return _get_file_content_as_dictionary(content_bytes)
 
 
 def _extract_file_access_credentials(litellm_params: Optional[dict]) -> dict:

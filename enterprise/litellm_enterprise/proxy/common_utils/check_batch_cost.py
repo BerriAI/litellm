@@ -173,6 +173,7 @@ class CheckBatchCost:
                 jobs = await self._fallback_find_jobs()
         else:
             jobs = await self._fallback_find_jobs()
+        verbose_proxy_logger.debug(f"CheckBatchCost: Found {len(jobs)} jobs to process")
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
@@ -180,6 +181,7 @@ class CheckBatchCost:
             decoded_unified_object_id = _is_base64_encoded_unified_file_id(
                 unified_object_id
             )
+            verbose_proxy_logger.debug(f"CheckBatchCost: Decoded unified_object_id: {decoded_unified_object_id!r}")
             if not decoded_unified_object_id:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because it is not a valid unified object id"
@@ -192,6 +194,7 @@ class CheckBatchCost:
 
             model_id = get_model_id_from_unified_batch_id(unified_object_id)
             batch_id = get_batch_id_from_unified_batch_id(unified_object_id)
+            verbose_proxy_logger.debug(f"CheckBatchCost: Extracted model_id={model_id!r}, batch_id={batch_id!r} from unified_object_id")
 
             if model_id is None:
                 verbose_proxy_logger.info(
@@ -250,26 +253,35 @@ class CheckBatchCost:
                 # would trigger check_managed_file_id_access and get 403. Instead, extract the raw
                 # provider file ID and call afile_content directly with deployment credentials.
                 raw_output_file_id = response.output_file_id
+                verbose_proxy_logger.debug(f"CheckBatchCost: Raw output_file_id={raw_output_file_id!r}")
                 decoded = _is_base64_encoded_unified_file_id(raw_output_file_id)
+                verbose_proxy_logger.debug(f"CheckBatchCost: Decoded output_file_id={decoded!r}")
                 if decoded:
                     try:
                         raw_output_file_id = decoded.split("llm_output_file_id,")[1].split(";")[0]
-                    except (IndexError, AttributeError):
-                        pass
+                        verbose_proxy_logger.debug(f"CheckBatchCost: Extracted raw_output_file_id={raw_output_file_id!r} from decoded value")
+                    except (IndexError, AttributeError) as parse_err:
+                        verbose_proxy_logger.debug(f"CheckBatchCost: Failed to parse output_file_id from decoded: {parse_err}")
 
                 credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                verbose_proxy_logger.debug(f"CheckBatchCost: Deployment credentials keys={list(credentials.keys()) if credentials else 'None'}")
+                verbose_proxy_logger.debug(f"CheckBatchCost: Calling afile_content with file_id={raw_output_file_id!r}")
                 _file_content = await afile_content(
                     file_id=raw_output_file_id,
                     **credentials,
                 )
+                verbose_proxy_logger.debug(f"CheckBatchCost: afile_content returned type={type(_file_content).__name__}")
 
                 # Access content - handle both direct attribute and method call
                 if hasattr(_file_content, 'content'):
                     content_bytes = _file_content.content  # type: ignore[union-attr]
+                    verbose_proxy_logger.debug(f"CheckBatchCost: Got content from .content attribute, size={len(content_bytes) if content_bytes else 0} bytes")
                 elif hasattr(_file_content, 'read'):
                     content_bytes = await _file_content.read()  # type: ignore[misc]
+                    verbose_proxy_logger.debug(f"CheckBatchCost: Got content from .read() method, size={len(content_bytes) if content_bytes else 0} bytes")
                 else:
                     content_bytes = _file_content  # type: ignore[assignment]
+                    verbose_proxy_logger.debug(f"CheckBatchCost: Got content directly, type={type(content_bytes).__name__}, size={len(content_bytes) if content_bytes else 0} bytes")
 
                 file_content_as_dict = _get_file_content_as_dictionary(
                     content_bytes  # type: ignore[arg-type]
@@ -288,6 +300,7 @@ class CheckBatchCost:
                         pass
 
                 deployment_info = self.llm_router.get_deployment(model_id=model_id)
+                verbose_proxy_logger.debug(f"CheckBatchCost: get_deployment(model_id={model_id!r}) returned: {deployment_info is not None}")
                 if deployment_info is None:
                     verbose_proxy_logger.info(
                         f"Skipping job {unified_object_id} because it is not a valid deployment info"
@@ -295,13 +308,16 @@ class CheckBatchCost:
                     if prom_logger:
                         prom_logger.record_check_batch_cost_error("deployment_not_found")
                     continue
+                
                 custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
                 litellm_model_name = deployment_info.litellm_params.model
+                verbose_proxy_logger.debug(f"CheckBatchCost: deployment_info - custom_llm_provider={custom_llm_provider!r}, litellm_params.model={litellm_model_name!r}, model_name={deployment_info.model_name!r}")
 
                 model_name, llm_provider, _, _ = get_llm_provider(
                     model=litellm_model_name,
                     custom_llm_provider=custom_llm_provider,
                 )
+                verbose_proxy_logger.debug(f"CheckBatchCost: get_llm_provider result - model_name={model_name!r}, llm_provider={llm_provider!r}")
 
                 # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
                 # output/error file IDs to managed base64 IDs before the DB write here.
@@ -343,6 +359,8 @@ class CheckBatchCost:
                 # (input_cost_per_token_batches etc.) is used for cost calc
                 deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
                 model_name=deployment_info.model_name
+                verbose_proxy_logger.debug(f"CheckBatchCost: deployment_model_info keys={list(deployment_model_info.keys()) if deployment_model_info else 'empty'}")
+                verbose_proxy_logger.debug(f"CheckBatchCost: Calling calculate_batch_cost_and_usage with custom_llm_provider={llm_provider!r}, model_name={model_name!r}, file_content_dict_entries={len(file_content_as_dict) if file_content_as_dict else 0}")
                 batch_cost, batch_usage, batch_models = (
                     await calculate_batch_cost_and_usage(
                         file_content_dictionary=file_content_as_dict,
@@ -351,6 +369,7 @@ class CheckBatchCost:
                         model_info=deployment_model_info,  # type: ignore[arg-type]
                     )
                 )
+                verbose_proxy_logger.debug(f"CheckBatchCost: calculate_batch_cost_and_usage result - batch_cost={batch_cost}, batch_usage={batch_usage}, batch_models={batch_models}")
                 logging_obj = LiteLLMLogging(
                     model=model_name,
                     messages=[{"role": "user", "content": "<retrieve_batch>"}],
@@ -410,10 +429,12 @@ class CheckBatchCost:
                     }
                     if self._has_batch_processed_column:
                         update_data["batch_processed"] = True
+                    verbose_proxy_logger.debug(f"CheckBatchCost: Updating job {job.id} with status=complete, batch_processed={self._has_batch_processed_column}")
                     await self.prisma_client.db.litellm_managedobjecttable.update(
                         where={"id": job.id},
                         data=update_data,
                     )
+                    verbose_proxy_logger.debug(f"CheckBatchCost: Successfully marked job {job.id} as complete")
                 except Exception as db_err:
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
