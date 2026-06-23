@@ -1404,7 +1404,11 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def _positive_int(value: object) -> int:
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, float) and value.is_integer() and value > 0:
             return int(value)
         return 0
 
