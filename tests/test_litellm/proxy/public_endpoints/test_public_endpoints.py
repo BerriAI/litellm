@@ -201,6 +201,48 @@ def test_anthropic_provider_fields_support_byok():
     ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
 
 
+def test_bedrock_mantle_provider_fields():
+    """Amazon Bedrock Mantle must be a selectable provider in the Add Model flow.
+
+    The dropdown is driven entirely by /public/providers/fields, so a missing
+    entry means Mantle cannot be added through the UI at all (regression guard
+    for LIT-3885). The credential fields must match what the backend actually
+    honors: an optional bearer api_key (BYOK), the AWS SigV4 chain, a region,
+    and an api_base override.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    mantle = next((p for p in providers if p["provider"] == "BedrockMantle"), None)
+    assert mantle is not None, "Bedrock Mantle provider entry not found"
+
+    # provider must equal the UI provider_map key so the model dropdown resolves
+    # bedrock_mantle models; litellm_provider must be the backend slug.
+    assert mantle["provider_display_name"] == "Amazon Bedrock Mantle"
+    assert mantle["litellm_provider"] == "bedrock_mantle"
+    assert mantle["default_model_placeholder"].startswith("bedrock_mantle/")
+
+    fields_by_key = {f["key"]: f for f in mantle["credential_fields"]}
+
+    # Bearer-token auth is BYOK: optional and masked.
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    # AWS SigV4 fallback credentials.
+    assert fields_by_key["aws_access_key_id"]["field_type"] == "password"
+    assert fields_by_key["aws_secret_access_key"]["field_type"] == "password"
+    assert "aws_region_name" in fields_by_key
+
+    # api_base override so admins can target a custom Mantle host without env access.
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+
 def test_google_ai_studio_provider_fields_expose_api_base():
     """The Google AI Studio (gemini) credential form must let admins set a custom
     api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted
@@ -818,4 +860,45 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
 
     assert response.status_code == 200
     assert response.json() == []
+    app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_does_not_expose_upstream_url():
+    """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
+    upstream url must never appear in its response even when the server has one."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    secret_url = "https://internal-only.example.com/mcp"
+    server = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        url=secret_url,
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [server]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    assert all("url" not in item for item in data)
+    assert secret_url not in response.text
     app.dependency_overrides.clear()
