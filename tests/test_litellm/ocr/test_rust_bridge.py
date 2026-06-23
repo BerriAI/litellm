@@ -119,3 +119,19 @@ def test_ocr_skips_rust_when_disabled(monkeypatch, fake_bridge):
 
     assert called.get("hit") is True
     assert fake_bridge == []  # Rust bridge never invoked
+
+
+def test_ocr_resolves_key_via_secret_manager(monkeypatch, fake_bridge):
+    """No explicit api_key: the Rust path must resolve it via get_secret_str so
+    secret-manager backends (AWS/Azure/GCP/Vault) work, matching the Python path.
+    Rust's own fallback only reads the process env, so Python resolves and passes it.
+    """
+    import litellm.secret_managers.main as secret_mgr
+
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.setattr(secret_mgr, "get_secret_str", lambda name: "sk-from-vault")
+    litellm.use_litellm_rust()
+
+    litellm.ocr(model=MODEL, document=DOCUMENT)  # no api_key passed
+
+    assert fake_bridge[0]["api_key"] == "sk-from-vault"
