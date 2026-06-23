@@ -302,6 +302,45 @@ class TestListMCPServers:
             assert {server.server_id for server in result} == {"server-1", "server-2"}
 
     @pytest.mark.asyncio
+    async def test_list_mcp_servers_admin_includes_enabled_platform_mcp(self):
+        admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        server = generate_mock_mcp_server_db_record(server_id="server-1", alias="One")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="restricted",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[admin]),
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_all_allowed_mcp_servers",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.platform_mcp.get_platform_mcp_enabled",
+                AsyncMock(return_value=True),
+            ),
+        ):
+            result = await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=admin
+            )
+
+        ids = {server.server_id for server in result}
+        assert ids == {"server-1", "platform_mcp"}
+        platform_server = next(
+            server for server in result if server.server_id == "platform_mcp"
+        )
+        assert platform_server.server_name == "platform_mcp"
+        assert platform_server.mcp_info is not None
+        assert platform_server.mcp_info["is_platform_mcp"] is True
+
+    @pytest.mark.asyncio
     async def test_list_mcp_servers_view_all_mode_virtual_key_is_sanitized(self):
         """Issue #20325: virtual keys should get a safe discovery view."""
 
@@ -1326,6 +1365,40 @@ class TestTeamScopedMCPServerAccess:
                 user_api_key_dict=mock_user_auth, team_id="any-team-id"
             )
             assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_admin_team_query_adds_enabled_platform_mcp_assignment_option(self):
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user",
+        )
+        scoped_list = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.platform_mcp.get_platform_mcp_enabled",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
+                scoped_list,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            await fetch_all_mcp_servers(
+                user_api_key_dict=mock_user_auth, team_id="any-team-id"
+            )
+
+        scoped_list.assert_awaited_once_with(
+            "any-team-id", additional_server_ids={"platform_mcp"}
+        )
 
     @pytest.mark.asyncio
     async def test_restricted_virtual_key_cannot_use_team_id_filter(self):

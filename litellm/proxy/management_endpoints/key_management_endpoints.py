@@ -20,7 +20,7 @@ import secrets
 import traceback
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, cast
 
 import fastapi
 import yaml
@@ -209,6 +209,29 @@ def _set_key_rotation_fields(
                 "key_rotation_at": _calculate_key_rotation_time(rotation_interval),
             }
         )
+
+
+def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return user_api_key_dict.user_role in {
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    }
+
+
+async def _get_admin_assignable_mcp_server_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Set[str]:
+    if not _is_proxy_admin(user_api_key_dict):
+        return set()
+
+    from litellm.proxy._experimental.mcp_server.platform_mcp import (
+        PLATFORM_MCP_SERVER_ID,
+        get_platform_mcp_enabled,
+    )
+
+    if await get_platform_mcp_enabled():
+        return {PLATFORM_MCP_SERVER_ID}
+    return set()
 
 
 def _is_allowed_to_make_key_request(
@@ -874,6 +897,9 @@ async def _common_key_generation_helper(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
+        additional_allowed_mcp_server_ids=await _get_admin_assignable_mcp_server_ids(
+            user_api_key_dict
+        ),
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
@@ -2164,6 +2190,7 @@ async def _validate_mcp_servers_for_key_update(
     existing_key_row: Any,
     prisma_client: Any,
     user_api_key_cache: Any,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[dict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
@@ -2186,6 +2213,9 @@ async def _validate_mcp_servers_for_key_update(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
+        additional_allowed_mcp_server_ids=await _get_admin_assignable_mcp_server_ids(
+            user_api_key_dict
+        ),
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
@@ -2422,6 +2452,7 @@ async def _validate_update_key_data(
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
         )
         if normalized_object_permission is not None:
             data.object_permission = LiteLLM_ObjectPermissionBase(

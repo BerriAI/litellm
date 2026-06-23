@@ -507,7 +507,10 @@ if MCP_AVAILABLE:
         must see them, but a read-only admin gets the same redacted view as
         any other non-managing caller.
         """
-        return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        return user_api_key_dict.user_role in {
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN.value,
+        }
 
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
@@ -843,8 +846,47 @@ if MCP_AVAILABLE:
             return "view_all"
         return "restricted"
 
+    async def _get_admin_assignable_platform_mcp_server_ids(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Set[str]:
+        if not _user_is_full_admin(user_api_key_dict):
+            return set()
+
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            PLATFORM_MCP_SERVER_ID,
+            get_platform_mcp_enabled,
+        )
+
+        if await get_platform_mcp_enabled():
+            return {PLATFORM_MCP_SERVER_ID}
+        return set()
+
+    async def _append_admin_assignable_platform_mcp_server(
+        servers: List[LiteLLM_MCPServerTable],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> List[LiteLLM_MCPServerTable]:
+        platform_server_ids = await _get_admin_assignable_platform_mcp_server_ids(
+            user_api_key_dict
+        )
+        if not platform_server_ids:
+            return servers
+        if any(server.server_id in platform_server_ids for server in servers):
+            return servers
+
+        platform_server = global_mcp_server_manager.get_mcp_server_by_id(
+            next(iter(platform_server_ids))
+        )
+        if platform_server is None:
+            return servers
+
+        return [
+            *servers,
+            global_mcp_server_manager._build_mcp_server_table(platform_server),
+        ]
+
     async def _get_team_scoped_mcp_server_list(
         team_id: str,
+        additional_server_ids: Optional[Set[str]] = None,
     ) -> List[LiteLLM_MCPServerTable]:
         """
         Return MCP servers scoped to a team: team's allowed servers + allow_all_keys servers.
@@ -866,7 +908,20 @@ if MCP_AVAILABLE:
 
         team_server_ids = await _get_team_allowed_mcp_servers(team_obj)
         allow_all_server_ids = _get_allow_all_keys_server_ids()
-        all_allowed_ids = team_server_ids | allow_all_server_ids
+        all_allowed_ids = (
+            team_server_ids | allow_all_server_ids | (additional_server_ids or set())
+        )
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            get_platform_mcp_enabled,
+            is_platform_mcp_server_identifier,
+        )
+
+        if not await get_platform_mcp_enabled():
+            all_allowed_ids = {
+                server_id
+                for server_id in all_allowed_ids
+                if not is_platform_mcp_server_identifier(server_id)
+            }
 
         if not all_allowed_ids:
             return []
@@ -977,11 +1032,18 @@ if MCP_AVAILABLE:
                     )
 
             redacted_mcp_servers = await _get_team_scoped_mcp_server_list(
-                sanitized_team_id
+                sanitized_team_id,
+                additional_server_ids=await _get_admin_assignable_platform_mcp_server_ids(
+                    user_api_key_dict
+                ),
             )
         else:
             servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
-            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+            redacted_mcp_servers = _redact_mcp_credentials_list(
+                await _append_admin_assignable_platform_mcp_server(
+                    servers, user_api_key_dict
+                )
+            )
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:

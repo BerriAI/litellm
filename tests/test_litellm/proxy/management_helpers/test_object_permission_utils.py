@@ -279,6 +279,32 @@ async def test_validate_allow_all_keys_servers_always_allowed(
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("platform_mcp"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_additional_allowed_server_without_team(
+    mock_access_groups, mock_allow_all
+):
+    object_permission = {"mcp_servers": ["platform_mcp"]}
+    await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=None,
+        additional_allowed_mcp_server_ids={"platform_mcp"},
+    )
+    assert object_permission["mcp_servers"] == ["platform_mcp"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("global-server"),
 )
 @patch(

@@ -4532,13 +4532,20 @@ class MCPServerManager:
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
         """Return all MCP servers from registry without applying access controls."""
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            get_platform_mcp_enabled,
+            is_platform_mcp_server,
+        )
 
         registry = self.get_registry()
         if not registry:
             return []
 
+        platform_mcp_enabled = await get_platform_mcp_enabled()
         servers: List[LiteLLM_MCPServerTable] = []
         for server in registry.values():
+            if is_platform_mcp_server(server) and not platform_mcp_enabled:
+                continue
             servers.append(self._build_mcp_server_table(server))
         return servers
 
@@ -4546,10 +4553,21 @@ class MCPServerManager:
         self, server_ids: Optional[List[str]] = None
     ) -> List[LiteLLM_MCPServerTable]:
         """Return health info for all servers in registry regardless of user access."""
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            get_platform_mcp_enabled,
+            is_platform_mcp_server,
+        )
 
         registry = self.get_registry()
         if not registry:
             return []
+
+        if not await get_platform_mcp_enabled():
+            registry = {
+                server_id: server
+                for server_id, server in registry.items()
+                if not is_platform_mcp_server(server)
+            }
 
         if server_ids:
             target_server_ids = [sid for sid in server_ids if sid in registry]

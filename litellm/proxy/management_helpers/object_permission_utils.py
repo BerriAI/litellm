@@ -464,6 +464,7 @@ async def validate_key_mcp_servers_against_team(
     object_permission: Optional[dict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: Optional[PrismaClient] = None,
+    additional_allowed_mcp_server_ids: Optional[Set[str]] = None,
 ) -> Optional[dict]:
     """
     Validate that MCP servers requested on a key are within the allowed scope.
@@ -492,8 +493,11 @@ async def validate_key_mcp_servers_against_team(
         prisma_client=prisma_client,
     )
 
-    # Combined allowed set = team servers + allow_all_keys servers
-    all_allowed_servers = team_allowed_servers | allow_all_keys_servers
+    all_allowed_servers = (
+        team_allowed_servers
+        | allow_all_keys_servers
+        | (additional_allowed_mcp_server_ids or set())
+    )
 
     # Validate requested server IDs
     if requested_servers:
