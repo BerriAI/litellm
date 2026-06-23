@@ -111,6 +111,68 @@ _RESPONSES_NAMED_PARAM_NAMES = {
 }
 
 
+def _responses_named_param_values(local_vars: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        name: local_vars[name]
+        for name in _RESPONSES_NAMED_PARAM_NAMES
+        if name in local_vars
+    }
+
+
+def _responses_deployment_hook_kwargs(
+    *, local_vars: Dict[str, Any], kwargs: Dict[str, Any]
+) -> Dict[str, Any]:
+    return {**kwargs, **_responses_named_param_values(local_vars)}
+
+
+def _apply_responses_hook_result_to_local_vars(
+    *, modified_kwargs: Dict[str, Any], local_vars: Dict[str, Any]
+) -> Dict[str, Any]:
+    named_params = {
+        name: modified_kwargs[name]
+        for name in _RESPONSES_NAMED_PARAM_NAMES
+        if name in modified_kwargs
+    }
+    local_vars.update(
+        {
+            **_responses_named_param_values(local_vars),
+            **named_params,
+        }
+    )
+    kwargs = {
+        k: v
+        for k, v in modified_kwargs.items()
+        if k not in _RESPONSES_NAMED_PARAM_NAMES
+    }
+    local_vars["kwargs"] = kwargs
+    return kwargs
+
+
+def _run_sync_responses_deployment_hook(
+    *,
+    litellm_logging_obj: Optional[LiteLLMLoggingObj],
+    local_vars: Dict[str, Any],
+    kwargs: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if (
+        litellm_logging_obj is None
+        or not base_llm_http_handler._has_agentic_completion_hook(litellm_logging_obj)
+    ):
+        return None
+
+    modified_kwargs = run_async_function(
+        async_pre_call_deployment_hook,
+        _responses_deployment_hook_kwargs(local_vars=local_vars, kwargs=kwargs),
+        CallTypes.responses.value,
+    )
+    if modified_kwargs is None:
+        return None
+    return _apply_responses_hook_result_to_local_vars(
+        modified_kwargs=modified_kwargs,
+        local_vars=local_vars,
+    )
+
+
 def _has_file_search_tool(tools: Optional[Any]) -> bool:
     """Return True if any tool in the list has type 'file_search'."""
     if not tools:
@@ -1020,133 +1082,44 @@ def responses(
             local_vars=local_vars,
         )
 
-        if (
-            not _is_async
-            and litellm_logging_obj is not None
-            and base_llm_http_handler._has_agentic_completion_hook(litellm_logging_obj)
-        ):
-            deployment_hook_kwargs = {
-                **kwargs,
-                "input": input,
-                "model": model,
-                "include": include,
-                "instructions": instructions,
-                "max_output_tokens": max_output_tokens,
-                "prompt": prompt,
-                "metadata": metadata,
-                "parallel_tool_calls": parallel_tool_calls,
-                "previous_response_id": previous_response_id,
-                "reasoning": reasoning,
-                "store": store,
-                "background": background,
-                "stream": stream,
-                "temperature": temperature,
-                "text": text,
-                "text_format": text_format,
-                "tool_choice": tool_choice,
-                "tools": tools,
-                "top_p": top_p,
-                "truncation": truncation,
-                "user": user,
-                "service_tier": service_tier,
-                "safety_identifier": safety_identifier,
-                "extra_headers": extra_headers,
-                "extra_query": extra_query,
-                "extra_body": extra_body,
-                "timeout": timeout,
-                "allowed_openai_params": allowed_openai_params,
-                "custom_llm_provider": custom_llm_provider,
-            }
-            modified_kwargs = run_async_function(
-                async_pre_call_deployment_hook,
-                deployment_hook_kwargs,
-                CallTypes.responses.value,
+        if not _is_async:
+            hook_kwargs = _run_sync_responses_deployment_hook(
+                litellm_logging_obj=litellm_logging_obj,
+                local_vars=local_vars,
+                kwargs=kwargs,
             )
-            if modified_kwargs is not None:
-                input = cast(
-                    Union[str, ResponseInputParam],
-                    modified_kwargs.get("input", input),
-                )
-                model = cast(str, modified_kwargs.get("model", model))
-                include = modified_kwargs.get("include", include)
-                instructions = modified_kwargs.get("instructions", instructions)
-                max_output_tokens = modified_kwargs.get(
-                    "max_output_tokens", max_output_tokens
-                )
-                prompt = modified_kwargs.get("prompt", prompt)
-                metadata = modified_kwargs.get("metadata", metadata)
-                parallel_tool_calls = modified_kwargs.get(
-                    "parallel_tool_calls", parallel_tool_calls
-                )
-                previous_response_id = modified_kwargs.get(
-                    "previous_response_id", previous_response_id
-                )
-                reasoning = modified_kwargs.get("reasoning", reasoning)
-                store = modified_kwargs.get("store", store)
-                background = modified_kwargs.get("background", background)
-                stream = modified_kwargs.get("stream", stream)
-                temperature = modified_kwargs.get("temperature", temperature)
-                text = modified_kwargs.get("text", text)
-                text_format = modified_kwargs.get("text_format", text_format)
-                tool_choice = modified_kwargs.get("tool_choice", tool_choice)
-                tools = modified_kwargs.get("tools", tools)
-                top_p = modified_kwargs.get("top_p", top_p)
-                truncation = modified_kwargs.get("truncation", truncation)
-                user = modified_kwargs.get("user", user)
-                service_tier = modified_kwargs.get("service_tier", service_tier)
-                safety_identifier = modified_kwargs.get(
-                    "safety_identifier", safety_identifier
-                )
-                extra_headers = modified_kwargs.get("extra_headers", extra_headers)
-                extra_query = modified_kwargs.get("extra_query", extra_query)
-                extra_body = modified_kwargs.get("extra_body", extra_body)
-                timeout = modified_kwargs.get("timeout", timeout)
-                allowed_openai_params = modified_kwargs.get(
-                    "allowed_openai_params", allowed_openai_params
-                )
-                custom_llm_provider = modified_kwargs.get(
-                    "custom_llm_provider", custom_llm_provider
-                )
-                kwargs = {
-                    k: v
-                    for k, v in modified_kwargs.items()
-                    if k not in _RESPONSES_NAMED_PARAM_NAMES
-                }
+            if hook_kwargs is not None:
+                kwargs = hook_kwargs
                 litellm_params = GenericLiteLLMParams(**kwargs)
-                local_vars.update(
-                    {
-                        "input": input,
-                        "model": model,
-                        "include": include,
-                        "instructions": instructions,
-                        "max_output_tokens": max_output_tokens,
-                        "prompt": prompt,
-                        "metadata": metadata,
-                        "parallel_tool_calls": parallel_tool_calls,
-                        "previous_response_id": previous_response_id,
-                        "reasoning": reasoning,
-                        "store": store,
-                        "background": background,
-                        "stream": stream,
-                        "temperature": temperature,
-                        "text": text,
-                        "text_format": text_format,
-                        "tool_choice": tool_choice,
-                        "tools": tools,
-                        "top_p": top_p,
-                        "truncation": truncation,
-                        "user": user,
-                        "service_tier": service_tier,
-                        "safety_identifier": safety_identifier,
-                        "extra_headers": extra_headers,
-                        "extra_query": extra_query,
-                        "extra_body": extra_body,
-                        "timeout": timeout,
-                        "allowed_openai_params": allowed_openai_params,
-                        "custom_llm_provider": custom_llm_provider,
-                        "kwargs": kwargs,
-                    }
-                )
+                input = cast(Union[str, ResponseInputParam], local_vars["input"])
+                model = cast(str, local_vars["model"])
+                include = local_vars.get("include")
+                instructions = local_vars.get("instructions")
+                max_output_tokens = local_vars.get("max_output_tokens")
+                prompt = local_vars.get("prompt")
+                metadata = local_vars.get("metadata")
+                parallel_tool_calls = local_vars.get("parallel_tool_calls")
+                previous_response_id = local_vars.get("previous_response_id")
+                reasoning = local_vars.get("reasoning")
+                store = local_vars.get("store")
+                background = local_vars.get("background")
+                stream = local_vars.get("stream")
+                temperature = local_vars.get("temperature")
+                text = local_vars.get("text")
+                text_format = local_vars.get("text_format")
+                tool_choice = local_vars.get("tool_choice")
+                tools = local_vars.get("tools")
+                top_p = local_vars.get("top_p")
+                truncation = local_vars.get("truncation")
+                user = local_vars.get("user")
+                service_tier = local_vars.get("service_tier")
+                safety_identifier = local_vars.get("safety_identifier")
+                extra_headers = local_vars.get("extra_headers")
+                extra_query = local_vars.get("extra_query")
+                extra_body = local_vars.get("extra_body")
+                timeout = local_vars.get("timeout")
+                allowed_openai_params = local_vars.get("allowed_openai_params")
+                custom_llm_provider = local_vars.get("custom_llm_provider")
 
         #########################################################
         # PROMPT MANAGEMENT

@@ -5,6 +5,19 @@ from typing import Union, cast
 
 import httpx
 
+from litellm.constants import (
+    OPEN_SANDBOX_API_BASE,
+    OPEN_SANDBOX_API_BASE_ENV_VAR,
+    OPEN_SANDBOX_API_KEY_ENV_VAR,
+    OPEN_SANDBOX_DEFAULT_ENTRYPOINT,
+    OPEN_SANDBOX_DEFAULT_LANGUAGE,
+    OPEN_SANDBOX_DEFAULT_RESOURCE_LIMITS,
+    OPEN_SANDBOX_DEFAULT_TEMPLATE,
+    OPEN_SANDBOX_DEFAULT_TIMEOUT,
+    OPEN_SANDBOX_EXECD_PORT,
+    OPEN_SANDBOX_POLL_INTERVAL,
+    OPEN_SANDBOX_READY_TIMEOUT,
+)
 from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
     CodeExecutionResult,
@@ -18,15 +31,9 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-OPEN_SANDBOX_API_BASE = "http://localhost:8080/v1"
-OPEN_SANDBOX_DEFAULT_TEMPLATE = "opensandbox/code-interpreter:v1.1.0"
-OPEN_SANDBOX_DEFAULT_ENTRYPOINT = ("/opt/code-interpreter/code-interpreter.sh",)
-OPEN_SANDBOX_DEFAULT_LANGUAGE = "python"
-OPEN_SANDBOX_DEFAULT_RESOURCE_LIMITS = {"cpu": "1", "memory": "2Gi"}
-OPEN_SANDBOX_EXECD_PORT = 44772
-DEFAULT_SANDBOX_TIMEOUT = 300
-DEFAULT_READY_TIMEOUT = 30.0
-DEFAULT_POLL_INTERVAL = 0.2
+DEFAULT_SANDBOX_TIMEOUT = OPEN_SANDBOX_DEFAULT_TIMEOUT
+DEFAULT_READY_TIMEOUT = OPEN_SANDBOX_READY_TIMEOUT
+DEFAULT_POLL_INTERVAL = OPEN_SANDBOX_POLL_INTERVAL
 MAX_OUTPUT_BYTES = SANDBOX_MAX_OUTPUT_BYTES
 
 
@@ -39,7 +46,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
         if api_key is not None:
             return api_key
-        return get_secret_str("OPEN_SANDBOX_API_KEY") or ""
+        return get_secret_str(OPEN_SANDBOX_API_KEY_ENV_VAR) or ""
 
     async def acreate_sandbox(
         self,
@@ -418,7 +425,9 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     @staticmethod
     def _api_base(api_base: str | None) -> str:
         return (
-            api_base or get_secret_str("OPEN_SANDBOX_API_BASE") or OPEN_SANDBOX_API_BASE
+            api_base
+            or get_secret_str(OPEN_SANDBOX_API_BASE_ENV_VAR)
+            or OPEN_SANDBOX_API_BASE
         ).rstrip("/")
 
     @staticmethod
