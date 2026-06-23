@@ -18,6 +18,48 @@ const SUPPORTED_OCR_PARAMS: &[&str] = &[
     "id",
 ];
 
+/// Default Mistral API base, used when the caller does not override `api_base`.
+pub const MISTRAL_DEFAULT_API_BASE: &str = "https://api.mistral.ai/v1";
+
+/// Environment variable holding the Mistral API key.
+pub const MISTRAL_API_KEY_ENV: &str = "MISTRAL_API_KEY";
+
+/// Error message raised when no Mistral API key can be resolved.
+pub const MISSING_KEY_MESSAGE: &str = "Missing Mistral API Key - A call is being made to Mistral but no key is set either in the environment variables or via params";
+
+/// Build the complete OCR endpoint URL, de-duplicating a trailing `/v1`.
+///
+/// Blank/whitespace `api_base` is treated as absent (guard at resolution time).
+pub fn complete_url(api_base: Option<&str>) -> String {
+    let base = api_base
+        .map(str::trim)
+        .filter(|base| !base.is_empty())
+        .unwrap_or(MISTRAL_DEFAULT_API_BASE)
+        .trim_end_matches('/');
+
+    if base.ends_with("/v1") {
+        format!("{base}/ocr")
+    } else {
+        format!("{base}/v1/ocr")
+    }
+}
+
+/// Resolve the Mistral API key from the explicit param or the environment.
+///
+/// Blank/whitespace values are treated as absent. Returns `CoreError::Auth`
+/// when no usable key is available.
+pub fn resolve_api_key(
+    api_key: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> CoreResult<String> {
+    api_key
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
+        .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+}
+
 pub struct MistralOcrConfig;
 
 pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
@@ -208,5 +250,39 @@ mod tests {
         assert_eq!(result.document_annotation, Some(Value::Null));
         assert_eq!(result.usage_info, Some(json!({"pages_processed": 1})));
         assert_eq!(result.object, "ocr");
+    }
+
+    #[test]
+    fn complete_url_defaults_and_dedupes_v1() {
+        assert_eq!(complete_url(None), "https://api.mistral.ai/v1/ocr");
+        assert_eq!(complete_url(Some("   ")), "https://api.mistral.ai/v1/ocr");
+        assert_eq!(
+            complete_url(Some("https://proxy.internal")),
+            "https://proxy.internal/v1/ocr"
+        );
+        assert_eq!(
+            complete_url(Some("https://proxy.internal/v1/")),
+            "https://proxy.internal/v1/ocr"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_prefers_param_then_env() {
+        let no_env = |_: &str| None;
+        assert_eq!(
+            resolve_api_key(Some("sk-param"), &no_env).unwrap(),
+            "sk-param"
+        );
+
+        let with_env = |key: &str| (key == MISTRAL_API_KEY_ENV).then(|| "sk-env".to_string());
+        assert_eq!(resolve_api_key(None, &with_env).unwrap(), "sk-env");
+        // Blank param falls through to the environment.
+        assert_eq!(resolve_api_key(Some("  "), &with_env).unwrap(), "sk-env");
+    }
+
+    #[test]
+    fn resolve_api_key_errors_when_absent() {
+        let err = resolve_api_key(None, &|_| None).expect_err("missing key should error");
+        assert_eq!(err, CoreError::Auth(MISSING_KEY_MESSAGE.to_string()));
     }
 }
