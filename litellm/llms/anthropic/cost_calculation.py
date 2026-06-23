@@ -3,7 +3,7 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_token_base_cost,
