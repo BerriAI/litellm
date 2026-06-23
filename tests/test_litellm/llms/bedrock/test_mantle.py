@@ -247,3 +247,154 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert requests[0]["path"] == "/anthropic/v1/messages"
     assert requests[0]["headers"]["anthropic-workspace"] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in requests[0]["body"]
+
+
+_VPCE_BASE = "https://vpce-0a1b2c3d.bedrock-mantle.us-east-1.vpce.amazonaws.com"
+
+
+class TestMantleCustomEndpointOverride:
+    """The bedrock/mantle/ route must route through a caller-supplied private
+    endpoint (api_base or aws_bedrock_runtime_endpoint) instead of the hardcoded
+    public host, so deployments behind a VPC endpoint can reach Mantle.
+
+    Each case fails against the previous behaviour, which ignored both overrides
+    and always returned the public bedrock-mantle.{region}.api.aws host.
+    """
+
+    @pytest.mark.parametrize(
+        "config", [AmazonMantleConfig(), AmazonMantleMessagesConfig()]
+    )
+    def test_api_base_overrides_public_host(self, config):
+        url = config.get_complete_url(
+            api_base=_VPCE_BASE,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+        )
+        assert url == f"{_VPCE_BASE}/anthropic/v1/messages"
+
+    @pytest.mark.parametrize(
+        "config", [AmazonMantleConfig(), AmazonMantleMessagesConfig()]
+    )
+    def test_aws_bedrock_runtime_endpoint_overrides_public_host(self, config):
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_runtime_endpoint": _VPCE_BASE,
+            },
+            litellm_params={},
+        )
+        assert url == f"{_VPCE_BASE}/anthropic/v1/messages"
+
+    @pytest.mark.parametrize(
+        "config", [AmazonMantleConfig(), AmazonMantleMessagesConfig()]
+    )
+    def test_aws_bedrock_runtime_endpoint_from_litellm_params(self, config):
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={"aws_bedrock_runtime_endpoint": _VPCE_BASE},
+        )
+        assert url == f"{_VPCE_BASE}/anthropic/v1/messages"
+
+    @pytest.mark.parametrize(
+        "config", [AmazonMantleConfig(), AmazonMantleMessagesConfig()]
+    )
+    def test_api_base_takes_precedence_over_runtime_endpoint(self, config):
+        url = config.get_complete_url(
+            api_base=_VPCE_BASE,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_runtime_endpoint": "https://wrong.example.com",
+            },
+            litellm_params={},
+        )
+        assert url == f"{_VPCE_BASE}/anthropic/v1/messages"
+
+    @pytest.mark.parametrize(
+        "config", [AmazonMantleConfig(), AmazonMantleMessagesConfig()]
+    )
+    def test_override_with_full_path_is_not_doubled(self, config):
+        full = f"{_VPCE_BASE}/anthropic/v1/messages"
+        url = config.get_complete_url(
+            api_base=full,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+        )
+        assert url == full
+
+    @pytest.mark.parametrize(
+        "config", [AmazonMantleConfig(), AmazonMantleMessagesConfig()]
+    )
+    def test_no_override_keeps_public_host(self, config):
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={"aws_region_name": "us-west-2"},
+            litellm_params={},
+        )
+        assert url == "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages"
+
+
+def test_mantle_completion_routes_to_custom_endpoint():
+    import litellm
+
+    urls = []
+
+    def mock_post(self, url, data=None, headers=None, **kwargs):
+        urls.append(url)
+        return _anthropic_response(url)
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post):
+        litellm.completion(
+            model="bedrock/mantle/anthropic.claude-mythos-preview",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=10,
+            aws_bedrock_runtime_endpoint=_VPCE_BASE,
+            aws_access_key_id="fake-key",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-east-1",
+        )
+
+    assert urls == [f"{_VPCE_BASE}/anthropic/v1/messages"]
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_routes_to_custom_endpoint():
+    import litellm
+
+    urls = []
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        urls.append(url)
+        return _anthropic_response(url)
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-mythos-preview",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                aws_bedrock_runtime_endpoint=_VPCE_BASE,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert urls == [f"{_VPCE_BASE}/anthropic/v1/messages"]

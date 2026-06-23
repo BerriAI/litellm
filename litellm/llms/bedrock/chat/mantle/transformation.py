@@ -7,10 +7,14 @@ The bedrock-mantle endpoint uses the Anthropic Messages API format but is served
 at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional, cast
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
+)
+from litellm.llms.bedrock.mantle_common import (
+    get_runtime_endpoint_override,
+    resolve_mantle_messages_url,
 )
 from litellm.types.llms.openai import AllMessageValues
 
@@ -20,10 +24,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-MANTLE_ENDPOINT_TEMPLATE = (
-    "https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages"
-)
 
 
 class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
@@ -46,7 +46,14 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         stream: Optional[bool] = None,
     ) -> str:
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
-        return MANTLE_ENDPOINT_TEMPLATE.format(region=region)
+        return resolve_mantle_messages_url(
+            region=region,
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=get_runtime_endpoint_override(
+                cast(Mapping[str, object], optional_params),
+                cast(Mapping[str, object], litellm_params),
+            ),
+        )
 
     def validate_environment(
         self,

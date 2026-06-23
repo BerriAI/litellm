@@ -6,8 +6,12 @@ AmazonAnthropicClaudeMessagesConfig. Overrides only the URL and model-prefix
 stripping that are specific to the bedrock-mantle endpoint.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple, cast
 
+from litellm.llms.bedrock.mantle_common import (
+    get_runtime_endpoint_override,
+    resolve_mantle_messages_url,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
@@ -19,10 +23,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-MANTLE_ENDPOINT_TEMPLATE = (
-    "https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages"
-)
 
 
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
@@ -43,7 +43,14 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         stream: Optional[bool] = None,
     ) -> str:
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
-        return MANTLE_ENDPOINT_TEMPLATE.format(region=region)
+        return resolve_mantle_messages_url(
+            region=region,
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=get_runtime_endpoint_override(
+                cast(Mapping[str, object], optional_params),
+                cast(Mapping[str, object], litellm_params),
+            ),
+        )
 
     def validate_anthropic_messages_environment(
         self,
