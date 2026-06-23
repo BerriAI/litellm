@@ -155,7 +155,7 @@ class TestSingulrRequestPayload:
             )
             call_kwargs = mock_post.call_args
             url = call_kwargs.kwargs["url"]
-            assert url == "https://api.test.singulr.ai/api/v1/ai-platform/controller/singulr-guardrails-sdk"
+            assert url == "https://api.test.singulr.ai/api/v1/ai-platform/controller/singulr-guardrails-litellm"
 
 # ---------------------------------------------------------------------------
 # Config model

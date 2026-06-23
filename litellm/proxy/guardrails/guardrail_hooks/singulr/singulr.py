@@ -36,12 +36,14 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
         GuardrailConfigModel,
     )
+import httpx
 
 _DEFAULT_API_BASE = "http://localhost:8000"
 _GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
 
 
 class SingulrMissingCredentials(Exception):
+    """Custom exception for missing Singulr secrets."""
     pass
 
 
@@ -139,6 +141,7 @@ class SingulrGuardrail(CustomGuardrail):
             endpoint,
         )
 
+
         try:
             response = await self.async_handler.post(
                 url=endpoint,
@@ -148,13 +151,34 @@ class SingulrGuardrail(CustomGuardrail):
             )
             response.raise_for_status()
             result = response.json()
-        except Exception as exc:
-            verbose_proxy_logger.error("Singulr API error: %s", str(exc))
+
+        except httpx.HTTPStatusError as exc:
+            verbose_proxy_logger.error(
+                "Singulr API returned HTTP %s: %s",
+                exc.response.status_code,
+                str(exc),
+            )
+
+            if self.block_on_error:
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=(
+                        f"Singulr API returned HTTP "
+                        f"{exc.response.status_code}: {exc.response.text}"
+                    ),
+                ) from exc
+
+            return inputs
+
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            verbose_proxy_logger.error("Singulr API unreachable: %s", str(exc))
+
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=f"Singulr API unreachable (block_on_error=True): {exc}",
                 ) from exc
+
             return inputs
 
         should_block = result.get("should_block", False)
