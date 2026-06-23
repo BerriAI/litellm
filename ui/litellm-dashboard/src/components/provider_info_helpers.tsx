@@ -318,10 +318,12 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
     return { logo, displayName };
   }
 
-  // Find the enum key by matching provider_map values
-  const enumKey = Object.keys(provider_map).find(
-    (key) => provider_map[key].toLowerCase() === providerValue.toLowerCase(),
-  );
+  // Resolve by the litellm provider slug (e.g. "bedrock_mantle"); fall back to
+  // the enum key (e.g. "BedrockMantle") for callers like the Add Model dropdown
+  // that pass the key instead of the slug.
+  const enumKey =
+    Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === providerValue.toLowerCase()) ??
+    Object.keys(provider_map).find((key) => key.toLowerCase() === providerValue.toLowerCase());
 
   if (!enumKey) {
     return { logo: "", displayName: providerValue };
