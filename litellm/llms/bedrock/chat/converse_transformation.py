@@ -858,6 +858,7 @@ class AmazonConverseConfig(BaseConfig):
         }
         """
         if json_schema is not None:
+            json_schema = AnthropicConfig.filter_anthropic_output_schema(json_schema)
             json_schema = AmazonConverseConfig._add_additional_properties_to_schema(
                 json_schema
             )
