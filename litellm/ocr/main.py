@@ -268,7 +268,9 @@ def ocr(
         rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
 
         if custom_llm_provider == "mistral" and rust_bridge.rust_ocr_enabled():
-            return rust_bridge.rust_ocr(model, document, api_key, api_base, kwargs)
+            return OCRResponse(
+                **rust_bridge.rust_ocr(model, document, api_key, api_base, kwargs)
+            )
 
         # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
