@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -287,6 +288,9 @@ def _rewrite_object_permission_mcp_servers(
 
     normalized_servers: List[str] = []
     for identifier in mcp_servers:
+        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
+            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
+            continue
         normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
     object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
 
@@ -426,6 +430,7 @@ def _extract_requested_mcp_server_ids(
     mcp_servers = object_permission.get("mcp_servers")
     if isinstance(mcp_servers, list):
         server_ids.update(mcp_servers)
+        server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
 
     mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
     if isinstance(mcp_tool_permissions, dict):
