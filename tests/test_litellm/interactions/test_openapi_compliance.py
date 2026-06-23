@@ -153,19 +153,18 @@ class TestResponseCompliance:
 
     def test_interaction_response_fields(self, spec_dict):
         """Verify our InteractionsAPIResponse has correct fields."""
-        # The response is the dedicated `Interaction` schema. Google moved the
-        # output-only fields (notably the `steps` array, formerly `outputs`)
-        # off `CreateModelInteractionParams` and onto `Interaction`; the request
-        # schema no longer carries `steps`. Keep this aligned with the live spec.
-        schema = spec_dict["components"]["schemas"]["Interaction"]
+        # The response is the Interaction schema
+        # Check CreateModelInteractionParams which includes output fields
+        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
 
-        # Output fields (readOnly).
+        # Output fields (readOnly)
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
-            "steps",
+            "role",
+            "outputs",
             "usage",
         ]
 
@@ -175,13 +174,9 @@ class TestResponseCompliance:
 
     def test_status_enum_values(self, spec_dict):
         """Verify status enum values match spec."""
-        # `status` is an output-only field; validate against the response schema.
-        schema = spec_dict["components"]["schemas"]["Interaction"]
+        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026).
-        # Keep this an exact match: this test intentionally breaks CI when
-        # Google changes the live spec — that breakage is how we get notified
-        # to review the change.
+        # Google Interactions API uses lowercase status values (updated Feb 2026)
         expected_statuses = [
             "in_progress",
             "requires_action",
@@ -189,7 +184,6 @@ class TestResponseCompliance:
             "failed",
             "cancelled",
             "incomplete",
-            "budget_exceeded",
         ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")

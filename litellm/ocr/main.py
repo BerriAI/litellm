@@ -10,6 +10,7 @@ import os
 import re
 from functools import partial
 from io import IOBase
+from pathlib import Path
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
@@ -19,171 +20,13 @@ from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
-from litellm.llms.custom_httpx.llm_http_handler import (
-    BaseLLMHTTPHandler,
-    _get_httpx_client,
-)
-from litellm.llms.mistral.ocr.rust_provider import (
-    get_mistral_rust_ocr_headers,
-    get_mistral_rust_ocr_provider,
-    get_mistral_rust_ocr_url,
-)
-from litellm.rust_bridge.ocr import call_ocr, rust_ocr_provider_enabled
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 ####### ENVIRONMENT VARIABLES ###################
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
-
-
-def _prepare_ocr_document(document: dict[str, Any]) -> dict[str, str]:
-    if not isinstance(document, dict):
-        raise ValueError(
-            f"document must be a dict with 'type' and URL/file field, got {type(document)}"
-        )
-
-    doc_type = document.get("type")
-    if doc_type == "file":
-        document = convert_file_document_to_url_document(document)
-        doc_type = document.get("type")
-
-    if doc_type not in ["document_url", "image_url"]:
-        raise ValueError(
-            f"Invalid document type: {doc_type}. "
-            "Must be 'document_url', 'image_url', or 'file'"
-        )
-
-    return document
-
-
-def _get_rust_ocr_provider(custom_llm_provider: str | None) -> str | None:
-    return get_mistral_rust_ocr_provider(custom_llm_provider=custom_llm_provider)
-
-
-def _should_route_to_rust_ocr(custom_llm_provider: str | None) -> bool:
-    rust_ocr_provider = _get_rust_ocr_provider(custom_llm_provider)
-    return rust_ocr_provider is not None and rust_ocr_provider_enabled(
-        rust_ocr_provider
-    )
-
-
-def _call_rust_ocr(
-    payload: dict[str, Any],
-    *,
-    require_enabled: bool,
-    fallback_on_unavailable: bool,
-) -> dict[str, Any] | None:
-    result = call_ocr(payload, require_enabled=require_enabled)
-    if result is not None:
-        return result
-    if fallback_on_unavailable:
-        return None
-    raise ValueError("Rust OCR bridge is unavailable for this request")
-
-
-def _rust_ocr_impl(
-    model: str,
-    document: dict[str, str],
-    api_key: str | None,
-    api_base: str | None,
-    timeout: float | httpx.Timeout | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
-    litellm_logging_obj: LiteLLMLoggingObj,
-    litellm_call_id: str | None,
-    fallback_on_unavailable: bool,
-    require_enabled: bool,
-    kwargs: dict[str, Any],
-) -> OCRResponse | None:
-    rust_ocr_provider = _get_rust_ocr_provider(custom_llm_provider)
-    if rust_ocr_provider is None:
-        if fallback_on_unavailable:
-            return None
-        raise ValueError(
-            f"Rust OCR is not supported for provider: {custom_llm_provider}"
-        )
-
-    if require_enabled and not rust_ocr_provider_enabled(rust_ocr_provider):
-        return None
-
-    optional_params = _call_rust_ocr(
-        {
-            "provider": rust_ocr_provider,
-            "operation": "map_params",
-            "non_default_params": dict(kwargs),
-        },
-        require_enabled=require_enabled,
-        fallback_on_unavailable=fallback_on_unavailable,
-    )
-    if optional_params is None:
-        return None
-
-    transformed_request = _call_rust_ocr(
-        {
-            "provider": rust_ocr_provider,
-            "operation": "transform_request",
-            "model": model,
-            "document": document,
-            "optional_params": optional_params,
-        },
-        require_enabled=require_enabled,
-        fallback_on_unavailable=fallback_on_unavailable,
-    )
-    if transformed_request is None:
-        return None
-
-    request_data = transformed_request.get("data")
-    if not isinstance(request_data, dict):
-        raise ValueError(f"Rust OCR provider {rust_ocr_provider} returned invalid data")
-
-    headers = get_mistral_rust_ocr_headers(
-        headers=extra_headers,
-        api_key=api_key,
-    )
-    complete_url = get_mistral_rust_ocr_url(api_base=api_base)
-
-    litellm_logging_obj.update_from_kwargs(
-        kwargs=kwargs,
-        model=model,
-        optional_params=optional_params,
-        litellm_params={
-            "litellm_call_id": litellm_call_id,
-            "api_base": api_base,
-        },
-        custom_llm_provider=custom_llm_provider,
-    )
-    litellm_logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=api_key,
-        additional_args={
-            "complete_input_dict": request_data,
-            "api_base": complete_url,
-            "headers": headers,
-        },
-    )
-
-    response = _get_httpx_client().post(
-        url=complete_url,
-        headers=headers,
-        json=request_data,
-        timeout=timeout or request_timeout,
-    )
-
-    transformed_response = _call_rust_ocr(
-        {
-            "provider": rust_ocr_provider,
-            "operation": "transform_response",
-            "model": model,
-            "response_json": response.json(),
-        },
-        require_enabled=require_enabled,
-        fallback_on_unavailable=fallback_on_unavailable,
-    )
-    if transformed_response is None:
-        return None
-
-    return OCRResponse(**transformed_response)
 
 
 @client
@@ -304,70 +147,6 @@ async def aocr(
 
 
 @client
-def rust_ocr(
-    model: str,
-    document: dict[str, Any],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    timeout: float | httpx.Timeout | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    **kwargs,
-) -> OCRResponse:
-    """
-    Direct Rust OCR entrypoint.
-    """
-    local_vars = locals()
-    try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        document = _prepare_ocr_document(document)
-
-        (
-            model,
-            custom_llm_provider,
-            dynamic_api_key,
-            dynamic_api_base,
-        ) = litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
-            api_key=api_key,
-        )
-
-        if dynamic_api_key:
-            api_key = dynamic_api_key
-        if dynamic_api_base:
-            api_base = dynamic_api_base
-
-        response = _rust_ocr_impl(
-            model=model,
-            document=document,
-            api_key=api_key,
-            api_base=api_base,
-            timeout=timeout,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            litellm_logging_obj=litellm_logging_obj,
-            litellm_call_id=litellm_call_id,
-            fallback_on_unavailable=False,
-            require_enabled=False,
-            kwargs=kwargs,
-        )
-        if response is None:
-            raise ValueError("Rust OCR bridge is unavailable for this request")
-        return response
-    except Exception as e:
-        raise litellm.exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
-            completion_kwargs=local_vars,
-            extra_kwargs=kwargs,
-        )
-
-
-@client
 def ocr(
     model: str,
     document: Dict[str, Any],
@@ -446,7 +225,24 @@ def ocr(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aocr", False) is True
 
-        document = _prepare_ocr_document(document)
+        # Validate document parameter format
+        if not isinstance(document, dict):
+            raise ValueError(
+                f"document must be a dict with 'type' and URL/file field, got {type(document)}"
+            )
+
+        doc_type = document.get("type")
+
+        # Handle file type: convert to document_url/image_url with base64 data URI
+        if doc_type == "file":
+            document = convert_file_document_to_url_document(document)
+            doc_type = document.get("type")
+
+        if doc_type not in ["document_url", "image_url"]:
+            raise ValueError(
+                f"Invalid document type: {doc_type}. "
+                "Must be 'document_url', 'image_url', or 'file'"
+            )
 
         (
             model,
@@ -465,24 +261,6 @@ def ocr(
             api_key = dynamic_api_key
         if dynamic_api_base:
             api_base = dynamic_api_base
-
-        if _should_route_to_rust_ocr(custom_llm_provider):
-            rust_response = _rust_ocr_impl(
-                model=model,
-                document=document,
-                api_key=api_key,
-                api_base=api_base,
-                timeout=timeout,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                litellm_logging_obj=litellm_logging_obj,
-                litellm_call_id=litellm_call_id,
-                fallback_on_unavailable=True,
-                require_enabled=True,
-                kwargs=kwargs,
-            )
-            if rust_response is not None:
-                return rust_response
 
         # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
@@ -598,12 +376,10 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     with an inline base64 data URI.
 
     Accepts document dicts like:
+        {"type": "file", "file": "/path/to/document.pdf"}        # file path string
         {"type": "file", "file": Path("/path/to/doc.pdf")}       # pathlib.Path
         {"type": "file", "file": <binary file-like object>}      # file-like object (BinaryIO)
         {"type": "file", "file": b"raw bytes"}                   # raw bytes
-
-    Bare ``str`` paths are not accepted — pass a ``pathlib.Path`` or
-    ``open(path, "rb")`` instead. See the str check below for the rationale.
 
     Returns:
         {"type": "document_url", "document_url": "data:<mime>;base64,<data>"}
@@ -613,28 +389,14 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     if file_input is None:
         raise ValueError(
             "document with type='file' must include a 'file' field containing "
-            "a pathlib.Path, file-like object, or bytes"
+            "a file path (str), pathlib.Path, file-like object, or bytes"
         )
 
     file_bytes: bytes
     mime_type: str = "application/octet-stream"
     file_name: Optional[str] = None
 
-    if isinstance(file_input, str):
-        # Bare strings are rejected here. The OCR ``document`` accepts a
-        # ``{"type": "file", "file": <value>}`` shape, and when this helper
-        # runs in a proxy request handler ``<value>`` is attacker-controlled.
-        # Opening it as a path is an arbitrary local file read on the proxy
-        # host, which is then base64-encoded and forwarded to the OCR
-        # provider — an exfiltration primitive.
-        raise ValueError(
-            "OCR file input does not accept bare str values. Pass bytes, "
-            "a pathlib.Path, or a file-like object. To OCR a local file "
-            "from a path, call open(path, 'rb') yourself."
-        )
-    if isinstance(file_input, os.PathLike):
-        # os.PathLike (pathlib.Path and custom __fspath__ classes) is a
-        # Python-level type that HTTP form values can't fabricate.
+    if isinstance(file_input, (str, Path)):
         file_path = str(file_input)
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -655,7 +417,7 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     else:
         raise ValueError(
             f"Unsupported file input type: {type(file_input)}. "
-            "Expected pathlib.Path, bytes, or a file-like object."
+            "Expected str (file path), pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:
