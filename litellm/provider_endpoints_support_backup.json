@@ -1835,6 +1835,23 @@
         "interactions": true
       }
     },
+    "darkbloom": {
+      "display_name": "Darkbloom (`darkbloom`)",
+      "url": "https://docs.litellm.ai/docs/providers/darkbloom",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "predibase": {
       "display_name": "Predibase (`predibase`)",
       "url": "https://docs.litellm.ai/docs/providers/predibase",

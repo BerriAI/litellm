@@ -1037,6 +1037,8 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if not general_settings.get("expose_fallback_errors_to_caller"):
+            self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
             await _authorize_response_file_search_vector_stores(
                 data=self.data,

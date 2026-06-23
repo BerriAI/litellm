@@ -3358,7 +3358,9 @@ class ProxyException(Exception):
 
 class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = (
-        "DB not connected. See https://docs.litellm.ai/docs/proxy/virtual_keys"
+        "DB not connected. This endpoint needs a database; set DATABASE_URL to a "
+        "PostgreSQL connection string (postgresql://...) to enable it. "
+        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."

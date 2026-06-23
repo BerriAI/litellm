@@ -878,6 +878,114 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+def _bedrock_error_event(exception_type: str):
+    """A mocked botocore event-stream error event: status_code is botocore's
+    hard-coded 400, with the real type in the :exception-type header."""
+    event = Mock()
+    event.to_response_dict = Mock(
+        return_value={
+            "status_code": 400,
+            "headers": {
+                ":exception-type": exception_type,
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            "body": b'{"message":"Bedrock had an internal error."}',
+        }
+    )
+    return event
+
+
+@pytest.mark.asyncio
+async def test_bedrock_midstream_internal_server_error_wraps_for_fallback(
+    logging_obj: Logging,
+):
+    """End-to-end regression for https://github.com/BerriAI/litellm/issues/24608:
+    a Bedrock mid-stream internalServerException event (botocore stamps it 400)
+    must flow through the real decoder, gain its modeled 500 status, and wrap
+    into MidStreamFallbackError so the Router can run streaming fallback.
+
+    Calls the real AWSEventStreamDecoder, so reverting the decoder status fix
+    makes the decoder raise BedrockError(400) and the gate raises BadRequestError
+    directly -> this test fails without the fix."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-3-sonnet-20240229-v1:0")
+
+    async def _bedrock_stream():
+        decoder._parse_message_from_event(
+            _bedrock_error_event("internalServerException")
+        )
+        yield  # unreachable; the line above raises
+
+    async def _make_call(**kwargs):
+        return _bedrock_stream()
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+        make_call=_make_call,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await response.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_5xx_wraps_for_midstream_fallback(logging_obj: Logging):
+    """Gate contract: a Bedrock 5xx (here 503 serviceUnavailableException) wraps
+    into MidStreamFallbackError so the Router can run streaming fallback."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockError
+
+    async def _raise_503(**kwargs):
+        raise BedrockError(
+            status_code=503,
+            message="serviceUnavailableException Bedrock is unavailable.",
+        )
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+        make_call=_raise_503,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await response.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
+    """Gate contract: a Bedrock validationException (400) is a client error and
+    must surface directly, never wrapped into MidStreamFallbackError."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockError
+
+    async def _raise_400(**kwargs):
+        raise BedrockError(
+            status_code=400,
+            message="validationException malformed input.",
+        )
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+        make_call=_raise_400,
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await response.__anext__()
+    assert not isinstance(excinfo.value, MidStreamFallbackError)
+    assert getattr(excinfo.value, "status_code", None) == 400
+
+
 @pytest.mark.asyncio
 async def test_async_streaming_read_timeout_triggers_midstream_fallback(
     logging_obj: Logging,
