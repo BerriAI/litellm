@@ -463,8 +463,12 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     finish_reason: Optional[str] = _normalize_oci_finish_reason(
         typed_chunk.finishReason
     )
-    # OpenAI semantics: a chunk carrying tool calls reports finish_reason="tool_calls".
-    if tool_calls:
+    # OpenAI semantics: the terminal chunk reports finish_reason="tool_calls" when
+    # tool calls are present. Guard with `finish_reason is not None` so intermediate
+    # chunks (OCI streams tool calls progressively, with finishReason=null and
+    # toolCalls populated) keep finish_reason=None — a non-null value on a
+    # non-terminal chunk would signal premature stream termination to callers.
+    if finish_reason is not None and tool_calls:
         finish_reason = "tool_calls"
 
     return ModelResponseStream(

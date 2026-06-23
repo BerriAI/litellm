@@ -145,3 +145,26 @@ def test_generic_stream_chunk_with_tool_calls_reports_tool_calls():
     }
     result = handle_generic_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "tool_calls"
+
+
+def test_generic_stream_intermediate_chunk_keeps_finish_reason_none():
+    # OCI streams tool calls progressively: an intermediate chunk carries
+    # toolCalls but finishReason=null. finish_reason must stay None on a
+    # non-terminal chunk — emitting "tool_calls" here would signal premature
+    # stream termination to callers that stop on finish_reason is not None.
+    chunk = {
+        "finishReason": None,
+        "message": {
+            "toolCalls": [
+                {
+                    "id": "call_0",
+                    "type": "FUNCTION",
+                    "name": "get_weather",
+                    "arguments": "{}",
+                }
+            ]
+        },
+        "index": 0,
+    }
+    result = handle_generic_stream_chunk(chunk)
+    assert result.choices[0].finish_reason is None
