@@ -344,6 +344,19 @@ def ocr(
                 from litellm.secret_managers.main import get_secret_str
 
                 resolved_api_key = api_key or get_secret_str("MISTRAL_API_KEY")
+                resolved_headers = ocr_provider_config.validate_environment(
+                    headers={},
+                    model=model,
+                    api_key=resolved_api_key,
+                    api_base=api_base,
+                    litellm_params=dict(litellm_params),
+                )
+                resolved_complete_url = ocr_provider_config.get_complete_url(
+                    api_base=api_base,
+                    model=model,
+                    optional_params=optional_params,
+                    litellm_params=dict(litellm_params),
+                )
                 litellm_logging_obj.pre_call(
                     input="OCR document processing",
                     api_key=resolved_api_key,
@@ -353,8 +366,8 @@ def ocr(
                             "document": document,
                             **optional_params,
                         },
-                        "api_base": api_base,
-                        "headers": {},
+                        "api_base": resolved_complete_url,
+                        "headers": resolved_headers,
                     },
                 )
                 return OCRResponse(
