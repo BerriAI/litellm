@@ -10,6 +10,7 @@ except Exception:
 
 import asyncio
 import sys
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -217,9 +218,10 @@ class CustomPrometheusLogger(PrometheusLogger):
         model_id: str,
         api_base: str,
         api_provider: str,
+        model_group: Optional[str] = None,
     ):
         self.deployment_complete_outages.append(
-            [litellm_model_name, model_id, api_base, api_provider]
+            [litellm_model_name, model_id, api_base, api_provider, model_group]
         )
 
     def increment_deployment_cooled_down(
@@ -229,9 +231,17 @@ class CustomPrometheusLogger(PrometheusLogger):
         api_base: str,
         api_provider: str,
         exception_status: str,
+        model_group: Optional[str] = None,
     ):
         self.deployment_cooled_downs.append(
-            [litellm_model_name, model_id, api_base, api_provider, exception_status]
+            [
+                litellm_model_name,
+                model_id,
+                api_base,
+                api_provider,
+                exception_status,
+                model_group,
+            ]
         )
 
 
@@ -292,6 +302,7 @@ async def test_router_cooldown_event_callback():
         "test-model-id",
         "https://api.openai.com",
         "openai",
+        "gpt-5-mini",
     ]
     assert prometheus_logger.deployment_cooled_downs[0] == [
         "gpt-5-mini",
@@ -299,7 +310,56 @@ async def test_router_cooldown_event_callback():
         "https://api.openai.com",
         "openai",
         "429",
+        "gpt-5-mini",
     ]
+
+
+@pytest.mark.asyncio
+async def test_router_cooldown_event_callback_distinguishes_model_group_from_model():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/30748
+
+    The deployment's public alias (deployment["model_name"]) is the model_group,
+    while litellm_params["model"] is the underlying provider model. The cooldown
+    callback must report the underlying model as litellm_model_name and the alias
+    as model_group, matching the success path; otherwise litellm_deployment_state
+    fragments into two inconsistent series per deployment. Previously the alias
+    was passed as litellm_model_name and model_group was never emitted.
+    """
+    from prometheus_client import REGISTRY
+
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        REGISTRY.unregister(collector)
+
+    mock_router = MagicMock()
+    mock_deployment = {
+        "litellm_params": {"model": "gpt-5-mini"},
+        "model_name": "my-gpt-group",
+        "model_info": ModelInfo(id="test-model-id"),
+    }
+    mock_router.get_deployment.return_value = mock_deployment
+
+    prometheus_logger = CustomPrometheusLogger()
+    litellm.callbacks = [prometheus_logger]
+
+    await router_cooldown_event_callback(
+        litellm_router_instance=mock_router,
+        deployment_id="test-deployment",
+        exception_status="429",
+        cooldown_time=60.0,
+    )
+
+    await asyncio.sleep(0.5)
+
+    complete_outage = prometheus_logger.deployment_complete_outages[0]
+    cooled_down = prometheus_logger.deployment_cooled_downs[0]
+
+    # index 0 = litellm_model_name (underlying model), last = model_group (alias)
+    assert complete_outage[0] == "gpt-5-mini"
+    assert complete_outage[-1] == "my-gpt-group"
+    assert cooled_down[0] == "gpt-5-mini"
+    assert cooled_down[-1] == "my-gpt-group"
 
 
 @pytest.mark.asyncio
