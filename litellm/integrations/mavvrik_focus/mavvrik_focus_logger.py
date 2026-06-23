@@ -276,7 +276,9 @@ class MavvrikFocusLogger(FocusLogger):
             )
 
             instance = _init_custom_logger_compatible_class(
-                logging_integration="mavvrik"
+                logging_integration="mavvrik",
+                internal_usage_cache=None,
+                llm_router=None,
             )
             if isinstance(instance, MavvrikFocusLogger):
                 loggers = [instance]

@@ -774,8 +774,8 @@ async def test_gcs_session_cancelled_on_chunk_failure():
 
 
 @pytest.mark.asyncio
-async def test_update_metrics_marker_warns_on_4xx():
-    """_update_metrics_marker must log a warning on 4xx but not raise."""
+async def test_update_metrics_marker_warns_on_non_410_error():
+    """_update_metrics_marker must log a warning on any >=400 (non-410) status but not raise."""
     dest = _dest()
 
     fail_resp = MagicMock()
