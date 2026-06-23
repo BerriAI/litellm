@@ -434,7 +434,7 @@ class TestHiddenlayerGuardrail:
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_request_with_image(self):
-        """Test apply_guardrail sends multimodal content (image) to HiddenLayer v1."""
+        """Test apply_guardrail strips images from multimodal content before sending to HiddenLayer v1."""
         os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
 
         guardrail = HiddenlayerGuardrail(
@@ -487,12 +487,15 @@ class TestHiddenlayerGuardrail:
                 logging_obj=logging_obj,
             )
 
-        # v1 API requires string content — multimodal list is stringified
+        # v1 API requires string content — image_url items are stripped and the
+        # remaining (text-only) content is stringified before being sent.
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args.kwargs
         sent_content = call_kwargs["json"]["input"]["messages"][0]["content"]
         assert isinstance(sent_content, str)
-        assert sent_content == str(multimodal_content)
+        assert sent_content == str(
+            [{"type": "text", "text": "how much is on this receipt?"}]
+        )
 
         # Result should be returned without error
         assert result is not None
