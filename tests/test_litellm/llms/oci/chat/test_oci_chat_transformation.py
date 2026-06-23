@@ -700,7 +700,10 @@ class TestOCIChatConfig:
 
         choice = result.choices[0]
         assert isinstance(choice, litellm.Choices)
-        assert choice.finish_reason == "stop"
+        # The response carries tool calls, so finish_reason is normalized to
+        # "tool_calls" (OpenAI semantics) regardless of OCI's raw "stop" — matching
+        # the Cohere path (test_cohere_response_finish_reason_tool_call).
+        assert choice.finish_reason == "tool_calls"
 
         # Message and tool_calls assertions
         message = choice.message
