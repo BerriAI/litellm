@@ -4,7 +4,7 @@ import logging
 import math
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1430,7 +1430,7 @@ class ProxyBaseLLMRequestProcessing:
         # GH#30566: overhead for non-chat-completions routes
         _hidden_params = getattr(response, "_hidden_params", {}) or {}
         if not _hidden_params.get("litellm_overhead_time_ms"):
-            end_time = datetime.now()
+            end_time = datetime.now(tz=timezone.utc)
             _logging_obj = self.data.get("litellm_logging_obj")
             if _logging_obj is not None:
                 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
