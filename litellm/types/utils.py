@@ -37,6 +37,8 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    SkipValidation,
+    field_serializer,
     field_validator,
 )
 from typing_extensions import Required, TypedDict
@@ -3610,9 +3612,19 @@ class LiteLLMBatch(Batch):
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
-    results: OpenAIRealtimeStreamList
+    # Events are already well-formed provider dicts. Validating them against the
+    # OpenAIRealtimeEvents union makes Pydantic try every member per event, which
+    # floods thousands of ValidationErrors for events outside the union (e.g.
+    # rate_limits.updated), blocks the event loop, and discards the session usage.
+    results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     _hidden_params: dict = {}
+
+    @field_serializer("results")
+    def _serialize_results(
+        self, results: OpenAIRealtimeStreamList
+    ) -> List[Dict[str, Any]]:
+        return [dict(event) for event in results]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
