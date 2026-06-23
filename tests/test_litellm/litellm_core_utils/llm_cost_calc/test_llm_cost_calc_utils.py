@@ -1663,3 +1663,23 @@ def test_priority_service_tier_above_threshold_falls_back_to_standard_for_cache_
     expected_completion = 1_000 * 2.25e-5
     assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
     assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
+
+
+def test_zai_glm_5_2_pricing_in_model_cost_map():
+    """Test that zai/glm-5.2 is present in the model cost map with correct pricing."""
+    from pathlib import Path
+
+    cost_map_path = Path(__file__).parent.parent.parent.parent.parent / "model_prices_and_context_window.json"
+    with open(cost_map_path) as f:
+        model_cost = json.load(f)
+
+    model = "zai/glm-5.2"
+    assert model in model_cost, f"{model} not found in model cost map"
+
+    model_info = model_cost[model]
+    assert model_info["input_cost_per_token"] == 1.4e-06
+    assert model_info["output_cost_per_token"] == 4.4e-06
+    assert model_info["cache_read_input_token_cost"] == 2.6e-07
+    assert model_info["litellm_provider"] == "zai"
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_prompt_caching"] is True
