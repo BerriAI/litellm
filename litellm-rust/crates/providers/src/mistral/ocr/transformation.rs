@@ -48,6 +48,10 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 ///
 /// Blank/whitespace values are treated as absent. Returns `CoreError::Auth`
 /// when no usable key is available.
+///
+/// Note: the env fallback only reads the process environment. Secret-manager
+/// backends (AWS/Azure/GCP/Vault) are resolved on the Python side and passed in
+/// via `api_key`; this fallback is a last resort for direct/standalone use.
 pub fn resolve_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
