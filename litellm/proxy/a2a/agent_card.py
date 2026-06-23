@@ -10,8 +10,21 @@ and uses LiteLLM auth.
 from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Optional
 
-# Protocol version LiteLLM speaks. Bump when the proxy's A2A surface changes.
+# Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
+# responses are normalized to it regardless of the upstream agent's own version.
+SUPPORTED_A2A_PROTOCOL_VERSIONS = ("0.3", "1.0")
+
+# Default served version when the agent card does not pin one.
 LITELLM_A2A_PROTOCOL_VERSION = "1.0"
+
+
+def resolve_served_protocol_version(card: Optional[Mapping[str, Any]]) -> str:
+    """Return the validated protocol version an agent card pins, else the default."""
+    version = card.get("protocolVersion") if card else None
+    if version in SUPPORTED_A2A_PROTOCOL_VERSIONS:
+        return version
+    return LITELLM_A2A_PROTOCOL_VERSION
+
 
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
 # whatever upstream advertised — the client must authenticate to the proxy,
@@ -139,7 +152,8 @@ def merge_agent_card(
     # proxy requests. The public well-known endpoint rewrites this field
     # to the proxy URL before exposing the card to clients.
 
-    base["protocolVersion"] = LITELLM_A2A_PROTOCOL_VERSION
+    served_version = resolve_served_protocol_version(upstream_card)
+    base["protocolVersion"] = served_version
 
     if name:
         base["name"] = name
@@ -165,7 +179,7 @@ def merge_agent_card(
         {
             "url": proxy_url,
             "protocolBinding": "JSONRPC",
-            "protocolVersion": LITELLM_A2A_PROTOCOL_VERSION,
+            "protocolVersion": served_version,
         }
     ]
 

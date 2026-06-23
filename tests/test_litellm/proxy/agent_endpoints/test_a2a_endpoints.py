@@ -1166,10 +1166,8 @@ async def test_send_message_pascal_case_routes_to_asend_message():
     assert body["result"]["message"]["role"] == "ROLE_AGENT"
 
 
-def test_format_jsonrpc_response_for_a2a_v1_wraps_flat_message_result():
-    from litellm.proxy.agent_endpoints.a2a_endpoints import (
-        _format_jsonrpc_response_for_client,
-    )
+def test_normalize_response_wraps_flat_message_result_for_1_0():
+    from litellm.proxy.a2a.version_convert import normalize_jsonrpc_response
 
     wire_response = {
         "jsonrpc": "2.0",
@@ -1183,17 +1181,15 @@ def test_format_jsonrpc_response_for_a2a_v1_wraps_flat_message_result():
             "taskId": "task-1",
         },
     }
-    formatted = _format_jsonrpc_response_for_client(wire_response, is_a2a_v1=True)
+    formatted = normalize_jsonrpc_response(wire_response, "1.0", method="message/send")
     assert "message" in formatted["result"]
     assert formatted["result"]["message"]["role"] == "ROLE_AGENT"
     assert formatted["result"]["message"]["parts"] == [{"text": "hello"}]
     assert "contextId" not in formatted["result"]
 
 
-def test_format_jsonrpc_response_keeps_wire_format_for_v03_clients():
-    from litellm.proxy.agent_endpoints.a2a_endpoints import (
-        _format_jsonrpc_response_for_client,
-    )
+def test_normalize_response_keeps_wire_format_for_0_3():
+    from litellm.proxy.a2a.version_convert import normalize_jsonrpc_response
 
     wire_response = {
         "jsonrpc": "2.0",
@@ -1207,8 +1203,8 @@ def test_format_jsonrpc_response_keeps_wire_format_for_v03_clients():
         },
     }
     assert (
-        _format_jsonrpc_response_for_client(wire_response, is_a2a_v1=False)
-        == wire_response
+        normalize_jsonrpc_response(wire_response, "0.3", method="message/send")
+        is wire_response
     )
 
 
@@ -1696,3 +1692,36 @@ async def test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers()
     assert (
         posted_headers.get("X-LiteLLM-Team-Id") == "real-team"
     ), "authenticated team id must not be overridden by forwarded client headers"
+
+
+def _agent(protocol_version):
+    agent = MagicMock()
+    agent.agent_card_params = (
+        {"protocolVersion": protocol_version} if protocol_version is not None else {}
+    )
+    return agent
+
+
+def _request_with_a2a_header(value):
+    request = MagicMock()
+    request.headers = {"a2a-version": value} if value is not None else {}
+    return request
+
+
+def test_served_version_config_governs_over_header():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _served_version
+
+    # A 0.3-configured agent serves 0.3 even when the client asks for 1.0.
+    agent = _agent("0.3")
+    request = _request_with_a2a_header("1.0")
+    assert _served_version(agent, request) == "0.3"
+
+    # A 1.0-configured agent serves 1.0 even when the client asks for 0.3.
+    assert _served_version(_agent("1.0"), _request_with_a2a_header("0.3")) == "1.0"
+
+
+def test_served_version_falls_back_to_header_when_unconfigured():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _served_version
+
+    assert _served_version(_agent(None), _request_with_a2a_header("1.0")) == "1.0"
+    assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"

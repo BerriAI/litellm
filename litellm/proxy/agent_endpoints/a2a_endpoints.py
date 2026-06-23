@@ -20,6 +20,13 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
     DATABRICKS_OAUTH_PARAM,
     resolve_databricks_app_auth_header,
 )
+from litellm.proxy.a2a.version_convert import (
+    A2AVersion,
+    normalize_agent_card,
+    normalize_jsonrpc_response,
+    normalize_request_params,
+    normalize_stream_event,
+)
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import all_litellm_params
@@ -59,70 +66,21 @@ def _build_message_send_params(params: dict) -> Any:
         return to_compat_send_message_request(pb, "").params
 
 
-def _is_a2a_v1_request(request: Request, original_method: Optional[str]) -> bool:
-    """True when the caller is using A2A protocol 1.0 JSON-RPC."""
+def _served_version(
+    agent: Any, request: Request, original_method: Optional[str] = None
+) -> A2AVersion:
+    """Protocol version LiteLLM serves for this agent.
+
+    The agent's configured version governs. For agents that pin no version, fall back
+    to the client's signal: PascalCase JSON-RPC methods and an ``a2a-version: 1.x``
+    header both mark a 1.0 caller; otherwise default to 0.3.
+    """
+    configured = (agent.agent_card_params or {}).get("protocolVersion")
+    if configured in ("0.3", "1.0"):
+        return configured
     if original_method in ("SendMessage", "SendStreamingMessage"):
-        return True
-    a2a_version = request.headers.get("a2a-version", "")
-    return a2a_version.startswith("1.")
-
-
-def _to_a2a_v1_send_message_result(result: dict, request_id: Optional[Any]) -> dict:
-    """Wrap a wire-format message/task result for A2A 1.0 clients."""
-    if "message" in result or "task" in result:
-        return result
-
-    from a2a.compat.v0_3.conversions import MessageToDict, to_core_send_message_response
-    from a2a.compat.v0_3.types import (
-        Message,
-        SendMessageResponse,
-        SendMessageSuccessResponse,
-        Task,
-    )
-
-    if result.get("kind") == "message" or "messageId" in result:
-        try:
-            compat_result = Message.model_validate(result)
-        except ValidationError:
-            return result
-    elif isinstance(result.get("status"), dict) or (
-        "id" in result and "contextId" in result
-    ):
-        try:
-            compat_result = Task.model_validate(result)
-        except ValidationError:
-            return result
-    else:
-        return result
-
-    compat_response = SendMessageResponse(
-        root=SendMessageSuccessResponse(
-            id=str(request_id or ""),
-            result=compat_result,
-        )
-    )
-    return MessageToDict(
-        to_core_send_message_response(compat_response),
-        preserving_proto_field_name=False,
-    )
-
-
-def _format_jsonrpc_response_for_client(
-    content: dict,
-    *,
-    is_a2a_v1: bool,
-) -> dict:
-    """Return JSON-RPC payloads in the wire format the caller expects."""
-    if not is_a2a_v1 or content.get("error"):
-        return content
-
-    result = content.get("result")
-    if not isinstance(result, dict):
-        return content
-
-    formatted = dict(content)
-    formatted["result"] = _to_a2a_v1_send_message_result(result, content.get("id"))
-    return formatted
+        return "1.0"
+    return "1.0" if request.headers.get("a2a-version", "").startswith("1.") else "0.3"
 
 
 def _validate_push_notification_url(url: str) -> None:
@@ -239,6 +197,7 @@ async def _a2a_sse_event_source(
     body: dict,
     request_id: Optional[Any] = None,
     extra_headers: Optional[Dict[str, str]] = None,
+    served_version: A2AVersion = "0.3",
 ) -> AsyncGenerator[dict, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
@@ -285,9 +244,14 @@ async def _a2a_sse_event_source(
             if not payload:
                 continue
             try:
-                yield json.loads(payload)
+                event = json.loads(payload)
             except Exception:
                 continue
+            if isinstance(event, dict):
+                event = normalize_stream_event(
+                    event, served_version, request_id=request_id
+                )
+            yield event
     finally:
         await resp.aclose()
 
@@ -300,8 +264,15 @@ async def _forward_jsonrpc_sse(
     proxy_logging_obj: Optional[Any] = None,
     user_api_key_dict: Optional[Any] = None,
     request_data: Optional[dict] = None,
+    served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
-    event_source = _a2a_sse_event_source(agent_url, body, request_id=request_id, extra_headers=extra_headers)
+    event_source = _a2a_sse_event_source(
+        agent_url,
+        body,
+        request_id=request_id,
+        extra_headers=extra_headers,
+        served_version=served_version,
+    )
 
     def _serialize_chunk(chunk: Any) -> str:
         return f"data: {json.dumps(chunk)}\n\n"
@@ -362,7 +333,7 @@ async def _handle_stream_message(
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     request_data: Optional[dict] = None,
     proxy_logging_obj: Optional[Any] = None,
-    is_a2a_v1: bool = False,
+    served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
 
@@ -429,8 +400,8 @@ async def _handle_stream_message(
                     else:
                         obj = chunk
                     if isinstance(obj, dict):
-                        obj = _format_jsonrpc_response_for_client(
-                            obj, is_a2a_v1=is_a2a_v1
+                        obj = normalize_stream_event(
+                            obj, served_version, request_id=request_id
                         )
                     return json.dumps(obj) + "\n"
 
@@ -469,8 +440,8 @@ async def _handle_stream_message(
                     else:
                         obj = chunk
                     if isinstance(obj, dict):
-                        obj = _format_jsonrpc_response_for_client(
-                            obj, is_a2a_v1=is_a2a_v1
+                        obj = normalize_stream_event(
+                            obj, served_version, request_id=request_id
                         )
                     yield json.dumps(obj) + "\n"
         except Exception as e:
@@ -628,7 +599,6 @@ async def invoke_agent_a2a(
         original_method: Optional[str] = body.get("method")
         method: Optional[str] = original_method
         params = body.get("params", {})
-        is_a2a_v1 = _is_a2a_v1_request(request, original_method)
 
         if method:
             method = _PASCAL_TO_WIRE.get(method, method)
@@ -652,6 +622,8 @@ async def invoke_agent_a2a(
         agent = _get_agent(agent_id)
         if agent is None:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
+
+        served_version = _served_version(agent, request, original_method)
 
         is_allowed = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
@@ -829,13 +801,14 @@ async def invoke_agent_a2a(
                     _enqueue_fn()
 
             return JSONResponse(
-                content=_format_jsonrpc_response_for_client(
+                content=normalize_jsonrpc_response(
                     (
                         response.model_dump(mode="json", exclude_none=True)  # type: ignore
                         if hasattr(response, "model_dump")
                         else response
                     ),
-                    is_a2a_v1=is_a2a_v1,
+                    served_version,
+                    method="message/send",
                 )
             )
 
@@ -852,7 +825,7 @@ async def invoke_agent_a2a(
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
-                is_a2a_v1=is_a2a_v1,
+                served_version=served_version,
             )
         elif method in {
             "tasks/get",
@@ -865,7 +838,11 @@ async def invoke_agent_a2a(
             "agent/getAuthenticatedExtendedCard",
         }:
             if not agent_url:
-                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+                return _jsonrpc_error(
+                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+                )
+            if isinstance(params, dict):
+                params = normalize_request_params(params, served_version, method=method)
             if method == "tasks/pushNotificationConfig/set":
                 if not isinstance(params, dict):
                     raise HTTPException(
@@ -900,8 +877,18 @@ async def invoke_agent_a2a(
             )
             result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
             if method == "agent/getAuthenticatedExtendedCard":
-                if isinstance(result.get("result"), dict) and "url" in result["result"]:
-                    result["result"]["url"] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+                if isinstance(result.get("result"), dict):
+                    if "url" in result["result"]:
+                        result["result"][
+                            "url"
+                        ] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+                    result["result"] = normalize_agent_card(
+                        result["result"], served_version
+                    )
+            else:
+                result = normalize_jsonrpc_response(
+                    result, served_version, method=method
+                )
             from litellm.types.agents import LiteLLMSendMessageResponse
 
             response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
@@ -918,7 +905,11 @@ async def invoke_agent_a2a(
 
         elif method == "tasks/resubscribe":
             if not agent_url:
-                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+                return _jsonrpc_error(
+                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+                )
+            if isinstance(params, dict):
+                params = normalize_request_params(params, served_version, method=method)
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -938,6 +929,7 @@ async def invoke_agent_a2a(
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
+                served_version=served_version,
             )
 
         else:

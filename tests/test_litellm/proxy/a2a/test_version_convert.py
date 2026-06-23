@@ -1,0 +1,164 @@
+"""Unit tests for A2A protocol version normalization in
+litellm/proxy/a2a/version_convert.py.
+
+These assert the conversion actually changes wire shape in the right direction and
+preserves core fields on a round trip, so a mutation that no-ops or flips the direction
+fails the suite.
+"""
+
+import pytest
+
+from litellm.proxy.a2a.version_convert import (
+    normalize_agent_card,
+    normalize_jsonrpc_response,
+    normalize_request_params,
+    normalize_stream_event,
+)
+
+a2a = pytest.importorskip("a2a.compat.v0_3.conversions")
+
+
+def _rpc(result: dict, request_id: str = "1") -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+V03_MESSAGE = {
+    "kind": "message",
+    "messageId": "m1",
+    "role": "agent",
+    "parts": [{"kind": "text", "text": "hi"}],
+}
+
+V03_TASK = {
+    "kind": "task",
+    "id": "t1",
+    "contextId": "c1",
+    "status": {"state": "completed"},
+}
+
+V03_STATUS_UPDATE = {
+    "kind": "status-update",
+    "taskId": "t1",
+    "contextId": "c1",
+    "status": {"state": "working"},
+    "final": False,
+}
+
+V03_ARTIFACT_UPDATE = {
+    "kind": "artifact-update",
+    "taskId": "t1",
+    "contextId": "c1",
+    "artifact": {"artifactId": "a1", "parts": [{"kind": "text", "text": "out"}]},
+}
+
+
+def test_send_result_0_3_to_1_0_wraps_in_envelope():
+    out = normalize_jsonrpc_response(_rpc(V03_MESSAGE), "1.0", method="message/send")
+    assert "message" in out["result"]
+    assert "kind" not in out["result"]
+    assert out["result"]["message"]["messageId"] == "m1"
+
+
+def test_send_result_1_0_to_0_3_unwraps_to_bare_kind():
+    v1 = normalize_jsonrpc_response(_rpc(V03_MESSAGE), "1.0", method="message/send")
+    out = normalize_jsonrpc_response(v1, "0.3", method="message/send")
+    assert out["result"]["kind"] == "message"
+    assert out["result"]["messageId"] == "m1"
+    assert out["result"]["parts"][0]["text"] == "hi"
+
+
+def test_send_result_same_version_is_identity_passthrough():
+    rpc = _rpc(V03_MESSAGE)
+    out = normalize_jsonrpc_response(rpc, "0.3", method="message/send")
+    assert out is rpc
+
+
+def test_task_result_round_trip_preserves_ids():
+    v1 = normalize_jsonrpc_response(_rpc(V03_TASK), "1.0", method="tasks/get")
+    assert "kind" not in v1["result"]
+    assert v1["result"]["id"] == "t1"
+    back = normalize_jsonrpc_response(v1, "0.3", method="tasks/get")
+    assert back["result"]["kind"] == "task"
+    assert back["result"]["id"] == "t1"
+    assert back["result"]["contextId"] == "c1"
+
+
+def test_error_response_passes_through_untouched():
+    err = {"jsonrpc": "2.0", "id": "1", "error": {"code": -32600, "message": "bad"}}
+    assert normalize_jsonrpc_response(err, "1.0", method="message/send") is err
+
+
+def test_malformed_result_falls_back_to_passthrough():
+    # A 0.3 message missing required fields can't validate; conversion must not raise.
+    rpc = _rpc({"kind": "message"})
+    out = normalize_jsonrpc_response(rpc, "1.0", method="message/send")
+    assert out["result"] == {"kind": "message"}
+
+
+def test_unknown_shape_passes_through():
+    rpc = _rpc({"unexpected": "shape"})
+    out = normalize_jsonrpc_response(rpc, "1.0", method="message/send")
+    assert out is rpc
+
+
+@pytest.mark.parametrize("event", [V03_STATUS_UPDATE, V03_ARTIFACT_UPDATE])
+def test_stream_event_round_trip_preserves_kind(event):
+    v1 = normalize_stream_event(_rpc(event), "1.0", request_id="1")
+    assert "kind" not in v1["result"]
+    back = normalize_stream_event(v1, "0.3", request_id="1")
+    assert back["result"]["kind"] == event["kind"]
+    assert back["result"]["taskId"] == "t1"
+
+
+def test_stream_event_envelope_key_for_status_update():
+    v1 = normalize_stream_event(_rpc(V03_STATUS_UPDATE), "1.0", request_id="1")
+    assert "statusUpdate" in v1["result"]
+
+
+def test_request_params_lowering_is_noop_for_0_3():
+    params = {"id": "t1", "historyLength": 5}
+    assert normalize_request_params(params, "0.3", method="tasks/get") is params
+
+
+def test_request_params_lowering_get_task_to_0_3():
+    out = normalize_request_params(
+        {"id": "t1", "historyLength": 5}, "1.0", method="tasks/get"
+    )
+    assert out["id"] == "t1"
+    assert out["historyLength"] == 5
+
+
+def _extended_card_1_0() -> dict:
+    return {
+        "name": "Card",
+        "description": "d",
+        "version": "1.0.0",
+        "supportedInterfaces": [
+            {
+                "url": "https://upstream.example",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "0.3",
+            },
+            {
+                "url": "http://internal:9999",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "0.3",
+            },
+        ],
+    }
+
+
+def test_agent_card_lowered_to_0_3_drops_additional_interfaces():
+    # A 1.0 card with multiple interfaces would lower into a 0.3 card carrying the
+    # secondary backend URLs in ``additionalInterfaces``; those must be stripped so
+    # the conversion never re-exposes an upstream backend to A2A clients.
+    out = normalize_agent_card(_extended_card_1_0(), "0.3")
+    assert out["url"] == "https://upstream.example"
+    assert "additionalInterfaces" not in out
+    assert "supportedInterfaces" not in out
+    assert "http://internal:9999" not in str(out)
+
+
+def test_agent_card_same_version_passthrough():
+    card = _extended_card_1_0()
+    assert normalize_agent_card(card, "1.0") is card
