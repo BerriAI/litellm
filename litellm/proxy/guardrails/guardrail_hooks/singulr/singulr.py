@@ -65,7 +65,7 @@ class SingulrGuardrail(CustomGuardrail):
             "SINGULR_ENFORCEMENT_ENTITY_ID"
         )
         self.guardrail_id = guardrail_id or os.environ.get(
-            "SINGULR_guardrail_id"
+            "SINGULR_GUARDRAIL_ID"
         )
 
         if block_on_error is None:
