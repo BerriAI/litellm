@@ -1,5 +1,6 @@
 import json
 import ssl
+from functools import lru_cache
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
@@ -188,6 +189,7 @@ def _google_genai_streaming_hidden_params(
     }
 
 
+@lru_cache(maxsize=None)
 def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
 

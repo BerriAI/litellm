@@ -181,10 +181,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
 
         messages = tuple(
             parsed
-            for stripped in (line.strip() for line in lines)
-            if stripped
-            for parsed in (_try_parse(stripped),)
-            if parsed is not None
+            for line in lines
+            if (stripped := line.strip())
+            if (parsed := _try_parse(stripped)) is not None
         )
 
         def of_type(message_type: str):

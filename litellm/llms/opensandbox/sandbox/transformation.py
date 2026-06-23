@@ -473,8 +473,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         messages = tuple(
             event
             for line in lines
-            for event in (OpenSandboxSandboxConfig._parse_sse_line(line),)
-            if event is not None
+            if (event := OpenSandboxSandboxConfig._parse_sse_line(line)) is not None
         )
 
         def of_type(message_type: str):
@@ -551,18 +550,30 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     def _normalize_error(message: dict[str, object]) -> dict[str, object]:
         raw_error = message.get("error")
         if isinstance(raw_error, dict):
-            name = raw_error.get("ename") or raw_error.get("name") or ""
-            value = raw_error.get("evalue") or raw_error.get("value") or ""
-            traceback = raw_error.get("traceback") or []
+            name = OpenSandboxSandboxConfig._first_non_none_value(
+                raw_error, "ename", "name", default=""
+            )
+            value = OpenSandboxSandboxConfig._first_non_none_value(
+                raw_error, "evalue", "value", default=""
+            )
+            traceback = OpenSandboxSandboxConfig._first_non_none_value(
+                raw_error, "traceback", default=[]
+            )
             return {
                 "name": name,
                 "value": value,
                 "traceback": traceback,
             }
         return {
-            "name": message.get("name") or "",
-            "value": message.get("value") or message.get("text") or "",
-            "traceback": message.get("traceback") or [],
+            "name": OpenSandboxSandboxConfig._first_non_none_value(
+                message, "name", default=""
+            ),
+            "value": OpenSandboxSandboxConfig._first_non_none_value(
+                message, "value", "text", default=""
+            ),
+            "traceback": OpenSandboxSandboxConfig._first_non_none_value(
+                message, "traceback", default=[]
+            ),
         }
 
     @staticmethod
@@ -575,3 +586,12 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             except ValueError:
                 return None
         return None
+
+    @staticmethod
+    def _first_non_none_value(
+        values: dict[str, object], *keys: str, default: object
+    ) -> object:
+        return next(
+            (values[key] for key in keys if key in values and values[key] is not None),
+            default,
+        )

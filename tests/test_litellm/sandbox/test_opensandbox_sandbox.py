@@ -191,6 +191,27 @@ def test_parse_sse_lines_maps_fallback_shapes():
         "value": "boom",
         "traceback": [],
     }
+    empty_string_error = OpenSandboxSandboxConfig._parse_lines(
+        [
+            sse(
+                {
+                    "type": "error",
+                    "error": {
+                        "ename": "",
+                        "name": "FallbackName",
+                        "evalue": "",
+                        "value": "fallback value",
+                        "traceback": [],
+                    },
+                }
+            )
+        ]
+    )
+    assert empty_string_error.error == {
+        "name": "",
+        "value": "",
+        "traceback": [],
+    }
 
 
 def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
