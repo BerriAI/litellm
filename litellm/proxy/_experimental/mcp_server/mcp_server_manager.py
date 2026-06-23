@@ -1063,6 +1063,11 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
+        if static_headers_dict:
+            static_headers_dict = {
+                k: get_secret(v) if isinstance(v, str) and v.startswith("os.environ/") else v
+                for k, v in static_headers_dict.items()
+            }
         env_vars_list = self._resolve_env_vars_list(
             mcp_server,
             env_vars_are_encrypted=(
