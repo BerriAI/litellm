@@ -41,10 +41,4 @@ export default defineConfig({
   define: {
     "import.meta.vitest": "undefined",
   },
-  oxc: {
-    jsx: {
-      runtime: "automatic",
-      importSource: "react",
-    },
-  },
 });
