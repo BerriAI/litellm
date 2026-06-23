@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
 
 if TYPE_CHECKING:
@@ -265,6 +266,7 @@ def _extract_requested_mcp_server_ids(
     mcp_servers = object_permission.get("mcp_servers")
     if isinstance(mcp_servers, list):
         server_ids.update(mcp_servers)
+        server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
 
     mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
     if isinstance(mcp_tool_permissions, dict):

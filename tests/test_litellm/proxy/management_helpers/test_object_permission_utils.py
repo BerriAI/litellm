@@ -111,6 +111,24 @@ def test_extract_requested_mcp_server_ids_none():
     assert _extract_requested_mcp_server_ids({}) == set()
 
 
+def test_extract_requested_mcp_server_ids_excludes_no_mcp_servers_sentinel():
+    obj_perm = {"mcp_servers": ["no-mcp-servers", "server-1"]}
+    assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
+
+
+@pytest.mark.asyncio
+async def test_validate_no_mcp_servers_sentinel_passes_and_preserved():
+    """A key scoped to no-mcp-servers passes team validation without raising, keeping
+    the sentinel so it is not mistaken for an unknown server and rejected."""
+    team_obj = _make_team_obj(mcp_servers=["server-1"])
+    obj_perm = {"mcp_servers": ["no-mcp-servers"]}
+    await validate_key_mcp_servers_against_team(
+        object_permission=obj_perm,
+        team_obj=team_obj,
+    )
+    assert obj_perm["mcp_servers"] == ["no-mcp-servers"]
+
+
 # ---- Tests for _extract_requested_mcp_access_groups ----
 
 
