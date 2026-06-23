@@ -74,12 +74,11 @@ interface AgentCard {
   [key: string]: any;
 }
 
-interface MCPServerData {
+export interface MCPServerData {
   server_id: string;
   name: string;
   alias?: string | null;
   server_name: string;
-  url: string;
   transport: string;
   spec_path?: string | null;
   auth_type: string;
@@ -95,6 +94,73 @@ interface PublicModelHubProps {
   accessToken?: string | null;
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
 }
+
+export const publicMCPHubColumns = (showMcpModal: (server: MCPServerData) => void): ColumnDef<MCPServerData>[] => [
+  {
+    header: "Server Name",
+    accessorKey: "server_name",
+    enableSorting: true,
+    cell: ({ row }) => (
+      <div className="overflow-hidden">
+        <Tooltip title={row.original.server_name}>
+          <Button
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
+            onClick={() => showMcpModal(row.original)}
+          >
+            {row.original.server_name}
+          </Button>
+        </Tooltip>
+      </div>
+    ),
+    size: 150,
+  },
+  {
+    header: "Description",
+    accessorKey: "mcp_info.description",
+    enableSorting: false,
+    cell: ({ row }) => {
+      const description = String(row.original.mcp_info?.description ?? "-");
+      const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
+      return (
+        <Tooltip title={description}>
+          <Text className="text-sm text-gray-700">{truncated}</Text>
+        </Tooltip>
+      );
+    },
+    size: 250,
+  },
+  {
+    header: "Transport",
+    accessorKey: "transport",
+    enableSorting: true,
+    cell: ({ row }) => {
+      const transport = row.original.transport;
+      return (
+        <Tag color="blue" className="text-xs uppercase">
+          {transport}
+        </Tag>
+      );
+    },
+    size: 100,
+  },
+  {
+    header: "Auth Type",
+    accessorKey: "auth_type",
+    enableSorting: true,
+    cell: ({ row }) => {
+      const authType = row.original.auth_type;
+      const color = authType === "none" ? "gray" : "green";
+      return (
+        <Tag color={color} className="text-xs capitalize">
+          {authType}
+        </Tag>
+      );
+    },
+    size: 100,
+  },
+];
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
@@ -889,94 +955,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     },
   ];
 
-  const publicMCPHubColumns = (): ColumnDef<MCPServerData>[] => [
-    {
-      header: "Server Name",
-      accessorKey: "server_name",
-      enableSorting: true,
-      cell: ({ row }) => (
-        <div className="overflow-hidden">
-          <Tooltip title={row.original.server_name}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
-              onClick={() => showMcpModal(row.original)}
-            >
-              {row.original.server_name}
-            </Button>
-          </Tooltip>
-        </div>
-      ),
-      size: 150,
-    },
-    {
-      header: "Description",
-      accessorKey: "mcp_info.description",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const description = String(row.original.mcp_info?.description ?? "-");
-        const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
-        return (
-          <Tooltip title={description}>
-            <Text className="text-sm text-gray-700">{truncated}</Text>
-          </Tooltip>
-        );
-      },
-      size: 250,
-    },
-    {
-      header: "URL",
-      accessorKey: "url",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const url = row.original.url ?? "";
-        const truncated = url.length > 40 ? url.substring(0, 40) + "..." : url;
-        return (
-          <Tooltip title={url}>
-            <div className="flex items-center space-x-2">
-              <Text className="text-xs font-mono">{truncated}</Text>
-              <Copy
-                onClick={() => copyToClipboard(url)}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 w-3 h-3"
-              />
-            </div>
-          </Tooltip>
-        );
-      },
-      size: 200,
-    },
-    {
-      header: "Transport",
-      accessorKey: "transport",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const transport = row.original.transport;
-        return (
-          <Tag color="blue" className="text-xs uppercase">
-            {transport}
-          </Tag>
-        );
-      },
-      size: 100,
-    },
-    {
-      header: "Auth Type",
-      accessorKey: "auth_type",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const authType = row.original.auth_type;
-        const color = authType === "none" ? "gray" : "green";
-        return (
-          <Tag color={color} className="text-xs capitalize">
-            {authType}
-          </Tag>
-        );
-      },
-      size: 100,
-    },
-  ];
-
   return (
     <ThemeProvider accessToken={accessToken}>
       <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
@@ -1286,7 +1264,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
 
                   <ModelDataTable
-                    columns={publicMCPHubColumns()}
+                    columns={publicMCPHubColumns(showMcpModal)}
                     data={filteredMcpData}
                     isLoading={mcpLoading}
                     defaultSorting={[{ id: "server_name", desc: false }]}
@@ -1890,18 +1868,6 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                   <div className="col-span-2">
                     <Text className="font-medium">Description:</Text>
                     <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
-                  </div>
-                  <div className="col-span-2">
-                    <Text className="font-medium">URL:</Text>
-                    <a
-                      href={selectedMcpServer.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 text-sm break-all flex items-center space-x-2"
-                    >
-                      <span>{selectedMcpServer.url}</span>
-                      <ExternalLinkIcon className="w-4 h-4" />
-                    </a>
                   </div>
                 </div>
               </div>

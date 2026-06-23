@@ -1348,6 +1348,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     non_admin = MagicMock(spec=UserAPIKeyAuth)
     non_admin.user_role = LitellmUserRoles.INTERNAL_USER
     non_admin.user_id = "user-mine"
+    non_admin.team_id = None
 
     filtered, total_count = await _apply_search_filter_to_models(
         all_models=[caller_team_byok, other_team_byok, public_model],
@@ -1381,6 +1382,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     admin = MagicMock(spec=UserAPIKeyAuth)
     admin.user_role = LitellmUserRoles.PROXY_ADMIN
     admin.user_id = "admin-1"
+    admin.team_id = None
 
     filtered_admin, _ = await _apply_search_filter_to_models(
         all_models=[caller_team_byok, other_team_byok, public_model],
@@ -8326,6 +8328,42 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_preserve_redacted_plugin_keys_keeps_stored_credential():
+    """A redacted or blank plugin_key on update must not overwrite the real key."""
+    from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
+
+    existing = [{"name": "p1", "url": "https://p1", "plugin_key": "sk-real-1"}]
+
+    redacted = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1-new", "plugin_key": "***"}], existing
+    )
+    assert redacted == [
+        {"name": "p1", "url": "https://p1-new", "plugin_key": "sk-real-1"}
+    ]
+
+    blanked = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1", "plugin_key": ""}], existing
+    )
+    assert blanked[0]["plugin_key"] == "sk-real-1"
+
+
+def test_preserve_redacted_plugin_keys_sets_new_and_drops_orphan_placeholder():
+    """A real new key replaces; a placeholder with no stored key is dropped, never persisted."""
+    from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
+
+    existing = [{"name": "p1", "url": "https://p1", "plugin_key": "sk-real-1"}]
+
+    rotated = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1", "plugin_key": "sk-new"}], existing
+    )
+    assert rotated[0]["plugin_key"] == "sk-new"
+
+    new_plugin = _preserve_redacted_plugin_keys(
+        [{"name": "p2", "url": "https://p2", "plugin_key": "***"}], existing
+    )
+    assert "plugin_key" not in new_plugin[0]
 
 
 def _config_field_info_client(monkeypatch, user_role):

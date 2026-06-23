@@ -4292,7 +4292,7 @@ _FIREWORKS_MODELS = [
         6e-08,
         512000,
         512000,
-        False,
+        True,
         True,
     ),
     (
