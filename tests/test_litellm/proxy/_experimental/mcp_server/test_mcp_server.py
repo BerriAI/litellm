@@ -4289,11 +4289,6 @@ async def test_call_mcp_tool_failure_hook_uses_logging_metadata_without_clearing
             "get_mcp_server_by_id",
             return_value=mock_server,
         ),
-        patch.object(
-            global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
-            return_value=None,
-        ),
         patch(
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
             new_callable=AsyncMock,
