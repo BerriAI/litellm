@@ -1,3 +1,27 @@
+"""
+Provider-agnostic agentic loop for Chat Completions.
+
+A ``CustomLogger`` interceptor (e.g. code-interpreter) emits an
+``AgenticLoopPlan`` that runs a tool and patches the next request; this module
+runs one step of that loop and re-enters ``litellm.acompletion``, so deeper
+steps recurse through the same dispatch.
+
+It exists separately from the Responses-side dispatch
+(``BaseLLMHTTPHandler._call_agentic_completion_hooks``) because chat routing is
+forked per provider: OpenAI goes through its SDK in ``openai.py``, not the
+shared httpx handler, so the loop has to be driven from ``litellm.main`` after
+the forks reconverge rather than from inside one provider's handler. This is
+the chat-surface mirror of the Responses loop and goes through the same shared
+``CustomLogger`` hooks (``async_should_run_agentic_loop`` /
+``async_build_agentic_loop_plan``) with a chat surface marker.
+
+Loop-control fields (``_agentic_loop_*``, ``max_agentic_loops``,
+``_code_interpreter_interception_*``) are carried as LiteLLM-level kwargs only;
+they are registered in ``all_litellm_params`` so they never reach the provider
+payload, and the follow-up call here strips the non-code-interpreter
+interception prefixes before recursing.
+"""
+
 import json
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 

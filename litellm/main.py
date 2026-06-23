@@ -653,6 +653,14 @@ async def acompletion(
                 response_object=response,
                 model_response_object=litellm.ModelResponse(),
             )
+        # Provider-agnostic dispatch point for the chat-completions agentic loop
+        # (code-interpreter interception, etc). Chat routing forks per provider
+        # before this (OpenAI goes through the OpenAI SDK in openai.py, others
+        # through the shared httpx handler), so a dispatch inside any single
+        # provider handler would miss the others. Here is where every fork
+        # reconverges, so the loop runs once for all providers. Responses needs
+        # no equivalent: every provider already funnels through one shared
+        # handler where the loop is dispatched.
         if isinstance(response, litellm.ModelResponse):
             looped = await maybe_run_chat_completion_agentic_loop(
                 response=response,

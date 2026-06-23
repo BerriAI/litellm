@@ -3148,6 +3148,13 @@ class CustomPricingLiteLLMParams(BaseModel):
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
 
+# Server-controlled fields that bound or drive an interceptor's agentic loop
+# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
+# in all_litellm_params so they are treated as LiteLLM-level and excluded from
+# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
+# any unrecognized top-level key into extra_body and leaks them to the provider.
+# This is what lets the loop carry state across rerun calls without a provider
+# scrubber.
 agentic_loop_internal_litellm_params = [
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
