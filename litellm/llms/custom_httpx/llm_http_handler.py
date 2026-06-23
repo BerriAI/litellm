@@ -1879,6 +1879,9 @@ class BaseLLMHTTPHandler:
         data = provider_config.transform_search_request(
             query=query,
             optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
         )
 
         # Get complete URL (pass data for providers that need request body for URL construction)
