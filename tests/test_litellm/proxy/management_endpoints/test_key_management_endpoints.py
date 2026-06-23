@@ -10195,6 +10195,22 @@ def _make_regenerate_existing_key():
     )
 
 
+class _RegenerateModelBudgetCache:
+    def __init__(self):
+        self.cache = {}
+        self.ttls = {}
+
+    async def async_get_cache(self, key, **kwargs):
+        return self.cache.get(key)
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self.cache[key] = value
+        self.ttls[key] = kwargs.get("ttl")
+
+    async def async_get_ttl(self, key):
+        return self.ttls.get(key)
+
+
 @pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_rejects_over_limit_duration():
     """Regenerate must reject durations exceeding upperbound_key_generate_params.duration."""
@@ -10249,6 +10265,92 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration():
         assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
     finally:
         litellm.upperbound_key_generate_params = original
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_migrates_model_budget_cache():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    old_token_hash = "old-token-hash"
+    new_token_hash = "new-token-hash"
+    existing_key = LiteLLM_VerificationToken(
+        token=old_token_hash,
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id=None,
+        max_budget=None,
+        tags=None,
+        model_max_budget={
+            "gpt-4": {
+                "budget_limit": 0.0001,
+                "time_period": "1d",
+            }
+        },
+    )
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    mock_prisma_client.db.litellm_verificationtoken.update.return_value = (
+        type(
+            "DictLikeResult",
+            (),
+            {
+                "__iter__": lambda self: iter(
+                    {
+                        "token": new_token_hash,
+                        "key_name": "sk-...ab12",
+                        "user_id": "user-1",
+                    }.items()
+                )
+            },
+        )()
+    )
+
+    cache = _RegenerateModelBudgetCache()
+    cache.cache[f"virtual_key_budget_start_time:{old_token_hash}"] = 12345.0
+    cache.cache[f"virtual_key_spend:{old_token_hash}:gpt-4:1d"] = 0.001
+    cache.ttls[f"virtual_key_budget_start_time:{old_token_hash}"] = 3600
+    cache.ttls[f"virtual_key_spend:{old_token_hash}:gpt-4:1d"] = 3600
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.hash_token",
+            return_value=new_token_hash,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key=old_token_hash,
+            key=old_token_hash,
+            data=None,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=cache,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert cache.cache[f"virtual_key_budget_start_time:{new_token_hash}"] == 12345.0
+    assert cache.ttls[f"virtual_key_budget_start_time:{new_token_hash}"] == 3600
+    assert cache.cache[f"virtual_key_spend:{new_token_hash}:gpt-4:1d"] == 0.001
+    assert cache.ttls[f"virtual_key_spend:{new_token_hash}:gpt-4:1d"] == 3600
 
 
 @pytest.mark.asyncio
