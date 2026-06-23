@@ -4,40 +4,62 @@ Optional Rust-backed OCR path.
 Enable with ``litellm.use_litellm_rust()``; the sync ``litellm.ocr()`` entrypoint
 then routes supported Mistral calls through the compiled ``litellm_python_bridge``
 extension, which performs the whole OCR call (URL, headers, HTTP, parse) in Rust.
+
+No module-level ``litellm`` imports keep this a leaf so ``litellm/ocr/main.py``
+can import it statically without forming an import cycle.
 """
 
 from __future__ import annotations
 
-_RUST_OCR_ENABLED = False
+from typing import Optional, Protocol, cast
 
 
-def use_litellm_rust(enabled: bool = True) -> None:
-    """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension."""
-    global _RUST_OCR_ENABLED
-    _RUST_OCR_ENABLED = enabled
+class RustOcr(Protocol):
+    """Signature of the compiled ``litellm_python_bridge.ocr`` entrypoint."""
+
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict[str, object],
+        timeout_seconds: Optional[float],
+    ) -> dict[str, object]: ...
+
+
+_rust_ocr_enabled = False
+_rust_ocr_impl: Optional[RustOcr] = None
+
+
+def use_litellm_rust(enabled: bool = True, *, ocr: Optional[RustOcr] = None) -> None:
+    """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
+
+    ``ocr`` injects the bridge callable; when omitted the compiled extension is
+    loaded on demand. Supplying it lets an embedder (or a test) provide an
+    alternative bridge without reaching into ``sys.modules``.
+    """
+    global _rust_ocr_enabled, _rust_ocr_impl
+    _rust_ocr_enabled = enabled
+    _rust_ocr_impl = ocr
 
 
 def rust_ocr_enabled() -> bool:
     """Whether the Rust OCR path has been turned on via ``use_litellm_rust()``."""
-    return _RUST_OCR_ENABLED
+    return _rust_ocr_enabled
 
 
-def rust_ocr(
-    model: str,
-    document: dict,
-    api_key: str | None,
-    api_base: str | None,
-    optional_params: dict,
-    timeout_seconds: float | None = None,
-) -> dict:
-    """Call the Rust bridge and return the raw OCR response dict.
+def load_rust_ocr() -> Optional[RustOcr]:
+    """Return the Rust OCR callable, or ``None`` when no bridge is available.
 
-    Kept free of ``litellm`` imports so this module stays a leaf — the caller
-    (``litellm/ocr/main.py``) wraps the dict into an ``OCRResponse``. This avoids
-    the import edge CodeQL repeatedly flags (and auto-"fixes") as a cyclic import.
+    Prefers an injected implementation, otherwise loads the compiled
+    ``litellm_python_bridge`` extension; a missing extension yields ``None`` so
+    the caller can fall back to the Python path instead of hard-failing.
     """
-    import litellm_python_bridge
-
-    return litellm_python_bridge.ocr(
-        model, document, api_key, api_base, optional_params, timeout_seconds
-    )
+    if _rust_ocr_impl is not None:
+        return _rust_ocr_impl
+    try:
+        import litellm_python_bridge
+    except ImportError:
+        return None
+    return cast(RustOcr, litellm_python_bridge.ocr)
