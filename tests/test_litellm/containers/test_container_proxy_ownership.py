@@ -38,6 +38,59 @@ def _container(container_id: str) -> ContainerObject:
     )
 
 
+def test_collect_response_code_interpreter_container_ids_filters_tools():
+    from litellm.proxy.common_request_processing import (
+        _collect_response_code_interpreter_container_ids,
+    )
+
+    assert _collect_response_code_interpreter_container_ids({"tools": None}) == set()
+    assert _collect_response_code_interpreter_container_ids(
+        {
+            "tools": [
+                "not-a-dict",
+                {"type": "file_search", "container": "cntr_ignored"},
+                {"type": "code_interpreter", "container": {"type": "auto"}},
+                {"type": "code_interpreter", "container": ""},
+                {"type": "code_interpreter", "container": "cntr_1"},
+            ]
+        }
+    ) == {"cntr_1"}
+
+
+@pytest.mark.asyncio
+async def test_response_code_interpreter_container_authorization_defaults_to_openai(
+    monkeypatch,
+):
+    from litellm.proxy.common_request_processing import (
+        _authorize_response_code_interpreter_containers,
+    )
+
+    mock_assert = AsyncMock()
+    monkeypatch.setattr(
+        ownership,
+        "assert_user_can_access_container",
+        mock_assert,
+    )
+
+    await _authorize_response_code_interpreter_containers(
+        data={
+            "tools": [
+                {
+                    "type": "code_interpreter",
+                    "container": "cntr_native_123",
+                }
+            ]
+        },
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    mock_assert.assert_awaited_once_with(
+        container_id="cntr_native_123",
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+
 @pytest.mark.asyncio
 async def test_should_record_container_owner_with_original_provider_id(monkeypatch):
     table = AsyncMock()

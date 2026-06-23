@@ -143,6 +143,11 @@ class TestResponsesAPIRequestUtils:
         assert updated_tools[0]["container"] == "cntr_native_123"
         assert tools[0]["container"] == encoded_container_id
 
+        assert (
+            ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(None)
+            is None
+        )
+
         plain_tools = [{"type": "file_search", "vector_store_ids": ["vs_123"]}]
         plain_result = (
             ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(
@@ -150,6 +155,14 @@ class TestResponsesAPIRequestUtils:
             )
         )
         assert plain_result is plain_tools
+
+        plain_tuple = ({"type": "file_search", "vector_store_ids": ["vs_123"]},)
+        plain_tuple_result = (
+            ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(
+                plain_tuple
+            )
+        )
+        assert plain_tuple_result == list(plain_tuple)
 
     def test_update_responses_api_response_id_with_model_id_handles_dict(self):
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""

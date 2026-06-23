@@ -310,6 +310,74 @@ class TestContainerAPI:
         assert decoded.get("model_id") == "router-gpt"
 
     @pytest.mark.asyncio
+    async def test_router_aresponses_routes_managed_tool_container_id_to_owner_deployment(
+        self,
+    ):
+        router = Router(model_list=[])
+        router._ageneric_api_call_with_fallbacks = AsyncMock(
+            return_value={"id": "resp_1"}
+        )
+
+        encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="azure-deployment-id",
+            container_id="cntr_native_123",
+        )
+        tools = [
+            "not-a-dict",
+            {"type": "file_search", "container": "cntr_ignored"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+            {"type": "code_interpreter", "container": encoded_container_id},
+        ]
+
+        await router.aresponses(
+            model="logical-model",
+            input="hello",
+            tools=tools,
+            custom_llm_provider="openai",
+        )
+
+        call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+        assert call_kwargs["model"] == "azure-deployment-id"
+        assert call_kwargs["custom_llm_provider"] == "azure"
+        assert call_kwargs["tools"][3]["container"] == "cntr_native_123"
+        assert tools[3]["container"] == encoded_container_id
+
+    def test_router_responses_routes_managed_tool_container_id_to_owner_deployment(
+        self,
+    ):
+        router = Router(model_list=[])
+        router._generic_api_call_with_fallbacks = MagicMock(
+            return_value={"id": "resp_1"}
+        )
+
+        encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="azure-deployment-id",
+            container_id="cntr_native_123",
+        )
+        tools = [
+            "not-a-dict",
+            {"type": "file_search", "container": "cntr_ignored"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+            {"type": "code_interpreter", "container": encoded_container_id},
+        ]
+
+        response = router.responses(
+            model="logical-model",
+            input="hello",
+            tools=tools,
+            custom_llm_provider="openai",
+        )
+
+        call_kwargs = router._generic_api_call_with_fallbacks.call_args.kwargs
+        assert response == {"id": "resp_1"}
+        assert call_kwargs["model"] == "azure-deployment-id"
+        assert call_kwargs["custom_llm_provider"] == "azure"
+        assert call_kwargs["tools"][3]["container"] == "cntr_native_123"
+        assert tools[3]["container"] == encoded_container_id
+
+    @pytest.mark.asyncio
     async def test_aretrieve_container_basic(self):
         """Test basic async container retrieval functionality."""
         container_id = "cntr_async_retrieve"
