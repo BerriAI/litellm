@@ -156,12 +156,14 @@ class TestResponseCompliance:
         # The response is the dedicated `Interaction` schema. Google moved the
         # output-only fields (notably the `steps` array, formerly `outputs`)
         # off `CreateModelInteractionParams` and onto `Interaction`; the request
-        # schema no longer carries `steps`. Google also dropped the `role` field
-        # from `Interaction` (it now lives on `Turn`); our response model keeps it
-        # as an optional, backward-compatible field. Keep this aligned with the live spec.
+        # schema no longer carries `steps`. Google later moved `role` off
+        # `Interaction` onto the per-turn `Turn` schema (asserted in
+        # test_turn_schema), so it is no longer a top-level output field here.
+        # Keep this aligned with the live spec.
         schema = spec_dict["components"]["schemas"]["Interaction"]
 
-        # Output fields (readOnly).
+        # Output fields (readOnly). `role` was removed from the `Interaction`
+        # schema by Google; it now lives only on `Turn`.
         output_fields = [
             "id",
             "status",

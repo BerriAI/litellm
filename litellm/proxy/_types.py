@@ -461,6 +461,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
+        "/v1/mcp/tools",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -2977,6 +2978,10 @@ class SpecialModelNames(enum.Enum):
     no_default_models = "no-default-models"
 
 
+class SpecialMCPServerNames(enum.Enum):
+    no_mcp_servers = "no-mcp-servers"
+
+
 class SpecialProxyStrings(enum.Enum):
     default_user_id = "default_user_id"  # global proxy admin
 
@@ -3353,7 +3358,9 @@ class ProxyException(Exception):
 
 class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = (
-        "DB not connected. See https://docs.litellm.ai/docs/proxy/virtual_keys"
+        "DB not connected. This endpoint needs a database; set DATABASE_URL to a "
+        "PostgreSQL connection string (postgresql://...) to enable it. "
+        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."

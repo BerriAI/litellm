@@ -867,6 +867,7 @@ openai_compatible_providers: List = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "darkbloom",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`

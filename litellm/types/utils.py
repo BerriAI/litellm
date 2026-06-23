@@ -37,6 +37,8 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    SkipValidation,
+    field_serializer,
     field_validator,
 )
 from typing_extensions import Required, TypedDict
@@ -3146,6 +3148,19 @@ class CustomPricingLiteLLMParams(BaseModel):
     search_context_cost_per_query: Optional[Dict[str, Any]] = None
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
+    cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
+    input_cost_per_image_token: Optional[float] = None
+    input_cost_per_token_above_272k_tokens: Optional[float] = None
+    input_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_cost_per_token_above_272k_tokens: Optional[float] = None
+    output_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_vector_size: Optional[int] = None
+    ocr_cost_per_page: Optional[float] = None
+    ocr_cost_per_credit: Optional[float] = None
+    annotation_cost_per_page: Optional[float] = None
+    regional_processing_uplift_multiplier_eu: Optional[float] = None
+    regional_processing_uplift_multiplier_us: Optional[float] = None
 
 
 all_litellm_params = (
@@ -3448,6 +3463,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    DARKBLOOM = "darkbloom"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3610,9 +3626,19 @@ class LiteLLMBatch(Batch):
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
-    results: OpenAIRealtimeStreamList
+    # Events are already well-formed provider dicts. Validating them against the
+    # OpenAIRealtimeEvents union makes Pydantic try every member per event, which
+    # floods thousands of ValidationErrors for events outside the union (e.g.
+    # rate_limits.updated), blocks the event loop, and discards the session usage.
+    results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     _hidden_params: dict = {}
+
+    @field_serializer("results")
+    def _serialize_results(
+        self, results: OpenAIRealtimeStreamList
+    ) -> List[Dict[str, Any]]:
+        return [dict(event) for event in results]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
