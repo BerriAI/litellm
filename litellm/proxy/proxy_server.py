@@ -15538,7 +15538,11 @@ async def get_config():
                 "SLACK_WEBHOOK_URL",
             ]
             _slack_env_vars = {
-                _var: environment_variables.get(_var) or os.getenv(_var)
+                _var: (
+                    value
+                    if (value := environment_variables.get(_var)) is not None
+                    else os.getenv(_var)
+                )
                 for _var in _slack_vars
             }
             _slack_env_vars = mask_sensitive_keys(

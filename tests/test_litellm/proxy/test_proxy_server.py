@@ -969,6 +969,54 @@ def test_get_config_returns_slack_webhook(monkeypatch):
     assert "*" in masked_url
 
 
+def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
+    """
+    A webhook the admin cleared is stored as "" in environment_variables. The
+    slack block must surface that empty value, not silently fall back to a
+    SLACK_WEBHOOK_URL still present in the OS environment (which truthiness-based
+    `or` would do). Only a truly absent key should trigger the os.getenv lookup.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv(
+        "SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/STALE/OS/ENVVALUE"
+    )
+    config_data = {
+        "litellm_settings": {},
+        "general_settings": {"alerting": ["slack"]},
+        "environment_variables": {"SLACK_WEBHOOK_URL": ""},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+
+    mock_logging = MagicMock()
+    mock_logging.slack_alerting_instance.alert_types = ["budget_alerts"]
+    mock_logging.slack_alerting_instance._all_possible_alert_types.return_value = [
+        "budget_alerts"
+    ]
+    mock_logging.slack_alerting_instance.alert_to_webhook_url = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    slack_alert = next(
+        (a for a in response.json()["alerts"] if a["name"] == "slack"), None
+    )
+    assert slack_alert is not None
+    assert slack_alert["variables"]["SLACK_WEBHOOK_URL"] == ""
+
+
 # Mock Prisma
 class MockPrisma:
     def __init__(self, database_url=None, proxy_logging_obj=None, http_client=None):
