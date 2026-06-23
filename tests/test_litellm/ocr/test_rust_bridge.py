@@ -66,7 +66,7 @@ def test_use_litellm_rust_toggles_flag():
     assert rust_bridge.rust_ocr_enabled() is False
 
 
-def test_rust_ocr_wraps_bridge_response(fake_bridge):
+def test_rust_ocr_returns_bridge_dict(fake_bridge):
     response = rust_bridge.rust_ocr(
         model="mistral-ocr-latest",
         document=DOCUMENT,
@@ -75,9 +75,10 @@ def test_rust_ocr_wraps_bridge_response(fake_bridge):
         optional_params={"include_image_base64": True},
     )
 
-    assert isinstance(response, OCRResponse)
-    assert response.pages[0].markdown == "hello world"
-    assert response.model == "mistral-ocr-2505-completion"
+    # rust_ocr returns the raw dict; main.py wraps it into an OCRResponse.
+    assert isinstance(response, dict)
+    assert response["pages"][0]["markdown"] == "hello world"
+    assert response["model"] == "mistral-ocr-2505-completion"
     assert fake_bridge[0]["model"] == "mistral-ocr-latest"
     assert fake_bridge[0]["optional_params"] == {"include_image_base64": True}
 
