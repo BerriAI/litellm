@@ -538,6 +538,93 @@ def test_synthetic_error_log_produces_no_llm_span():
     assert "auth /chat/completions" in names  # auth span itself still recorded
 
 
+def test_lazy_activation_emits_llm_span_when_destination_resolves(monkeypatch):
+    """LIT-3850 lazy-activation seam: a v2 instance born inside the success path
+    (because the destination resolver appended its backend to ``success_callback``
+    on this request) was not in the callback list when ``pre_call`` iterated, so
+    no carrier was opened. The close must still emit the gen-ai span when the
+    payload is present and the admin-resolved destinations name this backend, so
+    the per-tenant exporter ships it. Without the fallthrough, this test sees
+    zero spans."""
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "in_memory")
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    # Make ``tracer_for`` return the logger's default tracer regardless of the
+    # destinations passed: the test asserts the close-path emitted the span, not
+    # that the per-destination provider clone wired up an OTLP exporter (the
+    # routing cache's job, covered separately). The default tracer is bound to
+    # the in-memory exporter so the test can read the result.
+    tracer_for_calls: list[tuple] = []
+
+    def _fake_tracer_for(default, destinations):
+        tracer_for_calls.append(destinations)
+        return default
+
+    monkeypatch.setattr(logger._tenant_tracers, "tracer_for", _fake_tracer_for)
+    kwargs = _kwargs()
+    kwargs["standard_callback_dynamic_params"] = {
+        "otel_destinations": [
+            {
+                "callback_name": "in_memory",
+                "endpoint": "https://otlp.example.com/v1",
+                "headers": {"api_key": "k"},
+            }
+        ]
+    }
+    assert "call_1" not in logger._open_llm_calls  # no carrier opened
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "chat gpt-4o" in names
+    # ``tracer_for`` was invoked with exactly the resolved destination, proving
+    # the deferred path used per-tenant routing rather than the default tracer
+    # blindly.
+    assert len(tracer_for_calls) == 1
+    (dests,) = tracer_for_calls
+    assert len(dests) == 1 and dests[0].endpoint == "https://otlp.example.com/v1"
+
+
+def test_close_without_carrier_and_without_destination_drops_silently():
+    """The pre-existing early-return semantics (auth gate / pre-call guardrail
+    rejection with no destination resolving to this backend) must be preserved:
+    no phantom span. The fix only widens emit-on-close when the admin-resolved
+    destinations name this backend AND the payload exists."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    asyncio.run(logger.async_log_success_event(_kwargs(), None, None, None))
+    server.end()
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "chat gpt-4o" not in names
+
+
+def test_close_without_carrier_drops_when_payload_missing(monkeypatch):
+    """No carrier + no payload = the auth-gate rejection case (no upstream call
+    happened). Must drop even when destinations resolve, so a phantom span is
+    never emitted for a request the gate refused."""
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "in_memory")
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_callback_dynamic_params": {
+            "otel_destinations": [
+                {
+                    "callback_name": "in_memory",
+                    "endpoint": "https://otlp.example.com/v1",
+                    "headers": {},
+                }
+            ]
+        },
+    }
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    assert exporter.get_finished_spans() == ()
+
+
 def test_create_request_started_span_captures_anchor():
     """``create_litellm_proxy_request_started_span`` doubles as the anchor capture
     point: the active server span becomes the request root for later spans."""
