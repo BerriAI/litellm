@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Iterator, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -314,6 +314,46 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
         raise e
 
 
+def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+    """
+    Yield batch input JSONL entries one at a time without materializing the whole
+    file as a list, so peak memory stays bounded when counting a large batch file.
+    """
+    start, length, newline = 0, len(file_content), ord("\n")
+    while start < length:
+        idx = file_content.find(newline, start)
+        if idx == -1:
+            chunk, start = file_content[start:], length
+        else:
+            chunk, start = file_content[start:idx], idx + 1
+        line = chunk.strip()
+        if line:
+            yield json.loads(line)
+
+
+def _count_entry_tokens(
+    entry: dict,
+    model_name: Optional[str] = None,
+) -> int:
+    """Token-count a single batch input entry's body (chat / text / embedding)."""
+    body = entry.get("body", {}) or {}
+    model = body.get("model", model_name or "")
+
+    messages = body.get("messages")
+    if messages:
+        return token_counter(model=model, messages=messages)
+
+    prompt = body.get("prompt")
+    if prompt:
+        return _count_prompt_or_input_tokens(model=model, value=prompt)
+
+    input_data = body.get("input")
+    if input_data:
+        return _count_prompt_or_input_tokens(model=model, value=input_data)
+
+    return 0
+
+
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal[
@@ -391,70 +431,6 @@ def _get_batch_job_total_usage_from_file_content(
             completion_tokens += usage.completion_tokens
     return Usage(
         total_tokens=total_tokens,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-    )
-
-
-def _get_models_from_batch_input_file_content(
-    file_content_dictionary: List[dict],
-) -> List[str]:
-    """Extract the distinct ``body.model`` values from a batch *input* file.
-
-    Used by the proxy's batch pre-call hook to enforce that the caller is
-    authorized for every model named inside the JSONL — not just the one
-    on the outer request — so the proxy's per-key model allowlist isn't
-    bypassed by smuggling expensive models into the batch file.
-    """
-    models: List[str] = []
-    seen: set = set()
-    for _item in file_content_dictionary:
-        body = _item.get("body") or {}
-        model = body.get("model")
-        if model and model not in seen:
-            seen.add(model)
-            models.append(model)
-    return models
-
-
-def _get_batch_job_input_file_usage(
-    file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    model_name: Optional[str] = None,
-) -> Usage:
-    """
-    Count the number of tokens in the input file
-
-    Used for batch rate limiting to count the number of tokens in the input file
-    """
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-
-    for _item in file_content_dictionary:
-        body = _item.get("body", {})
-        model = body.get("model", model_name or "")
-
-        # Chat completion payloads.
-        messages = body.get("messages")
-        if messages:
-            prompt_tokens += token_counter(model=model, messages=messages)
-            continue
-
-        # Text completion payloads (`prompt`).
-        prompt = body.get("prompt")
-        if prompt:
-            prompt_tokens += _count_prompt_or_input_tokens(model=model, value=prompt)
-            continue
-
-        # Embedding payloads (`input`).
-        input_data = body.get("input")
-        if input_data:
-            prompt_tokens += _count_prompt_or_input_tokens(
-                model=model, value=input_data
-            )
-
-    return Usage(
-        total_tokens=prompt_tokens + completion_tokens,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )

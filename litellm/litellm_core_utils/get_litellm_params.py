@@ -14,7 +14,7 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "azure_password",
         "azure_scope",
         "timeout",
-        "bucket_name",
+        "gcs_bucket_name",
         "vertex_credentials",
         "vertex_project",
         "vertex_location",
