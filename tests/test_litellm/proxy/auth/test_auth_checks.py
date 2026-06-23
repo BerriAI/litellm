@@ -352,6 +352,43 @@ async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
 
 
 @pytest.mark.asyncio
+async def test_can_team_access_model_all_team_models_expands_router_models():
+    from litellm import Router
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "allowed-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    assert (
+        await can_team_access_model(
+            model="allowed-model",
+            team_object=team_object,
+            llm_router=router,
+        )
+        is True
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="blocked-model",
+            team_object=team_object,
+            llm_router=router,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_reconnect_once_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(
@@ -3791,4 +3828,55 @@ async def test_inference_route_still_enforces_team_budget():
             proxy_logging_obj=AsyncMock(),
             valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
             request=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_error_names_the_key():
+    """BudgetExceededError for a virtual key must name the key (alias + masked key)
+    so operators don't have to reverse-map a spend figure back to a key."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_alias="payments-prod",
+        key_name="sk-...um_g",
+        max_budget=10.0,
+        spend=0.0,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=25.0),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    message = str(exc_info.value)
+    assert "payments-prod" in message
+    assert "sk-...um_g" in message
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_not_exceeded_does_not_raise():
+    """Spend below the configured budget must not raise."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_alias="payments-prod",
+        max_budget=10.0,
+        spend=0.0,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=1.0),
+    ):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
         )
