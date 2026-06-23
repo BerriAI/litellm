@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
@@ -35,13 +36,15 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 
-def initialize_callbacks_on_proxy(  # noqa: PLR0915
+def initialize_callbacks_on_proxy(
     value: Any,
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict = {},
+    callback_specific_params: Optional[dict] = None,
 ):
+    if not isinstance(callback_specific_params, dict):
+        callback_specific_params = {}
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.logging_callback_manager import (
         LoggingCallbackManager,
@@ -66,6 +69,23 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     )
                 )
                 imported_list.append(compression_interception_obj)
+                continue
+
+            if (
+                isinstance(callback, str)
+                and callback == "code_interpreter_interception"
+            ):
+                from litellm.integrations.code_interpreter_interception.handler import (
+                    CodeInterpreterInterceptionLogger,
+                )
+
+                code_interpreter_interception_obj = (
+                    CodeInterpreterInterceptionLogger.initialize_from_proxy_config(
+                        litellm_settings=litellm_settings,
+                        callback_specific_params=callback_specific_params,
+                    )
+                )
+                imported_list.append(code_interpreter_interception_obj)
                 continue
 
             # check if callback is a custom logger compatible callback
@@ -166,7 +186,12 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 )
 
                 init_params = {}
-                if "lakera_prompt_injection" in callback_specific_params:
+                if (
+                    "lakera_prompt_injection" in callback_specific_params
+                    and isinstance(
+                        callback_specific_params["lakera_prompt_injection"], dict
+                    )
+                ):
                     init_params = callback_specific_params["lakera_prompt_injection"]
                 lakera_moderations_object = lakeraAI_Moderation(**init_params)
                 imported_list.append(lakera_moderations_object)
@@ -317,7 +342,15 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     DatadogCostManagementLogger,
                 )
 
-                datadog_cost_management_obj = DatadogCostManagementLogger()
+                init_params = {}
+                if (
+                    "datadog_cost_management" in callback_specific_params
+                    and isinstance(
+                        callback_specific_params["datadog_cost_management"], dict
+                    )
+                ):
+                    init_params = callback_specific_params["datadog_cost_management"]
+                datadog_cost_management_obj = DatadogCostManagementLogger(**init_params)
                 imported_list.append(datadog_cost_management_obj)
             elif isinstance(callback, CustomLogger):
                 imported_list.append(callback)
@@ -482,6 +515,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
         "guardrail_config",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
+        PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         "disable_global_guardrails",
         "disable_global_guardrail",
         "opted_out_global_guardrails",

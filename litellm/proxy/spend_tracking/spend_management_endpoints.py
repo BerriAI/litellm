@@ -21,7 +21,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.repositories.table_repositories import SpendLogsRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -37,9 +41,18 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    View all keys created, ordered by spend
+    View keys created, ordered by spend.
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every key in
+      the database.
+    - All other callers (INTERNAL_USER / INTERNAL_USER_VIEW_ONLY, etc.) are
+      scoped to keys they own (``user_id == caller``). A caller with no
+      ``user_id`` has no scope and receives an empty list rather than the
+      full table.
 
     Example Request:
     ```
@@ -56,8 +69,17 @@ async def spend_key_fn():
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
-        return key_info
+        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            return await prisma_client.get_data(table_name="key", query_type="find_all")
+
+        caller_user_id = user_api_key_dict.user_id
+        if not caller_user_id:
+            return []
+        return await prisma_client.get_data(
+            table_name="key",
+            query_type="find_all",
+            user_id=caller_user_id,
+        )
 
     except Exception as e:
         raise HTTPException(
@@ -86,9 +108,19 @@ async def spend_user_fn(
         default=None,
         description="Get User Table row for user_id",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    View all users created, ordered by spend
+    View users created, ordered by spend.
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every user, or
+      a specific user when ``user_id`` is supplied.
+    - All other callers may only read their own row. If they supply a
+      ``user_id`` query parameter that does not match their authenticated
+      ``user_id`` the request is rejected with HTTP 403; supplying their
+      own id (or none at all) returns just their row. A caller with no
+      ``user_id`` on their key has no scope and receives an empty list
+      rather than the full table.
 
     Example Request:
     ```
@@ -110,6 +142,17 @@ async def spend_user_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
+        if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            caller_user_id = user_api_key_dict.user_id
+            if not caller_user_id:
+                return []
+            if user_id is not None and user_id != caller_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "Not authorized to view spend for another user."},
+                )
+            user_id = caller_user_id
+
         if user_id is not None:
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_unique", user_id=user_id
@@ -124,6 +167,8 @@ async def spend_user_fn(
         _strip_password_from_users(result)
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1689,7 +1734,7 @@ async def calculate_spend(request: SpendCalculateRequest):
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def ui_view_spend_logs(  # noqa: PLR0915
+async def ui_view_spend_logs(
     request: Request,
     api_key: Optional[str] = fastapi.Query(
         default=None,
@@ -1739,6 +1784,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model_id: Optional[str] = fastapi.Query(
         default=None,
         description="Filter logs by model ID (litellm model deployment id)",
+    ),
+    model_group: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by model group"
     ),
     key_alias: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by key alias"
@@ -1874,6 +1922,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if model_id is not None:
             where_conditions["model_id"] = model_id
 
+        if model_group is not None:
+            where_conditions["model_group"] = model_group
+
         # Build metadata filters
         metadata_filters = []
         if key_alias is not None:
@@ -1964,7 +2015,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         order_direction = (sort_order or "desc").lower()
 
         # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
+        total_records = await SpendLogsRepository(prisma_client).table.count(
             where=where_conditions,
         )
 
@@ -1997,6 +2048,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             ("request_id", "request_id"),
             ("model", "model"),
             ("model_id", "model_id"),
+            ("model_group", "model_group"),
             ("end_user", "end_user"),
         ]:
             val = where_conditions.get(wc_key)
@@ -2089,6 +2141,20 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         sql_params.extend([page_size, skip])
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
+
+        # query_raw returns the JSONB `metadata` column as a string (the Prisma
+        # serialiser bypasses the model-layer JSON hydration we get on the ORM
+        # path). The UI reads `metadata.status` / `metadata.error_information`
+        # as object fields, so failure rows looked like successes (#29674).
+        # Re-hydrate to dict here.
+        for row in data:
+            if isinstance(row, dict):
+                md = row.get("metadata")
+                if isinstance(md, str):
+                    try:
+                        row["metadata"] = json.loads(md)
+                    except (ValueError, TypeError):
+                        row["metadata"] = {}
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
@@ -2207,7 +2273,7 @@ async def ui_view_request_response_for_request_id(
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def view_spend_logs(  # noqa: PLR0915
+async def view_spend_logs(
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -2327,7 +2393,7 @@ async def view_spend_logs(  # noqa: PLR0915
             # Check if user wants unsummarized data
             if not summarize:
                 # Return filtered individual log entries (similar to UI endpoint)
-                data = await prisma_client.db.litellm_spendlogs.find_many(
+                data = await SpendLogsRepository(prisma_client).table.find_many(
                     where=filter_query,  # type: ignore
                     order={
                         "startTime": "desc",
@@ -2337,7 +2403,7 @@ async def view_spend_logs(  # noqa: PLR0915
 
             # Legacy behavior: return summarized data (when summarize=true)
             # SQL query
-            response = await prisma_client.db.litellm_spendlogs.group_by(
+            response = await SpendLogsRepository(prisma_client).table.group_by(
                 by=["api_key", "user", "model", "startTime"],
                 where=filter_query,  # type: ignore
                 sum={
@@ -2415,7 +2481,7 @@ async def view_spend_logs(  # noqa: PLR0915
                 )
                 return spend_logs
 
-            data = await prisma_client.db.litellm_spendlogs.find_many(
+            data = await SpendLogsRepository(prisma_client).table.find_many(
                 where=scoped_filter,  # type: ignore
                 order={"startTime": "desc"},
             )
@@ -2467,10 +2533,10 @@ async def global_spend_reset():
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    await prisma_client.db.litellm_verificationtoken.update_many(
+    await VerificationTokenRepository(prisma_client).table.update_many(
         data={"spend": 0.0}, where={}
     )
-    await prisma_client.db.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+    await TeamRepository(prisma_client).table.update_many(data={"spend": 0.0}, where={})
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",
@@ -3149,18 +3215,12 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
+        router_budget_logger = llm_router._get_router_deployment_budget_limiter()
+        if router_budget_logger is None:
+            raise ValueError("No router budget logger found")
+
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            router_budget_logger = next(
-                (
-                    cb
-                    for cb in (llm_router.optional_callbacks or [])
-                    if isinstance(cb, RouterBudgetLimiting)
-                ),
-                None,
-            )
-            if router_budget_logger is None:
-                raise ValueError("No router budget logger found")
             _provider_spend = (
                 await router_budget_logger._get_current_provider_spend(_provider) or 0.0
             )
@@ -3343,7 +3403,7 @@ async def ui_view_session_spend_logs(
         skip = (page - 1) * page_size
 
         # Get total count for pagination metadata
-        total_records = await prisma_client.db.litellm_spendlogs.count(
+        total_records = await SpendLogsRepository(prisma_client).table.count(
             where=where_conditions
         )
 
@@ -3359,7 +3419,7 @@ async def ui_view_session_spend_logs(
                 session_id, status, mcp_namespaced_tool_name, agent_id
             FROM "LiteLLM_SpendLogs"
             WHERE session_id = $1
-            ORDER BY "startTime" ASC
+            ORDER BY "startTime" DESC
             LIMIT $2 OFFSET $3
         """
         result = await prisma_client.db.query_raw(
@@ -3444,7 +3504,7 @@ async def _build_ui_spend_logs_response(
             # is bounded by page_size (typically 25-50 distinct session IDs).
             # If performance degrades at scale, consider short-lived caching or
             # folding the count into the main query via a window function.
-            counts = await prisma_client.db.litellm_spendlogs.group_by(
+            counts = await SpendLogsRepository(prisma_client).table.group_by(
                 by=["session_id"],
                 where={"session_id": {"in": session_ids}},
                 count={"session_id": True},
@@ -3531,7 +3591,7 @@ async def _can_team_member_view_log(
 
     if team_id is None:
         return False
-    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+    team_row = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
     if team_row is None:
@@ -3573,7 +3633,7 @@ async def _assert_user_can_view_request_id(
     permitted teams (admin or ``/spend/logs`` permission).
     Raises HTTP 403 if not.
     """
-    row = await prisma_client.db.litellm_spendlogs.find_unique(
+    row = await SpendLogsRepository(prisma_client).table.find_unique(
         where={"request_id": request_id},
         include=None,
     )
@@ -3628,7 +3688,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     if user_obj is None or not user_obj.teams:
         return []
 
-    team_rows = await prisma_client.db.litellm_teamtable.find_many(
+    team_rows = await TeamRepository(prisma_client).table.find_many(
         where={"team_id": {"in": user_obj.teams}}
     )
 

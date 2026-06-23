@@ -80,6 +80,257 @@ def test_router_with_model_info_and_model_group():
     )
 
 
+def test_router_model_group_encrypted_content_affinity_callback_registration():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    model_group_affinity_config = {
+        model_group: ["encrypted_content_affinity"],
+    }
+    original_callbacks = list(litellm.callbacks)
+    litellm.callbacks = []
+    router = None
+
+    try:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": model_group,
+                    "litellm_params": {
+                        "model": "openai/gpt-5.1-codex",
+                        "api_key": "mock-api-key",
+                    },
+                }
+            ],
+            model_group_affinity_config=model_group_affinity_config,
+            num_retries=0,
+        )
+        callbacks = router.optional_callbacks or []
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        deployment_callback = next(
+            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
+        )
+        assert len(encrypted_content_callbacks) == 1
+        assert encrypted_content_callbacks[0].enable_global_affinity is False
+        assert (
+            encrypted_content_callbacks[0].model_group_affinity_config
+            == model_group_affinity_config
+        )
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
+            deployment_callback
+        )
+        assert litellm.callbacks.index(encrypted_content_callbacks[0]) < (
+            litellm.callbacks.index(deployment_callback)
+        )
+
+        router._add_encrypted_content_affinity_check(enable_global_affinity=True)
+
+        callbacks = router.optional_callbacks or []
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        assert len(encrypted_content_callbacks) == 1
+        assert encrypted_content_callbacks[0].enable_global_affinity is True
+        assert encrypted_content_callbacks[0].router is router
+    finally:
+        if router is not None:
+            router.discard()
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_model_group_config_is_additive():
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    target_deployment = {
+        "model_name": model_group,
+        "litellm_params": {"model": "openai/gpt-5.1-codex"},
+        "model_info": {"id": "deployment-b"},
+    }
+    healthy_deployments = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-5.1-codex"},
+            "model_info": {"id": "deployment-a"},
+        },
+        target_deployment,
+    ]
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-b", "rs_test"
+    )
+
+    assert EncryptedContentAffinityCheck.has_model_group_affinity_enabled(
+        {model_group: ["encrypted_content_affinity"]}
+    )
+    assert not EncryptedContentAffinityCheck.has_model_group_affinity_enabled(None)
+
+    per_group_check = EncryptedContentAffinityCheck(
+        enable_global_affinity=False,
+        model_group_affinity_config={
+            model_group: ["encrypted_content_affinity"],
+        },
+    )
+    request_kwargs = {
+        "input": [{"type": "reasoning", "id": encoded_id}],
+        "litellm_metadata": {},
+    }
+    filtered = await per_group_check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == [target_deployment]
+    assert request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"]
+
+    disabled_check = EncryptedContentAffinityCheck(
+        enable_global_affinity=False,
+        model_group_affinity_config={
+            "other-model-group": ["encrypted_content_affinity"],
+        },
+    )
+    disabled_request_kwargs = {
+        "input": [{"type": "reasoning", "id": encoded_id}],
+        "litellm_metadata": {},
+    }
+    unfiltered = await disabled_check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=disabled_request_kwargs,
+    )
+
+    assert unfiltered == healthy_deployments
+    assert (
+        "encrypted_content_affinity_enabled"
+        not in disabled_request_kwargs["litellm_metadata"]
+    )
+
+    global_check = EncryptedContentAffinityCheck(
+        enable_global_affinity=True,
+        model_group_affinity_config={
+            model_group: ["deployment_affinity"],
+        },
+    )
+    global_request_kwargs = {
+        "input": [{"type": "reasoning", "id": encoded_id}],
+        "litellm_metadata": {},
+    }
+    globally_filtered = await global_check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=global_request_kwargs,
+    )
+
+    assert globally_filtered == [target_deployment]
+    assert global_request_kwargs["litellm_metadata"][
+        "encrypted_content_affinity_enabled"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity():
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    user_api_key_hash = "test-user-key"
+    deployment_a = {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": "openai/gpt-5.1-codex",
+            "api_key": "mock-api-key-a",
+        },
+        "model_info": {"id": "deployment-a"},
+    }
+    deployment_b = {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": "openai/gpt-5.1-codex",
+            "api_key": "mock-api-key-b",
+        },
+        "model_info": {"id": "deployment-b"},
+    }
+    original_callbacks = list(litellm.callbacks)
+    litellm.callbacks = []
+    router = None
+
+    try:
+        router = litellm.Router(
+            model_list=[deployment_a, deployment_b],
+            model_group_affinity_config={
+                model_group: [
+                    "deployment_affinity",
+                    "encrypted_content_affinity",
+                ],
+            },
+            num_retries=0,
+        )
+        callbacks = router.optional_callbacks or []
+        deployment_callback = next(
+            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
+        )
+        encrypted_content_callback = next(
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        )
+        assert callbacks.index(encrypted_content_callback) < callbacks.index(
+            deployment_callback
+        )
+        assert litellm.callbacks.index(encrypted_content_callback) < (
+            litellm.callbacks.index(deployment_callback)
+        )
+
+        cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+            model_group=model_group,
+            user_key=user_api_key_hash,
+        )
+        await deployment_callback.cache.async_set_cache(
+            key=cache_key,
+            value={"model_id": "deployment-a"},
+            ttl=60,
+        )
+        encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            "deployment-b", "rs_test"
+        )
+        request_kwargs = {
+            "input": [{"type": "reasoning", "id": encoded_id}],
+            "litellm_metadata": {"user_api_key_hash": user_api_key_hash},
+        }
+
+        filtered = await router.async_callback_filter_deployments(
+            model=model_group,
+            healthy_deployments=[deployment_a, deployment_b],
+            messages=None,
+            parent_otel_span=None,
+            request_kwargs=request_kwargs,
+        )
+
+        assert filtered == [deployment_b]
+        assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
+    finally:
+        if router is not None:
+            router.discard()
+        litellm.callbacks = original_callbacks
+
+
 @pytest.mark.asyncio
 async def test_arouter_with_tags_and_fallbacks():
     """
@@ -980,6 +1231,67 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     assert "Mock failure" in str(exc_info.value)
                     # Check that fail_calls was incremented
                     assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_deployment_model_overrides_alias():
+    """
+    Regression: when a model alias (e.g. "not-gemini-2.5-flash") maps to a deployment
+    with model="vertex_ai/gemini-2.5-flash", the underlying litellm function must receive
+    the deployment model, not the alias. Before the fix, **kwargs overwrote data["model"].
+    """
+    from unittest.mock import patch
+
+    captured: dict = {}
+
+    async def capture_model(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return {"result": "ok"}
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "not-gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                },
+            }
+        ]
+    )
+
+    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+        # Simulate the alias leaking into kwargs (as happens when
+        # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
+        # calling the helper through async_function_with_fallbacks).
+        kwargs["model"] = "not-gemini-2.5-flash"
+
+    with (
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(
+            router,
+            "_update_kwargs_with_deployment",
+            side_effect=inject_alias_into_kwargs,
+        ),
+        patch.object(router, "async_routing_strategy_pre_call_checks"),
+        patch.object(router, "_get_client", return_value=None),
+    ):
+        mock_dep.return_value = {
+            "model_name": "not-gemini-2.5-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "api_key": "fake-key",
+            },
+        }
+
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="not-gemini-2.5-flash",
+            original_generic_function=capture_model,
+        )
+
+    assert (
+        captured["model"] == "vertex_ai/gemini-2.5-flash"
+    ), f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
 
 
 def test_router_get_model_access_groups_team_only_models():
@@ -2376,6 +2688,74 @@ def test_get_deployment_model_info_base_model_flow():
             # Should return None when no model info is found
             assert result is None
 
+    # Test Case 6: custom_model_info present but litellm_model_name_model_info is None
+    # (model has custom pricing in config but is not in built-in model_prices_and_context_window.json)
+    mock_custom_pricing_only = {
+        "input_cost_per_token": 1.74e-06,
+        "output_cost_per_token": 3.48e-06,
+        "cache_read_input_token_cost": 1.45e-08,
+        "mode": "chat",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"custom-model-id": mock_custom_pricing_only},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            # Model NOT in built-in cost map — raise exception
+            mock_get_model_info.side_effect = Exception("Model not in cost map")
+
+            result = router.get_deployment_model_info(
+                model_id="custom-model-id", model_name="unknown-model"
+            )
+
+            # Should return custom_model_info even when litellm_model_name_model_info is None
+            assert result is not None
+            assert result["input_cost_per_token"] == 1.74e-06
+            assert result["output_cost_per_token"] == 3.48e-06
+            assert result["cache_read_input_token_cost"] == 1.45e-08
+            assert result["mode"] == "chat"
+
+    # Test Case 7: custom_model_info with base_model but litellm_model_name_model_info None
+    mock_custom_with_base = {
+        "base_model": "some-base-model",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+    }
+    mock_base_info = {
+        "key": "some-base-model",
+        "max_tokens": 8192,
+        "mode": "chat",
+        "litellm_provider": "openai",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"custom-with-base": mock_custom_with_base},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+
+            def get_info_side_effect(model):
+                if model == "some-base-model":
+                    return mock_base_info
+                raise Exception("Model not in cost map")
+
+            mock_get_model_info.side_effect = get_info_side_effect
+
+            result = router.get_deployment_model_info(
+                model_id="custom-with-base", model_name="unknown-model"
+            )
+
+            # Should return custom_model_info merged with base model info
+            assert result is not None
+            assert (
+                result["input_cost_per_token"] == 0.01
+            )  # From custom (overrides base)
+            assert result["max_tokens"] == 8192  # From base model
+            assert result["litellm_provider"] == "openai"  # From base model
+
     print("✓ All base model flow test cases passed!")
 
 
@@ -2545,6 +2925,33 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     assert (
         result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/invoke"
     ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"
+
+
+def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+                },
+            }
+        ],
+    )
+    deployment = router.model_list[0]
+    kwargs: dict = {}
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"pass_through_request_timeout": 6},
+    ):
+        router._update_kwargs_with_deployment(
+            deployment=deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+
+    assert kwargs["timeout"] == 6.0
 
 
 @pytest.mark.asyncio
@@ -3341,6 +3748,151 @@ def test_combine_fallback_usage():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_failure():
+    """A mid-stream failure with no successful fallback raises and is logged as
+    a failure, so the router must never dispatch it as a success. Partial-spend
+    recovery for the failure row happens in the streaming handler, not here, so
+    this guards only against reintroducing a success log for a failed stream.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices, Usage
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+        ],
+        set_verbose=True,
+    )
+
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="The Roman Empire began when",
+    )
+
+    def _make_interrupted_model_response():
+        partial_chunk = litellm.ModelResponseStream(
+            id="chatcmpl-partial-1",
+            created=1742056047,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
+        )
+
+        class _RaisingStream:
+            def __init__(self):
+                self.index = 0
+                self.chunks = [partial_chunk]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.index == 0:
+                    self.index += 1
+                    return partial_chunk
+                raise error
+
+        stream = _RaisingStream()
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.model_call_details = {}
+        setattr(stream, "model", "gpt-4")
+        setattr(stream, "custom_llm_provider", "openai")
+        setattr(stream, "logging_obj", logging_obj)
+        return stream, logging_obj
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Terminal path: no successful fallback -> the error propagates and the
+    # router never dispatches a success for the failed stream.
+    model_response, logging_obj = _make_interrupted_model_response()
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=model_response,
+            messages=messages,
+            initial_kwargs=dict(initial_kwargs),
+        )
+        collected = []
+        with pytest.raises(MidStreamFallbackError):
+            async for chunk in result:
+                collected.append(chunk)
+
+    assert len(collected) == 1
+    logging_obj.dispatch_success_handlers.assert_not_called()
+
+    # Fallback success: the fallback stream owns success accounting via
+    # _combine_fallback_usage, so this iterator must not dispatch its own.
+    model_response, logging_obj = _make_interrupted_model_response()
+
+    class _FallbackStream:
+        def __init__(self, items):
+            self.items = items
+            self.index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    fallback_stream = _FallbackStream(
+        [
+            litellm.ModelResponseStream(
+                id="chatcmpl-fallback-1",
+                model="gpt-3.5-turbo",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content=" continued", role="assistant"),
+                    )
+                ],
+            )
+        ]
+    )
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=model_response,
+            messages=messages,
+            initial_kwargs=dict(initial_kwargs),
+        )
+        collected = []
+        async for chunk in result:
+            collected.append(chunk)
+
+    assert len(collected) == 2
+    logging_obj.dispatch_success_handlers.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_team_scoped_model_fallback():
     """
     Test that fallback works correctly for team-scoped models.
@@ -4095,6 +4647,82 @@ def test_get_fully_blocked_model_names_treats_missing_key_as_unblocked():
     assert router.get_fully_blocked_model_names() == set()
 
 
+def _seed_unhealthy_states(router, unhealthy_ids, timestamp=None):
+    import time
+
+    ts = timestamp if timestamp is not None else time.time()
+    router.health_state_cache.set_deployment_health_states(
+        {
+            uid: {"is_healthy": False, "timestamp": ts, "reason": "test_unhealthy"}
+            for uid in unhealthy_ids
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_marks_name_when_all_unhealthy():
+    router = _router_with_two_deployments([False, False])
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"})
+    assert await router.async_get_fully_unhealthy_model_names() == {"gpt-4o"}
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
+    router = _router_with_two_deployments([False, False])
+    _seed_unhealthy_states(router, {"dep-0"})
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_empty_without_health_state():
+    router = _router_with_two_deployments([False, False])
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_ignores_stale_state():
+    import time
+
+    router = _router_with_two_deployments([False, False])
+    stale_ts = time.time() - (router.health_state_cache.staleness_threshold + 10)
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"}, timestamp=stale_ts)
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_includes_team_alias():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {
+                    "id": "dep-0",
+                    "team_id": "team-1",
+                    "team_public_model_name": "team-gpt",
+                },
+            }
+        ]
+    )
+    _seed_unhealthy_states(router, {"dep-0"})
+    assert await router.async_get_fully_unhealthy_model_names() == {
+        "gpt-4o",
+        "team-gpt",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_noop_with_allowed_fails_policy():
+    from litellm.types.router import AllowedFailsPolicy
+
+    router = _router_with_two_deployments([False, False])
+    router.allowed_fails_policy = AllowedFailsPolicy(BadRequestErrorAllowedFails=1)
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"})
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
 @pytest.mark.asyncio
 async def test_async_get_healthy_deployments_skips_blocked_deployment():
     router = _router_with_two_deployments([True, False])
@@ -4186,6 +4814,48 @@ def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
         router.get_available_deployment_for_pass_through(
             model="pt-0", request_kwargs={}
         )
+
+
+def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
+    """
+    Bedrock deployments using IAM/OIDC auth have no api_key; pass-through
+    init must not raise and drop them from routing (#27728).
+    """
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    "aws_role_name": "arn:aws:iam::123456789012:role/my-role",
+                    "aws_session_name": "my-session",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": "bedrock-iam-pt"},
+            }
+        ]
+    )
+    assert [m["model_info"]["id"] for m in router.get_model_list()] == [
+        "bedrock-iam-pt"
+    ]
+
+
+def test_initialize_deployment_for_pass_through_sets_credentials_with_api_key():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
+    )
+
+    passthrough_endpoint_router.credentials.clear()
+    router = _router_with_two_pass_through_deployments([False, False])
+    assert len(router.get_model_list()) == 2
+    assert (
+        passthrough_endpoint_router.get_credentials(
+            custom_llm_provider="openai", region_name=None
+        )
+        == "sk-fake-for-tests"
+    )
 
 
 def test_get_deployment_credentials_returns_none_for_blocked_deployment():

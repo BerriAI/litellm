@@ -93,6 +93,37 @@ class TestApplyToolsetScope:
             await _apply_toolset_scope(auth, "toolset-123")
         assert exc_info.value.status_code == 403
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("user_role", [None, LitellmUserRoles.PROXY_ADMIN.value])
+    async def test_no_mcp_servers_sentinel_denies_toolset_access(self, user_role):
+        """A key scoped to the no-mcp-servers sentinel cannot reach a toolset it
+        would otherwise be granted (even as admin); the opt-out covers the
+        toolset path, which replaces mcp_servers and would drop the sentinel."""
+        from starlette.exceptions import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        op = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test",
+            mcp_servers=["no-mcp-servers"],
+            mcp_toolsets=["toolset-123"],
+        )
+        auth = UserAPIKeyAuth(
+            api_key="sk-test", object_permission=op, user_role=user_role
+        )
+
+        resolve = AsyncMock(return_value={"server-a": ["tool1"]})
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server."
+            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            new=resolve,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _apply_toolset_scope(auth, "toolset-123")
+
+        assert exc_info.value.status_code == 403
+        resolve.assert_not_awaited()
+
 
 class TestFetchMCPToolsetsAccess:
     """Tests for GET /v1/mcp/toolset access control."""

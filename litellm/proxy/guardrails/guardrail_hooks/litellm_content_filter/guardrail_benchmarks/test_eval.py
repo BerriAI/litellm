@@ -59,7 +59,7 @@ def _run(checker, text: str) -> dict:
         checker.check(text)
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
-        if e.status_code == 403:
+        if e.status_code == 400:
             detail: Dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
@@ -542,7 +542,7 @@ class _LlmJudgeChecker:
 
         if "BLOCK" in decision:
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": "Content blocked by LLM judge",
                     "topic": "financial_advice",

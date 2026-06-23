@@ -62,6 +62,22 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
+      const result = getProviderLogoAndName("bedrock_mantle");
+      expect(result.displayName).toBe(Providers.BedrockMantle);
+      expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
+    it("should resolve the BedrockMantle enum key to the Bedrock Mantle logo", () => {
+      // The Add Model dropdown passes the provider_map key ("BedrockMantle"),
+      // not the slug ("bedrock_mantle"). Unlike "Bedrock", the key does not
+      // lowercase-match its slug, so without the enum-key fallback this would
+      // render a blank fallback logo for a Bedrock variant (LIT-3885).
+      const result = getProviderLogoAndName("BedrockMantle");
+      expect(result.displayName).toBe(Providers.BedrockMantle);
+      expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
@@ -94,6 +110,27 @@ describe("provider_info_helpers", () => {
           expect(result.displayName).toBeTruthy();
         }
       });
+    });
+  });
+
+  describe("provider logo asset paths", () => {
+    // Regression: a relative "../ui/assets/logos/" base resolved to
+    // "/ui/ui/assets/logos/..." (404) on the public model hub at
+    // /ui/model_hub_table/, which sits a level below the /ui/ SPA. Root-absolute
+    // paths resolve correctly at any route depth.
+    it("should expose every provider logo as a root-absolute /ui path", () => {
+      const logos = Object.values(providerLogoMap);
+      expect(logos.length).toBeGreaterThan(0);
+      logos.forEach((logo) => {
+        expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
+        expect(logo).not.toContain("../");
+      });
+    });
+
+    it("should resolve a provider logo to a root-absolute path via getProviderLogoAndName", () => {
+      const { logo } = getProviderLogoAndName("openai");
+      expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
+      expect(logo).not.toContain("../");
     });
   });
 
@@ -283,6 +320,23 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("bedrock-converse-model");
       expect(result).toContain("bedrock-mantle-model");
       expect(result).not.toContain("openai-model");
+    });
+
+    it("should return only bedrock_mantle models when called with 'BedrockMantle' provider key", () => {
+      // Selecting "Amazon Bedrock Mantle" in the dropdown must populate the
+      // model field with the Mantle models and exclude the regular Bedrock
+      // ones, so onboarding a gpt-oss model is a one-click flow (LIT-3885).
+      const modelMap = {
+        "bedrock_mantle/openai.gpt-oss-120b": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.5": { litellm_provider: "bedrock_mantle" },
+        "bedrock-base": { litellm_provider: "bedrock" },
+        "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
+      };
+      const result = getProviderModels("BedrockMantle" as Providers, modelMap);
+      expect(result).toContain("bedrock_mantle/openai.gpt-oss-120b");
+      expect(result).toContain("bedrock_mantle/openai.gpt-5.5");
+      expect(result).not.toContain("bedrock-base");
+      expect(result).not.toContain("bedrock-converse-model");
     });
 
     it("should include fireworks_ai-embedding-models when called with 'FireworksAI' provider key", () => {

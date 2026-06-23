@@ -135,9 +135,11 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
-    def test_get_reload_options_no_config(self):
+    def test_get_reload_options_no_config_still_watches_env(self):
         opts = ProxyInitializationHelpers._get_reload_options(None)
-        assert opts == {"reload": True}
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [os.path.abspath(os.getcwd())]
+        assert opts["reload_includes"] == ["*.py", ".env"]
 
     def test_get_reload_options_with_config_in_cwd(self, tmp_path, monkeypatch):
         config_file = tmp_path / "config.yaml"
@@ -148,7 +150,7 @@ class TestProxyInitializationHelpers:
 
         assert opts["reload"] is True
         assert opts["reload_dirs"] == [str(tmp_path)]
-        assert opts["reload_includes"] == ["*.py", "config.yaml"]
+        assert opts["reload_includes"] == ["*.py", ".env", "config.yaml"]
 
     def test_get_reload_options_with_config_outside_cwd(self, tmp_path, monkeypatch):
         cwd_dir = tmp_path / "work"
@@ -163,9 +165,9 @@ class TestProxyInitializationHelpers:
 
         assert opts["reload"] is True
         assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
-        assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
+        assert opts["reload_includes"] == ["*.py", ".env", "proxy.yaml"]
 
-    def test_patch_statreload_for_config_yields_yaml(self, tmp_path):
+    def test_patch_statreload_extra_paths_yields_config_and_py(self, tmp_path):
         from pathlib import Path
 
         from uvicorn.supervisors.statreload import StatReload
@@ -178,8 +180,8 @@ class TestProxyInitializationHelpers:
         py_file = tmp_path / "module.py"
         py_file.write_text("x = 1\n")
 
-        applied = ProxyInitializationHelpers._patch_statreload_for_config(
-            str(config_file)
+        applied = ProxyInitializationHelpers._patch_statreload_extra_paths(
+            [str(config_file)]
         )
         assert applied is True
 
@@ -191,7 +193,42 @@ class TestProxyInitializationHelpers:
         assert config_file.resolve() in yielded_paths
         assert py_file.resolve() in yielded_paths
 
-    def test_patch_statreload_for_config_is_idempotent(self, tmp_path):
+    def test_patch_statreload_extra_paths_yields_env(self, tmp_path):
+        from pathlib import Path
+
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+
+        applied = ProxyInitializationHelpers._patch_statreload_extra_paths(
+            [str(env_file)]
+        )
+        assert applied is True
+
+        fake_self = types.SimpleNamespace(
+            config=types.SimpleNamespace(reload_dirs=[tmp_path])
+        )
+        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
+
+        assert env_file.resolve() in yielded_paths
+
+    def test_patch_statreload_extra_paths_skips_falsy(self, tmp_path):
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+
+        assert ProxyInitializationHelpers._patch_statreload_extra_paths([]) is False
+        assert (
+            ProxyInitializationHelpers._patch_statreload_extra_paths([None, ""])
+            is False
+        )
+
+    def test_patch_statreload_extra_paths_is_idempotent(self, tmp_path):
         from pathlib import Path
 
         from uvicorn.supervisors.statreload import StatReload
@@ -205,7 +242,7 @@ class TestProxyInitializationHelpers:
         py_file.write_text("x = 1\n")
 
         for _ in range(3):
-            ProxyInitializationHelpers._patch_statreload_for_config(str(config_file))
+            ProxyInitializationHelpers._patch_statreload_extra_paths([str(config_file)])
 
         fake_self = types.SimpleNamespace(
             config=types.SimpleNamespace(reload_dirs=[tmp_path])
@@ -215,6 +252,57 @@ class TestProxyInitializationHelpers:
         yielded_paths = {Path(p).resolve() for p in yielded}
         assert config_file.resolve() in yielded_paths
         assert py_file.resolve() in yielded_paths
+
+    def test_configure_dev_reload_watches_env_and_sets_override_flag(
+        self, tmp_path, monkeypatch
+    ):
+        from pathlib import Path
+
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+        monkeypatch.delenv("LITELLM_DEV_ENV_HOT_RELOAD", raising=False)
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        monkeypatch.chdir(tmp_path)
+
+        uvicorn_args: dict = {}
+        with patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning:
+            ProxyInitializationHelpers._configure_dev_reload(
+                uvicorn_args, str(config_file)
+            )
+
+        assert os.environ["LITELLM_DEV_ENV_HOT_RELOAD"] == "True"
+        assert uvicorn_args["reload"] is True
+        assert ".env" in uvicorn_args["reload_includes"]
+
+        mock_warning.assert_called_once()
+        warning_text = mock_warning.call_args.args[0].lower()
+        assert "override" in warning_text
+        assert ".env" in warning_text
+
+        fake_self = types.SimpleNamespace(
+            config=types.SimpleNamespace(reload_dirs=[tmp_path])
+        )
+        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
+        assert env_file.resolve() in yielded_paths
+        assert config_file.resolve() in yielded_paths
+
+    def test_dev_env_hot_reload_enabled_reads_flag(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("LITELLM_DEV_ENV_HOT_RELOAD", "True")
+        assert litellm._dev_env_hot_reload_enabled() is True
+
+        monkeypatch.setenv("LITELLM_DEV_ENV_HOT_RELOAD", "false")
+        assert litellm._dev_env_hot_reload_enabled() is False
+
+        monkeypatch.delenv("LITELLM_DEV_ENV_HOT_RELOAD", raising=False)
+        assert litellm._dev_env_hot_reload_enabled() is False
 
     @patch("asyncio.run")
     @patch("builtins.print")
@@ -707,6 +795,127 @@ class TestProxyInitializationHelpers:
             assert appended_params["pgbouncer"] == "true"
             assert appended_params["statement_cache_size"] == 0
 
+    def test_build_db_connection_url_params_disable_prepared_statements(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            disable_prepared_statements=True,
+        )
+        assert params["pgbouncer"] == "true"
+
+    def test_build_db_connection_url_params_no_pgbouncer_by_default(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+        )
+        assert "pgbouncer" not in params
+
+    def test_build_db_connection_url_params_extra_pgbouncer_overrides_flag(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            disable_prepared_statements=True,
+            extra_params={"pgbouncer": "false"},
+        )
+        assert params["pgbouncer"] == "false"
+
+    @pytest.mark.parametrize(
+        "config_value, expect_pgbouncer",
+        [
+            (True, True),
+            (False, False),
+            ("true", True),
+            ("false", False),
+            ("not-a-bool", False),
+        ],
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_disable_prepared_statements_forwarded_to_url(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+        config_value,
+        expect_pgbouncer,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={
+                "general_settings": {
+                    "database_url": "postgresql://test:test@localhost:5432/test",
+                    "database_disable_prepared_statements": config_value,
+                }
+            }
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: str(url),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_append_query_params.assert_called()
+            appended_params = mock_append_query_params.call_args.args[1]
+            if expect_pgbouncer:
+                assert appended_params["pgbouncer"] == "true"
+            else:
+                assert "pgbouncer" not in appended_params
+
     @patch("uvicorn.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
@@ -968,6 +1177,231 @@ class TestProxyInitializationHelpers:
             # Check that uvicorn.run was called with limit_max_requests parameter
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["limit_max_requests"] == 123
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_max_requests_before_restart_jitter_flag(
+        self, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
+        """--max_requests_before_restart_jitter maps to uvicorn limit_max_requests_jitter"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        class _NewUvicornConfig:
+            def __init__(self, limit_max_requests=None, limit_max_requests_jitter=0):
+                pass
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch("uvicorn.Config", _NewUvicornConfig),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                [
+                    "--local",
+                    "--max_requests_before_restart",
+                    "1000",
+                    "--max_requests_before_restart_jitter",
+                    "50",
+                ],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_called_once()
+            call_args = mock_uvicorn_run.call_args
+            assert call_args[1]["limit_max_requests"] == 1000
+            assert call_args[1]["limit_max_requests_jitter"] == 50
+
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_gunicorn_server")
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_run_gunicorn_passes_max_requests_jitter(
+        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_run_gunicorn
+    ):
+        """--run_gunicorn threads jitter into _run_gunicorn_server, not uvicorn.run"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                [
+                    "--local",
+                    "--run_gunicorn",
+                    "--max_requests_before_restart",
+                    "900",
+                    "--max_requests_before_restart_jitter",
+                    "75",
+                ],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_not_called()
+            mock_run_gunicorn.assert_called_once()
+            g_kwargs = mock_run_gunicorn.call_args[1]
+            assert g_kwargs["max_requests_before_restart"] == 900
+            assert g_kwargs["max_requests_before_restart_jitter"] == 75
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_options_include_max_requests_jitter(self):
+        """_run_gunicorn_server puts max_requests_jitter into the gunicorn options"""
+        pytest.importorskip("gunicorn")
+
+        captured: dict = {}
+
+        def capture_run(self):
+            captured["options"] = dict(self.options)
+
+        with patch("gunicorn.app.base.BaseApplication.run", capture_run):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4010,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=1000,
+                max_requests_before_restart_jitter=50,
+            )
+
+        assert captured["options"]["max_requests"] == 1000
+        assert captured["options"]["max_requests_jitter"] == 50
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_jitter_without_base_warns(self):
+        """gunicorn path warns when jitter is set without --max_requests_before_restart"""
+        pytest.importorskip("gunicorn")
+
+        captured: dict = {}
+
+        def capture_run(self):
+            captured["options"] = dict(self.options)
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch("builtins.print") as mock_print,
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4011,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=None,
+                max_requests_before_restart_jitter=50,
+            )
+
+        assert "max_requests" not in captured["options"]
+        assert "max_requests_jitter" not in captured["options"]
+        assert any("has no effect" in str(c) for c in mock_print.call_args_list)
+
+    def test_apply_uvicorn_jitter_sets_arg_when_supported(self):
+        class _NewUvicornConfig:
+            def __init__(self, limit_max_requests=None, limit_max_requests_jitter=0):
+                pass
+
+        uvicorn_args: dict = {}
+        with patch("uvicorn.Config", _NewUvicornConfig):
+            ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                uvicorn_args=uvicorn_args,
+                max_requests_before_restart=1000,
+                jitter=50,
+            )
+        assert uvicorn_args["limit_max_requests_jitter"] == 50
+
+    def test_apply_uvicorn_jitter_skipped_on_old_uvicorn(self):
+        class _FakeUvicornConfig:
+            def __init__(self, limit_max_requests=None):
+                pass
+
+        uvicorn_args: dict = {}
+        with (
+            patch("uvicorn.Config", _FakeUvicornConfig),
+            patch("builtins.print") as mock_print,
+        ):
+            ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                uvicorn_args=uvicorn_args,
+                max_requests_before_restart=1000,
+                jitter=50,
+            )
+
+        assert "limit_max_requests_jitter" not in uvicorn_args
+        assert any("0.41.0" in str(c) for c in mock_print.call_args_list)
+
+    def test_apply_uvicorn_jitter_without_base_warns(self):
+        uvicorn_args: dict = {}
+        with patch("builtins.print") as mock_print:
+            ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                uvicorn_args=uvicorn_args,
+                max_requests_before_restart=None,
+                jitter=50,
+            )
+
+        assert "limit_max_requests_jitter" not in uvicorn_args
+        assert any("has no effect" in str(c) for c in mock_print.call_args_list)
 
     @patch.dict(os.environ, {}, clear=True)
     def test_construct_database_url_from_env_vars(self):
@@ -1273,6 +1707,57 @@ class TestRunServerDbSetup:
             mock_setup_database.assert_called_once_with(
                 use_migrate=True, use_v2_resolver=False
             )
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_startup_exits_on_non_postgres_database_url(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """A sqlite DATABASE_URL must exit immediately, before any prisma call,
+        instead of stalling on a migration against the postgresql-only schema."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "sqlite:///data/litellm.db"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                run_server.main(
+                    ["--local", "--skip_server_startup"], standalone_mode=False
+                )
+            assert exc_info.value.code == 1
+            mock_setup_database.assert_not_called()
 
 
 # --- Module-level helpers for worker startup hook tests ---

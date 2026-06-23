@@ -7,7 +7,6 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -145,25 +144,16 @@ class PassThroughStreamingHandler:
                 end_time=end_time,
                 model=model,
             )
-            await litellm_logging_obj.async_success_handler(
+            # Always reached from an async context (anthropic_messages,
+            # google_genai, and proxy pass-through stream tasks). prefer_async_handlers
+            # keeps async-only loggers running even when call_type isn't pass_through
+            # and litellm_params lacks an async flag (e.g. aanthropic_messages).
+            await litellm_logging_obj.dispatch_success_handlers(
                 result=standard_logging_response_object,
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=False,
-                **kwargs,
-            )
-            if (
-                litellm_logging_obj._should_run_sync_callbacks_for_async_calls()
-                is False
-            ):
-                return
-
-            executor.submit(
-                litellm_logging_obj.success_handler,
-                result=standard_logging_response_object,
-                end_time=end_time,
-                cache_hit=False,
-                start_time=start_time,
+                prefer_async_handlers=True,
                 **kwargs,
             )
         except Exception as e:
@@ -295,8 +285,10 @@ class PassThroughStreamingHandler:
         Returns:
             List of string lines, with each line being a complete data: {} chunk
         """
-        # Combine all bytes and decode to string
-        combined_str = b"".join(raw_bytes).decode("utf-8")
+        # errors="replace" so a stream cut mid-multibyte-sequence (client disconnect)
+        # still decodes and logs the usage events already received, instead of raising
+        # and dropping the whole request from SpendLogs
+        combined_str = b"".join(raw_bytes).decode("utf-8", errors="replace")
 
         # Split by newlines and filter out empty lines
         lines = [line.strip() for line in combined_str.split("\n") if line.strip()]

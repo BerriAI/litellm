@@ -10,7 +10,6 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
-    List,
     Literal,
     Optional,
     Tuple,
@@ -210,32 +209,11 @@ class BaseAWSLLM:
         """
         Return a boto3.Credentials object
         """
-        ## CHECK IS  'os.environ/' passed in
-        params_to_check: List[Optional[str]] = [
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region_name,
-            aws_session_name,
-            aws_profile_name,
-            aws_role_name,
-            aws_web_identity_token,
-            aws_sts_endpoint,
-            aws_external_id,
-        ]
-
-        # Iterate over parameters and update if needed
-        for i, param in enumerate(params_to_check):
-            if param and param.startswith("os.environ/"):
-                _v = get_secret(param)
-                if _v is not None and isinstance(_v, str):
-                    params_to_check[i] = _v
-            elif param is None:  # check if uppercase value in env
-                key = self.aws_authentication_params[i]
-                if key.upper() in os.environ:
-                    params_to_check[i] = os.getenv(key.upper())
-
-        # Assign updated values back to parameters
+        # Only config-sourced credentials are expanded against the environment.
+        # os.environ/<VAR> references in the model config are resolved at load time,
+        # so any reference still present at this point is caller-supplied input and is
+        # left as-is rather than expanded into a process environment variable. Each
+        # unset param falls back to its matching fixed AWS_* ambient env var.
         (
             aws_access_key_id,
             aws_secret_access_key,
@@ -247,7 +225,21 @@ class BaseAWSLLM:
             aws_web_identity_token,
             aws_sts_endpoint,
             aws_external_id,
-        ) = params_to_check
+        ) = tuple(
+            value if value is not None else os.getenv(env_var)
+            for value, env_var in (
+                (aws_access_key_id, "AWS_ACCESS_KEY_ID"),
+                (aws_secret_access_key, "AWS_SECRET_ACCESS_KEY"),
+                (aws_session_token, "AWS_SESSION_TOKEN"),
+                (aws_region_name, "AWS_REGION_NAME"),
+                (aws_session_name, "AWS_SESSION_NAME"),
+                (aws_profile_name, "AWS_PROFILE_NAME"),
+                (aws_role_name, "AWS_ROLE_NAME"),
+                (aws_web_identity_token, "AWS_WEB_IDENTITY_TOKEN"),
+                (aws_sts_endpoint, "AWS_STS_ENDPOINT"),
+                (aws_external_id, "AWS_EXTERNAL_ID"),
+            )
+        )
 
         verbose_logger.debug(
             "in get credentials\n"
@@ -845,6 +837,20 @@ class BaseAWSLLM:
             f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
         )
 
+        # get_secret() expands environment-variable references (an os.environ/<VAR>
+        # prefix, or a bare name matching an environment variable). Config-sourced
+        # references are expanded at load time, so such a reference reaching here is
+        # caller-supplied input; reject it rather than expanding a process-environment
+        # value for use as the token.
+        if (
+            aws_web_identity_token.startswith("os.environ/")
+            or aws_web_identity_token in os.environ
+        ):
+            raise AwsAuthError(
+                message="Invalid web identity token reference.",
+                status_code=400,
+            )
+
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -861,14 +867,58 @@ class BaseAWSLLM:
         with tracer.trace("boto3.client(sts)"):
             sts_client = boto3.client("sts", **sts_client_kwargs)
 
+        # The session policy is an IAM PERMISSION CEILING — effective
+        # permissions are the intersection of the role's identity policies
+        # and this policy. Any action not listed here is silently denied
+        # even when the IAM role grants it. So every Bedrock route we
+        # support needs a matching action statement, or it 403s on OIDC
+        # auth only (static creds + IRSA take other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+        bedrock_session_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "BedrockLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock:InvokeModel",
+                        "bedrock:InvokeModelWithResponseStream",
+                        "bedrock:ApplyGuardrail",
+                        "bedrock:GetGuardrail",
+                        "bedrock:ListGuardrails",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+                # Claude Platform on AWS (added by #27678 for the
+                # ``bedrock/claude_platform/<model>`` route) lives under
+                # a separate IAM action namespace; without these entries
+                # the OIDC path 403s on every claude_platform request
+                # even with a fully permissive identity policy (#30200).
+                {
+                    "Sid": "ClaudePlatformLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "aws-external-anthropic:CreateInference",
+                        "aws-external-anthropic:CreateBatchInference",
+                        "aws-external-anthropic:CancelBatchInference",
+                        "aws-external-anthropic:DeleteBatchInference",
+                        "aws-external-anthropic:CountTokens",
+                        "aws-external-anthropic:Get*",
+                        "aws-external-anthropic:List*",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+            ],
+        }
         assume_role_params = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": '{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream","bedrock:ApplyGuardrail","bedrock:GetGuardrail","bedrock:ListGuardrails"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}',
+            "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
         }
 
         # Add ExternalId parameter if provided
@@ -1534,10 +1584,9 @@ class BaseAWSLLM:
         )
 
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        if headers is not None:
+        headers = headers or {}
+        if not any(header_name.lower() == "content-type" for header_name in headers):
             headers = {"Content-Type": "application/json", **headers}
-        else:
-            headers = {"Content-Type": "application/json"}
 
         aws_signature_headers = self._filter_headers_for_aws_signature(headers)
         request = AWSRequest(

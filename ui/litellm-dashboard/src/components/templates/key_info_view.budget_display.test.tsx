@@ -26,9 +26,7 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
 vi.mock("../networking", () => ({
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
-  getPolicyInfoWithGuardrails: vi
-    .fn()
-    .mockResolvedValue({ resolved_guardrails: [] }),
+  getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),
 }));
 
 const MOCK_KEY_DATA = {

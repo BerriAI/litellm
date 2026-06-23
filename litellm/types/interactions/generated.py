@@ -203,6 +203,8 @@ class Status1(Enum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    incomplete = "incomplete"
+    budget_exceeded = "budget_exceeded"
 
 
 class InteractionStatusUpdate(BaseModel):
@@ -386,13 +388,13 @@ class ResponseModality(Enum):
 
 
 class Status3(Enum):
-    UNSPECIFIED = "UNSPECIFIED"
-    IN_PROGRESS = "IN_PROGRESS"
-    REQUIRES_ACTION = "REQUIRES_ACTION"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-    INCOMPLETE = "INCOMPLETE"
+    IN_PROGRESS = "in_progress"
+    REQUIRES_ACTION = "requires_action"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INCOMPLETE = "incomplete"
+    BUDGET_EXCEEDED = "budget_exceeded"
 
 
 class ModelOption(RootModel[str]):
@@ -952,9 +954,6 @@ class Interaction(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1029,9 +1028,6 @@ class CreateModelInteractionParams(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1098,9 +1094,6 @@ class CreateAgentInteractionParams(BaseModel):
     updated: Optional[AwareDatetime] = Field(
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
-    )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
     )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
@@ -1321,7 +1314,6 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
-    role: Optional[str] = None
     # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
     outputs: Optional[List[Dict[str, Any]]] = None
     # New schema field (Api-Revision: 2026-05-20).
@@ -1354,7 +1346,6 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
-    role: Optional[str] = None
     # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
     outputs: Optional[List[Dict[str, Any]]] = None
     # New schema field (Api-Revision: 2026-05-20).

@@ -170,6 +170,44 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     }
 
 
+def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_only_content_block():
+    """OpenAI-compatible reasoning backends (vLLM/SGLang) emit ``reasoning_content``
+    without ``thinking_blocks``. The content-block classifier must still open a
+    ``thinking`` block so the matching ``thinking_delta`` stream is not emitted
+    inside a text block (which silently drops chain-of-thought for /v1/messages
+    streaming clients)."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="Let me think",
+                thinking_blocks=None,
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking"
+    assert content_block_start == {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "",
+    }
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block():
     choices = [
         StreamingChoices(
@@ -1257,6 +1295,12 @@ CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = (
     "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
 )
 CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
+# Bedrock Application Inference Profile ARN: the string contains neither
+# "anthropic" nor "claude", so the model can only be recognized via its ARN shape
+CACHE_CONTROL_BEDROCK_ARN_MODEL = (
+    "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:"
+    "application-inference-profile/abcdef123456"
+)
 
 
 def test_should_add_cache_control_for_anthropic_model():
@@ -1371,6 +1415,68 @@ def test_cache_control_not_preserved_for_non_claude_model():
 
     assert len(result) == 1
     assert "cache_control" not in result[0]["content"][0]
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        (CACHE_CONTROL_BEDROCK_ARN_MODEL, True),
+        (
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123:application-inference-profile/x",
+            True,
+        ),
+        ("bedrock/amazon.titan-text-express-v1", False),
+        ("arn:aws:sagemaker:us-east-1:123:endpoint/my-endpoint", False),
+        ("arn:aws:sagemaker:us-east-1:123:endpoint/my-bedrock-transcriber", False),
+        (CACHE_CONTROL_NON_ANTHROPIC_MODEL, False),
+    ],
+)
+def test_is_bedrock_arn_model(model, expected):
+    """is_bedrock_arn_model requires an ARN with bedrock in the service field, not just anywhere."""
+    assert LiteLLMAnthropicMessagesAdapter.is_bedrock_arn_model(model) is expected
+
+
+def test_cache_control_preserved_for_bedrock_arn_inference_profile():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/26625
+
+    Bedrock Application Inference Profile ARNs hide the underlying Claude model
+    name, so cache_control must still be preserved through the /v1/messages adapter.
+    """
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_ARN_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_fix_does_not_broaden_claude_detection():
+    """
+    The cache_control fix is scoped to _add_cache_control_if_applicable; it must not
+    make is_anthropic_claude_model treat ARN profiles as Claude, which would route
+    thinking params through unmodified and break non-Claude Bedrock profiles.
+    """
+    assert (
+        LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(
+            CACHE_CONTROL_BEDROCK_ARN_MODEL
+        )
+        is False
+    )
 
 
 def test_cache_control_preserved_in_image_content_for_claude():
@@ -2472,3 +2578,192 @@ def test_translate_anthropic_tool_choice_none():
 
     result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
     assert result == "none"
+
+
+# ---------------------------------------------------------------------------
+# PolyfillResult integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_simple_openai_response(
+    text: str = "Hello", prompt_tokens: int = 10, completion_tokens: int = 5
+) -> ModelResponse:
+    return ModelResponse(
+        id="resp_polyfill_test",
+        model="gpt-4o",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content=text),
+            )
+        ],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+
+
+def test_translate_openai_response_to_anthropic_with_polyfill_compaction_block():
+    """compaction_block from PolyfillResult must be prepended to content at index 0."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+        PolyfillResult,
+    )
+
+    compaction_block = {"type": "compaction", "content": "Summary of prior turns."}
+    polyfill = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=compaction_block,
+        iterations_usage=None,
+    )
+    response = _make_simple_openai_response(text="Hello after compaction.")
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, polyfill_result=polyfill
+    )
+
+    content = result.get("content")
+    assert content is not None
+    assert content[0]["type"] == "compaction"
+    assert content[0]["content"] == "Summary of prior turns."
+    assert content[1]["type"] == "text"
+    assert content[1]["text"] == "Hello after compaction."
+
+    # applied_edits must surface on context_management
+    cm = result.get("context_management")
+    assert cm is not None
+    assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_openai_response_to_anthropic_with_polyfill_iterations_usage():
+    """iterations_usage from PolyfillResult must produce usage['iterations'] with a message entry."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+        PolyfillResult,
+    )
+
+    polyfill = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=None,
+        iterations_usage=[
+            {"type": "compaction", "input_tokens": 200, "output_tokens": 50},
+        ],
+    )
+    response = _make_simple_openai_response(prompt_tokens=100, completion_tokens=30)
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, polyfill_result=polyfill
+    )
+
+    usage = result.get("usage")
+    assert usage is not None
+    iterations = usage.get("iterations")
+    assert iterations is not None
+    assert len(iterations) == 2
+    assert iterations[0] == {
+        "type": "compaction",
+        "input_tokens": 200,
+        "output_tokens": 50,
+    }
+    assert iterations[1]["type"] == "message"
+    assert iterations[1]["input_tokens"] == 100
+    assert iterations[1]["output_tokens"] == 30
+
+    # Top-level tokens must still reflect the message iteration
+    assert usage["input_tokens"] == 100
+    assert usage["output_tokens"] == 30
+
+
+def test_translate_openai_response_to_anthropic_no_polyfill_no_change():
+    """Without a PolyfillResult the response must be unchanged (no compaction, no iterations)."""
+    response = _make_simple_openai_response()
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(response=response)
+
+    content = result.get("content")
+    assert content is not None
+    assert content[0]["type"] == "text"
+
+    usage = result.get("usage")
+    assert usage is not None
+    assert "iterations" not in usage
+
+
+def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_and_iterations():
+    """Full summary path: compaction_block and iterations_usage both present simultaneously."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+        PolyfillResult,
+    )
+
+    compaction_block = {
+        "type": "compaction",
+        "content": "Summary of a long conversation.",
+    }
+    polyfill = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=compaction_block,
+        iterations_usage=[
+            {"type": "compaction", "input_tokens": 300, "output_tokens": 75},
+        ],
+    )
+    response = _make_simple_openai_response(
+        text="After compaction.", prompt_tokens=120, completion_tokens=40
+    )
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, polyfill_result=polyfill
+    )
+
+    # compaction block must come first
+    content = result.get("content")
+    assert content is not None
+    assert content[0]["type"] == "compaction"
+    assert content[0]["content"] == "Summary of a long conversation."
+    assert content[1]["type"] == "text"
+    assert content[1]["text"] == "After compaction."
+
+    # iterations: compaction entry + message entry
+    usage = result.get("usage")
+    assert usage is not None
+    iterations = usage.get("iterations")
+    assert iterations is not None
+    assert len(iterations) == 2
+    assert iterations[0] == {
+        "type": "compaction",
+        "input_tokens": 300,
+        "output_tokens": 75,
+    }
+    assert iterations[1]["type"] == "message"
+    assert iterations[1]["input_tokens"] == 120
+    assert iterations[1]["output_tokens"] == 40
+
+    # top-level tokens match the message iteration
+    assert usage["input_tokens"] == 120
+    assert usage["output_tokens"] == 40
+
+    # context_management applied_edits must surface
+    cm = result.get("context_management")
+    assert cm is not None
+    assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
+    """Regression for #30557: the Anthropic tool `type` ("custom") must not be
+    merged into the OpenAI function `parameters`, overwriting parameters.type."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    params = new_tools[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert new_tools[0]["type"] == "function"

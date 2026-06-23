@@ -7,9 +7,21 @@ Common utilities used across bedrock chat/embedding/image generation
 import functools
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    TypedDict,
+    Union,
+)
 
 if TYPE_CHECKING:
+    from botocore.model import Shape
+
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
@@ -34,6 +46,15 @@ class BedrockError(BaseLLMException):
 # Lazy import cache to avoid circular imports and performance impact
 _get_model_info = None
 
+BedrockOutputConfigEffort = Literal["low", "medium", "high", "max", "xhigh"]
+_BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER: Dict[BedrockOutputConfigEffort, int] = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "max": 3,
+    "xhigh": 4,
+}
+
 
 def get_cached_model_info():
     """
@@ -49,6 +70,79 @@ def get_cached_model_info():
 
         _get_model_info = get_model_info
     return _get_model_info
+
+
+@functools.lru_cache(maxsize=1)
+def _get_local_model_cost_map() -> Dict:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return GetModelCostMap.load_local_model_cost_map()
+
+
+def pop_bedrock_invoke_output_config_format(request_body: Dict) -> Optional[Dict]:
+    """
+    Remove and return Anthropic's nested ``output_config.format`` field.
+
+    Bedrock Invoke paths convert the schema to inline message text. Any remaining
+    ``output_config`` keys, such as ``effort``, are left in place.
+    """
+    output_config = request_body.get("output_config")
+    if not isinstance(output_config, dict):
+        return None
+
+    output_format = output_config.pop("format", None)
+    if not output_config:
+        request_body.pop("output_config", None)
+
+    if isinstance(output_format, dict):
+        return output_format
+    return None
+
+
+def convert_bedrock_invoke_output_format_to_inline_schema(
+    output_format: Dict,
+    request_body: Dict,
+) -> None:
+    """
+    Embed an Anthropic structured-output schema into the last user message.
+
+    Bedrock Invoke does not support ``output_format`` directly, so the schema is
+    appended to the final user message for prompt-engineered structured output.
+    The caller's ``messages`` list, message dict, and content list are not
+    mutated; a fresh ``messages`` list with a copied final user message is
+    written back to ``request_body``.
+    """
+    schema = output_format.get("schema")
+    if not schema:
+        return
+
+    messages = request_body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+
+    last_user_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        message = messages[i]
+        if isinstance(message, dict) and message.get("role") == "user":
+            last_user_idx = i
+            break
+
+    if last_user_idx is None:
+        return
+
+    original = messages[last_user_idx]
+    content = original.get("content", [])
+    schema_block = {"type": "text", "text": json.dumps(schema)}
+    if isinstance(content, str):
+        new_content = [{"type": "text", "text": content}, schema_block]
+    elif isinstance(content, list):
+        new_content = [*content, schema_block]
+    else:
+        return
+
+    new_messages = list(messages)
+    new_messages[last_user_idx] = {**original, "content": new_content}
+    request_body["messages"] = new_messages
 
 
 def remove_custom_field_from_tools(request_body: dict) -> None:
@@ -603,6 +697,62 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
 
+def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
+    """
+    Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
+
+    Bedrock's Claude Opus request validator can accept a narrower effort
+    vocabulary than Anthropic's compatibility surface. The Bedrock ceiling is
+    read from ``model_prices_and_context_window.json`` via
+    ``bedrock_output_config_effort_ceiling``.
+
+    Mutates ``output_config`` in place so callers can accept Claude Code's
+    ``xhigh`` input without forwarding a provider-invalid value.
+    """
+    if not isinstance(output_config, dict):
+        return
+
+    effort = output_config.get("effort")
+    if effort not in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
+        return
+
+    ceiling = _get_bedrock_output_config_effort_ceiling(model)
+    if ceiling is None:
+        return
+
+    if (
+        _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort]
+        > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]
+    ):
+        output_config["effort"] = ceiling
+
+
+def _get_bedrock_output_config_effort_ceiling(
+    model: str,
+) -> Optional[BedrockOutputConfigEffort]:
+    try:
+        model_info = get_cached_model_info()(
+            model=model,
+            custom_llm_provider="bedrock",
+        )
+    except Exception:
+        return None
+
+    ceiling = model_info.get("bedrock_output_config_effort_ceiling")
+    if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
+        return ceiling  # type: ignore[return-value]
+
+    model_cost_key = model_info.get("key")
+    if not isinstance(model_cost_key, str):
+        return None
+
+    local_model_info = _get_local_model_cost_map().get(model_cost_key, {})
+    ceiling = local_model_info.get("bedrock_output_config_effort_ceiling")
+    if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
+        return ceiling  # type: ignore[return-value]
+    return None
+
+
 # Import after standalone functions to avoid circular imports
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 
@@ -994,6 +1144,39 @@ def get_bedrock_response_stream_shape():
     return _load_bedrock_response_stream_shape()
 
 
+class BedrockEventStreamResponseDict(TypedDict):
+    status_code: int
+    headers: Mapping[str, str]
+    body: bytes
+
+
+def build_bedrock_stream_error(
+    response_dict: BedrockEventStreamResponseDict,
+    response_stream_shape: Shape | None,
+) -> BedrockError:
+    """Build a BedrockError for a non-200 event-stream error event.
+
+    botocore hard-codes HTTP 400 on every mid-stream error event, so the modeled
+    ResponseStream member's httpStatusCode is the real status. Resolve it from the
+    shape and fall back to the raw status when the type is not modeled.
+    """
+    exception_type = response_dict["headers"].get(":exception-type")
+    decoded_body = response_dict["body"].decode()
+    message = f"{exception_type} {decoded_body}" if exception_type else decoded_body
+
+    status_code = response_dict["status_code"]
+    if exception_type is not None and response_stream_shape is not None:
+        member = response_stream_shape.members.get(exception_type)
+        if member is not None:
+            modeled_status = (
+                (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            )
+            if modeled_status is not None:
+                status_code = int(modeled_status)
+
+    return BedrockError(status_code=status_code, message=message)
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
@@ -1018,23 +1201,7 @@ class BedrockEventStreamDecoderBase:
         parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
-            decoded_body = response_dict["body"].decode()
-            if isinstance(decoded_body, dict):
-                error_message = decoded_body.get("message")
-            elif isinstance(decoded_body, str):
-                error_message = decoded_body
-            else:
-                error_message = ""
-            exception_status = response_dict["headers"].get(":exception-type")
-            error_message = exception_status + " " + error_message
-            raise BedrockError(
-                status_code=response_dict["status_code"],
-                message=(
-                    json.dumps(error_message)
-                    if isinstance(error_message, dict)
-                    else error_message
-                ),
-            )
+            raise build_bedrock_stream_error(response_dict, response_stream_shape)
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
