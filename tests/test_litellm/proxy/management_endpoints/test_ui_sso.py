@@ -770,6 +770,131 @@ def test_generic_response_convertor_normalizes_email():
 
 
 @pytest.mark.asyncio
+async def test_insert_sso_user_blocks_when_at_user_limit():
+    """
+    Non-premium: insert_sso_user raises ProxyException when the DB already has 5 users.
+    """
+    from litellm.proxy._types import ProxyException, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=5)
+
+    mock_openid = CustomOpenID(
+        id="new-user-1",
+        email="new@example.com",
+        display_name="New User",
+        provider="google",
+        team_ids=[],
+    )
+    user_defined_values: SSOUserDefinedValues = {
+        "user_id": "new-user-1",
+        "user_email": "new@example.com",
+        "user_role": None,
+        "max_budget": None,
+        "budget_duration": None,
+        "models": [],
+    }
+
+    with patch("litellm.proxy.proxy_server.premium_user", False):
+        with pytest.raises(ProxyException) as exc_info:
+            await insert_sso_user(
+                result_openid=mock_openid,
+                user_defined_values=user_defined_values,
+                prisma_client=mock_prisma,
+            )
+
+    assert str(exc_info.value.code) == "403"
+
+
+@pytest.mark.asyncio
+async def test_insert_sso_user_allows_when_under_user_limit():
+    """
+    Non-premium: insert_sso_user does NOT raise when DB has fewer than 5 users.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=3)
+
+    mock_openid = CustomOpenID(
+        id="new-user-2",
+        email="new2@example.com",
+        display_name="New User 2",
+        provider="google",
+        team_ids=[],
+    )
+    user_defined_values: SSOUserDefinedValues = {
+        "user_id": "new-user-2",
+        "user_email": "new2@example.com",
+        "user_role": None,
+        "max_budget": None,
+        "budget_duration": None,
+        "models": [],
+    }
+
+    mock_response = NewUserResponse(user_id="new-user-2", key="sk-test", teams=None)
+
+    with patch("litellm.proxy.proxy_server.premium_user", False):
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            return_value=mock_response,
+        ):
+            result = await insert_sso_user(
+                result_openid=mock_openid,
+                user_defined_values=user_defined_values,
+                prisma_client=mock_prisma,
+            )
+
+    assert result.user_id == "new-user-2"
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_propagates_proxy_exception_for_new_user():
+    """
+    upsert_sso_user must not swallow ProxyException raised by insert_sso_user
+    (e.g. the non-premium user-limit enforcement).
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=5)
+
+    sso_result = CustomOpenID(
+        id="over-limit-user",
+        email="overlimit@example.com",
+        display_name="Over Limit",
+        provider="google",
+        team_ids=[],
+    )
+    user_defined_values = {
+        "user_id": "over-limit-user",
+        "user_email": "overlimit@example.com",
+        "user_role": None,
+        "max_budget": None,
+        "budget_duration": None,
+        "models": [],
+    }
+
+    with patch("litellm.proxy.proxy_server.premium_user", False):
+        with pytest.raises(ProxyException) as exc_info:
+            await SSOAuthenticationHandler.upsert_sso_user(
+                result=sso_result,
+                user_info=None,
+                user_email="overlimit@example.com",
+                user_defined_values=user_defined_values,
+                prisma_client=mock_prisma,
+            )
+
+    assert str(exc_info.value.code) == "403"
+
+
+@pytest.mark.asyncio
 async def test_upsert_sso_user_updates_role_for_existing_user():
     """
     Test that upsert_sso_user updates the user role in database when SSO provides a valid role.
@@ -7131,3 +7256,80 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
     assert response.status_code == 200
     assert "Default Credentials" not in body
     assert "MASTER_KEY" not in body
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_propagates_proxy_exception():
+    """
+    get_user_info_from_db must re-raise ProxyException instead of swallowing it
+    (e.g. the non-premium user-limit ProxyException raised by upsert_sso_user).
+    """
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from starlette import status
+
+    sso_result = CustomOpenID(
+        id="test-user",
+        email="test@example.com",
+        display_name="Test",
+        provider="google",
+        team_ids=[],
+    )
+    expected_exc = ProxyException(
+        message="limit reached",
+        type=ProxyErrorTypes.auth_error,
+        param="premium_user",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        side_effect=expected_exc,
+    ), patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=None,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await get_user_info_from_db(
+                result=sso_result,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+                user_email="test@example.com",
+                user_defined_values={
+                    "user_id": "test-user",
+                    "user_email": "test@example.com",
+                    "user_role": None,
+                    "max_budget": None,
+                    "budget_duration": None,
+                    "models": [],
+                },
+            )
+
+    assert exc_info.value is expected_exc
+
+
+@pytest.mark.asyncio
+async def test_google_login_raises_when_sso_configured_and_no_db():
+    """
+    Non-premium: google_login raises ProxyException (db_not_connected) when an SSO
+    provider env var is set but prisma_client is None.
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.example.com/"
+
+    with (
+        patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "fake-client-id"}, clear=False),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await google_login(request=mock_request)
+
+    assert str(exc_info.value.code) == "403"
