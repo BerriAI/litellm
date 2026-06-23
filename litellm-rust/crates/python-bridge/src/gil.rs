@@ -26,6 +26,15 @@ where
     py.allow_threads(f)
 }
 
+/// Record an off-GIL offload without wrapping a closure.
+///
+/// The async `aocr` path hands work to the Tokio runtime, which runs without the
+/// GIL by construction, so there is no `allow_threads` closure to wrap — this
+/// keeps the release count accurate across both entry points.
+pub fn note_offload() {
+    GIL_RELEASES.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Total GIL releases performed by the bridge so far.
 pub fn release_count() -> u64 {
     GIL_RELEASES.load(Ordering::Relaxed)
