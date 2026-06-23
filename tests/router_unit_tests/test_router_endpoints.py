@@ -768,7 +768,7 @@ async def test_init_responses_api_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_router_aresponses_decodes_managed_tool_container_id_without_routing_override():
+async def test_router_aresponses_routes_managed_tool_container_id_to_owner_deployment():
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
     router = Router(model_list=[])
@@ -789,8 +789,8 @@ async def test_router_aresponses_decodes_managed_tool_container_id_without_routi
     )
 
     call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert call_kwargs["model"] == "logical-model"
-    assert call_kwargs["custom_llm_provider"] == "openai"
+    assert call_kwargs["model"] == "azure-deployment-id"
+    assert call_kwargs["custom_llm_provider"] == "azure"
     assert call_kwargs["tools"][0]["container"] == "cntr_native_123"
     assert tools[0]["container"] == encoded_container_id
 
@@ -800,12 +800,12 @@ async def test_router_aresponses_decodes_managed_tool_container_id_without_routi
         "tools": [{"type": "code_interpreter", "container": encoded_container_id}],
     }
     router._decode_responses_api_tool_container_ids(kwargs)
-    assert kwargs["model"] == "logical-model"
-    assert kwargs["custom_llm_provider"] == "openai"
+    assert kwargs["model"] == "azure-deployment-id"
+    assert kwargs["custom_llm_provider"] == "azure"
     assert kwargs["tools"][0]["container"] == "cntr_native_123"
 
 
-def test_router_responses_preserves_custom_provider_when_decoding_managed_tool_container_id():
+def test_router_responses_routes_managed_tool_container_id_to_owner_deployment():
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
     router = Router(model_list=[])
@@ -827,8 +827,8 @@ def test_router_responses_preserves_custom_provider_when_decoding_managed_tool_c
 
     call_kwargs = router._generic_api_call_with_fallbacks.call_args.kwargs
     assert response == {"id": "resp_1"}
-    assert call_kwargs["model"] == "logical-model"
-    assert call_kwargs["custom_llm_provider"] == "openai"
+    assert call_kwargs["model"] == "azure-deployment-id"
+    assert call_kwargs["custom_llm_provider"] == "azure"
     assert call_kwargs["tools"][0]["container"] == "cntr_native_123"
     assert tools[0]["container"] == encoded_container_id
 

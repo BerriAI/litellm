@@ -4482,14 +4482,35 @@ class Router:
     def _decode_responses_api_tool_container_ids(kwargs: Dict[str, Any]) -> None:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        # Keep authorization and deployment selection anchored to the requested
-        # model. Managed container IDs are supplied by the client, so only the
-        # provider-issued container ID is safe to recover from them here.
+        decoded_container_payload = None
+        request_tools = kwargs.get("tools")
+        if isinstance(request_tools, list):
+            for tool in request_tools:
+                if not isinstance(tool, dict) or tool.get("type") != "code_interpreter":
+                    continue
+                container_id = tool.get("container")
+                if not isinstance(container_id, str):
+                    continue
+                decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+                original_id = decoded.get("response_id", container_id)
+                if original_id != container_id:
+                    decoded_container_payload = decoded
+                    break
+
         tools = ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(
-            kwargs.get("tools")
+            request_tools
         )
-        if tools is not kwargs.get("tools"):
+        if tools is not request_tools:
             kwargs["tools"] = tools
+        if decoded_container_payload is None:
+            return
+
+        model_id = decoded_container_payload.get("model_id")
+        if model_id:
+            kwargs["model"] = model_id
+        decoded_provider = decoded_container_payload.get("custom_llm_provider")
+        if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
+            kwargs["custom_llm_provider"] = decoded_provider
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
