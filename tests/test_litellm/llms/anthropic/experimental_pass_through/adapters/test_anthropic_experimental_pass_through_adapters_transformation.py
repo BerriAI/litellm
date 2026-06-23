@@ -2146,6 +2146,148 @@ def test_translate_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_
     assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
 
 
+def test_translate_openai_response_to_anthropic_cache_creation_from_prompt_tokens_details():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="gpt-4o-2024-08-06",
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+    assert anthropic_response["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_openai_response_to_anthropic_cache_tokens_from_usage_fields():
+    usage = Usage(prompt_tokens=120, completion_tokens=50, total_tokens=170)
+    usage.cache_read_input_tokens = 30
+    usage.cache_creation_input_tokens = 20
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+    assert anthropic_response["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_openai_response_to_anthropic_cache_tokens_from_private_usage_fields():
+    usage = Usage(prompt_tokens=120, completion_tokens=50, total_tokens=170)
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    response.usage._cache_read_input_tokens = 30
+    response.usage._cache_creation_input_tokens = 20
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+    assert anthropic_response["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_streaming_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_details():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message_delta = adapter.translate_streaming_openai_response_to_anthropic(
+        response=response,
+        current_content_block_index=0,
+    )
+
+    assert message_delta["usage"]["input_tokens"] == 70
+    assert message_delta["usage"]["output_tokens"] == 50
+    assert message_delta["usage"]["cache_read_input_tokens"] == 30
+    assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+
+
 # =====================================================================
 # Web Search Tool Transformation Tests
 # =====================================================================

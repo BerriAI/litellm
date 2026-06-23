@@ -207,32 +207,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if "delta" not in merged_chunk:
             merged_chunk["delta"] = {}
 
-        uncached_input_tokens = chunk.usage.prompt_tokens or 0
-        if (
-            hasattr(chunk.usage, "prompt_tokens_details")
-            and chunk.usage.prompt_tokens_details
-        ):
-            cached_tokens = (
-                getattr(chunk.usage.prompt_tokens_details, "cached_tokens", 0) or 0
-            )
-            uncached_input_tokens -= cached_tokens
+        from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        usage_dict: UsageDelta = {
-            "input_tokens": uncached_input_tokens,
-            "output_tokens": chunk.usage.completion_tokens or 0,
-        }
-        if (
-            hasattr(chunk.usage, "_cache_creation_input_tokens")
-            and chunk.usage._cache_creation_input_tokens > 0
-        ):
-            usage_dict["cache_creation_input_tokens"] = (
-                chunk.usage._cache_creation_input_tokens
+        usage_dict: UsageDelta = (
+            LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+                chunk.usage
             )
-        if (
-            hasattr(chunk.usage, "_cache_read_input_tokens")
-            and chunk.usage._cache_read_input_tokens > 0
-        ):
-            usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+        )
         merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
             merged_chunk["context_management"] = ContextManagementResponse(
