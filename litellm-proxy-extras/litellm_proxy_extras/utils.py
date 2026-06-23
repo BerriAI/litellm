@@ -504,7 +504,7 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _setup_database_v2(use_migrate: bool) -> bool:
         """
-        v2 migration resolver (opt-in via --use_v2_migration_resolver).
+        v2 migration resolver (the CLI default; selected via use_v2_resolver=True).
 
         Runs `prisma migrate deploy` and handles standard recovery paths
         (P3005 baseline, P3009/P3018 idempotent errors). Critically, it does
@@ -695,7 +695,7 @@ class ProxyExtrasDBManager:
             bool: True if setup was successful, False otherwise
         """
         if use_v2_resolver:
-            logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
+            logger.info("Using v2 migration resolver")
             return ProxyExtrasDBManager._setup_database_v2(use_migrate=use_migrate)
 
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
