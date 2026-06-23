@@ -13,8 +13,10 @@ import logging
 import sys
 
 import litellm
+from litellm import _logging as litellm_logging
 from litellm._logging import (
     ALL_LOGGERS,
+    HealthCheckAccessLogFilter,
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
@@ -328,3 +330,77 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+def _make_uvicorn_access_record(
+    full_path: str, status: int = 200
+) -> logging.LogRecord:
+    # Mirror uvicorn's AccessFormatter args:
+    #   (client_addr, method, full_path, http_version, status_code)
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("10.0.0.1:12345", "GET", full_path, "1.1", status),
+        exc_info=None,
+    )
+    return record
+
+
+def test_healthcheck_filter_passes_when_env_unset(monkeypatch):
+    monkeypatch.delenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", raising=False)
+    monkeypatch.setattr(
+        litellm_logging, "_DISABLED_ACCESS_LOG_PATHS", frozenset()
+    )
+    f = HealthCheckAccessLogFilter()
+    assert f.filter(_make_uvicorn_access_record("/health/liveliness")) is True
+    assert f.filter(_make_uvicorn_access_record("/")) is True
+
+
+def test_healthcheck_filter_drops_configured_paths(monkeypatch):
+    paths = frozenset({"/", "/health/liveliness", "/health/readiness", "/metrics/"})
+    monkeypatch.setattr(litellm_logging, "_DISABLED_ACCESS_LOG_PATHS", paths)
+    f = HealthCheckAccessLogFilter()
+
+    # All four configured paths must be dropped
+    assert f.filter(_make_uvicorn_access_record("/")) is False
+    assert f.filter(_make_uvicorn_access_record("/health/liveliness")) is False
+    assert f.filter(_make_uvicorn_access_record("/health/readiness")) is False
+    assert f.filter(_make_uvicorn_access_record("/metrics/")) is False
+
+    # Real traffic must still pass
+    assert f.filter(_make_uvicorn_access_record("/v1/chat/completions")) is True
+    assert f.filter(_make_uvicorn_access_record("/health")) is True  # not in list
+
+
+def test_healthcheck_filter_strips_query_string(monkeypatch):
+    monkeypatch.setattr(
+        litellm_logging,
+        "_DISABLED_ACCESS_LOG_PATHS",
+        frozenset({"/health/readiness"}),
+    )
+    f = HealthCheckAccessLogFilter()
+    assert f.filter(_make_uvicorn_access_record("/health/readiness?x=1")) is False
+
+
+def test_healthcheck_filter_robust_to_malformed_args(monkeypatch):
+    monkeypatch.setattr(
+        litellm_logging, "_DISABLED_ACCESS_LOG_PATHS", frozenset({"/"})
+    )
+    f = HealthCheckAccessLogFilter()
+    # No args
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="raw msg",
+        args=None,
+        exc_info=None,
+    )
+    assert f.filter(record) is True
+    # Args too short
+    record.args = ("10.0.0.1:12345", "GET")
+    assert f.filter(record) is True
