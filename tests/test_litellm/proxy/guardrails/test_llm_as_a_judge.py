@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
+    _derive_overall_score,
     _extract_text_from_content,
     initialize_guardrail,
 )
@@ -90,7 +91,7 @@ def test_build_judge_prompt_missing_name_and_weight():
 
 def _make_litellm_params(**overrides):
     params = MagicMock()
-    for attr in ("guardrail_name", "judge_model", "criteria", "on_failure", "overall_threshold", "mode", "default_on"):
+    for attr in ("guardrail_name", "judge_model", "criteria", "on_failure", "overall_threshold", "fail_closed", "mode", "default_on"):
         setattr(params, attr, None)
     for k, v in overrides.items():
         setattr(params, k, v)
@@ -222,3 +223,309 @@ async def test_apply_guardrail_clamps_score(mock_completion):
     result = await guardrail.apply_guardrail(inputs, request_data, "response")
     assert result is inputs
     assert request_data["metadata"]["eval_information"]["overall_score"] == 100.0
+
+
+# ---------------------------------------------------------------------------
+# _derive_overall_score — score resolution (issue #30731)
+# ---------------------------------------------------------------------------
+
+
+def test_derive_overall_score_prefers_top_level():
+    assert _derive_overall_score({"overall_score": 73, "verdicts": []}) == 73.0
+
+
+def test_derive_overall_score_clamps_top_level():
+    assert _derive_overall_score({"overall_score": 150}) == 100.0
+    assert _derive_overall_score({"overall_score": -10}) == 0.0
+
+
+def test_derive_overall_score_weighted_average_from_verdicts():
+    # Missing overall_score -> weighted mean: (2*60 + 5*40) / 100 = 3.2
+    result = _derive_overall_score(
+        {
+            "verdicts": [
+                {"criterion_name": "Safety", "score": 2, "passed": False, "weight": 60},
+                {"criterion_name": "Policy", "score": 5, "passed": False, "weight": 40},
+            ]
+        }
+    )
+    assert result == pytest.approx(3.2)
+
+
+def test_derive_overall_score_simple_mean_when_no_weights():
+    result = _derive_overall_score(
+        {"verdicts": [{"score": 2}, {"score": 5}, {"score": 8}]}
+    )
+    assert result == pytest.approx(5.0)
+
+
+def test_derive_overall_score_falls_back_to_verdicts_when_unparseable():
+    result = _derive_overall_score(
+        {
+            "overall_score": "not-a-number",
+            "verdicts": [{"score": 90, "weight": 100}],
+        }
+    )
+    assert result == pytest.approx(90.0)
+
+
+def test_derive_overall_score_none_when_no_data():
+    assert _derive_overall_score({}) is None
+    assert _derive_overall_score({"verdicts": []}) is None
+    assert _derive_overall_score({"verdicts": [{"reasoning": "no score"}]}) is None
+
+
+def test_derive_overall_score_skips_non_dict_verdict_and_bad_weight():
+    # Non-dict entries are skipped; verdicts whose weight is non-numeric fall
+    # back to a simple mean of the parsed scores instead of crashing.
+    result = _derive_overall_score(
+        {
+            "verdicts": [
+                "not-a-dict",  # skipped
+                {"score": "abc", "weight": 50},  # non-numeric score -> skipped
+                {"score": 40, "weight": "heavy"},  # bad weight -> ignored weight
+                {"score": 60, "weight": "x"},  # bad weight -> ignored weight
+            ]
+        }
+    )
+    assert result == pytest.approx(50.0)
+
+
+def test_derive_overall_score_mixed_weighted_and_unweighted_uses_simple_mean():
+    # A verdict missing its weight must NOT be silently dropped from the score.
+    # A(90, weight 60) + B(0, no weight) -> simple mean 45, NOT weighted 90.
+    result = _derive_overall_score(
+        {
+            "verdicts": [
+                {"criterion_name": "A", "score": 90, "weight": 60},
+                {"criterion_name": "B", "score": 0},  # weight missing
+            ]
+        }
+    )
+    assert result == pytest.approx(45.0)
+
+
+# ---------------------------------------------------------------------------
+# _derive_overall_score — malformed / manipulated judge output (veria-ai)
+# ---------------------------------------------------------------------------
+
+
+def test_derive_overall_score_rejects_non_finite_top_level():
+    # NaN/Infinity must not clamp to 100. With no verdicts -> indeterminate.
+    assert _derive_overall_score({"overall_score": float("nan")}) is None
+    assert _derive_overall_score({"overall_score": float("inf")}) is None
+    assert _derive_overall_score({"overall_score": "nan"}) is None
+
+
+def test_derive_overall_score_non_finite_top_level_falls_back_to_verdicts():
+    result = _derive_overall_score(
+        {"overall_score": float("nan"), "verdicts": [{"score": 10, "weight": 100}]}
+    )
+    assert result == pytest.approx(10.0)
+
+
+def test_derive_overall_score_skips_non_finite_verdict_score():
+    # A NaN verdict score is skipped, not averaged in as 100.
+    result = _derive_overall_score(
+        {"verdicts": [{"score": "nan", "weight": 60}, {"score": 0, "weight": 40}]}
+    )
+    assert result == pytest.approx(0.0)
+
+
+def test_derive_overall_score_clamps_inflated_verdict_score():
+    # An out-of-range score is clamped per verdict so it cannot mask a failure.
+    # clamp(10000) = 100, simple mean(100, 0) = 50.
+    result = _derive_overall_score({"verdicts": [{"score": 10000}, {"score": 0}]})
+    assert result == pytest.approx(50.0)
+
+
+def test_derive_overall_score_none_for_non_dict():
+    assert _derive_overall_score([]) is None
+    assert _derive_overall_score("not a dict") is None
+    assert _derive_overall_score(123) is None
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_non_dict_judge_output_fail_closed_blocks(mock_completion):
+    # A top-level JSON array is valid JSON but unusable -> indeterminate ->
+    # fail_closed must block instead of slipping through the outer except.
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps([])))]
+    )
+    guardrail = _make_guardrail(fail_closed=True, on_failure="block")
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_inflated_verdict_scores_still_block(mock_completion):
+    # Weighted path: clamp(10000)=100, (100*60 + 0*40)/100 = 60 < 80 -> block.
+    payload = {
+        "verdicts": [
+            {"criterion_name": "A", "score": 10000, "weight": 60},
+            {"criterion_name": "B", "score": 0, "weight": 40},
+        ]
+    }
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(payload)))]
+    )
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block")
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_missing_weight_on_failing_verdict_still_blocks(mock_completion):
+    # End-to-end: judge drops the weight on a failing criterion. The failing
+    # score must still pull the derived score below threshold and block.
+    payload = {
+        "verdicts": [
+            {"criterion_name": "Accuracy", "score": 100, "weight": 60},
+            {"criterion_name": "Safety", "score": 0},  # failing, weight missing
+        ]
+    }
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(payload)))]
+    )
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block")
+    inputs = {"texts": ["partially unsafe response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# apply_guardrail — missing overall_score (fail-open regression, issue #30731)
+# ---------------------------------------------------------------------------
+
+
+def _verdicts_only_response(scores_weights) -> dict:
+    """Build a judge response with verdicts but NO top-level overall_score."""
+    return {
+        "verdicts": [
+            {
+                "criterion_name": name,
+                "score": score,
+                "reasoning": "r",
+                "passed": score >= 80,
+                "weight": weight,
+            }
+            for name, score, weight in scores_weights
+        ]
+    }
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_missing_overall_score_with_failing_verdicts_blocks(mock_completion):
+    # The core bug: judge omits overall_score but every verdict fails. Previously
+    # defaulted to 100 (pass); now derived from verdicts -> 3.2 -> blocked.
+    payload = _verdicts_only_response([("Safety", 2, 60), ("Policy", 5, 40)])
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(payload)))]
+    )
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block")
+    inputs = {"texts": ["unsafe response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_missing_overall_score_with_passing_verdicts_passes(mock_completion):
+    payload = _verdicts_only_response([("Accuracy", 95, 60), ("Safety", 90, 40)])
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(payload)))]
+    )
+    guardrail = _make_guardrail(overall_threshold=80.0)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+    assert request_data["metadata"]["eval_information"]["passed"] is True
+    assert request_data["metadata"]["eval_information"]["overall_score"] == pytest.approx(93.0)
+
+
+# ---------------------------------------------------------------------------
+# apply_guardrail — fail_closed configuration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_no_score_no_verdicts_fails_open_by_default(mock_completion):
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps({})))]
+    )
+    guardrail = _make_guardrail()  # fail_closed defaults to False
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_no_score_no_verdicts_fail_closed_blocks(mock_completion):
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps({})))]
+    )
+    guardrail = _make_guardrail(fail_closed=True, on_failure="block")
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_fail_closed_log_mode_does_not_block(mock_completion):
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps({})))]
+    )
+    guardrail = _make_guardrail(fail_closed=True, on_failure="log")
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_judge_error_fail_closed_blocks(mock_completion):
+    mock_completion.side_effect = RuntimeError("judge down")
+    guardrail = _make_guardrail(fail_closed=True, on_failure="block")
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_parses_fail_closed(mock_mgr):
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict(fail_closed=True)
+    instance = initialize_guardrail(lp, g)
+    assert instance.fail_closed is True
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_fail_closed_defaults_false(mock_mgr):
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict()
+    instance = initialize_guardrail(lp, g)
+    assert instance.fail_closed is False
