@@ -153,18 +153,22 @@ class TestResponseCompliance:
 
     def test_interaction_response_fields(self, spec_dict):
         """Verify our InteractionsAPIResponse has correct fields."""
-        # The response is the Interaction schema
-        # Check CreateModelInteractionParams which includes output fields
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        # The response is the dedicated `Interaction` schema. Google moved the
+        # output-only fields (notably the `steps` array, formerly `outputs`)
+        # off `CreateModelInteractionParams` and onto `Interaction`; the request
+        # schema no longer carries `steps`. Google later moved `role` off
+        # `Interaction` onto the per-turn `Turn` schema (asserted in
+        # test_turn_schema), so it is no longer a top-level output field here.
+        # Keep this aligned with the live spec.
+        schema = spec_dict["components"]["schemas"]["Interaction"]
 
-        # Output fields (readOnly)
+        # Output fields (readOnly).
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
-            "role",
-            "outputs",
+            "steps",
             "usage",
         ]
 
@@ -174,10 +178,13 @@ class TestResponseCompliance:
 
     def test_status_enum_values(self, spec_dict):
         """Verify status enum values match spec."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        # `status` is an output-only field; validate against the response schema.
+        schema = spec_dict["components"]["schemas"]["Interaction"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026;
-        # "budget_exceeded" added to the published spec mid-2026).
+        # Google Interactions API uses lowercase status values (updated Feb 2026).
+        # Keep this an exact match: this test intentionally breaks CI when
+        # Google changes the live spec — that breakage is how we get notified
+        # to review the change.
         expected_statuses = [
             "in_progress",
             "requires_action",

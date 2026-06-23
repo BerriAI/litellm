@@ -15019,7 +15019,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
         "input_cost_per_token": 1.2e-06,
@@ -15322,7 +15322,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "fireworks_ai/qwen3p7-plus": {
         "cache_read_input_token_cost": 8e-08,

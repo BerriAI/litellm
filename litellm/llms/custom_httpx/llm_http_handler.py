@@ -2407,11 +2407,17 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        initial_response = (
+            responses_api_provider_config.transform_response_api_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
         )
+        # Responses agentic interception (e.g. code interpreter) runs the follow-up
+        # loop via the async hook, so it is async-only for now; the sync path returns
+        # the initial response unchanged.
+        return initial_response
 
     async def async_response_api_handler(
         self,
@@ -2570,11 +2576,43 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        initial_response = (
+            responses_api_provider_config.transform_response_api_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
         )
+
+        final_response = await self._call_agentic_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=(
+                input
+                if isinstance(input, list)
+                else [{"role": "user", "content": input}]
+            ),
+            anthropic_messages_provider_config=responses_api_provider_config,
+            anthropic_messages_optional_request_params=response_api_optional_request_params,
+            logging_obj=logging_obj,
+            stream=False,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=dict(litellm_params),
+            api_surface="responses",
+        )
+
+        result = final_response if final_response is not None else initial_response
+        if litellm_params.get(
+            "_code_interpreter_interception_converted_stream"
+        ) and not litellm_params.get("_agentic_loop_depth"):
+            return self._wrap_responses_response_as_fake_stream(
+                result=result,
+                model=model,
+                responses_api_provider_config=responses_api_provider_config,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+            )
+        return result
 
     async def async_delete_response_api_handler(
         self,
@@ -4875,6 +4913,132 @@ class BaseLLMHTTPHandler:
 
         return response
 
+    async def _execute_responses_agentic_plan(
+        self,
+        plan: AgenticLoopPlan,
+        model: str,
+        response_api_optional_request_params: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        kwargs: dict,
+        depth: int,
+        max_loops: int,
+        fingerprints: list[str],
+        fingerprint: str,
+        callback: Any | None = None,
+    ) -> Any:
+        patch = plan.request_patch or AgenticLoopRequestPatch()
+        if patch.messages is None:
+            raise ValueError("Agentic loop plan missing patched responses input")
+
+        optional_params = dict(response_api_optional_request_params)
+        optional_params.update(patch.optional_params)
+        if patch.tools is not None:
+            optional_params["tools"] = patch.tools
+        optional_params = {
+            k: v
+            for k, v in optional_params.items()
+            if k != "stream" and k != "_code_interpreter_interception_converted_stream"
+        }
+
+        internal_keys = {"litellm_logging_obj"}
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs.items()
+            if not k.startswith("_websearch_interception")
+            and not k.startswith("_compression_interception")
+            and k != "_code_interpreter_interception_converted_stream"
+            and k not in internal_keys
+            and k not in optional_params
+        }
+        kwargs_for_followup.update(patch.kwargs)
+        kwargs_for_followup["_agentic_loop_depth"] = depth + 1
+        kwargs_for_followup["max_agentic_loops"] = max_loops
+        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+
+        try:
+            response = await litellm.aresponses(
+                model=patch.model or model,
+                input=patch.messages,
+                **optional_params,
+                **kwargs_for_followup,
+            )
+
+            if callback is not None:
+                try:
+                    response = await callback.async_post_agentic_loop_response_hook(
+                        response=response, plan=plan, kwargs=kwargs
+                    )
+                except Exception as e:
+                    _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+                    verbose_logger.exception(
+                        "LiteLLM.AgenticHookError: Exception in "
+                        "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
+                        _call_id,
+                        model,
+                        str(e),
+                    )
+
+            return response
+        finally:
+            if callback is not None:
+                await self._run_agentic_loop_cleanup(
+                    callback=callback,
+                    plan=plan,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    model=model,
+                )
+
+    @staticmethod
+    async def _run_agentic_loop_cleanup(
+        callback: Any,
+        plan: AgenticLoopPlan,
+        kwargs: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        model: str,
+    ) -> None:
+        try:
+            await callback.async_agentic_loop_cleanup_hook(plan=plan, kwargs=kwargs)
+        except Exception as e:
+            _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+            verbose_logger.exception(
+                "LiteLLM.AgenticHookError: Exception in "
+                "async_agentic_loop_cleanup_hook [call_id=%s model=%s]: %s",
+                _call_id,
+                model,
+                str(e),
+            )
+
+    def _wrap_responses_response_as_fake_stream(
+        self,
+        result: Any,
+        model: str,
+        responses_api_provider_config: Any,
+        logging_obj: "LiteLLMLoggingObj",
+        custom_llm_provider: str,
+    ) -> Any:
+        """
+        Wrap a completed responses result as a synthetic stream.
+
+        Used when an interceptor forced stream=False to run the agentic loop on
+        the non-streaming path, but the caller originally asked for streaming.
+        """
+        import httpx
+
+        from litellm.responses.streaming_iterator import (
+            MockResponsesAPIStreamingIterator,
+        )
+
+        payload = result.model_dump() if hasattr(result, "model_dump") else result
+        raw_response = httpx.Response(status_code=200, json=payload)
+        return MockResponsesAPIStreamingIterator(
+            response=raw_response,
+            model=model,
+            responses_api_provider_config=responses_api_provider_config,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
+
     async def _execute_chat_completion_agentic_plan(
         self,
         plan: AgenticLoopPlan,
@@ -4940,6 +5104,7 @@ class BaseLLMHTTPHandler:
         stream: bool,
         custom_llm_provider: str,
         kwargs: Dict,
+        api_surface: str = "anthropic_messages",
     ) -> Optional[Any]:
         """
         Call agentic completion hooks for all custom loggers (Anthropic Messages API).
@@ -5046,6 +5211,20 @@ class BaseLLMHTTPHandler:
                 if not plan.run_agentic_loop:
                     continue
 
+                if api_surface == "responses":
+                    return await self._execute_responses_agentic_plan(
+                        plan=plan,
+                        model=model,
+                        response_api_optional_request_params=anthropic_messages_optional_request_params,
+                        logging_obj=logging_obj,
+                        kwargs=kwargs_with_provider,
+                        depth=depth,
+                        max_loops=max_loops,
+                        fingerprints=fingerprints,
+                        fingerprint=fingerprint,
+                        callback=callback,
+                    )
+
                 return await self._execute_anthropic_agentic_plan(
                     plan=plan,
                     model=model,
@@ -5083,7 +5262,7 @@ class BaseLLMHTTPHandler:
             else False
         )
 
-        if websearch_converted_stream:
+        if api_surface == "anthropic_messages" and websearch_converted_stream:
             from typing import cast
 
             from litellm._logging import verbose_logger
