@@ -62,7 +62,7 @@ def _compute_cache_only_cost(
 
 def cost_per_token(
     model: str, usage: "Usage", service_tier: str | None = None
-) -> tuple[float, float]:
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
