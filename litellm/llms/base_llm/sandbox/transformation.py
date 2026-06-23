@@ -8,9 +8,13 @@ run code -> delete container; `code_interpreter_tool` combines all three.
 
 from typing import Any, Union
 
+import httpx
+
 from pydantic import Field, PrivateAttr
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+SANDBOX_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 
 
 class ContainerHandle(LiteLLMPydanticObjectBase):
@@ -53,7 +57,7 @@ class BaseSandboxConfig:
         *,
         template: str | None = None,
         timeout: int | None = None,
-        allow_internet_access: bool = True,
+        allow_internet_access: bool | None = None,
         api_key: str | None = None,
         **kwargs,
     ) -> ContainerHandle:
@@ -77,3 +81,16 @@ class BaseSandboxConfig:
         **kwargs,
     ) -> bool:
         raise NotImplementedError("adelete_sandbox must be implemented by provider")
+
+    async def _read_capped_lines(self, response: httpx.Response) -> list[str]:
+        lines: list[str] = []
+        total = 0
+        async for line in response.aiter_lines():
+            total += len(line.encode("utf-8"))
+            if total > SANDBOX_MAX_OUTPUT_BYTES:
+                raise ValueError(
+                    f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting "
+                    "to avoid unbounded memory use."
+                )
+            lines.append(line)
+        return lines
