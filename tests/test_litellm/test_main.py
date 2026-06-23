@@ -433,6 +433,28 @@ def test_custom_provider_with_extra_body():
         }
 
 
+def test_extra_body_cannot_override_authorized_model():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            litellm.completion(
+                model="deepseek/deepseek-chat",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                extra_body={"model": "deepseek/some-other-model", "passthrough": "kept"},
+                api_key="fake-key-for-testing",
+                client=client,
+            )
+        except Exception:
+            pass
+
+        mock_post.assert_called_once()
+        sent_body = json.loads(mock_post.call_args.kwargs["data"])
+        assert sent_body["model"] == "deepseek-chat"
+        assert sent_body["passthrough"] == "kept"
+
+
 @pytest.fixture(autouse=True)
 def set_openrouter_api_key():
     original_api_key = os.environ.get("OPENROUTER_API_KEY")
