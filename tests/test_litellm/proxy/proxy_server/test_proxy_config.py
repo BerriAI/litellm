@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -887,6 +887,34 @@ def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
     assert pc._add_deployment(db_models=[bad]) == 0
 
 
+def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypatch):
+    monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="env-model",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "os.environ/LITELLM_DB_MODEL_API_KEY",
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.api_key == "resolved-secret"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.decrypt_model_list_from_db
 # ---------------------------------------------------------------------------
@@ -917,6 +945,33 @@ def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
         "params_model": "gpt-4",
         "id_present": True,
     }
+
+
+def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decrypt(
+    monkeypatch,
+):
+    monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: (
+            "os.environ/LITELLM_DB_MODEL_API_KEY" if key == "api_key" else value
+        ),
+    )
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="model-1",
+        model_name="env-model",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "api_key": "encrypted-env-ref",
+            "model": "openai/gpt-4o-mini",
+        },
+        blocked=False,
+    )
+
+    out = pc.decrypt_model_list_from_db(new_models=[m])
+
+    assert out[0]["litellm_params"]["api_key"] == "resolved-secret"
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
