@@ -3134,7 +3134,18 @@ class Router:
         - litellm_trace_id
         - metadata
         """
-        kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+        # Normalise an explicit num_retries=None to the router default here (dict.get()
+        # only falls back when the key is absent, not when its value is None), then to 0
+        # if the router default is itself None - mirroring the guard in
+        # async_function_with_retries, which remains the safety net for paths that bypass
+        # this setter.
+        _req_num_retries = kwargs.get("num_retries")
+        if _req_num_retries is not None:
+            kwargs["num_retries"] = _req_num_retries
+        else:
+            kwargs["num_retries"] = (
+                self.num_retries if self.num_retries is not None else 0
+            )
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):
@@ -6931,7 +6942,11 @@ class Router:
             "model_group_retry_policy", self.model_group_retry_policy
         )
         model_group: Optional[str] = kwargs.get("model")
-        num_retries = kwargs.pop("num_retries")
+        num_retries = kwargs.pop("num_retries", None)
+        if num_retries is None:
+            # Fall back to the router setting (then 0) so the comparisons below never
+            # hit `None > int`, which would mask the real upstream error with a TypeError.
+            num_retries = self.num_retries if self.num_retries is not None else 0
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
         _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
