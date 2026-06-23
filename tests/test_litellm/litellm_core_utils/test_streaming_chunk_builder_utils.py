@@ -8,7 +8,8 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm import stream_chunk_builder
+from litellm import ChatCompletionUsageBlock, stream_chunk_builder
+from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -324,6 +325,42 @@ def test_cache_read_input_tokens_retained():
     assert usage.cache_read_input_tokens == 11775
     assert usage.prompt_tokens_details.cached_tokens == 11775
 
+def test_cache_read_input_tokens_retained_genericstreamingchunk():
+    chunk1 = GenericStreamingChunk(
+        text="Test1",
+        is_finished=False,
+        finish_reason="",
+        usage=None,
+        index=1,
+    )
+
+    chunk2 = GenericStreamingChunk(
+        text="Test2",
+        is_finished=True,
+        finish_reason="stop",
+        usage=ChatCompletionUsageBlock(
+            completion_tokens=5,
+            prompt_tokens=1234,
+            total_tokens=1239,
+            completion_tokens_details=None,
+            prompt_tokens_details=PromptTokensDetails(
+                audio_tokens=None, cached_tokens=543
+            ).model_dump(),
+        ),
+        index=2,
+    )
+
+    # Use dictionaries directly instead of ModelResponseStream
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks,
+        model="gpt-5.5",
+        completion_output="",
+    )
+
+    assert usage.prompt_tokens_details.cached_tokens == 543
 
 def test_stream_chunk_builder_litellm_usage_chunks():
     """
@@ -520,7 +557,10 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
-    assert usage.server_tool_use["web_search_requests"] == 2
+    # server_tool_use must be a ServerToolUse pydantic so downstream cost-calc
+    # (which uses attribute access) works. See issue #26153.
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert usage.server_tool_use.web_search_requests == 2
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():

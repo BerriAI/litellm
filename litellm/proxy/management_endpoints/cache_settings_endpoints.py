@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.table_repositories import CacheConfigRepository
 from litellm.types.management_endpoints import (
     CACHE_SETTINGS_FIELDS,
@@ -160,8 +161,12 @@ class CacheSettingsManager:
         import json
 
         try:
-            cache_config = await CacheConfigRepository(prisma_client).table.find_unique(
-                where={"id": "cache_config"}
+            cache_config = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: CacheConfigRepository(prisma_client).table.find_unique(
+                    where={"id": "cache_config"}
+                ),
+                reason="init_cache_settings_in_db_lookup_failure",
             )
             if cache_config is not None and cache_config.cache_settings:
                 # Parse cache settings JSON

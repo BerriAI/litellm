@@ -8,7 +8,7 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 
 import asyncio
 import contextlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -1058,6 +1058,97 @@ def test_proxy_global_first_registered_wins(monkeypatch):
     assert second is not first
 
 
+def test_select_global_otel_v2_logger_reuses_existing_preset_logger():
+    """The global-provider selection must reuse the logger the callback factory
+    already built (e.g. an arize preset logger that folds the OTEL_* base exporter
+    and its own exporter into one logger), not mint a second generic one.
+
+    Regression for the orphan span: the startup publish used to search
+    ``service_callback`` (which a preset logger does not always reach), miss the
+    existing logger, and build a second generic ``OpenTelemetryV2`` whose provider
+    became the OTel global. The server span then exported through that generic
+    provider while the preset logger's gen-ai spans exported to the preset backend,
+    so on that backend the LLM span had no parent. Selecting from the loggers the
+    factory registered keeps one logger, one provider, one connected trace.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    chosen = select_global_otel_v2_logger([object(), preset_logger, object()])
+    assert chosen is preset_logger
+
+
+def test_select_global_otel_v2_logger_prefers_registered_owner_over_list_scan():
+    """Selection reuses the canonical owner the factory registered, not whatever
+    the ``in_memory_loggers`` scan happens to reach first.
+
+    The factory designates one logger as ``proxy_server.open_telemetry_logger`` the
+    moment it builds the first one, and every other v2 path (guardrail, seed,
+    phase spans) routes through that owner. With two presets configured, the list
+    scan's "first ``OpenTelemetryV2``" is order-dependent and could disagree with
+    that owner, publishing one backend's provider as the global while the rest of
+    the v2 code emits through another. Passing the registered owner pins the global
+    provider to the same logger the rest of the code already uses.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    owner = OpenTelemetryV2(
+        config=cfg,
+        callback_name="arize",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+    other = OpenTelemetryV2(
+        config=cfg,
+        callback_name="langfuse_otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+
+    chosen = select_global_otel_v2_logger([other, owner], registered=owner)
+    assert chosen is owner
+
+
+def test_select_global_otel_v2_logger_builds_one_when_none_registered():
+    """With no logger registered, selection builds exactly one generic logger so
+    the proxy still publishes a provider; it must not return ``None``."""
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    chosen = select_global_otel_v2_logger([])
+    assert isinstance(chosen, OpenTelemetryV2)
+
+
+def test_publish_global_otel_v2_provider_sets_selected_logger_provider():
+    """The startup publish must set the OTel global provider to the *selected*
+    logger's provider (the preset logger that owns every exporter), so the FastAPI
+    server span and the gen-ai spans share one provider and one trace.
+
+    Drives the publish step the proxy runs at startup, with the global-setter
+    injected so no real global OTel state is mutated. Guards the wiring that a unit
+    test would otherwise miss: that the published provider is the selected logger's,
+    not some other.
+    """
+    from litellm.integrations.otel.logger import publish_global_otel_v2_provider
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    published = []
+    chosen = publish_global_otel_v2_provider(
+        [object(), preset_logger], published.append
+    )
+
+    assert chosen is preset_logger
+    assert published == [preset_logger._tracer_provider]
+
+
 def test_registers_into_litellm_service_callback(monkeypatch):
     """The logger must mutate ``litellm.service_callback`` in place. An empty
     list is falsy, so a ``getattr(..) or []`` would append to a throwaway local
@@ -1314,3 +1405,178 @@ def test_module_level_emit_guardrail_span_swallows_emit_errors(monkeypatch):
 
     monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: _Boom())
     otel_logger.emit_guardrail_span(_guardrail_entry(start=1.0, end=2.0))
+
+
+# --------------------------------------------------------------------------- #
+#  Metrics: invalid attribute-filter config is visible, not a silent no-op
+# --------------------------------------------------------------------------- #
+
+
+def _emitted_metric_names(reader) -> set:
+    data = reader.get_metrics_data()
+    if data is None:
+        return set()
+    return {
+        m.name
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+        if any(m.data.data_points)
+    }
+
+
+def _metric_success_kwargs() -> dict:
+    return {
+        "model": "gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_params": {"custom_llm_provider": "openai"},
+        "optional_params": {},
+        "response_cost": 0.001,
+        "standard_logging_object": {"metadata": {}, "hidden_params": {}},
+    }
+
+
+def test_invalid_metric_filter_logged_once_records_nothing(caplog, monkeypatch):
+    """An invalid ``callback_settings.otel.attributes`` (include_list + exclude_list
+    both set) must make the operator-fixable config error visible once at ERROR and
+    record no metrics — without raising out of the success path and without
+    per-request log spam. Mirrors the v1 fix against the silent-no-op failure mode.
+    """
+    import logging
+
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    import litellm
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "otel": {
+                "attributes": {
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            }
+        },
+        raising=False,
+    )
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True)
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(seconds=1)
+    response_obj = {"usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        # Neither call may raise; the bad filter is caught in the logger.
+        asyncio.run(
+            logger.async_log_success_event(
+                _metric_success_kwargs(), response_obj, start, end
+            )
+        )
+        asyncio.run(
+            logger.async_log_success_event(
+                _metric_success_kwargs(), response_obj, start, end
+            )
+        )
+
+    assert _emitted_metric_names(reader) == set()  # nothing recorded
+    errors = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.ERROR and "metric filter" in r.getMessage()
+    ]
+    assert len(errors) == 1  # logged once, second bad record does not re-log
+
+
+def test_valid_metric_filter_records_six_metrics(monkeypatch):
+    """The happy path: with no attribute filter, a successful LLM call records all
+    six GenAI histograms, and the token metric keeps its input/output split."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "callback_settings", {}, raising=False)
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True)
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(seconds=2)
+    kwargs = _metric_success_kwargs()
+    kwargs["api_call_start_time"] = start.timestamp()
+    kwargs["completion_start_time"] = (start + timedelta(seconds=0.5)).timestamp()
+    kwargs["end_time"] = end.timestamp()
+    kwargs["optional_params"] = {"stream": True}
+    response_obj = {"usage": {"prompt_tokens": 5, "completion_tokens": 7}}
+
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert _emitted_metric_names(reader) == {
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+        "gen_ai.client.token.cost",
+        "gen_ai.client.response.time_to_first_token",
+        "gen_ai.client.response.time_per_output_token",
+        "gen_ai.client.response.duration",
+    }
+
+    data = reader.get_metrics_data()
+    token_types = {
+        dp.attributes.get("gen_ai.token.type")
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+        if m.name == "gen_ai.client.token.usage"
+        for dp in m.data.data_points
+    }
+    assert token_types == {"input", "output"}
+
+
+def test_metrics_disabled_by_default_records_nothing(monkeypatch):
+    """With ``enable_metrics`` off (the default), no meter is built and a success
+    event records nothing — the default behavior must stay unchanged."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "callback_settings", {}, raising=False)
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")  # enable_metrics defaults False
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+    assert logger._metrics_recorder is None
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(seconds=1)
+    asyncio.run(
+        logger.async_log_success_event(
+            _metric_success_kwargs(),
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+            start,
+            end,
+        )
+    )
+    assert _emitted_metric_names(reader) == set()

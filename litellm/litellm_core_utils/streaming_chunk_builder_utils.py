@@ -209,7 +209,7 @@ class ChunkProcessor:
         )
         return response
 
-    def get_combined_tool_content(  # noqa: PLR0915
+    def get_combined_tool_content(
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
@@ -604,6 +604,8 @@ class ChunkProcessor:
                 usage_chunk = chunk._hidden_params.get("usage", None)
 
             if usage_chunk is not None:
+                if isinstance(usage_chunk, dict):
+                    usage_chunk = Usage(**usage_chunk)
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if (
                     usage_chunk_dict["prompt_tokens"] is not None
@@ -637,7 +639,18 @@ class ChunkProcessor:
                     hasattr(usage_chunk, "server_tool_use")
                     and usage_chunk.server_tool_use is not None
                 ):
-                    server_tool_use = usage_chunk.server_tool_use
+                    # Coerce dict to ServerToolUse so downstream cost-calc code
+                    # (which accesses .web_search_requests as an attribute)
+                    # doesn't raise AttributeError. Some providers / streaming
+                    # paths leave server_tool_use as a plain dict on the chunk.
+                    if isinstance(usage_chunk.server_tool_use, dict):
+                        server_tool_use = ServerToolUse(**usage_chunk.server_tool_use)
+                    elif isinstance(usage_chunk.server_tool_use, ServerToolUse):
+                        server_tool_use = usage_chunk.server_tool_use
+                    else:
+                        server_tool_use = ServerToolUse.model_validate(
+                            usage_chunk.server_tool_use
+                        )
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(

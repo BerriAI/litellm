@@ -6,7 +6,7 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
@@ -86,6 +86,7 @@ class PydanticAITransformation:
         request_id: str,
         max_attempts: int = 30,
         poll_interval: float = 0.5,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Poll for task completion using tasks/get method.
@@ -112,7 +113,10 @@ class PydanticAITransformation:
             response = await client.post(
                 endpoint,
                 json=poll_request,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    **(agent_extra_headers or {}),
+                    "Content-Type": "application/json",
+                },
             )
             response.raise_for_status()
             poll_data = response.json()
@@ -142,6 +146,7 @@ class PydanticAITransformation:
         request_id: str,
         params: Any,
         timeout: float = 60.0,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
@@ -189,7 +194,10 @@ class PydanticAITransformation:
         response = await client.post(
             endpoint,
             json=a2a_request,
-            headers={"Content-Type": "application/json"},
+            headers={
+                **(agent_extra_headers or {}),
+                "Content-Type": "application/json",
+            },
         )
         response.raise_for_status()
         response_data = response.json()
@@ -211,6 +219,7 @@ class PydanticAITransformation:
                     endpoint=endpoint,
                     task_id=task_id,
                     request_id=request_id,
+                    agent_extra_headers=agent_extra_headers,
                 )
 
         verbose_logger.info(
@@ -225,6 +234,7 @@ class PydanticAITransformation:
         request_id: str,
         params: Any,
         timeout: float = 60.0,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Send a non-streaming A2A request to Pydantic AI agent and wait for completion.
@@ -234,6 +244,7 @@ class PydanticAITransformation:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message (dict or Pydantic model)
             timeout: Request timeout in seconds
+            agent_extra_headers: Per-request headers to forward on the upstream HTTP call.
 
         Returns:
             Standard A2A non-streaming response format with message
@@ -244,6 +255,7 @@ class PydanticAITransformation:
             request_id=request_id,
             params=params,
             timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
         # Transform to standard A2A non-streaming format
@@ -258,6 +270,7 @@ class PydanticAITransformation:
         request_id: str,
         params: Any,
         timeout: float = 60.0,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
@@ -269,6 +282,7 @@ class PydanticAITransformation:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message
             timeout: Request timeout in seconds
+            agent_extra_headers: Per-request headers to forward on the upstream HTTP call.
 
         Returns:
             Raw Pydantic AI task response (with history/artifacts)
@@ -278,6 +292,7 @@ class PydanticAITransformation:
             request_id=request_id,
             params=params,
             timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
     @staticmethod

@@ -21,7 +21,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Set
 
 from fastapi import (
     APIRouter,
@@ -49,6 +49,8 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
     collect_env_var_references,
+    LITELLM_MCP_SERVER_DESCRIPTION,
+    LITELLM_MCP_SERVER_NAME,
     get_server_prefix,
     parse_admin_env_vars,
 )
@@ -89,8 +91,6 @@ def does_mcp_server_exist(
 
 
 DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
-LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 
 try:
     importlib.import_module("mcp")
@@ -1722,11 +1722,13 @@ if MCP_AVAILABLE:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={"error": f"Access denied to MCP server {server_id}"},
                 )
-            allowed_server_ids = (
-                await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_dict
+            allowed_server_ids: Set[str] = set()
+            for auth_context in await build_effective_auth_contexts(user_api_key_dict):
+                allowed_server_ids.update(
+                    await global_mcp_server_manager.get_allowed_mcp_servers(
+                        auth_context
+                    )
                 )
-            )
             if server.server_id not in allowed_server_ids:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

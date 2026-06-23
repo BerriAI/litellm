@@ -27,7 +27,7 @@ from litellm.types.utils import EmbeddingResponse, all_litellm_params
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache  # noqa
+from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
@@ -41,7 +41,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -100,6 +100,8 @@ class Cache:
         gcs_path: Optional[str] = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         redis_semantic_cache_index_name: Optional[str] = None,
+        valkey_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        valkey_semantic_cache_index_name: str | None = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
         disk_cache_dir: Optional[str] = None,
@@ -208,6 +210,21 @@ class Cache:
                 index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
+        elif type == LiteLLMCacheType.VALKEY_SEMANTIC:
+            # Imported here, not at module top, so the optional redis dependency
+            # is only required when this backend is actually selected.
+            from .valkey_semantic_cache import ValkeySemanticCache
+
+            self.cache = ValkeySemanticCache(
+                host=host,
+                port=port,
+                password=password,
+                similarity_threshold=similarity_threshold,
+                embedding_model=valkey_semantic_cache_embedding_model,
+                index_name=valkey_semantic_cache_index_name,
+                startup_nodes=redis_startup_nodes,
+                **kwargs,
+            )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
             self.cache = QdrantSemanticCache(
                 qdrant_api_base=qdrant_api_base,
@@ -267,11 +284,49 @@ class Cache:
         if (
             self.type == LiteLLMCacheType.REDIS
             or self.type == LiteLLMCacheType.REDIS_SEMANTIC
+            or self.type == LiteLLMCacheType.VALKEY_SEMANTIC
         ) and default_in_redis_ttl is not None:
             self.ttl = default_in_redis_ttl
 
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
+
+    # Params whose values carry prompt content. Excluded from semantic-cache
+    # scope keys so differently worded prompts share a bucket and match via
+    # vector similarity rather than being split into per-wording buckets.
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset(
+        {"messages", "prompt", "input"}
+    )
+
+    # Server-set identity (from proxy auth) used to isolate semantic-cache
+    # buckets per tenant. Required once the prompt is out of the scope key, so a
+    # similar prompt from another key/team/org stays in a separate bucket.
+    _SEMANTIC_CACHE_TENANT_SCOPE_FIELDS: tuple[str, ...] = (
+        "user_api_key",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+    )
+
+    def _is_semantic_cache(self) -> bool:
+        return self.type in (
+            LiteLLMCacheType.REDIS_SEMANTIC,
+            LiteLLMCacheType.QDRANT_SEMANTIC,
+            LiteLLMCacheType.VALKEY_SEMANTIC,
+        )
+
+    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
+        metadata: dict = kwargs.get("metadata") or {}
+        litellm_params: dict = kwargs.get("litellm_params") or {}
+        metadata_in_litellm_params: dict = litellm_params.get("metadata") or {}
+
+        scope = ""
+        for field in self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS:
+            value = metadata.get(field)
+            if value is None:
+                value = metadata_in_litellm_params.get(field)
+            if value is not None:
+                scope += f"{field}: {value}"
+        return scope
 
     def get_cache_key(self, **kwargs) -> str:
         """
@@ -293,7 +348,15 @@ class Cache:
 
         combined_kwargs = ModelParamHelper._get_all_llm_api_params()
         litellm_param_kwargs = all_litellm_params
+        is_semantic_cache = self._is_semantic_cache()
+        scope_excluded_params = (
+            self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS
+            if is_semantic_cache
+            else frozenset()
+        )
         for param in kwargs:
+            if param in scope_excluded_params:
+                continue
             if param in combined_kwargs:
                 param_value: Optional[str] = self._get_param_value(param, kwargs)
                 if param_value is not None:
@@ -308,6 +371,9 @@ class Cache:
                         continue  # ignore None params
                     param_value = kwargs[param]
                     cache_key += f"{str(param)}: {str(param_value)}"
+
+        if is_semantic_cache:
+            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
@@ -691,6 +757,7 @@ class Cache:
         self,
         embedding_response: Any,
         model: Optional[str],
+        prompt_tokens: Optional[int] = None,
         prompt_tokens_details: Optional[dict] = None,
     ) -> CachedEmbedding:
         """
@@ -703,6 +770,7 @@ class Cache:
                     "index": embedding_response.get("index"),
                     "object": embedding_response.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
             elif hasattr(embedding_response, "model_dump"):
@@ -712,6 +780,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
             else:
@@ -721,6 +790,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
         except KeyError as e:
@@ -769,6 +839,29 @@ class Cache:
                 per_item[key] = value
         return per_item if per_item else None
 
+    def _get_per_item_prompt_tokens(
+        self,
+        result: EmbeddingResponse,
+        idx_in_result_data: int,
+    ) -> Optional[int]:
+        """
+        Extract the per-item prompt_tokens from a response for caching.
+
+        Single-item responses store the full usage.prompt_tokens. Multi-item
+        responses distribute it evenly (with remainder) so that summing all
+        per-item values on retrieval reconstructs the original total.
+        """
+        if result.usage is None or result.usage.prompt_tokens is None:
+            return None
+
+        total = result.usage.prompt_tokens
+        num_items = len(result.data)
+        if num_items <= 1:
+            return total
+
+        quotient, remainder = divmod(total, num_items)
+        return quotient + (1 if idx_in_result_data < remainder else 0)
+
     def add_embedding_response_to_cache(
         self,
         result: EmbeddingResponse,
@@ -780,7 +873,11 @@ class Cache:
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
 
-        # Extract per-item prompt_tokens_details from response usage
+        # Extract per-item prompt_tokens + details from response usage
+        prompt_tokens = self._get_per_item_prompt_tokens(
+            result=result,
+            idx_in_result_data=idx_in_result_data,
+        )
         prompt_tokens_details = self._get_per_item_prompt_tokens_details(
             result=result,
             idx_in_result_data=idx_in_result_data,
@@ -791,6 +888,7 @@ class Cache:
         embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
+            prompt_tokens=prompt_tokens,
             prompt_tokens_details=prompt_tokens_details,
         )
 
