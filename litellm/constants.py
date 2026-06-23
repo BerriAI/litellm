@@ -767,7 +767,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
-    "api.atlascloud.ai/v1",
+    "https://api.atlascloud.ai/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
