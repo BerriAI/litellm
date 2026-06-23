@@ -483,6 +483,25 @@ class TestResumableUploadUrl:
         assert "uploadType=resumable" in url
         assert "uploadType=media" not in url
 
+    def test_batch_text_plain_uses_resumable_upload_type(self):
+        # Clients often label a .jsonl batch upload as text/plain; it must still
+        # take the streaming/resumable path, not the buffered media path.
+        cfg = VertexAIFilesConfig()
+        request: CreateFileRequest = {
+            "file": ("batch.jsonl", _make_openai_jsonl_bytes(3), "text/plain"),
+            "purpose": "batch",
+        }
+        url = cfg.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
+            data=request,
+        )
+        assert "uploadType=resumable" in url
+        assert "uploadType=media" not in url
+
     def test_binary_upload_stays_simple_media(self):
         cfg = VertexAIFilesConfig()
         request: CreateFileRequest = {
@@ -539,9 +558,16 @@ class TestResumableChunking:
         pieces = list(BaseLLMHTTPHandler._iter_resumable_chunks(iter([b"x" * 10]), 4))
         assert pieces == [b"xxxx", b"xxxx", b"xx"]
 
-    def test_exact_multiple_yields_trailing_empty_for_finalize(self):
+    def test_exact_multiple_yields_no_trailing_empty(self):
+        # An exactly chunk-aligned stream yields only full chunks; the upload
+        # finalizes on the last data chunk instead of an extra empty request.
         pieces = list(BaseLLMHTTPHandler._iter_resumable_chunks(iter([b"x" * 8]), 4))
-        assert pieces == [b"xxxx", b"xxxx", b""]
+        assert pieces == [b"xxxx", b"xxxx"]
+
+    def test_empty_stream_yields_nothing(self):
+        # A 0-byte stream yields no chunks; the caller finalizes with one empty
+        # request (bytes */0).
+        assert list(BaseLLMHTTPHandler._iter_resumable_chunks(iter([]), 4)) == []
 
     def test_default_chunk_size_is_256kib_multiple(self):
         assert BaseLLMHTTPHandler._RESUMABLE_CHUNK_SIZE % (256 * 1024) == 0
@@ -640,11 +666,13 @@ class TestResumableUploadProtocol:
         assert bytes(state["received"]) == expected
         assert response.object == "file"
 
-    async def test_exact_multiple_finalizes_with_empty_chunk(self):
-        # Build a body that is an exact multiple of the chunk size so the stream
-        # ends on a chunk boundary; the upload must still finalize (bytes */TOTAL).
+    async def test_exact_multiple_finalizes_on_last_data_chunk(self):
+        # A body that is an exact multiple of the chunk size finalizes on its
+        # last data chunk (bytes (TOTAL-chunk)-(TOTAL-1)/TOTAL), with no extra
+        # empty finalize request.
         chunk_size = 256
-        stream = _FixedBytesStream(b"a" * (chunk_size * 3))
+        total = chunk_size * 3
+        stream = _FixedBytesStream(b"a" * total)
         config = {"body_stream": stream, "chunk_size": chunk_size}
         session_url = "https://storage.googleapis.com/upload/sess?upload_id=SID"
         mock, state = _gcs_resumable_mock(session_url)
@@ -657,8 +685,9 @@ class TestResumableUploadProtocol:
             timeout=None,
         )
 
-        assert state["ranges"][-1] == f"bytes */{chunk_size * 3}"
-        assert bytes(state["received"]) == b"a" * (chunk_size * 3)
+        assert state["ranges"][-1] == f"bytes {total - chunk_size}-{total - 1}/{total}"
+        assert "*" not in state["ranges"][-1]
+        assert bytes(state["received"]) == b"a" * total
         assert response.status_code == 200
 
     async def test_failed_chunk_raises(self):

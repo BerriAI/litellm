@@ -1,3 +1,4 @@
+import asyncio
 import json
 import ssl
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -3527,10 +3528,13 @@ class BaseLLMHTTPHandler:
     def _iter_resumable_chunks(
         byte_iter: Iterator[bytes], chunk_size: int
     ) -> Iterator[bytes]:
-        """Regroup a byte stream into ``chunk_size`` pieces followed by a final
-        piece of whatever remains (possibly empty). Every piece but the last is
-        exactly ``chunk_size`` bytes, so the caller can keep that a 256 KiB
-        multiple and never buffers more than one chunk.
+        """Regroup a byte stream into ``chunk_size`` pieces, yielding a final
+        partial piece only when it is non-empty. Every full piece is exactly
+        ``chunk_size`` bytes (kept a 256 KiB multiple for GCS) and never more than
+        one chunk is buffered. An exactly chunk-aligned stream yields only full
+        chunks, so the upload finalizes on its last data chunk instead of making
+        an extra empty request; a 0-byte stream yields nothing and the caller
+        finalizes with a single empty request.
         """
         buf = bytearray()
         for piece in byte_iter:
@@ -3538,7 +3542,8 @@ class BaseLLMHTTPHandler:
             while len(buf) >= chunk_size:
                 yield bytes(buf[:chunk_size])
                 del buf[:chunk_size]
-        yield bytes(buf)
+        if buf:
+            yield bytes(buf)
 
     @staticmethod
     def _resumable_content_range(offset: int, data_len: int, is_final: bool) -> str:
@@ -3676,7 +3681,15 @@ class BaseLLMHTTPHandler:
 
         offset = 0
         pending: Optional[bytes] = None
-        for chunk in self._iter_resumable_chunks(stream.iter_bytes(), chunk_size):
+        # Producing each chunk runs the synchronous per-row transform for that
+        # chunk's worth of rows. Pull it off the event loop thread so a large
+        # upload does not block other concurrent requests between PUTs.
+        chunk_iter = self._iter_resumable_chunks(stream.iter_bytes(), chunk_size)
+        done = object()
+        while True:
+            chunk = await asyncio.to_thread(next, chunk_iter, done)
+            if chunk is done:
+                break
             if pending is not None:
                 await self._asend_resumable_chunk(
                     httpx_client,
