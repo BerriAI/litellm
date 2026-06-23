@@ -130,6 +130,7 @@ model_list:
       api_key: os.environ/GEMINI_API_KEY
       input_cost_per_token: 0.00005
       output_cost_per_token: 0.0001
+      input_cost_per_token_above_272k_tokens: 9.99e-04
 
   # embedding models
   - model_name: openai-text-embedding-3-small
