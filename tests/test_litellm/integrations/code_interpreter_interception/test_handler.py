@@ -12,9 +12,13 @@ import pytest
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
-    _CHAT_COMPLETION_AGENTIC_SURFACE,
     _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
     _SANDBOX_KEY,
+)
+from litellm.types.integrations.custom_logger import (
+    CHAT_COMPLETION_AGENTIC_SURFACE,
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    is_interception_internal_key,
 )
 from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.utils import CallTypes
@@ -90,6 +94,18 @@ def _iter_messages(plan):
     assert patch is not None, "plan.request_patch must be set"
     assert patch.messages is not None, "plan.request_patch.messages must be set"
     return patch.messages
+
+
+def test_interception_internal_key_prefix_sets_preserve_code_interpreter_state():
+    assert is_interception_internal_key("_code_interpreter_interception_active")
+    assert not is_interception_internal_key(
+        "_code_interpreter_interception_active",
+        prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    )
+    assert is_interception_internal_key(
+        "_websearch_interception_converted_stream",
+        prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    )
 
 
 @pytest.mark.asyncio
@@ -597,7 +613,7 @@ async def test_chat_completion_gate_detects_code_execution_tool_call():
         custom_llm_provider="openai",
         kwargs={
             _ACTIVE_KEY: True,
-            "_agentic_loop_api_surface": _CHAT_COMPLETION_AGENTIC_SURFACE,
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
         },
     )
 
@@ -618,7 +634,7 @@ async def test_chat_completion_gate_refuses_without_server_active_marker():
         tools=[],
         stream=False,
         custom_llm_provider="openai",
-        kwargs={"_agentic_loop_api_surface": _CHAT_COMPLETION_AGENTIC_SURFACE},
+        kwargs={"_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE},
     )
 
     assert should_run is False
@@ -660,7 +676,7 @@ async def test_chat_completion_build_plan_runs_code_and_appends_tool_message():
             _ACTIVE_KEY: True,
             _SANDBOX_KEY: "sbxkey1",
             "_code_interpreter_interception_converted_stream": True,
-            "_agentic_loop_api_surface": _CHAT_COMPLETION_AGENTIC_SURFACE,
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
         },
     )
 
@@ -687,7 +703,7 @@ async def test_chat_completion_build_plan_runs_code_and_appends_tool_message():
         _ACTIVE_KEY: True,
         _SANDBOX_KEY: "sbxkey1",
         "_code_interpreter_interception_converted_stream": True,
-        "_agentic_loop_api_surface": _CHAT_COMPLETION_AGENTIC_SURFACE,
+        "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
     }
     assert patch.messages is not None
     assert patch.messages[-2]["role"] == "assistant"
@@ -932,14 +948,14 @@ def test_sync_chat_completion_dispatches_agentic_hook(monkeypatch):
         async def async_should_run_agentic_loop(self, **kwargs):
             assert (
                 kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == _CHAT_COMPLETION_AGENTIC_SURFACE
+                == CHAT_COMPLETION_AGENTIC_SURFACE
             )
             return True, {"tool_calls": [{"id": "call_1"}]}
 
         async def async_build_agentic_loop_plan(self, **kwargs):
             assert (
                 kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == _CHAT_COMPLETION_AGENTIC_SURFACE
+                == CHAT_COMPLETION_AGENTIC_SURFACE
             )
             return AgenticLoopPlan(response_override={"agentic": True})
 
@@ -1087,14 +1103,14 @@ async def test_openai_native_chat_hook_uses_typed_agentic_plan(monkeypatch):
         async def async_should_run_agentic_loop(self, **kwargs):
             assert (
                 kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == _CHAT_COMPLETION_AGENTIC_SURFACE
+                == CHAT_COMPLETION_AGENTIC_SURFACE
             )
             return True, {"tool_calls": [{"id": "call_1"}]}
 
         async def async_build_agentic_loop_plan(self, **kwargs):
             assert (
                 kwargs["kwargs"]["_agentic_loop_api_surface"]
-                == _CHAT_COMPLETION_AGENTIC_SURFACE
+                == CHAT_COMPLETION_AGENTIC_SURFACE
             )
             return AgenticLoopPlan(response_override={"agentic": True})
 

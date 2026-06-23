@@ -12,6 +12,8 @@ import uuid
 from typing import Any, Literal, TypedDict, cast
 
 import litellm
+from pydantic import ValidationError
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.code_interpreter_interception import (
@@ -20,6 +22,9 @@ from litellm.types.integrations.code_interpreter_interception import (
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    CHAT_COMPLETION_AGENTIC_SURFACE,
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    is_interception_internal_key,
 )
 from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
@@ -36,7 +41,6 @@ LITELLM_CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
 _INTERCEPTION_ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 _CACHE_TTL_SECONDS = 15 * 60
-_CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
 
 
 class CodeExecutionToolCall(TypedDict, total=False):
@@ -306,7 +310,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         tool_calls = (
             self._extract_chat_completion_code_execution_tool_calls(response=response)
             if kwargs.get("_agentic_loop_api_surface")
-            == _CHAT_COMPLETION_AGENTIC_SURFACE
+            == CHAT_COMPLETION_AGENTIC_SURFACE
             else self._extract_code_execution_tool_calls(response=response)
         )
         if not tool_calls:
@@ -326,7 +330,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:
-        if kwargs.get("_agentic_loop_api_surface") == _CHAT_COMPLETION_AGENTIC_SURFACE:
+        if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
             return await self._build_chat_completion_agentic_loop_plan(
                 tools=tools,
                 model=model,
@@ -405,15 +409,15 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def _build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: dict[str, object],
         model: str,
         messages: list[dict],
-        optional_params: dict,
-        kwargs: dict,
+        optional_params: dict[str, object],
+        kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
         await self._prune_expired_cache()
         tool_calls = cast(list[CodeExecutionToolCall], tools.get("tool_calls", []))
-        sandbox_key = kwargs.get(_SANDBOX_KEY)
+        sandbox_key = cast(str | None, kwargs.get(_SANDBOX_KEY))
         container, params = await self._get_or_create_container(cache_key=sandbox_key)
 
         try:
@@ -495,13 +499,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
 
     @staticmethod
-    def _filter_agentic_loop_kwargs(kwargs: dict) -> dict:
+    def _filter_agentic_loop_kwargs(kwargs: dict[str, object]) -> dict[str, object]:
         return {
             k: v
             for k, v in kwargs.items()
             if k not in {"litellm_logging_obj", "acompletion"}
-            and not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
+            and not is_interception_internal_key(
+                k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
+            )
         }
 
     def _get_followup_tools(
@@ -518,13 +523,17 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             for tool in tools
         ]
 
-    def _get_followup_optional_params(self, optional_params: dict) -> dict:
-        followup_params = {k: v for k, v in optional_params.items() if k != "tools"}
-        if self._tool_choice_targets_code_interpreter(
-            followup_params.get("tool_choice")
-        ):
-            followup_params.pop("tool_choice", None)
-        return followup_params
+    def _get_followup_optional_params(
+        self, optional_params: dict[str, object]
+    ) -> dict[str, object]:
+        drop_tool_choice = self._tool_choice_targets_code_interpreter(
+            optional_params.get("tool_choice")
+        )
+        return {
+            k: v
+            for k, v in optional_params.items()
+            if k != "tools" and not (k == "tool_choice" and drop_tool_choice)
+        }
 
     async def async_post_agentic_loop_response_hook(
         self, response: Any, plan: AgenticLoopPlan, kwargs: dict
@@ -770,7 +779,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return response
         try:
             return ModelResponse(**response)
-        except Exception:
+        except (TypeError, ValidationError):
             return None
 
     def _is_code_execution_call(self, item: Any) -> bool:

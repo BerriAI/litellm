@@ -86,6 +86,9 @@ from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    CHAT_COMPLETION_AGENTIC_SURFACE,
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    is_interception_internal_key,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -137,8 +140,6 @@ from litellm.utils import (
     ModelResponse,
     ProviderConfigManager,
 )
-
-_CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
 
 from .http_handler import get_shared_realtime_ssl_context
 
@@ -4876,19 +4877,6 @@ class BaseLLMHTTPHandler:
         except Exception:
             return str(tools)
 
-    @staticmethod
-    def _is_interception_internal_key(
-        key: str, *, strip_code_interpreter: bool = True
-    ) -> bool:
-        return (
-            key.startswith("_websearch_interception")
-            or key.startswith("_compression_interception")
-            or (
-                strip_code_interpreter
-                and key.startswith("_code_interpreter_interception")
-            )
-        )
-
     async def _execute_anthropic_agentic_plan(
         self,
         plan: AgenticLoopPlan,
@@ -4934,7 +4922,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not self._is_interception_internal_key(k)
+            if not is_interception_internal_key(k)
             and k not in internal_keys
             and k not in optional_params
         }
@@ -4942,7 +4930,7 @@ class BaseLLMHTTPHandler:
             {
                 k: v
                 for k, v in patch.kwargs.items()
-                if not self._is_interception_internal_key(k)
+                if not is_interception_internal_key(k)
                 and k not in internal_keys
                 and k not in optional_params
             }
@@ -5012,7 +5000,9 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not self._is_interception_internal_key(k, strip_code_interpreter=False)
+            if not is_interception_internal_key(
+                k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
+            )
             and k not in internal_keys
             and k not in optional_params
         }
@@ -5020,8 +5010,8 @@ class BaseLLMHTTPHandler:
             {
                 k: v
                 for k, v in patch.kwargs.items()
-                if not self._is_interception_internal_key(
-                    k, strip_code_interpreter=False
+                if not is_interception_internal_key(
+                    k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
                 )
                 and k not in internal_keys
                 and k not in optional_params
@@ -5156,15 +5146,17 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not self._is_interception_internal_key(k, strip_code_interpreter=False)
+            if not is_interception_internal_key(
+                k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
+            )
             and k not in internal_params
         }
         kwargs_for_followup.update(
             {
                 k: v
                 for k, v in patch.kwargs.items()
-                if not self._is_interception_internal_key(
-                    k, strip_code_interpreter=False
+                if not is_interception_internal_key(
+                    k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
                 )
                 and k not in internal_params
                 and k not in optional_params_for_followup
@@ -5453,7 +5445,7 @@ class BaseLLMHTTPHandler:
                 if shared_gate_overridden:
                     kwargs_with_surface = kwargs.copy() if kwargs else {}
                     kwargs_with_surface["_agentic_loop_api_surface"] = (
-                        _CHAT_COMPLETION_AGENTIC_SURFACE
+                        CHAT_COMPLETION_AGENTIC_SURFACE
                     )
                     should_run, tool_calls = (
                         await callback.async_should_run_agentic_loop(
@@ -5507,7 +5499,7 @@ class BaseLLMHTTPHandler:
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
                 if use_shared_agentic_hook:
                     kwargs_with_provider["_agentic_loop_api_surface"] = (
-                        _CHAT_COMPLETION_AGENTIC_SURFACE
+                        CHAT_COMPLETION_AGENTIC_SURFACE
                     )
                     build_plan_overridden = (
                         callback.__class__.async_build_agentic_loop_plan
