@@ -451,7 +451,10 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
-from litellm.proxy.plugin_routes import register_plugins_from_config, router as plugin_router
+from litellm.proxy.plugin_routes import (
+    register_plugins_from_config,
+    router as plugin_router,
+)
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
