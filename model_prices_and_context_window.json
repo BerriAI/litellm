@@ -18824,7 +18824,7 @@
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
-        "mode": "chat",
+        "mode": "audio_generation",
         "output_cost_per_image": 0.04,
         "output_cost_per_token": 0,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -18849,7 +18849,8 @@
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
-        "mode": "chat",
+        "mode": "audio_generation",
+        "output_cost_per_image": 0.08,
         "output_cost_per_token": 0,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
@@ -35569,6 +35570,26 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supports_tool_choice": true
+    },
+    "vertex_ai/lyria-3-clip-preview": {
+        "litellm_provider": "vertex_ai",
+        "mode": "audio_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
+    },
+    "vertex_ai/lyria-3-pro-preview": {
+        "litellm_provider": "vertex_ai",
+        "mode": "audio_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
     },
     "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
         "input_cost_per_token": 5e-06,

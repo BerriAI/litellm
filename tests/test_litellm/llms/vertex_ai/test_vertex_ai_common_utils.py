@@ -1591,3 +1591,32 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+
+def test_lyria_models_route_to_lyria():
+    from litellm.llms.vertex_ai.common_utils import (
+        VertexAIModelRoute,
+        get_vertex_ai_model_route,
+    )
+
+    assert get_vertex_ai_model_route("lyria-3-clip-preview") == VertexAIModelRoute.LYRIA
+    assert get_vertex_ai_model_route("lyria-3-pro-preview") == VertexAIModelRoute.LYRIA
+
+
+def test_lyria_model_pricing_in_model_cost_map():
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    cost_map = GetModelCostMap.load_local_model_cost_map()
+
+    assert "vertex_ai/lyria-3-clip-preview" in cost_map
+    assert "vertex_ai/lyria-3-pro-preview" in cost_map
+
+    clip = cost_map["vertex_ai/lyria-3-clip-preview"]
+    assert clip["litellm_provider"] == "vertex_ai"
+    assert clip["supports_audio_output"] is True
+    assert clip["output_cost_per_image"] == 0.04
+
+    pro = cost_map["vertex_ai/lyria-3-pro-preview"]
+    assert pro["litellm_provider"] == "vertex_ai"
+    assert pro["supports_audio_output"] is True
+    assert pro["output_cost_per_image"] == 0.08
