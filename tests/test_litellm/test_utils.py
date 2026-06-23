@@ -4203,6 +4203,17 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
 
+    # Max output is 384K for both v4 models, per
+    # https://api-docs.deepseek.com/quick_start/pricing
+    for key in [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+    ]:
+        assert model_cost[key]["max_output_tokens"] == 384_000
+        assert model_cost[key]["max_tokens"] == 384_000
+
 
 def test_deepseek_v4_models_in_backup_cost_map():
     """
@@ -4242,6 +4253,17 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["input_cost_per_token"] == expected_input
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
+
+    # Max output is 384K for both v4 models, per
+    # https://api-docs.deepseek.com/quick_start/pricing
+    for key in [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+    ]:
+        assert model_cost[key]["max_output_tokens"] == 384_000
+        assert model_cost[key]["max_tokens"] == 384_000
 
 
 _FIREWORKS_MODELS = [
