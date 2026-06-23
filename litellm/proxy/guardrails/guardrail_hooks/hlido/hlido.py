@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
     Literal,
     Protocol,
     Union,
@@ -185,7 +185,7 @@ class HlidoGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type[GuardrailConfigModel] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.hlido import (
             HlidoGuardrailConfigModel,
         )
@@ -426,10 +426,10 @@ class HlidoGuardrail(CustomGuardrail):
 
 
 __all__ = [
-    "HlidoGuardrail",
     "HlidoAgentRecord",
+    "HlidoGuardrail",
     "TrustAllowed",
     "TrustBlocked",
-    "TrustUnverified",
     "TrustLookupFailed",
+    "TrustUnverified",
 ]
