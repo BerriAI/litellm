@@ -63,7 +63,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    ProxyException,
+    SpecialMCPServerNames,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -227,6 +231,28 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
         elif ch == ":":
             expect_key = False
     return False
+
+
+def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
+    """Map a ``ProxyException`` to an ``HTTPException`` that preserves its real
+    status code and headers.
+
+    ``user_api_key_auth`` raises ``ProxyException`` (not ``HTTPException``) on
+    auth failures. The MCP ASGI handlers re-raise ``HTTPException`` to keep the
+    status and any ``WWW-Authenticate`` challenge, but a ``ProxyException`` would
+    otherwise fall through to their generic handler and be flattened to a 500 —
+    dropping the 401 + challenge an OAuth client needs to re-authenticate, so the
+    tool call surfaces as a cancelled/terminated session instead.
+    """
+    try:
+        status_code = int(exc.code)
+    except (TypeError, ValueError):
+        status_code = 500
+    return HTTPException(
+        status_code=status_code,
+        detail=exc.message,
+        headers=exc.headers or None,
+    )
 
 
 if MCP_AVAILABLE:
@@ -3352,6 +3378,19 @@ if MCP_AVAILABLE:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
+        # A key scoped to no MCP servers opts out of every MCP path. Enforce it
+        # here too, since toolset scoping replaces mcp_servers and would otherwise
+        # drop the sentinel. Checked before the admin branch, mirroring
+        # get_allowed_mcp_servers.
+        original_op = user_api_key_auth.object_permission
+        if original_op is not None and SpecialMCPServerNames.no_mcp_servers.value in (
+            original_op.mcp_servers or []
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="API key is scoped to no MCP servers; toolset access is denied.",
+            )
+
         # Access control: non-admin keys must have this toolset in their grant list.
         # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
         is_admin = _user_has_admin_view(user_api_key_auth)
@@ -4006,6 +4045,12 @@ if MCP_AVAILABLE:
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
+        except ProxyException as e:
+            # Auth failures from user_api_key_auth arrive as ProxyException, not
+            # HTTPException. Preserve the real status (e.g. 401 + WWW-Authenticate)
+            # so OAuth clients can re-authenticate instead of receiving a generic
+            # 500 that surfaces as a cancelled tool call.
+            raise _proxy_exception_to_http_exception(e)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
@@ -4123,6 +4168,12 @@ if MCP_AVAILABLE:
             # Re-raise HTTP exceptions to preserve status codes and details
             # (e.g. 401 + WWW-Authenticate challenges from OAuth pass-through).
             raise
+        except ProxyException as e:
+            # Auth failures from user_api_key_auth arrive as ProxyException, not
+            # HTTPException. Preserve the real status (e.g. 401 + WWW-Authenticate)
+            # so OAuth clients can re-authenticate instead of receiving a generic
+            # 500 that surfaces as a cancelled tool call.
+            raise _proxy_exception_to_http_exception(e)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions

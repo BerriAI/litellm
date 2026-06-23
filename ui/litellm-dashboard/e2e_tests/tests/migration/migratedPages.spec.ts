@@ -17,11 +17,11 @@ const ROOT = process.env.SERVER_ROOT_PATH ?? "";
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pathRe = (segment: string) => new RegExp(`${esc(ROOT)}/ui/${esc(segment)}/?($|\\?)`);
-const legacyAnchor = (page: Page) => page.locator("a", { hasText: "Virtual Keys" });
+const virtualKeysLink = (page: Page) => page.getByRole("link", { name: "Virtual Keys", exact: true });
 
 /** The dashboard shell is present (sidebar rendered); page didn't 404 / crash. */
 async function expectRendered(page: Page) {
-  await expect(legacyAnchor(page)).toBeVisible({ timeout: 20_000 });
+  await expect(virtualKeysLink(page)).toBeVisible({ timeout: 20_000 });
 }
 
 /**
@@ -45,7 +45,7 @@ test.use({ storageState: ADMIN_STORAGE_PATH });
 
 test.describe("App Router migrated pages", () => {
   for (const segment of MIGRATED_E2E_SEGMENTS) {
-    test(`${segment}: sidebar nav, reload, and round-trip with a legacy page`, async ({ page }) => {
+    test(`${segment}: sidebar nav, reload, and round-trip via the api-keys landing`, async ({ page }) => {
       const pageErrors: string[] = [];
       page.on("pageerror", (e) => pageErrors.push(String(e)));
 
@@ -63,9 +63,9 @@ test.describe("App Router migrated pages", () => {
       await dismissFeedbackPopup(page);
       await expect(page).toHaveURL(pathRe(segment));
       await expectRendered(page);
-      // 4. Click off to a legacy (not-yet-migrated) page.
-      await legacyAnchor(page).click();
-      await expect(page).toHaveURL(new RegExp(`${esc(ROOT)}/ui/\\?page=api-keys`));
+      // 4. Click the Virtual Keys sidebar link to the api-keys landing (now a path route), then back.
+      await virtualKeysLink(page).click();
+      await expect(page).toHaveURL(pathRe("api-keys"));
       await dismissFeedbackPopup(page);
       await expectRendered(page);
       // 5. Click back to the migrated page.
