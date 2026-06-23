@@ -44,7 +44,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _resolve_api_base(api_base: Optional[str]) -> str:
-        if api_base is None:
+        if not api_base:
             account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
             if account_id is None:
                 raise ValueError(

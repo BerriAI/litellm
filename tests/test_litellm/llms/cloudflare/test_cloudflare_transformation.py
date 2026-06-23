@@ -68,6 +68,24 @@ def test_get_complete_url_is_idempotent_for_full_base():
     )
 
 
+def test_get_complete_url_falls_back_to_account_id_when_base_is_empty(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    config = CloudflareChatConfig()
+
+    url = config.get_complete_url(
+        api_base="",
+        api_key="cf-key",
+        model="@cf/meta/llama-2-7b-chat-int8",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert (
+        url
+        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
+    )
+
+
 def test_get_complete_url_raises_when_account_id_and_base_missing(monkeypatch):
     monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
     config = CloudflareChatConfig()
