@@ -23,7 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
-    CLI_JWT_TOKEN_NAME,
+    CLI_SESSION_KEY_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
@@ -2432,6 +2432,7 @@ class ExperimentalUIJWTToken:
         Returns:
             Encrypted JWT token string
         """
+        import secrets
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -2453,11 +2454,16 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
+        # Unique per-login identity so concurrent sessions get isolated spend
+        # attribution; budget is enforced via the shared team/user counters
+        # (team_id/user_id), not a per-key max_budget.
+        session_token = f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
+        session_alias = f"{CLI_SESSION_KEY_PREFIX}-{user_info.user_id}"
+
         valid_token = UserAPIKeyAuth(
-            token=CLI_JWT_TOKEN_NAME,
-            key_name=CLI_JWT_TOKEN_NAME,
-            key_alias=CLI_JWT_TOKEN_NAME,
-            max_budget=litellm.max_ui_session_budget,
+            token=session_token,
+            key_name=session_alias,
+            key_alias=session_alias,
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,

@@ -3786,3 +3786,128 @@ async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     # Reaching the success-assembly return (never the exception handler)
     # proves a valid key is unaffected by the 503 conversion.
     mock_return.assert_awaited_once()
+
+
+def _mint_cli_session_token(monkeypatch, *, user_id="cli-admin"):
+    """Mint a CLI session token for a PROXY_ADMIN user so auth resolves on the
+    admin early-return path (no prisma/common_checks needed)."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="cli@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        models=["gpt-3.5-turbo"],
+        max_budget=100.0,
+    )
+    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info, team_id="cli-team", team_alias="cli-team-alias"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cli_session_token_authenticates_without_experimental_flag(monkeypatch):
+    """A lite login token (encrypted non-sk blob) must authenticate on the LLM
+    hot path even when EXPERIMENTAL_UI_LOGIN is unset. Before the fix the decrypt
+    branch was gated behind that flag, so this would 401 on default deployments."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    cli_token = _mint_cli_session_token(monkeypatch)
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {cli_token}"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        result = await user_api_key_auth(
+            request=mock_request,
+            api_key=f"Bearer {cli_token}",
+        )
+
+    assert result.user_id == "cli-admin"
+    assert result.team_id == "cli-team"
+    assert result.token is not None and result.token.startswith("cli-session-")
+
+
+@pytest.mark.asyncio
+async def test_random_non_sk_token_is_rejected(monkeypatch):
+    """Decryption fails closed: a random non-sk string is not a valid blob, so it
+    must fall through to the 'expected sk-' 401 rather than being silently
+    accepted. A non-None prisma is used so the no-db short-circuit is skipped and
+    the real rejection path (before any DB lookup) is exercised."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": "Bearer not-a-real-token"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+    ):
+        with pytest.raises(Exception) as exc_info:
+            await user_api_key_auth(
+                request=mock_request,
+                api_key="Bearer not-a-real-token",
+            )
+
+    message = str(getattr(exc_info.value, "message", exc_info.value))
+    assert int(getattr(exc_info.value, "code", 0)) == status.HTTP_401_UNAUTHORIZED
+    assert "sk-" in message
+
+
+@pytest.mark.asyncio
+async def test_expired_cli_session_token_is_rejected(monkeypatch):
+    """An expired CLI session token must 401 with expired_key. Expiry is enforced
+    on the shared validation path, not only for DB-backed keys."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "-1")
+
+    import importlib
+
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
+
+    user_info = LiteLLM_UserTable(
+        user_id="cli-admin",
+        user_email="cli@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        models=["gpt-3.5-turbo"],
+        max_budget=100.0,
+    )
+    cli_token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info)
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {cli_token}"}
+    mock_request.query_params = {}
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=f"Bearer {cli_token}",
+                )
+
+        assert exc_info.value.type == ProxyErrorTypes.expired_key
+    finally:
+        monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
+        importlib.reload(constants)
+        importlib.reload(auth_checks)

@@ -84,7 +84,6 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
-from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
 try:
@@ -1513,8 +1512,11 @@ async def _user_api_key_auth_builder(
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
 
-            ## Check UI Hash Key
-            if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            ## Check UI/CLI Hash Key
+            # Embedded session tokens (lite login, UI dashboard) are encrypted
+            # blobs, never sk- keys. Attempt decryption only for non-sk- keys;
+            # decryption fails closed for anything that isn't a genuine blob.
+            if valid_token is None and not api_key.startswith("sk-"):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
                     api_key
                 )
