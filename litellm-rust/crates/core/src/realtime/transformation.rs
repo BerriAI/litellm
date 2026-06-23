@@ -1,4 +1,4 @@
-use crate::realtime::types::RealtimeTransformResult;
+use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 use crate::CoreResult;
 
 pub trait RealtimeProviderConfig {
@@ -6,17 +6,17 @@ pub trait RealtimeProviderConfig {
     /// Pure string construction only — no network, no env.
     fn complete_url(&self, api_base: Option<&str>, model: &str) -> String;
 
-    /// Transform a client → backend message before it is forwarded upstream.
+    /// Transform a client → backend event before it is forwarded upstream.
     fn transform_realtime_request(
         &self,
-        message: &str,
+        event: &RealtimeEvent,
         model: &str,
     ) -> CoreResult<RealtimeTransformResult>;
 
-    /// Transform a backend → client message before it is forwarded downstream.
+    /// Transform a backend → client event before it is forwarded downstream.
     fn transform_realtime_response(
         &self,
-        message: &str,
+        event: &RealtimeEvent,
         model: &str,
     ) -> CoreResult<RealtimeTransformResult>;
 }
