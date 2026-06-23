@@ -9,6 +9,9 @@ repository.workspace = true
 litellm-core.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
