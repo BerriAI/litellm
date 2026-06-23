@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.90.0"
+version = "1.91.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -55,7 +55,7 @@ proxy = [
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
-    "cryptography>=46.0.7,<47.0",
+    "cryptography>=48.0.1,<49.0",
     "pynacl>=1.6.2,<2.0",
     "websockets>=15.0.1,<16.0",
     "boto3>=1.43.1,<2.0",
@@ -70,6 +70,7 @@ proxy = [
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "pydantic-settings>=2.14.1,<3.0",
+    "expression>=5.6.0,<6.0",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
@@ -181,7 +182,7 @@ dev = [
     "parameterized==0.9.0",
     "openapi-core==0.22.0; python_version < '3.14'",
     "pytest-timeout==2.4.0",
-    "vcrpy==8.1.1",
+    "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
 ]
 proxy-dev = [
@@ -207,7 +208,7 @@ ci = [
     "pytest-codspeed==4.3.0",
     "pytest-retry==1.7.0",
     "pyarrow==23.0.1",
-    "langchain==1.2.10",
+    "langchain==1.3.9",
     "lunary==1.4.36; python_version == '3.10'",
     "lunary==1.4.37; python_version >= '3.11'",
     "logfire==4.6.0",
@@ -224,11 +225,8 @@ ci = [
     "pylint==4.0.5",
     "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
-    "langgraph==1.0.10",
-    # langgraph-prebuilt 1.0.9 imports ExecutionInfo/ServerInfo from
-    # langgraph.runtime, which is not exported until langgraph 1.1.0.
-    # Pin to 1.0.8 so it pairs correctly with langgraph==1.0.10.
-    "langgraph-prebuilt==1.0.8",
+    "langgraph>=1.2.4,<1.3.0",
+    "langgraph-prebuilt>=1.1.0,<1.3.0",
     "claude-agent-sdk==0.1.44",
 ]
 healthcheck = [
@@ -243,7 +241,7 @@ build-backend = "uv_build"
 [tool.uv]
 constraint-dependencies = [
     "tornado>=6.5.6",
-    "aiohttp>=3.13.5,<3.14",
+    "aiohttp>=3.14.1,<4.0",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
@@ -272,7 +270,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.90.0"
+version = "1.91.0"
 version_files = [
     "pyproject.toml:^version",
 ]

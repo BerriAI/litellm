@@ -1,6 +1,7 @@
 import os
 import sys
 
+import httpx
 import pytest
 
 import litellm
@@ -550,3 +551,78 @@ class TestExtractAndRaiseLitellmException:
         )
 
         assert result is None
+
+
+class ModelError(Exception):
+    """Mimics replicate's SDK exception, whose mapping keys on the class name."""
+
+
+class CohereConnectionError(Exception):
+    """Mimics cohere's SDK exception, whose mapping keys on the class name."""
+
+
+def test_replicate_model_error_maps_to_bad_request():
+    """The replicate branch keys on ``type(original_exception).__name__ ==
+    "ModelError"`` rather than on the error string. The dispatch now lives in a
+    per-provider helper, so this class-name value has to be threaded into the
+    helper; if it is not, the bare name ``exception_type`` resolves to the
+    module-level function and the comparison is always False, silently mismapping
+    to APIConnectionError."""
+    original_exception = ModelError("the deployed model failed to return a prediction")
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"
+
+
+def test_cohere_connection_error_maps_to_rate_limit():
+    """The cohere branch keys on ``"CohereConnectionError" in
+    type(original_exception).__name__``. With the dispatch extracted into a helper
+    the class-name value must be passed in; otherwise ``in`` runs against the
+    module-level ``exception_type`` function object and raises TypeError, which the
+    outer handler swallows into a generic APIConnectionError."""
+    original_exception = CohereConnectionError("connection reset by peer")
+    original_exception.message = "connection reset by peer"
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="command-r",
+            original_exception=original_exception,
+            custom_llm_provider="cohere",
+        )
+
+    assert excinfo.value.llm_provider == "cohere"
+
+
+class ReplicateError(Exception):
+    """Mimics a replicate HTTP error carrying a status_code and response."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.response = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://api.replicate.com/v1/predictions"),
+        )
+
+
+def test_replicate_422_maps_to_unprocessable_entity():
+    """The replicate status-code ladder carried two identical ``status_code == 422``
+    branches; the second was unreachable dead code. After dropping the duplicate the
+    surviving branch must still map 422 to UnprocessableEntityError."""
+    original_exception = ReplicateError("validation failed for the input", 422)
+
+    with pytest.raises(litellm.UnprocessableEntityError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"

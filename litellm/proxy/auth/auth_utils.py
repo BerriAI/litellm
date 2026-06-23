@@ -285,6 +285,8 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # SDK-only field; also rejected outright in is_request_body_safe.
+    "model_list",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -365,6 +367,10 @@ def is_request_body_safe(
     ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
     recursion-depth DoS surface.
     """
+    if "model_list" in request_body:
+        raise ValueError(
+            "Rejected Request: model_list is not allowed in the request body."
+        )
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))

@@ -38,7 +38,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json
+from pydantic import BaseModel, Json, JsonValue
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -106,6 +106,10 @@ from litellm.proxy.common_utils.callback_utils import (
     process_callback,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.router_utils.add_retry_fallback_headers import (
+    get_fallback_errors_from_headers,
+    get_hidden_params_dict,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -419,6 +423,10 @@ from litellm.proxy.management_endpoints.workflow_management_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.memory.memory_endpoints import router as memory_router
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
+    register_plugins_from_config,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -4455,6 +4463,8 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                    if key == "request_timeout":
+                        litellm.request_timeout_explicitly_set = True
                     if key in {"s3_audit_callback_params", "s3_callback_params"}:
                         from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
                         from litellm.litellm_core_utils.litellm_logging import (
@@ -4502,6 +4512,8 @@ class ProxyConfig:
             load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
             ### ALERTING ###
             self._load_alerting_settings(general_settings=general_settings)
+            ### PLUGINS ###
+            register_plugins_from_config(general_settings)
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
@@ -4772,6 +4784,11 @@ class ProxyConfig:
         search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(
             config
         )
+
+        ## SANDBOX TOOLS SETTINGS
+        from litellm.sandbox.sandbox_tools import register_sandbox_tools
+
+        register_sandbox_tools(config.get("sandbox_tools") or [])
 
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
@@ -5662,6 +5679,10 @@ class ProxyConfig:
                 alert_to_webhook_url=general_settings["alert_to_webhook_url"],
                 llm_router=llm_router,
             )
+
+        if _general_settings is not None and "plugins" in _general_settings:
+            general_settings["plugins"] = _general_settings["plugins"]
+            register_plugins_from_config(general_settings)
 
     async def _reschedule_spend_log_cleanup_job(self):
         """
@@ -7070,57 +7091,122 @@ def _get_client_requested_model_for_streaming(request_data: dict) -> str:
     return requested_model if isinstance(requested_model, str) else ""
 
 
+def _is_positive_int_like(value: Any) -> bool:
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _should_include_fallback_errors(request_data: dict[str, object]) -> bool:
+    if not general_settings.get("expose_fallback_errors_to_caller"):
+        return False
+    return request_data.get("include_fallback_errors") is True
+
+
+def _get_streaming_fallback_metadata(
+    response_obj: object,
+) -> tuple[bool, str | None, list[dict[str, object]]]:
+    additional_headers = get_hidden_params_dict(response_obj).get("additional_headers")
+    if not isinstance(additional_headers, dict):
+        return False, None, []
+
+    if not _is_positive_int_like(
+        additional_headers.get("x-litellm-attempted-fallbacks")
+    ):
+        return False, None, []
+
+    fallback_model = additional_headers.get("x-litellm-model-group")
+    fallback_errors = get_fallback_errors_from_headers(additional_headers)
+    if isinstance(fallback_model, str) and fallback_model:
+        return True, fallback_model, fallback_errors
+    return True, None, fallback_errors
+
+
+def _format_fallback_metadata_sse_event(
+    *,
+    fallback_model: str | None,
+    fallback_errors: list[dict[str, object]],
+) -> str:
+    import time
+
+    payload = {
+        "id": "litellm-fallback-metadata",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": fallback_model or "",
+        "choices": [],
+        "litellm_fallback": {
+            "fallback_model": fallback_model,
+            "errors": fallback_errors,
+        },
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 def _restamp_streaming_chunk_model(
     *,
     chunk: Any,
     requested_model_from_client: str,
     request_data: dict,
     model_mismatch_logged: bool,
-) -> Tuple[Any, bool]:
+    fallback_was_attempted: bool = False,
+    fallback_model_from_metadata: str | None = None,
+) -> tuple[Any, bool]:
+    target_model = (
+        fallback_model_from_metadata
+        if fallback_was_attempted
+        else requested_model_from_client
+    )
     # Always return the client-requested model name (not provider-prefixed internal identifiers)
     # on streaming chunks.
+    # On fallback, use the public OpenAI-compatible model name. This keeps
+    # provider-prefixed internal identifiers from leaking into the public API.
     #
     # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+    if not target_model or not isinstance(chunk, (BaseModel, dict)):
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
-    if _is_azure_model_router_request(requested_model_from_client):
+    if not fallback_was_attempted and _is_azure_model_router_request(
+        requested_model_from_client
+    ):
         return chunk, model_mismatch_logged
 
     # For fastest_response batch completions, preserve the winning model's name
     # instead of stamping the comma-separated list the client sent.
-    if request_data.get("fastest_response", False):
+    if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
-    if downstream_model == requested_model_from_client:
+    if downstream_model == target_model:
         return chunk, model_mismatch_logged
 
-    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+    if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
-            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            "litellm_call_id=%s: streaming chunk model mismatch - target=%r downstream=%r fallback_was_attempted=%s. Overriding chunk model to target.",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
+            target_model,
             downstream_model,
+            fallback_was_attempted,
         )
         model_mismatch_logged = True
 
     if isinstance(chunk, dict):
-        chunk["model"] = requested_model_from_client
+        chunk["model"] = target_model
         return chunk, model_mismatch_logged
 
     try:
-        setattr(chunk, "model", requested_model_from_client)
+        chunk.model = target_model
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
+            target_model,
             type(chunk),
             str(e),
             exc_info=True,
@@ -7279,7 +7365,14 @@ async def async_data_generator(
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
+        (
+            fallback_was_attempted,
+            fallback_model_from_metadata,
+            fallback_errors,
+        ) = _get_streaming_fallback_metadata(response)
         model_mismatch_logged = False
+        fallback_metadata_event_sent = False
+        include_fallback_errors = _should_include_fallback_errors(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -7317,13 +7410,37 @@ async def async_data_generator(
                     str_so_far=_str_so_far,
                 )
 
+            # Mid-stream fallbacks surface metadata on individual chunks rather than
+            # the response wrapper. Keep scanning chunks until a fallback model is
+            # resolved, then latch it for the rest of the stream.
+            if fallback_model_from_metadata is None:
+                (
+                    chunk_fallback_was_attempted,
+                    chunk_fallback_model,
+                    chunk_fallback_errors,
+                ) = _get_streaming_fallback_metadata(chunk)
+                if chunk_fallback_was_attempted:
+                    fallback_was_attempted = True
+                    fallback_model_from_metadata = chunk_fallback_model
+                    fallback_errors = fallback_errors or chunk_fallback_errors
+
+            pending_fallback_event = (
+                include_fallback_errors
+                and fallback_was_attempted
+                and fallback_errors
+                and not fallback_metadata_event_sent
+            )
+
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
                 requested_model_from_client=requested_model_from_client,
                 request_data=request_data,
                 model_mismatch_logged=model_mismatch_logged,
+                fallback_was_attempted=fallback_was_attempted,
+                fallback_model_from_metadata=fallback_model_from_metadata,
             )
 
+            raw_passthrough = False
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
@@ -7339,14 +7456,14 @@ async def async_data_generator(
                         raise ValueError(
                             "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                         )
-                    continue
-                if chunk.startswith(("data:", "event:", ":")):
+                    raw_passthrough = True
+                elif chunk.startswith(("data:", "event:", ":")):
                     yield (
                         chunk
                         if chunk.endswith(_SSE_FRAME_DELIMITERS)
                         else chunk + "\n\n"
                     )
-                    continue
+                    raw_passthrough = True
             elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
                 while True:
@@ -7358,15 +7475,23 @@ async def async_data_generator(
                     raise ValueError(
                         "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                     )
-                continue
+                raw_passthrough = True
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
 
-            try:
-                yield _format_streaming_sse_chunk(chunk=chunk)
-            except Exception as e:
-                yield f"data: {str(e)}\n\n"
+            if not raw_passthrough:
+                try:
+                    yield _format_streaming_sse_chunk(chunk=chunk)
+                except Exception as e:
+                    yield f"data: {str(e)}\n\n"
+
+            if pending_fallback_event:
+                yield _format_fallback_metadata_sse_event(
+                    fallback_model=fallback_model_from_metadata,
+                    fallback_errors=fallback_errors,
+                )
+                fallback_metadata_event_sent = True
 
         stream_completed = True
         if not needs_iterator_wrap:
@@ -11566,9 +11691,12 @@ async def _get_caller_byok_team_scope(
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         return None
+    key_team_scope: set[str] = (
+        {user_api_key_dict.team_id} if user_api_key_dict.team_id else set()
+    )
     user_id = user_api_key_dict.user_id
     if user_id is None:
-        return set()
+        return key_team_scope
     try:
         user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_id}
@@ -11576,12 +11704,12 @@ async def _get_caller_byok_team_scope(
     except Exception:
         verbose_proxy_logger.exception(
             "Failed to look up caller teams while scoping BYOK search; "
-            "defaulting to no team access."
+            "defaulting to key team scope only."
         )
-        return set()
+        return key_team_scope
     if user_row is None:
-        return set()
-    return set(user_row.teams or [])
+        return key_team_scope
+    return key_team_scope | set(user_row.teams or [])
 
 
 def _byok_row_outside_caller_teams(
@@ -14931,6 +15059,41 @@ async def update_config(
 Keep it more precise, to prevent overwrite other values unintentially
 """
 
+_PLUGIN_KEY_REDACTED = "***"
+
+
+def _preserve_redacted_plugin_keys(incoming: object, existing: object) -> object:
+    """Restore real plugin_key values the client never sees.
+
+    /config/field/info redacts every plugin_key to ``"***"``, so an admin
+    editing a plugin posts that placeholder (or a blank, when the UI clears the
+    field) straight back. Treat a blank or redacted plugin_key as "keep the
+    stored credential" by sourcing it from the existing config; only a real,
+    non-redacted value replaces it, and a blank with no stored key drops the
+    field entirely instead of persisting the placeholder.
+    """
+    if not isinstance(incoming, list):
+        return incoming
+
+    stored_keys = {
+        p["name"]: p["plugin_key"]
+        for p in (existing if isinstance(existing, list) else [])
+        if isinstance(p, dict) and p.get("name") and p.get("plugin_key")
+    }
+
+    def resolve(plugin: object) -> object:
+        if not isinstance(plugin, dict):
+            return plugin
+        key = plugin.get("plugin_key")
+        if key not in (None, "", _PLUGIN_KEY_REDACTED):
+            return plugin
+        name = plugin.get("name")
+        if name in stored_keys:
+            return {**plugin, "plugin_key": stored_keys[name]}
+        return {k: v for k, v in plugin.items() if k != "plugin_key"}
+
+    return [resolve(p) for p in incoming]
+
 
 @router.post(
     "/config/field/update",
@@ -14997,7 +15160,13 @@ async def update_config_general_settings(
 
     ## update db
 
-    general_settings[data.field_name] = data.field_value
+    field_value = data.field_value
+    if data.field_name == "plugins":
+        field_value = _preserve_redacted_plugin_keys(
+            field_value, general_settings.get("plugins")
+        )
+
+    general_settings[data.field_name] = field_value
 
     response = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
@@ -15008,7 +15177,72 @@ async def update_config_general_settings(
     )
     await invalidate_config_param("general_settings")
 
+    if data.field_name == "plugins":
+        register_plugins_from_config(general_settings)
+
     return response
+
+
+# Secret-bearing general_settings fields the segment masker does not match by
+# name: database_url and database_extra_connection_params embed DB credentials,
+# pass_through_endpoints carry upstream Authorization headers, and
+# alert_to_webhook_url is itself a webhook secret
+_EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
+    {
+        "database_url",
+        "database_extra_connection_params",
+        "pass_through_endpoints",
+        "alert_to_webhook_url",
+    }
+)
+
+
+def _is_secret_general_setting_field(field_name: str) -> bool:
+    return (
+        field_name in _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS
+        or SENSITIVE_DATA_MASKER.is_sensitive_key(field_name)
+    )
+
+
+# Matches the cap on _redact_sensitive_litellm_params (the closest analog in the
+# proxy). Past this depth we fail closed by returning "REDACTED" for the whole
+# subtree rather than recursing further — better to over-redact a pathological
+# config than to silently return a deeply-nested credential verbatim
+_REDACT_SECRET_MAX_DEPTH = 10
+
+
+def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
+    """Recursively redact secret leaves inside a structured field so a nested
+    credential (e.g. aws_web_identity_token under database_args) is never
+    returned to a non-admin, while non-secret siblings stay visible. At
+    _REDACT_SECRET_MAX_DEPTH the whole subtree is replaced with "REDACTED"
+    so depth-overrun fails closed."""
+    if depth >= _REDACT_SECRET_MAX_DEPTH:
+        return "REDACTED"
+    if isinstance(value, dict):
+        return {
+            key: (
+                "REDACTED"
+                if _is_secret_general_setting_field(key)
+                else _redact_secret_values_in_obj(sub, depth + 1)
+            )
+            for key, sub in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secret_values_in_obj(item, depth + 1) for item in value]
+    return value
+
+
+def _redact_general_setting_value(
+    field_name: str, value: JsonValue, is_full_admin: bool
+) -> JsonValue:
+    if is_full_admin:
+        return value
+    if _is_secret_general_setting_field(field_name):
+        return "REDACTED"
+    if isinstance(value, (dict, list)):
+        return _redact_secret_values_in_obj(value)
+    return value
 
 
 @router.get(
@@ -15063,9 +15297,21 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            return ConfigFieldInfo(
-                field_name=field_name, field_value=general_settings[field_name]
+            field_value = _redact_general_setting_value(
+                field_name,
+                general_settings[field_name],
+                user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             )
+            if field_name == "plugins" and isinstance(field_value, list):
+                field_value = [
+                    (
+                        {k: ("***" if k == "plugin_key" else v) for k, v in p.items()}
+                        if isinstance(p, dict)
+                        else p
+                    )
+                    for p in field_value
+                ]
+            return ConfigFieldInfo(field_name=field_name, field_value=field_value)
         else:
             raise HTTPException(
                 status_code=400,
@@ -15110,6 +15356,8 @@ async def get_config_list(
                 )
             },
         )
+
+    is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     ## get general settings from db
     db_general_settings = await ConfigRepository(prisma_client).table.find_first(
@@ -15159,7 +15407,11 @@ async def get_config_list(
                             field_name=sub_field,
                             field_type=sub_field_type.__name__,
                             field_description="",  # Add custom logic if descriptions are available
-                            field_default_value=general_settings.get(sub_field, None),
+                            field_default_value=_redact_general_setting_value(
+                                sub_field,
+                                general_settings.get(sub_field, None),
+                                is_full_admin,
+                            ),
                             stored_in_db=None,
                         )
                         for sub_field, sub_field_type in pydantic_class.__annotations__.items()
@@ -15189,7 +15441,11 @@ async def get_config_list(
                         field_name=field_name,
                         field_type=allowed_args[field_name]["type"],
                         field_description=field_info.description or "",
-                        field_value=general_settings.get(field_name, None),
+                        field_value=_redact_general_setting_value(
+                            field_name,
+                            general_settings.get(field_name, None),
+                            is_full_admin,
+                        ),
                         stored_in_db=_stored_in_db,
                         field_default_value=field_info.default,
                         nested_fields=nested_fields,
@@ -15213,7 +15469,9 @@ async def get_config_list(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=_field_value,
+                    field_value=_redact_general_setting_value(
+                        field_name, _field_value, is_full_admin
+                    ),
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
@@ -16387,6 +16645,7 @@ app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
+app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)

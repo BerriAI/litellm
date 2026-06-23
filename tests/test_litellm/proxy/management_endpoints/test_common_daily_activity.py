@@ -638,6 +638,84 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metrics.spend == 10.0
 
 
+def _daily_user_spend_record(*, user_id, api_key, spend):
+    """A LiteLLM_DailyUserSpend row as the per-user breakdown reads it."""
+    return SimpleNamespace(
+        date="2024-01-01",
+        user_id=user_id,
+        api_key=api_key,
+        model="gpt-4",
+        model_group="gpt-4",
+        custom_llm_provider="openai",
+        mcp_namespaced_tool_name=None,
+        endpoint="/chat/completions",
+        spend=spend,
+        prompt_tokens=10,
+        completion_tokens=5,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        api_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_applies_resolve_entity_metadata_to_breakdown():
+    """Regression for LIT-3889: the Spend Per User chart showed raw UUIDs.
+
+    /user/daily/activity used to pass entity_metadata_field=None, so every
+    user entity in the breakdown carried empty metadata and the dashboard had
+    nothing to render but the user_id UUID. The page-scoped resolver must put
+    the resolved email/alias onto the entity metadata so the UI can label it,
+    while a spender with no email on file still falls back to the raw UUID.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    records = [
+        _daily_user_spend_record(user_id="user-with-email", api_key="key-1", spend=7.0),
+        _daily_user_spend_record(user_id="user-no-email", api_key="key-2", spend=3.0),
+    ]
+
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=len(records))
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    seen_user_ids = {}
+
+    async def resolver(page_records):
+        seen_user_ids["ids"] = {r.user_id for r in page_records}
+        return {"user-with-email": {"user_email": "spender@example.com"}}
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+        resolve_entity_metadata=resolver,
+    )
+
+    # Resolver is driven by the user_ids actually on the page
+    assert seen_user_ids["ids"] == {"user-with-email", "user-no-email"}
+
+    entities = result.results[0].breakdown.entities
+    # Email is on the entity metadata so the UI labels the chart with it
+    assert entities["user-with-email"].metadata["user_email"] == "spender@example.com"
+    # No email on file -> empty metadata -> UI falls back to the UUID
+    assert entities["user-no-email"].metadata == {}
+
+
 class TestAdjustDatesForTimezone:
     """
     Regression tests for the timezone double-counting bug.
@@ -758,6 +836,8 @@ class TestBuildAggregatedSqlQuery:
         ]
         assert "model = $4" in sql
         assert "api_key = $5" in sql
+
+
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_empty_result_set():
     """Regression test for the empty-range 500.

@@ -6293,3 +6293,153 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_empty_list_fails_cl
     )
 
     assert result == []
+
+
+class TestProxyExceptionToHttpException:
+    """Auth failures reach the MCP ASGI handlers as ProxyException, not
+    HTTPException. The handlers must map them back to their real status and
+    headers; otherwise they fall through to the generic 500 handler, dropping
+    the 401 + WWW-Authenticate challenge an OAuth client needs to re-authenticate
+    and surfacing the tool call as a cancelled/terminated session.
+    """
+
+    def test_preserves_401_status_and_www_authenticate_header(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _proxy_exception_to_http_exception,
+        )
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="Authentication Error, invalid token",
+            type="auth_error",
+            param="key",
+            code=401,
+            headers={"WWW-Authenticate": 'Bearer resource_metadata="/x"'},
+        )
+
+        http_exc = _proxy_exception_to_http_exception(exc)
+
+        assert http_exc.status_code == 401
+        assert http_exc.detail == "Authentication Error, invalid token"
+        assert http_exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/x"'
+
+    def test_preserves_403_status(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _proxy_exception_to_http_exception,
+        )
+        from litellm.proxy._types import ProxyException
+
+        http_exc = _proxy_exception_to_http_exception(
+            ProxyException(
+                message="Forbidden", type="auth_error", param="key", code=403
+            )
+        )
+
+        assert http_exc.status_code == 403
+
+    def test_non_numeric_code_falls_back_to_500(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _proxy_exception_to_http_exception,
+        )
+        from litellm.proxy._types import ProxyException
+
+        # ProxyException normalises code to the string "None" when unset.
+        http_exc = _proxy_exception_to_http_exception(
+            ProxyException(message="boom", type="server_error", param=None, code=None)
+        )
+
+        assert http_exc.status_code == 500
+
+
+class TestStreamableHttpAuthErrorMapping:
+    """End-to-end guard for the handler wiring: a ProxyException from auth must
+    propagate as the real HTTPException (401 + WWW-Authenticate), not be
+    flattened to a generic 500 by the catch-all handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_propagates_proxy_exception_as_401(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/some_server",
+            "headers": [(b"x-litellm-api-key", b"sk-bad")],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        auth_failure = ProxyException(
+            message="Authentication Error, invalid token",
+            type="auth_error",
+            param="key",
+            code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+        with patch.object(
+            mcp_module,
+            "extract_mcp_auth_context",
+            new=AsyncMock(side_effect=auth_failure),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["WWW-Authenticate"] == "Bearer"
+        # Must not have emitted a 500 body via the generic catch-all.
+        assert not any(
+            m.get("type") == "http.response.start" and m.get("status") == 500
+            for m in sent
+        )
+
+    @pytest.mark.asyncio
+    async def test_sse_propagates_proxy_exception_as_401(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/mcp/some_server",
+            "headers": [(b"x-litellm-api-key", b"sk-bad")],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        auth_failure = ProxyException(
+            message="Authentication Error, invalid token",
+            type="auth_error",
+            param="key",
+            code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+        with patch.object(
+            mcp_module,
+            "extract_mcp_auth_context",
+            new=AsyncMock(side_effect=auth_failure),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_module.handle_sse_mcp(scope, receive, send)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["WWW-Authenticate"] == "Bearer"
+        assert not any(
+            m.get("type") == "http.response.start" and m.get("status") == 500
+            for m in sent
+        )

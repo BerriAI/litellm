@@ -2160,3 +2160,48 @@ class TestGetRequestRouteTemplate:
             lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
         )
         assert get_request_route_template(req) is None
+
+
+class TestIsRequestBodySafeBlocksModelList:
+    """model_list is an SDK-only field with no proxy API meaning; it must
+    be rejected from the request body regardless of any opt-in."""
+
+    def test_model_list_rejected_with_no_opt_in(self):
+        with pytest.raises(ValueError, match="model_list is not allowed"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "model_list": [{"model_name": "x", "litellm_params": {}}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_model_list_rejected_even_with_proxy_wide_opt_in(self):
+        with pytest.raises(ValueError, match="model_list is not allowed"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "model_list": [],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_normal_body_still_passes(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )

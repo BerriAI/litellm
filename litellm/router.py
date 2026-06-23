@@ -40,7 +40,6 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -62,6 +61,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -81,8 +83,10 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.add_retry_fallback_headers import (
+    _HiddenParamsHost,
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
+    get_hidden_params_dict,
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
@@ -564,6 +568,12 @@ class Router:
 
         self._explicit_timeout = timeout  # None when user did not pass timeout
         self.timeout = timeout or litellm.request_timeout
+        # Per-attempt request_timeout, independent of router_settings.timeout.
+        # Only stored when a router timeout is also set, since otherwise
+        # request_timeout already flows through self.timeout above.
+        self.request_timeout = (
+            get_configured_request_timeout() if timeout is not None else None
+        )
         self.stream_timeout = stream_timeout
 
         self.retry_after = retry_after
@@ -2165,6 +2175,36 @@ class Router:
         )
         setattr(fallback_item, "usage", combined_usage)
 
+    @staticmethod
+    def _prepare_fallback_hidden_params(
+        fallback_response: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        fallback_hidden_params = get_hidden_params_dict(fallback_response)
+        fallback_headers = fallback_hidden_params.get("additional_headers")
+        if not isinstance(fallback_headers, dict):
+            return fallback_hidden_params, {}
+        return fallback_hidden_params, cast("dict[str, object]", fallback_headers)
+
+    @staticmethod
+    def _apply_fallback_hidden_params_to_item(
+        fallback_item: object,
+        prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
+    ) -> None:
+        if fallback_item is None or not hasattr(fallback_item, "_hidden_params"):
+            return
+
+        fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
+        item_hidden_params = get_hidden_params_dict(fallback_item)
+        item_headers = item_hidden_params.get("additional_headers")
+        if not isinstance(item_headers, dict):
+            item_headers = {}
+
+        cast(_HiddenParamsHost, fallback_item)._hidden_params = {
+            **item_hidden_params,
+            **fallback_hidden_params,
+            "additional_headers": {**item_headers, **fallback_headers},
+        }
+
     async def _acompletion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,
@@ -2257,12 +2297,22 @@ class Router:
                             model_group=model_group,
                             args=(),
                             kwargs=initial_kwargs,
+                            include_fallback_errors=initial_kwargs.get(
+                                "include_fallback_errors", False
+                            )
+                            is True,
                         )
                     )
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
+                        prepared_fallback_hidden_params = (
+                            Router._prepare_fallback_hidden_params(fallback_response)
+                        )
                         async for fallback_item in fallback_response:  # type: ignore
+                            Router._apply_fallback_hidden_params_to_item(
+                                fallback_item, prepared_fallback_hidden_params
+                            )
                             if (
                                 fallback_item
                                 and isinstance(fallback_item, ModelResponseStream)
@@ -2686,11 +2736,21 @@ class Router:
                             model_group=model_group,
                             args=(),
                             kwargs=initial_kwargs,
+                            include_fallback_errors=initial_kwargs.get(
+                                "include_fallback_errors", False
+                            )
+                            is True,
                         )
                     )
 
                     if hasattr(fallback_response, "__aiter__"):
+                        prepared_fallback_hidden_params = (
+                            Router._prepare_fallback_hidden_params(fallback_response)
+                        )
                         async for fallback_item in fallback_response:  # type: ignore
+                            Router._apply_fallback_hidden_params_to_item(
+                                fallback_item, prepared_fallback_hidden_params
+                            )
                             if partial_usage is not None:
                                 Router._combine_responses_fallback_usage(
                                     fallback_item, partial_usage
@@ -2815,7 +2875,13 @@ class Router:
                     )
 
                     if hasattr(fallback_response, "__iter__"):
+                        prepared_fallback_hidden_params = (
+                            Router._prepare_fallback_hidden_params(fallback_response)
+                        )
                         for fallback_item in fallback_response:
+                            Router._apply_fallback_hidden_params_to_item(
+                                fallback_item, prepared_fallback_hidden_params
+                            )
                             if (
                                 fallback_item
                                 and isinstance(fallback_item, ModelResponseStream)
@@ -2972,6 +3038,7 @@ class Router:
                 **kwargs,
             }
             input_kwargs.pop("silent_model", None)
+            input_kwargs.pop("include_fallback_errors", None)
 
             _response = litellm.acompletion(**input_kwargs)
 
@@ -3076,7 +3143,18 @@ class Router:
         - litellm_trace_id
         - metadata
         """
-        kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+        # Normalise an explicit num_retries=None to the router default here (dict.get()
+        # only falls back when the key is absent, not when its value is None), then to 0
+        # if the router default is itself None - mirroring the guard in
+        # async_function_with_retries, which remains the safety net for paths that bypass
+        # this setter.
+        _req_num_retries = kwargs.get("num_retries")
+        if _req_num_retries is not None:
+            kwargs["num_retries"] = _req_num_retries
+        else:
+            kwargs["num_retries"] = (
+                self.num_retries if self.num_retries is not None else 0
+            )
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):
@@ -3322,6 +3400,7 @@ class Router:
                 "stream_timeout", None
             )  # timeout set on litellm_params for this deployment
             or self.stream_timeout  # timeout set on router
+            or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
             or self.default_litellm_params.get("stream_timeout", None)
         )
 
@@ -3338,7 +3417,8 @@ class Router:
             or data.get(
                 "request_timeout", None
             )  # timeout set on litellm_params for this deployment
-            or self.timeout  # timeout set on router
+            or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
+            or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
         return timeout
@@ -6478,6 +6558,7 @@ class Router:
         model_group: Optional[str],
         args: tuple,
         kwargs: dict,
+        include_fallback_errors: bool = False,
     ):
         """
         Common utilities for async_function_with_fallbacks
@@ -6501,6 +6582,8 @@ class Router:
             input_kwargs["max_fallbacks"] = self.max_fallbacks
         if "fallback_depth" not in input_kwargs:
             input_kwargs["fallback_depth"] = 0
+        if include_fallback_errors:
+            input_kwargs["include_fallback_errors"] = True
 
         # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
         # Skip for error types that have their own dedicated fallback handlers
@@ -6759,6 +6842,7 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group: Optional[str] = kwargs.get("model")
+        include_fallback_errors = kwargs.get("include_fallback_errors", False) is True
         disable_fallbacks: Optional[bool] = kwargs.pop("disable_fallbacks", False)
         fallbacks: Optional[List] = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks: Optional[List] = kwargs.get(
@@ -6802,6 +6886,7 @@ class Router:
                 model_group,
                 args,
                 kwargs,
+                include_fallback_errors=include_fallback_errors,
             )
 
     def _handle_mock_testing_fallbacks(
@@ -6868,7 +6953,11 @@ class Router:
             "model_group_retry_policy", self.model_group_retry_policy
         )
         model_group: Optional[str] = kwargs.get("model")
-        num_retries = kwargs.pop("num_retries")
+        num_retries = kwargs.pop("num_retries", None)
+        if num_retries is None:
+            # Fall back to the router setting (then 0) so the comparisons below never
+            # hit `None > int`, which would mask the real upstream error with a TypeError.
+            num_retries = self.num_retries if self.num_retries is not None else 0
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
         _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
@@ -9725,17 +9814,19 @@ class Router:
         # - if healthy_deployments > 1, return model group rate limit headers
         # - else return the model's rate limit headers
         """
-        if (
-            isinstance(response, BaseModel)
-            and hasattr(response, "_hidden_params")
-            and isinstance(response._hidden_params, dict)  # type: ignore
-        ):
-            response._hidden_params.setdefault("additional_headers", {})  # type: ignore
-            response._hidden_params["additional_headers"][  # type: ignore
-                "x-litellm-model-group"
-            ] = model_group
+        if response is not None and hasattr(response, "_hidden_params"):
+            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            if hasattr(hidden_params, "model_dump"):
+                hidden_params = hidden_params.model_dump()
+            if not isinstance(hidden_params, dict):
+                return response
+            response._hidden_params = hidden_params
 
-            additional_headers = response._hidden_params["additional_headers"]  # type: ignore
+            additional_headers = hidden_params.get("additional_headers")
+            if not isinstance(additional_headers, dict):
+                additional_headers = {}
+                hidden_params["additional_headers"] = additional_headers
+            additional_headers["x-litellm-model-group"] = model_group
 
             # Lift QualityRouter routing decision into response headers for
             # transparency. The decision is stashed in request_kwargs.metadata

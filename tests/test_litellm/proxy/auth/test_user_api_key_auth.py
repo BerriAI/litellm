@@ -1106,7 +1106,7 @@ async def test_proxy_admin_expired_key_from_cache():
     # Mock get_key_object to return expired token from cache
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key_object,
         patch(
@@ -1261,7 +1261,7 @@ async def test_scim_deactivated_user_key_is_rejected():
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
@@ -2484,7 +2484,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
                 stack.enter_context(p)
             stack.enter_context(
                 patch(
-                    "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                    "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                     new_callable=AsyncMock,
                     return_value=valid_token,
                 )
@@ -2598,7 +2598,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
@@ -2687,6 +2687,67 @@ async def test_centralized_common_checks_runs_for_standard_auth():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+        "/v1/messages",
+    ],
+)
+async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(route):
+    """GH#30629: on LITELLM_METADATA_ROUTES the tag-budget read resolves to
+    litellm_metadata, so the litellm_metadata pre-seed must run before
+    apply_client_tag_policy_pre_auth merges x-litellm-tags. Otherwise header tags
+    land in metadata and silently escape _tag_max_budget_check. This guards the
+    pre-seed call site in _run_centralized_common_checks; dropping it routes header
+    tags back into metadata.
+    """
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"x-litellm-tags", b"tenant:acme")],
+            "query_string": b"",
+        }
+    )
+    request._url = URL(url=route)
+    request_data: dict = {"model": "us.anthropic.claude-sonnet-4-6"}
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data=request_data,
+                route=route,
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert request_data["litellm_metadata"]["tags"] == ["tenant:acme"]
+    assert "metadata" not in request_data
 
 
 @pytest.mark.asyncio
@@ -3652,7 +3713,7 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
         request._url = URL(url="/chat/completions")
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 get_key_object_mock,
             ),
             patch(

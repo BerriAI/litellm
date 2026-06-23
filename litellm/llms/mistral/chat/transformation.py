@@ -247,6 +247,8 @@ class MistralConfig(OpenAIGPTConfig):
         The above statement is not valid now. Need to plan to remove all the #1,2,3
         Mistral API supports content as a list.
         """
+        messages = [self._strip_output_only_fields(m) for m in messages]
+
         ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
         for m in messages:
             _content_block = m.get("content")
@@ -408,6 +410,25 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
         return cleaned_tools
+
+    @classmethod
+    def _strip_output_only_fields(cls, message: AllMessageValues) -> AllMessageValues:
+        """
+        ``reasoning_content`` and ``thinking_blocks`` are output-only fields that
+        LiteLLM attaches to assistant responses. Mistral's input schema forbids
+        unknown fields, so replaying them verbatim in a follow-up turn triggers a
+        422 ``extra_forbidden``. Drop them before the request is sent.
+        """
+        if message["role"] != "assistant":
+            return message
+        return cast(
+            AllMessageValues,
+            {
+                k: v
+                for k, v in message.items()
+                if k not in ("reasoning_content", "thinking_blocks")
+            },
+        )
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:

@@ -16,6 +16,7 @@ import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
@@ -110,6 +111,12 @@ const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
           </div>
+
+          {!isPublicPage && (
+            <div className="ml-4 flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <ViewSwitcher />
+            </div>
+          )}
 
           <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
             {showWorkerSwitch && (

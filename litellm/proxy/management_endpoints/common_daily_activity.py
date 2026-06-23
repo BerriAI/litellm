@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from fastapi import HTTPException, status
 
@@ -887,8 +887,17 @@ async def get_daily_activity(
     exclude_entity_ids: Optional[List[str]] = None,
     metadata_metrics_func: Optional[Callable[[List[Any]], SpendMetrics]] = None,
     timezone_offset_minutes: Optional[int] = None,
+    resolve_entity_metadata: Optional[
+        Callable[[list[Any]], Awaitable[dict[str, dict]]]
+    ] = None,
 ) -> SpendAnalyticsPaginatedResponse:
-    """Common function to get daily activity for any entity type."""
+    """Common function to get daily activity for any entity type.
+
+    ``resolve_entity_metadata`` lets a caller resolve entity metadata from the
+    rows actually on the page (e.g. user_id -> user_email) instead of fetching
+    the whole entity table upfront, which matters when the entity set is
+    unbounded.
+    """
 
     if prisma_client is None:
         raise HTTPException(
@@ -939,11 +948,18 @@ async def get_daily_activity(
             take=page_size,
         )
 
+        resolved_entity_metadata = entity_metadata_field
+        if resolve_entity_metadata is not None:
+            resolved_entity_metadata = {
+                **(entity_metadata_field or {}),
+                **(await resolve_entity_metadata(daily_spend_data)),
+            }
+
         aggregated = await _aggregate_spend_records(
             prisma_client=prisma_client,
             records=daily_spend_data,
             entity_id_field=entity_id_field,
-            entity_metadata_field=entity_metadata_field,
+            entity_metadata_field=resolved_entity_metadata,
         )
 
         metadata_metrics = aggregated["totals"]

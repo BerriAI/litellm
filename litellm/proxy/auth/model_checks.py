@@ -122,9 +122,16 @@ def get_key_models(
             SpecialModelNames.all_team_models.value in all_models
             and user_api_key_dict.team_id is not None
         ):
-            all_models = list(
-                user_api_key_dict.team_models
-            )  # copy to avoid mutating cached objects
+            all_models = list(user_api_key_dict.team_models)
+            if SpecialModelNames.all_team_models.value in all_models:
+                all_models = [
+                    model
+                    for model in all_models
+                    if model != SpecialModelNames.all_team_models.value
+                ]
+                all_models.extend(proxy_model_list)
+                if include_model_access_groups:
+                    all_models.extend(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
             if include_model_access_groups:
@@ -160,6 +167,12 @@ def get_team_models(
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
             all_models_set.update(team_models)
+            # GH#30619: expand all-team-models sentinel
+            # to the actual proxy model list
+            all_models_set.discard(SpecialModelNames.all_team_models.value)
+            all_models_set.update(proxy_model_list)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models_set:
             all_models_set.update(proxy_model_list)
             if include_model_access_groups:
