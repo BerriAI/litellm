@@ -268,8 +268,16 @@ def ocr(
         rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
 
         if custom_llm_provider == "mistral" and rust_bridge.rust_ocr_enabled():
+            # Resolve the key the same way the Python path does so secret-manager
+            # backends (AWS/Azure/GCP/Vault) work — the Rust bridge's own fallback
+            # only reads the process environment.
+            from litellm.secret_managers.main import get_secret_str
+
+            resolved_api_key = api_key or get_secret_str("MISTRAL_API_KEY")
             return OCRResponse(
-                **rust_bridge.rust_ocr(model, document, api_key, api_base, kwargs)
+                **rust_bridge.rust_ocr(
+                    model, document, resolved_api_key, api_base, kwargs
+                )
             )
 
         # Get provider config
