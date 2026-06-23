@@ -9731,9 +9731,14 @@ class ProviderConfigManager:
         Get sandbox (code execution) configuration for a given provider.
         """
         from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+        from litellm.llms.opensandbox.sandbox.transformation import (
+            OpenSandboxSandboxConfig,
+        )
 
         if provider == SandboxProviders.E2B:
             return E2BSandboxConfig()
+        if provider == SandboxProviders.OPENSANDBOX:
+            return OpenSandboxSandboxConfig()
         return None
 
     @staticmethod

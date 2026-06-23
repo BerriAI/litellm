@@ -1,5 +1,6 @@
 import json
 import ssl
+from functools import lru_cache
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
@@ -13,6 +14,7 @@ from typing import (
     Tuple,
     Union,
     cast,
+    get_type_hints,
 )
 
 import httpx  # type: ignore
@@ -26,6 +28,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -101,6 +104,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIFileObject,
     ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
@@ -135,6 +139,7 @@ from litellm.utils import (
     ImageResponse,
     ModelResponse,
     ProviderConfigManager,
+    async_pre_call_deployment_hook,
 )
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -182,6 +187,47 @@ def _google_genai_streaming_hidden_params(
         "response_cost": "",
         "additional_headers": process_response_headers(response_headers),
     }
+
+
+@lru_cache(maxsize=None)
+def _responses_api_optional_request_param_names() -> frozenset[str]:
+    return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
+
+
+def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_custom_logger_compatible_class,
+    )
+
+    dynamic_success_callbacks = getattr(logging_obj, "dynamic_success_callbacks", None)
+    callbacks = list(litellm.callbacks)
+    if isinstance(dynamic_success_callbacks, (list, tuple)):
+        callbacks.extend(dynamic_success_callbacks)
+
+    custom_loggers: list[Any] = []
+    for cb in callbacks:
+        if isinstance(cb, str):
+            resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
+            if resolved is None:
+                continue
+            cb = resolved
+        if isinstance(cb, CustomLogger):
+            custom_loggers.append(cb)
+    return custom_loggers
+
+
+def _has_pre_call_deployment_hook(logging_obj: Any) -> bool:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    base_func = CustomLogger.async_pre_call_deployment_hook
+    for cb in _custom_logger_callbacks(logging_obj):
+        cb_func = getattr(type(cb), "async_pre_call_deployment_hook", base_func)
+        if getattr(cb_func, "__func__", cb_func) is not getattr(
+            base_func, "__func__", base_func
+        ):
+            return True
+    return False
 
 
 class BaseLLMHTTPHandler:
@@ -2224,12 +2270,92 @@ class BaseLLMHTTPHandler:
             )
         raise ValueError("anthropic_messages_handler is not implemented for sync calls")
 
+    def _run_sync_responses_pre_call_deployment_hook(
+        self,
+        *,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        custom_llm_provider: str,
+        response_api_optional_request_params: dict[str, Any],
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> tuple[
+        str,
+        Union[str, ResponseInputParam],
+        str,
+        dict[str, Any],
+        GenericLiteLLMParams,
+    ]:
+        if not _has_pre_call_deployment_hook(logging_obj):
+            return (
+                model,
+                input,
+                custom_llm_provider,
+                response_api_optional_request_params,
+                litellm_params,
+            )
+
+        modified_kwargs = run_async_function(
+            async_pre_call_deployment_hook,
+            {
+                **dict(litellm_params),
+                **response_api_optional_request_params,
+                "model": model,
+                "input": input,
+                "custom_llm_provider": custom_llm_provider,
+            },
+            CallTypes.responses.value,
+        )
+        if modified_kwargs is None:
+            return (
+                model,
+                input,
+                custom_llm_provider,
+                response_api_optional_request_params,
+                litellm_params,
+            )
+
+        optional_param_names = _responses_api_optional_request_param_names()
+        updated_response_params = {
+            **response_api_optional_request_params,
+            **{
+                key: value
+                for key, value in modified_kwargs.items()
+                if key in optional_param_names
+            },
+        }
+        updated_litellm_params = GenericLiteLLMParams(
+            **{
+                **dict(litellm_params),
+                **{
+                    key: value
+                    for key, value in modified_kwargs.items()
+                    if key not in optional_param_names
+                    and key not in {"model", "input", "custom_llm_provider"}
+                },
+            }
+        )
+        return (
+            str(modified_kwargs["model"]) if "model" in modified_kwargs else model,
+            cast(
+                Union[str, ResponseInputParam],
+                modified_kwargs["input"] if "input" in modified_kwargs else input,
+            ),
+            (
+                str(modified_kwargs["custom_llm_provider"])
+                if "custom_llm_provider" in modified_kwargs
+                else custom_llm_provider
+            ),
+            updated_response_params,
+            updated_litellm_params,
+        )
+
     def response_api_handler(
         self,
         model: str,
         input: Union[str, ResponseInputParam],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_optional_request_params: dict[str, Any],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -2275,6 +2401,21 @@ class BaseLLMHTTPHandler:
                 litellm_metadata=litellm_metadata,
                 shared_session=shared_session,
             )
+
+        (
+            model,
+            input,
+            custom_llm_provider,
+            response_api_optional_request_params,
+            litellm_params,
+        ) = self._run_sync_responses_pre_call_deployment_hook(
+            model=model,
+            input=input,
+            custom_llm_provider=custom_llm_provider,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+        )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
@@ -2414,9 +2555,27 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
         )
-        # Responses agentic interception (e.g. code interpreter) runs the follow-up
-        # loop via the async hook, so it is async-only for now; the sync path returns
-        # the initial response unchanged.
+
+        if self._has_agentic_completion_hook(logging_obj):
+            final_response = run_async_function(
+                self._call_agentic_completion_hooks,
+                response=initial_response,
+                model=model,
+                messages=(
+                    input
+                    if isinstance(input, list)
+                    else [{"role": "user", "content": input}]
+                ),
+                anthropic_messages_provider_config=responses_api_provider_config,
+                anthropic_messages_optional_request_params=response_api_optional_request_params,
+                logging_obj=logging_obj,
+                stream=False,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=dict(litellm_params),
+                api_surface="responses",
+            )
+            return final_response if final_response is not None else initial_response
+
         return initial_response
 
     async def async_response_api_handler(
@@ -4772,22 +4931,9 @@ class BaseLLMHTTPHandler:
         agentic callback is detected too.
         """
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.litellm_core_utils.litellm_logging import (
-            get_custom_logger_compatible_class,
-        )
 
         base_func = CustomLogger.async_should_run_agentic_loop
-        callbacks = litellm.callbacks + (
-            getattr(logging_obj, "dynamic_success_callbacks", None) or []
-        )
-        for cb in callbacks:
-            if isinstance(cb, str):
-                resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
-                if resolved is None:
-                    continue
-                cb = resolved
-            if not isinstance(cb, CustomLogger):
-                continue
+        for cb in _custom_logger_callbacks(logging_obj):
             cb_func = getattr(type(cb), "async_should_run_agentic_loop", base_func)
             if getattr(cb_func, "__func__", cb_func) is not getattr(
                 base_func, "__func__", base_func

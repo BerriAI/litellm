@@ -68,7 +68,7 @@ async def acreate_sandbox(
     provider: str,
     template: str | None = None,
     timeout: int | None = None,
-    allow_internet_access: bool = True,
+    allow_internet_access: bool | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     **kwargs,
