@@ -170,7 +170,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     "messages": [
                         {
                             "role": last_msg.get("role", "user"),
-                            "content": str(scan_contents or content or "")
+                            "content": str(scan_contents or "") if isinstance(content, list) else str(content or "")
                         }
                     ]
                 },
