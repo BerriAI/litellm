@@ -1,47 +1,38 @@
 #!/usr/bin/env python3
-"""Per-rule count gate for mypy and basedpyright.
+"""Per-rule count gate for basedpyright.
 
-Each tool's output is reduced to a count of errors per *rule* (mypy error codes
-like ``arg-type``, basedpyright rules like ``reportAny``) and checked against a
-committed budget of the form ``{rule: {baseline, slack}}``, the same shape as
+basedpyright's ``--outputjson`` is reduced to a count of errors per *rule*
+(``reportAny``, ``reportArgumentType``, ...) and checked against a committed
+budget of the form ``{rule: {baseline, slack}}``, the same shape as
 ``ruff-strict-budget.json``. A rule fails when its codebase-wide total exceeds
 ``baseline + slack``. Counts ignore file, line, and column, so a violation
 moving anywhere in the tree is invisible; only the per-rule total moves the
 needle.
 
 Unlike ``ruff_strict_gate.py`` this does *not* re-run the tool on the merge base
-to compute a delta: a second mypy/basedpyright pass is minutes and gigabytes,
-whereas ruff is milliseconds. The committed budget is the baseline instead --
-exactly how the previous per-file gate worked -- so keep it fresh with
-``--update`` (ratchet), which re-captures every rule's count from the current
-tree while preserving each rule's slack. Tool output is read from stdin, so the
-caller decides how to invoke the tool (and from which cwd).
+to compute a delta: a second basedpyright pass is minutes and gigabytes, whereas
+ruff is milliseconds. The committed budget is the baseline instead -- exactly
+how the previous per-file gate worked -- so keep it fresh with ``--update``
+(ratchet), which re-captures every rule's count from the current tree while
+preserving each rule's slack. Tool output is read from stdin, so the caller
+decides how to invoke basedpyright (and from which cwd).
 
-mypy is parsed from its text output (one error per line, the rule code in a
-trailing ``[bracket]``). basedpyright is parsed from ``--outputjson``: its text
-diagnostics routinely wrap across lines, leaving the ``(reportRule)`` on a
-continuation line away from the ``- error:`` marker, so line parsing
-mis-attributes ~60% of errors -- the JSON carries an unambiguous ``rule`` field.
+``--outputjson`` is used rather than text diagnostics because the latter wrap
+across lines, leaving the ``(reportRule)`` on a continuation line away from the
+``- error:`` marker, so line parsing mis-attributes ~60% of errors -- the JSON
+carries an unambiguous ``rule`` field.
 """
 
 import argparse
 import json
-import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Iterable, Mapping, NamedTuple
+from typing import Mapping, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# mypy: one error per line, e.g. `path:12: error: msg  [arg-type]`. ERROR_LINE
-# recognizes the line; MYPY_CODE pulls the trailing [code]. Kept separate so an
-# error emitted without a code is still counted (under UNCODED), never dropped.
-MYPY_ERROR = re.compile(r"^(?P<file>.+?):\d+: error:")
-MYPY_CODE = re.compile(r"\[(?P<code>[a-z][a-z0-9-]*)\]\s*$")
-
-# Bucket for an error whose rule code we couldn't read (a mypy error with no
-# code, or a basedpyright diagnostic with no `rule`). Counted so it's gated.
+# Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
 
 # Ceiling for a rule that shows up at HEAD but isn't in the budget at all -- a
@@ -72,20 +63,6 @@ def _to_repo_relative(raw: str) -> str | None:
         return None
 
 
-def count_mypy(lines: Iterable[str]) -> dict[str, int]:
-    """Count in-repo mypy errors per rule code from text output. Errors for
-    files outside the repo (third-party stubs) are ignored, as before."""
-    counts: Counter[str] = Counter()
-    for raw in lines:
-        line = raw.rstrip("\n")
-        match = MYPY_ERROR.match(line)
-        if match is None or _to_repo_relative(match.group("file")) is None:
-            continue
-        code = MYPY_CODE.search(line)
-        counts[code.group("code") if code else UNCODED] += 1
-    return dict(counts)
-
-
 def count_basedpyright(payload: str) -> dict[str, int]:
     """Count in-repo basedpyright errors per rule from `--outputjson`. Warnings
     and information are ignored; only `severity == "error"` is gated."""
@@ -106,12 +83,6 @@ def count_basedpyright(payload: str) -> dict[str, int]:
             continue
         counts[diag.get("rule") or UNCODED] += 1
     return dict(counts)
-
-
-def count_errors(stdin_text: str, tool: str) -> dict[str, int]:
-    if tool == "basedpyright":
-        return count_basedpyright(stdin_text)
-    return count_mypy(stdin_text.splitlines())
 
 
 def evaluate(
@@ -136,13 +107,11 @@ def is_vacuous_run(
     return not counts and any(spec["baseline"] for spec in budget.values())
 
 
-def budget_path(tool: str) -> Path:
-    return REPO_ROOT / f"{tool}-code-budget.json"
+BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
 
 
-def cmd_update(tool: str, counts: Mapping[str, int]) -> None:
-    path = budget_path(tool)
-    existing = json.loads(path.read_text()) if path.exists() else {}
+def cmd_update(counts: Mapping[str, int]) -> None:
+    existing = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
     budget = {
         code: {
             "baseline": count,
@@ -152,18 +121,18 @@ def cmd_update(tool: str, counts: Mapping[str, int]) -> None:
         }
         for code, count in sorted(counts.items())
     }
-    path.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
     print(
-        f"Re-captured {tool} per-rule budget: {len(budget)} rules, {sum(counts.values())} errors total"
+        f"Re-captured basedpyright per-rule budget: {len(budget)} rules, {sum(counts.values())} errors total"
     )
 
 
-def cmd_check(tool: str, counts: Mapping[str, int]) -> None:
-    budget = json.loads(budget_path(tool).read_text())
+def cmd_check(counts: Mapping[str, int]) -> None:
+    budget = json.loads(BUDGET_PATH.read_text())
     if is_vacuous_run(counts, budget):
         expected = sum(spec["baseline"] for spec in budget.values())
         print(
-            f"FAIL: {tool} produced no errors, but {budget_path(tool).name} expects "
+            f"FAIL: basedpyright produced no errors, but {BUDGET_PATH.name} expects "
             f"~{expected}. The type checker almost certainly crashed or emitted "
             f"nothing; refusing to certify a vacuous run."
         )
@@ -171,25 +140,24 @@ def cmd_check(tool: str, counts: Mapping[str, int]) -> None:
     breaches = evaluate(counts, budget)
     if not breaches:
         print(
-            f"OK: every rule is within its {tool} ceiling ({sum(counts.values())} errors total)"
+            f"OK: every rule is within its basedpyright ceiling ({sum(counts.values())} errors total)"
         )
         return
-    print(f"FAIL: {tool} errors exceed the per-rule ceiling:")
+    print("FAIL: basedpyright errors exceed the per-rule ceiling:")
     for breach in breaches:
         print(f"  {breach.code}: {breach.total} errors over cap {breach.cap}")
     print(
-        f"Resolve the new errors, or run 'make lint-{tool}-budget-update' if the ceiling should move."
+        "Resolve the new errors, or run 'make lint-basedpyright-budget-update' if the ceiling should move."
     )
     raise SystemExit(1)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", choices=("mypy", "basedpyright"), required=True)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    counts = count_errors(sys.stdin.read(), args.tool)
-    cmd_update(args.tool, counts) if args.update else cmd_check(args.tool, counts)
+    counts = count_basedpyright(sys.stdin.read())
+    cmd_update(counts) if args.update else cmd_check(counts)
 
 
 if __name__ == "__main__":

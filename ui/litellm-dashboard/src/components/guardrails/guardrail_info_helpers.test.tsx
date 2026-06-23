@@ -194,6 +194,20 @@ describe("guardrail_info_helpers", () => {
       expect(result.displayName).toBe("Noma Security");
       expect(result.logo).toContain("noma_security.png");
     });
+
+    it("should resolve RepelloAI Argus logo and display name", () => {
+      populateGuardrailProviders({
+        repelloai: { ui_friendly_name: "RepelloAI Argus" },
+      });
+      populateGuardrailProviderMap({
+        repelloai: { ui_friendly_name: "RepelloAI Argus" },
+      });
+
+      const result = getGuardrailLogoAndName("repelloai");
+
+      expect(result.displayName).toBe("RepelloAI Argus");
+      expect(result.logo).toContain("repelloai.png");
+    });
   });
 
   describe("skipSystemMessageToChoice / choiceToSkipSystemForCreate", () => {
