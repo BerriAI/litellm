@@ -50,8 +50,16 @@ class ScimTransformations:
         scim_active = metadata.get("scim_active")
         active = True if scim_active is None else bool(scim_active)
 
+        schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
+        enterprise_user = None
+        if metadata.get(SCIM_ENTERPRISE_METADATA_KEY):
+            enterprise_user = SCIMEnterpriseUser.model_validate(
+                metadata[SCIM_ENTERPRISE_METADATA_KEY]
+            )
+            schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
+
         return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            schemas=schemas,
             id=user.user_id,
             userName=ScimTransformations._get_scim_user_name(user),
             displayName=ScimTransformations._get_scim_user_name(user),
@@ -62,6 +70,7 @@ class ScimTransformations:
             emails=emails,
             groups=groups,
             active=active,
+            enterprise_user=enterprise_user,
             meta={
                 "resourceType": "User",
                 "created": user_created_at,

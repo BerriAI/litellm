@@ -954,9 +954,6 @@ class Interaction(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1031,9 +1028,6 @@ class CreateModelInteractionParams(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1100,9 +1094,6 @@ class CreateAgentInteractionParams(BaseModel):
     updated: Optional[AwareDatetime] = Field(
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
-    )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
     )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
@@ -1323,7 +1314,6 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
-    role: Optional[str] = None
     # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
     outputs: Optional[List[Dict[str, Any]]] = None
     # New schema field (Api-Revision: 2026-05-20).
@@ -1356,7 +1346,6 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
-    role: Optional[str] = None
     # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
     outputs: Optional[List[Dict[str, Any]]] = None
     # New schema field (Api-Revision: 2026-05-20).

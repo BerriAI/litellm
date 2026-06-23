@@ -13,7 +13,10 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ENTERPRISE_USER_SCHEMA,
+    SCIMEnterpriseUser,
     SCIMPatchOperation,
+    SCIMUser,
 )
 
 
@@ -148,6 +151,77 @@ class TestScimTransformations:
 
             assert scim_user.name.givenName == "Test"
             assert scim_user.name.familyName == "User"
+
+    @pytest.mark.asyncio
+    async def test_transform_user_with_enterprise_metadata(self, mock_prisma_client):
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+
+        user = LiteLLM_UserTable(
+            user_id="user-ent",
+            user_email="ent@example.com",
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={
+                "scim_enterprise": {"costCenter": "CC-42", "department": "Platform"}
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user
+            )
+
+            assert scim_user.enterprise_user is not None
+            assert scim_user.enterprise_user.costCenter == "CC-42"
+            assert scim_user.enterprise_user.department == "Platform"
+            assert SCIM_ENTERPRISE_USER_SCHEMA in scim_user.schemas
+
+    @pytest.mark.asyncio
+    async def test_transform_user_without_enterprise_metadata_omits_schema(
+        self, mock_user, mock_prisma_client
+    ):
+        mock_client, mock_find_unique = mock_prisma_client
+        team1 = LiteLLM_TeamTable(
+            team_id="team-1", team_alias="Team One", members_with_roles=[]
+        )
+        team2 = LiteLLM_TeamTable(
+            team_id="team-2", team_alias="Team Two", members_with_roles=[]
+        )
+        mock_find_unique.side_effect = [team1, team2]
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                mock_user
+            )
+
+            assert scim_user.enterprise_user is None
+            assert SCIM_ENTERPRISE_USER_SCHEMA not in scim_user.schemas
+
+    def test_scim_user_serialization_omits_absent_enterprise_urn(self):
+        without_enterprise = SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            id="user-1",
+            userName="user@example.com",
+        )
+        dumped = without_enterprise.model_dump(by_alias=True)
+        assert SCIM_ENTERPRISE_USER_SCHEMA not in dumped
+        assert "enterprise_user" not in dumped
+        assert SCIM_ENTERPRISE_USER_SCHEMA not in dumped["schemas"]
+
+        with_enterprise = SCIMUser(
+            schemas=[
+                "urn:ietf:params:scim:schemas:core:2.0:User",
+                SCIM_ENTERPRISE_USER_SCHEMA,
+            ],
+            id="user-2",
+            userName="ent@example.com",
+            enterprise_user=SCIMEnterpriseUser(costCenter="CC-42"),
+        )
+        dumped_ent = with_enterprise.model_dump(by_alias=True)
+        assert dumped_ent[SCIM_ENTERPRISE_USER_SCHEMA]["costCenter"] == "CC-42"
 
     @pytest.mark.asyncio
     async def test_transform_litellm_team_to_scim_group(

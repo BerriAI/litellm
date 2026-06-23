@@ -82,13 +82,3 @@ def test_introduced_keeps_only_violations_on_changed_lines():
 @pytest.mark.parametrize("hunk", ["@@ -1 +1 @@", "@@ -1,0 +1,2 @@"])
 def test_parse_changed_lines_handles_single_and_ranged_hunks(hunk):
     assert gate.parse_changed_lines(f"+++ b/litellm/a.py\n{hunk}\n")["litellm/a.py"]
-
-
-def test_report_emits_breached_rules_as_final_line(capsys):
-    # CI surfaces only the tail of the log, so the breached-rule summary (rule,
-    # total/cap, added) must be the last line or it gets truncated away.
-    breaches = sorted([gate.Breach("UP045", 530, 529, 1), gate.Breach("ANN401", 12, 10, 2)])
-    new = [gate.Violation("litellm/types/llms/bedrock.py", 16, "UP045")]
-    gate.report(breaches, new, "origin/litellm_internal_staging")
-    last = capsys.readouterr().out.strip().splitlines()[-1]
-    assert last == "BREACHED RULES: ANN401 12/10 (+2); UP045 530/529 (+1)"

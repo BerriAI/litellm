@@ -71,6 +71,23 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(compression_interception_obj)
                 continue
 
+            if (
+                isinstance(callback, str)
+                and callback == "code_interpreter_interception"
+            ):
+                from litellm.integrations.code_interpreter_interception.handler import (
+                    CodeInterpreterInterceptionLogger,
+                )
+
+                code_interpreter_interception_obj = (
+                    CodeInterpreterInterceptionLogger.initialize_from_proxy_config(
+                        litellm_settings=litellm_settings,
+                        callback_specific_params=callback_specific_params,
+                    )
+                )
+                imported_list.append(code_interpreter_interception_obj)
+                continue
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(

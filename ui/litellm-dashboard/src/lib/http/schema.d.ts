@@ -515,6 +515,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Plugins
+         * @description Return registered plugins for authenticated UI callers.
+         *
+         *     plugin_key is never returned — the browser never needs it (the proxy injects
+         *     it server-side from the registry), and exposing it here would leak the
+         *     credential into React state and DevTools.  Admin key management goes through
+         *     the redacted /config/field/info path instead.
+         */
+        get: operations["list_plugins_api_plugins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/auth-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Auth Token
+         * @description Issue a short-lived, audience-scoped plugin session claim.
+         *
+         *     The claim contains {user_id, user_role, plugin, exp}.  It does NOT
+         *     contain the caller's litellm bearer token — a compromised plugin can
+         *     only learn the caller's identity, not impersonate them against the proxy.
+         *
+         *     Encrypted with a key derived from HMAC(LITELLM_SALT_KEY, plugin_name),
+         *     so each plugin holds only its own key and cannot forge claims for others.
+         *
+         *     Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
+         */
+        get: operations["plugin_auth_token_api_plugins_auth_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/apply_guardrail": {
         parameters: {
             query?: never;
@@ -8943,6 +8997,106 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/plugin-proxy/{plugin_name}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        get: operations["plugin_proxy_plugin_proxy__plugin_name___path__get"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        put: operations["plugin_proxy_plugin_proxy__plugin_name___path__put"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        post: operations["plugin_proxy_plugin_proxy__plugin_name___path__post"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        delete: operations["plugin_proxy_plugin_proxy__plugin_name___path__delete"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        options: operations["plugin_proxy_plugin_proxy__plugin_name___path__options"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        head: operations["plugin_proxy_plugin_proxy__plugin_name___path__head"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        patch: operations["plugin_proxy_plugin_proxy__plugin_name___path__patch"];
         trace?: never;
     };
     "/policies": {
@@ -22217,6 +22371,11 @@ export interface components {
              */
             pass_through_request_timeout?: number | null;
             /**
+             * Plugins
+             * @description external services registered as embeddable UI plugins
+             */
+            plugins?: components["schemas"]["PluginConfig"][] | null;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -24953,6 +25112,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -24997,8 +25158,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -25035,6 +25200,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -25049,8 +25216,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -25096,6 +25267,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -25126,8 +25301,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -25136,6 +25315,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -25144,6 +25325,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -26617,8 +26802,6 @@ export interface components {
              * @enum {string}
              */
             transport: "sse" | "http" | "stdio";
-            /** Url */
-            url?: string | null;
         };
         /**
          * MCPSemanticFilterSettings
@@ -28184,6 +28367,32 @@ export interface components {
              * @description Author name
              */
             name: string;
+        };
+        /**
+         * PluginConfig
+         * @description A single external service registered as an embeddable UI plugin.
+         */
+        PluginConfig: {
+            /**
+             * Display Name
+             * @description human-readable label shown in the UI view switcher
+             */
+            display_name?: string | null;
+            /**
+             * Name
+             * @description unique plugin identifier (kebab-case)
+             */
+            name: string;
+            /**
+             * Plugin Key
+             * @description plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls
+             */
+            plugin_key?: string | null;
+            /**
+             * Url
+             * @description base URL of the plugin service
+             */
+            url: string;
         };
         /**
          * PluginListItem
@@ -32611,6 +32820,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -32655,8 +32866,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -32693,6 +32908,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -32707,8 +32924,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -32754,6 +32975,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -32784,8 +33009,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -32794,6 +33023,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -32802,6 +33033,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -33484,6 +33719,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_plugins_api_plugins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
+                };
+            };
+        };
+    };
+    plugin_auth_token_api_plugins_auth_token_get: {
+        parameters: {
+            query?: {
+                plugin_name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -44497,6 +44787,230 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
