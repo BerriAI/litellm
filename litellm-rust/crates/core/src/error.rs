@@ -19,6 +19,8 @@ pub enum CoreError {
     Http { status: u16, body: String },
     #[error("OCR network error: {0}")]
     Network(String),
+    #[error("routing error: {0}")]
+    Routing(String),
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
