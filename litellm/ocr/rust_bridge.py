@@ -8,8 +8,6 @@ extension, which performs the whole OCR call (URL, headers, HTTP, parse) in Rust
 
 from typing import Any, Dict, Optional
 
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
-
 _RUST_OCR_ENABLED = False
 
 
@@ -30,9 +28,10 @@ def rust_ocr(
     api_key: Optional[str],
     api_base: Optional[str],
     optional_params: Dict[str, Any],
-) -> OCRResponse:
+) -> "OCRResponse":
     """Run a Mistral OCR call end-to-end in Rust and wrap the result as ``OCRResponse``."""
     import litellm_python_bridge
+    from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
     return OCRResponse(
         **litellm_python_bridge.ocr(model, document, api_key, api_base, optional_params)
