@@ -33,6 +33,7 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.secret_managers.main import get_secret_str
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
@@ -1064,10 +1065,20 @@ class MCPServerManager:
             getattr(mcp_server, "static_headers", None)
         )
         if static_headers_dict:
-            static_headers_dict = {
-                k: get_secret(v) if isinstance(v, str) and v.startswith("os.environ/") else v
-                for k, v in static_headers_dict.items()
-            }
+            resolved: dict[str, str] = {}
+            for k, v in static_headers_dict.items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    secret = get_secret_str(v)
+                    if secret is None:
+                        verbose_logger.warning(
+                            f"MCP static_header {k!r}: env var {v!r} not set; keeping literal value"
+                        )
+                        resolved[k] = v
+                    else:
+                        resolved[k] = secret
+                else:
+                    resolved[k] = v
+            static_headers_dict = resolved
         env_vars_list = self._resolve_env_vars_list(
             mcp_server,
             env_vars_are_encrypted=(
