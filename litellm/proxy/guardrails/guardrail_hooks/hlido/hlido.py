@@ -166,9 +166,11 @@ class HlidoGuardrail(CustomGuardrail):
             else DEFAULT_MAX_CACHE_ENTRIES
         )
         self._request_timeout: httpx.Timeout = httpx.Timeout(
-            request_timeout
-            if request_timeout is not None and request_timeout > 0
-            else DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            (
+                request_timeout
+                if request_timeout is not None and request_timeout > 0
+                else DEFAULT_REQUEST_TIMEOUT_SECONDS
+            ),
             connect=DEFAULT_CONNECT_TIMEOUT_SECONDS,
         )
         self._cache: Dict[str, Tuple[float, Optional[HlidoAgentRecord]]] = {}
@@ -368,7 +370,9 @@ class HlidoGuardrail(CustomGuardrail):
                     ),
                 )
 
-    def _cache_get(self, slug: str) -> Optional[Tuple[float, Optional[HlidoAgentRecord]]]:
+    def _cache_get(
+        self, slug: str
+    ) -> Optional[Tuple[float, Optional[HlidoAgentRecord]]]:
         cached = self._cache.get(slug)
         if cached is None:
             return None
