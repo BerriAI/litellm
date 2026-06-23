@@ -47,8 +47,9 @@ from pipecat.frames.frames import (  # noqa: E402
 from pipecat.pipeline.pipeline import Pipeline  # noqa: E402
 from pipecat.pipeline.runner import PipelineRunner  # noqa: E402
 from pipecat.pipeline.task import PipelineTask  # noqa: E402
-from pipecat.processors.aggregators.openai_llm_context import (  # noqa: E402
-    OpenAILLMContext,
+from pipecat.processors.aggregators.llm_context import LLMContext  # noqa: E402
+from pipecat.processors.aggregators.llm_response_universal import (  # noqa: E402
+    LLMContextAggregatorPair,
 )
 from pipecat.processors.frame_processor import (  # noqa: E402
     FrameDirection,
@@ -97,8 +98,8 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
     )
     llm.register_function("get_weather", get_weather)
 
-    context = OpenAILLMContext(tools=WEATHER_TOOL)
-    aggregator = llm.create_context_aggregator(context)
+    context = LLMContext(tools=WEATHER_TOOL)
+    aggregator = LLMContextAggregatorPair(context)
     capture = _CaptureText()
     task = PipelineTask(
         Pipeline([aggregator.user(), llm, capture, aggregator.assistant()])

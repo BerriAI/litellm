@@ -95,6 +95,14 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url = url.copy_with(params=query_params)
         return str(url)
 
+    def _make_event_normalizer(self) -> Any:
+        """Return a per-session GA event normalizer, or None for passthrough.
+
+        Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
+        normalizer instance.
+        """
+        return None
+
     async def async_realtime(
         self,
         model: str,
@@ -165,6 +173,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         if (query_params or {}).get("intent") == "transcription"
                         else None
                     ),
+                    event_normalizer=self._make_event_normalizer(),
                 )
                 await realtime_streaming.bidirectional_forward()
 

@@ -48,6 +48,7 @@ class RealTimeStreaming:
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
         force_transcription_model: Optional[str] = None,
+        event_normalizer: Optional[Any] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -106,6 +107,8 @@ class RealTimeStreaming:
         # their input_audio_transcription.completed usage drives duration-based cost.
         self._force_transcription_model = force_transcription_model
         self._is_transcription_session: bool = force_transcription_model is not None
+        # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
+        self._event_normalizer = event_normalizer
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -555,7 +558,27 @@ class RealTimeStreaming:
                 return False
         return True
 
+    def _should_drop_event_from_client(self, event: Any) -> bool:
+        """Return True for provider-specific events that must not reach GA clients."""
+        if self._event_normalizer is not None:
+            return self._event_normalizer.should_drop(event)
+        return False
+
+    def _normalize_event_for_ga_client(self, event: dict) -> dict:
+        """Apply per-provider GA normalization before forwarding to clients."""
+        if self._event_normalizer is not None:
+            return self._event_normalizer.normalize(event)
+        return event
+
+    def _event_to_client_json(self, event: dict) -> str:
+        return json.dumps(self._normalize_event_for_ga_client(event))
+
     async def _send_event_to_client(self, event: Any, event_str: str) -> bool:
+        if self._should_drop_event_from_client(event):
+            return False
+        if isinstance(event, dict):
+            event = self._normalize_event_for_ga_client(event)
+            event_str = json.dumps(event)
         if self._client_wants_beta and isinstance(event, dict):
             try:
                 translated = self._translate_event_to_beta(event)
@@ -843,6 +866,8 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
+            if self._should_drop_event_from_client(event):
+                continue
             is_session_created_event = (
                 isinstance(event, dict) and event.get("type") == "session.created"
             )
@@ -934,7 +959,7 @@ class RealTimeStreaming:
             and self._has_audio_transcription_guardrails()
         ):
             self.store_message(event_obj)
-            await self.websocket.send_text(raw_response)
+            await self.websocket.send_text(self._event_to_client_json(event_obj))
             await self._send_to_backend(self._make_disable_auto_response_message())
             return True
 
@@ -942,7 +967,7 @@ class RealTimeStreaming:
             transcript = event_obj.get("transcript", "")
             self._collect_user_input_from_backend_event(event_obj)
             self.store_message(event_obj)
-            await self.websocket.send_text(raw_response)
+            await self.websocket.send_text(self._event_to_client_json(event_obj))
 
             # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
             # assistant turn: capture audio-duration usage for cost and never
@@ -995,14 +1020,18 @@ class RealTimeStreaming:
                         await self.websocket.send_text(raw_response)
                         continue
 
+                    if self._should_drop_event_from_client(event):
+                        continue
+
                     if await self._handle_raw_backend_message(event, raw_response):
                         continue
                     self.store_message(event)
 
                     if not self._client_wants_beta:
-                        await self.websocket.send_text(raw_response)
+                        await self.websocket.send_text(self._event_to_client_json(event))
                         continue
 
+                    event = self._normalize_event_for_ga_client(event)
                     translated = self._translate_event_to_beta(event)
                     if translated is None:
                         continue

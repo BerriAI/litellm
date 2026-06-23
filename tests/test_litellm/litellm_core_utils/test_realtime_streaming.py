@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
@@ -199,6 +200,173 @@ async def test_backend_to_client_skips_non_utf8_binary_frames():
 
     assert client_ws.send_text.call_count == 1
     assert isinstance(client_ws.send_text.call_args_list[0].args[0], str)
+
+
+def _xai_streaming(client_ws=None, backend_ws=None, logging_obj=None):
+    """Helper: RealTimeStreaming wired with XAIRealtimeNormalizer."""
+    return RealTimeStreaming(
+        client_ws or MagicMock(),
+        backend_ws or MagicMock(),
+        logging_obj or MagicMock(),
+        event_normalizer=XAIRealtimeNormalizer(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# XAIRealtimeNormalizer unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_xai_normalizer_drops_ping():
+    n = XAIRealtimeNormalizer()
+    assert n.should_drop({"type": "ping", "event_id": "x"})
+    assert not n.should_drop({"type": "session.created", "session": {}})
+
+
+def test_xai_normalizer_converts_empty_response_created_usage_to_null():
+    n = XAIRealtimeNormalizer()
+    event = {
+        "type": "response.created",
+        "response": {"id": "r1", "object": "realtime.response", "output": [],
+                     "status": "in_progress", "status_details": None, "usage": {}},
+    }
+    assert n.normalize(event)["response"]["usage"] is None
+
+
+def test_xai_normalizer_converts_empty_response_done_usage_to_defaults():
+    n = XAIRealtimeNormalizer()
+    event = {
+        "type": "response.done",
+        "response": {"id": "r1", "object": "realtime.response", "output": [],
+                     "status": "completed", "status_details": None, "usage": {}},
+    }
+    usage = n.normalize(event)["response"]["usage"]
+    assert usage is not None
+    assert usage["total_tokens"] == 0
+    assert usage["input_token_details"]["text_tokens"] == 0
+
+
+def test_xai_normalizer_fills_partial_response_usage():
+    n = XAIRealtimeNormalizer()
+    event = {
+        "type": "response.done",
+        "response": {"id": "r1", "object": "realtime.response", "output": [],
+                     "status": "completed", "status_details": None,
+                     "usage": {"total_tokens": 12, "input_tokens": 5, "output_tokens": 7}},
+    }
+    usage = n.normalize(event)["response"]["usage"]
+    assert usage["total_tokens"] == 12
+    assert usage["input_token_details"]["text_tokens"] == 0
+    assert usage["output_token_details"]["audio_tokens"] == 0
+
+
+def test_xai_normalizer_injects_missing_content_part_done_part():
+    n = XAIRealtimeNormalizer()
+    n._update_content_part_field(
+        {"response_id": "r1", "item_id": "i1", "content_index": 0, "transcript": "hi"},
+        part_type="audio", field="transcript", value="hi",
+    )
+    event = {"type": "response.content_part.done",
+             "response_id": "r1", "item_id": "i1", "content_index": 0, "output_index": 0}
+    assert n.normalize(event)["part"] == {"type": "audio", "transcript": "hi"}
+
+
+def test_xai_normalizer_conversation_item_tool_role_becomes_assistant():
+    n = XAIRealtimeNormalizer()
+    event = {
+        "type": "conversation.item.added", "event_id": "e1", "previous_item_id": None,
+        "item": {"id": "i1", "object": "realtime.item", "type": "function_call",
+                 "status": "in_progress", "role": "tool",
+                 "call_id": "c1", "name": "get_weather", "arguments": ""},
+    }
+    normalized = n.normalize(event)
+    assert normalized["item"]["role"] == "assistant"
+    assert normalized["item"]["name"] == "get_weather"
+
+
+def test_xai_normalizer_injects_output_index_on_function_call_delta():
+    n = XAIRealtimeNormalizer()
+    event = {"type": "response.function_call_arguments.delta",
+             "event_id": "e1", "item_id": "i1", "response_id": "r1",
+             "delta": '{"city":"Paris"}', "call_id": "c1", "previous_item_id": None}
+    normalized = n.normalize(event)
+    assert normalized["output_index"] == 0
+    assert "content_index" not in normalized
+
+
+def test_xai_normalizer_injects_both_indices_on_content_part_done():
+    n = XAIRealtimeNormalizer()
+    event = {"type": "response.content_part.done",
+             "event_id": "e2", "item_id": "i1", "response_id": "r1",
+             "previous_item_id": None}
+    normalized = n.normalize(event)
+    assert normalized["output_index"] == 0
+    assert normalized["content_index"] == 0
+
+
+def test_xai_normalizer_preserves_existing_indices():
+    n = XAIRealtimeNormalizer()
+    event = {"type": "response.function_call_arguments.done",
+             "event_id": "e3", "item_id": "i1", "response_id": "r1",
+             "output_index": 2, "call_id": "c1", "arguments": '{"city":"Paris"}'}
+    assert n.normalize(event)["output_index"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration: RealTimeStreaming with XAIRealtimeNormalizer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backend_to_client_drops_ping_events():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "ping", "event_id": "evt_ping",
+                        "timestamp": 1782214899793}).encode(),
+            json.dumps({"type": "session.created", "session": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.call_count == 1
+    sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
+    assert sent["type"] == "session.created"
+
+
+@pytest.mark.asyncio
+async def test_backend_to_client_normalizes_empty_response_usage():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({
+                "type": "response.created",
+                "response": {"id": "r1", "object": "realtime.response", "output": [],
+                             "status": "in_progress", "status_details": "unimplemented",
+                             "usage": {}},
+            }).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
+    assert sent["response"]["usage"] is None
 
 
 @pytest.mark.asyncio
