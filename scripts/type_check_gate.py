@@ -176,7 +176,7 @@ def cmd_update(counts: Mapping[str, int]) -> None:
     )
 
 
-def cmd_check(base: str) -> None:
+def cmd_check(base_ref: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
     head = count_basedpyright(sys.stdin.read())
     if is_vacuous_run(head, budget):
@@ -187,7 +187,7 @@ def cmd_check(base: str) -> None:
             f"nothing; refusing to certify a vacuous run."
         )
         raise SystemExit(1)
-    base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
+    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
     base = base_counts(base_point)
     if is_vacuous_run(base, budget):
         print(
