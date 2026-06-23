@@ -12,10 +12,10 @@ services:
     # command:
     #  - "--config=/app/config.yaml"
     ##############################################
-    ports:
-      - "4000:4000" # Map the container port to the host, change the host port if necessary
+    # ports:
+    #   - "4000:4000" # Map the container port to the host, change the host port if necessary
     environment:
-      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm2"
       # Optional: route read-only queries (find_*, count, group_by, query_raw/_first)
       # to a separate reader endpoint, e.g. an Aurora reader. Leave unset for
       # single-DB deployments. With IAM_TOKEN_DB_AUTH enabled, the reader URL
@@ -34,40 +34,62 @@ services:
       timeout: 10s   # Health check command times out after 10 seconds
       retries: 3     # Retry up to 3 times if health check fails
       start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # Router with HTTPS
+      - "traefik.http.routers.litellm2.rule=Host(`litellm2.corpoml2.corporatings.com`)"
+      - "traefik.http.routers.litellm2.entrypoints=websecure"
+      - "traefik.http.routers.litellm2.tls.certresolver=letsencrypt"
 
+
+      # Middleware for redirect
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+      # Service port inside container
+      - "traefik.http.services.litellm2.loadbalancer.server.port=4000"
+    networks:
+      - proxy
   db:
     image: postgres:16
     restart: always
     container_name: litellm_db
     environment:
-      POSTGRES_DB: litellm
+      POSTGRES_DB: litellm2
       POSTGRES_USER: llmproxy
       POSTGRES_PASSWORD: dbpassword9090
-    ports:
-      - "5432:5432"
+    # ports:
+    #   - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
+      - postgres_data2:/var/lib/postgresql/data # Persists Postgres data across container restarts
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
       interval: 1s
       timeout: 5s
       retries: 10
-
-  prometheus:
-    image: prom/prometheus
-    volumes:
-      - prometheus_data:/prometheus
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=15d"
-    restart: always
+    networks:
+      - proxy
+  # prometheus:
+  #   image: prom/prometheus
+  #   volumes:
+  #     - prometheus_data:/prometheus
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  #   ports:
+  #     - "9090:9090"
+  #   command:
+  #     - "--config.file=/etc/prometheus/prometheus.yml"
+  #     - "--storage.tsdb.path=/prometheus"
+  #     - "--storage.tsdb.retention.time=15d"
+  #   restart: always
 
 volumes:
-  prometheus_data:
+  prometheus_data2:
     driver: local
-  postgres_data:
+  postgres_data2:
     name: litellm_postgres_data # Named volume for Postgres data persistence
+
+
+networks:
+  proxy:
+    name: proxy
+    external: true
