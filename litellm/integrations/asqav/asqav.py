@@ -450,8 +450,7 @@ class AsqavLogger(CustomLogger):
 
             client = _get_httpx_client()
             url = (
-                f"{self._cloud_api_base}/api/v1/agents/"
-                f"{self._cloud_agent_id}/sign"
+                f"{self._cloud_api_base}/api/v1/agents/" f"{self._cloud_agent_id}/sign"
             )
             resp = client.post(
                 url,
