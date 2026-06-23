@@ -1633,9 +1633,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             resp = tool_responses_by_id.pop(call_id, None)
             if resp is not None:
                 merged["response"] = resp.get("response")
-                # Keep response signature if call didn't have one
-                if "thought_signature" not in merged and "thought_signature" in resp:
-                    merged["thought_signature"] = resp["thought_signature"]
+                if "thought_signature" in resp:
+                    merged["response_thought_signature"] = resp["thought_signature"]
             invocations.append(merged)
 
         # Any orphan responses (shouldn't happen, but be safe)

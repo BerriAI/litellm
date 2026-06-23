@@ -22,7 +22,6 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
 
-
 # --- Response extraction tests ---
 
 
@@ -145,6 +144,38 @@ class TestExtractServerSideToolInvocations:
         assert result[0]["id"] == "exec1"
         assert "response" not in result[0]
 
+    def test_extracts_tool_call_and_response_with_different_signatures(self):
+        """Case where toolCall and toolResponse have different signatures."""
+        parts: List[HttpxPartType] = [
+            {
+                "thoughtSignature": "sig_call_1",
+                "toolCall": {
+                    "toolType": "GOOGLE_SEARCH_WEB",
+                    "id": "abc123",
+                    "args": {"queries": ["weather Buenos Aires"]},
+                },
+            },
+            {
+                "thoughtSignature": "sig_resp_1",
+                "toolResponse": {
+                    "toolType": "GOOGLE_SEARCH_WEB",
+                    "id": "abc123",
+                    "response": {"weather": "Sunny, 20°C"},
+                },
+            },
+        ]
+
+        result = VertexGeminiConfig._extract_server_side_tool_invocations(parts)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["tool_type"] == "GOOGLE_SEARCH_WEB"
+        assert result[0]["id"] == "abc123"
+        assert result[0]["args"] == {"queries": ["weather Buenos Aires"]}
+        assert result[0]["response"] == {"weather": "Sunny, 20°C"}
+        assert result[0]["thought_signature"] == "sig_call_1"
+        assert result[0]["response_thought_signature"] == "sig_resp_1"
+
 
 # --- Input re-injection tests ---
 
@@ -199,6 +230,44 @@ class TestReInjectServerSideToolInvocations:
         assert tool_response_parts[0]["toolResponse"]["response"] == {
             "weather": "Sunny, 20°C"
         }
+
+    def test_roundtrip_single_invocation_with_different_signatures(self):
+        """Server-side invocations with different signatures for call and response."""
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "It's sunny in Buenos Aires.",
+                "provider_specific_fields": {
+                    "server_side_tool_invocations": [
+                        {
+                            "tool_type": "GOOGLE_SEARCH_WEB",
+                            "id": "abc123",
+                            "args": {"queries": ["weather Buenos Aires"]},
+                            "response": {"weather": "Sunny, 20°C"},
+                            "thought_signature": "sig_call",
+                            "response_thought_signature": "sig_resp",
+                        }
+                    ]
+                },
+            },
+            {"role": "user", "content": "Thanks!"},
+        ]
+
+        contents = _gemini_convert_messages_with_history(messages)
+
+        model_turn = [c for c in contents if c["role"] == "model"]
+        assert len(model_turn) == 1
+
+        parts = model_turn[0]["parts"]
+        tool_call_parts = [p for p in parts if "toolCall" in p]
+        tool_response_parts = [p for p in parts if "toolResponse" in p]
+
+        assert len(tool_call_parts) == 1
+        assert tool_call_parts[0]["thoughtSignature"] == "sig_call"
+
+        assert len(tool_response_parts) == 1
+        assert tool_response_parts[0]["thoughtSignature"] == "sig_resp"
 
     def test_no_invocations_no_extra_parts(self):
         """Without server_side_tool_invocations, no extra parts are added."""
