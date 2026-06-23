@@ -36,7 +36,7 @@ async def get_platform_mcp_settings() -> tuple[bool, int]:
         if isinstance(param_value, dict):
             settings.update(param_value)
 
-    enabled = settings.get("platform_mcp_enabled") is True
+    enabled = _coerce_enabled(settings.get("platform_mcp_enabled"))
     threshold = _coerce_positive_threshold(settings.get("platform_mcp_tool_threshold"))
     return enabled, threshold
 
@@ -201,9 +201,25 @@ def serialize_tool(tool: Any) -> dict[str, Any]:
 
 
 def _coerce_positive_threshold(value: Any) -> int:
+    if isinstance(value, bool):
+        return DEFAULT_PLATFORM_MCP_TOOL_THRESHOLD
     if isinstance(value, int) and value > 0:
         return value
+    if isinstance(value, str):
+        value = value.strip()
+        if value.isdigit():
+            threshold = int(value)
+            if threshold > 0:
+                return threshold
     return DEFAULT_PLATFORM_MCP_TOOL_THRESHOLD
+
+
+def _coerce_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 def _server_match_name(server: MCPServer) -> str:

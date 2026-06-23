@@ -2182,6 +2182,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
+        enable_platform_mcp_compression: bool = True,
     ) -> List[MCPTool]:
         """
         List all available MCP tools.
@@ -2211,6 +2212,9 @@ if MCP_AVAILABLE:
 
         platform_mcp_enabled, platform_mcp_threshold = (
             await get_platform_mcp_settings()
+        )
+        platform_mcp_enabled = (
+            platform_mcp_enabled and enable_platform_mcp_compression
         )
         enabled_server_names = get_enabled_server_names_for_session(
             get_active_mcp_session()

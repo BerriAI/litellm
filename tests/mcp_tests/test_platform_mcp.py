@@ -100,6 +100,43 @@ def test_platform_mcp_advertises_tool_list_changed_capability():
 
 
 @pytest.mark.asyncio
+async def test_platform_mcp_settings_accept_config_field_string_values(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {
+            "platform_mcp_enabled": "true",
+            "platform_mcp_tool_threshold": "12",
+        },
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    assert await platform_mcp.get_platform_mcp_settings() == (True, 12)
+
+
+@pytest.mark.asyncio
+async def test_platform_mcp_threshold_ignores_bool_values(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {
+            "platform_mcp_enabled": True,
+            "platform_mcp_tool_threshold": True,
+        },
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    assert await platform_mcp.get_platform_mcp_settings() == (
+        True,
+        platform_mcp.DEFAULT_PLATFORM_MCP_TOOL_THRESHOLD,
+    )
+
+
+@pytest.mark.asyncio
 async def test_platform_mcp_compresses_aggregate_tools_over_threshold(monkeypatch):
     normal_tools = [_tool(f"tool_{idx}") for idx in range(11)]
 
@@ -125,6 +162,36 @@ async def test_platform_mcp_compresses_aggregate_tools_over_threshold(monkeypatc
     tools = await mcp_server_module._list_mcp_tools()
 
     assert [tool.name for tool in tools] == ["list_servers", "enable_server"]
+
+
+@pytest.mark.asyncio
+async def test_platform_mcp_catalog_call_can_bypass_compression(monkeypatch):
+    normal_tools = [_tool(f"tool_{idx}") for idx in range(11)]
+
+    async def fake_get_tools(**kwargs):
+        return normal_tools
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_merge_toolset_permissions",
+        _merge_toolset_permissions,
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_tools_from_mcp_servers",
+        fake_get_tools,
+    )
+    monkeypatch.setattr(
+        platform_mcp,
+        "get_platform_mcp_settings",
+        _enabled_platform_settings,
+    )
+
+    tools = await mcp_server_module._list_mcp_tools(
+        enable_platform_mcp_compression=False
+    )
+
+    assert tools == normal_tools
 
 
 @pytest.mark.asyncio
