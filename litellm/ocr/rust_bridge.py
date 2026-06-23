@@ -28,11 +28,15 @@ def rust_ocr(
     api_key: str | None,
     api_base: str | None,
     optional_params: dict,
-) -> "OCRResponse":
-    """Run a Mistral OCR call end-to-end in Rust and wrap the result as ``OCRResponse``."""
-    import litellm_python_bridge
-    from litellm.llms.base_llm.ocr.transformation import OCRResponse
+) -> dict:
+    """Call the Rust bridge and return the raw OCR response dict.
 
-    return OCRResponse(
-        **litellm_python_bridge.ocr(model, document, api_key, api_base, optional_params)
+    Kept free of ``litellm`` imports so this module stays a leaf — the caller
+    (``litellm/ocr/main.py``) wraps the dict into an ``OCRResponse``. This avoids
+    the import edge CodeQL repeatedly flags (and auto-"fixes") as a cyclic import.
+    """
+    import litellm_python_bridge
+
+    return litellm_python_bridge.ocr(
+        model, document, api_key, api_base, optional_params
     )
