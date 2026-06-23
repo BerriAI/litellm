@@ -468,6 +468,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
 request_timeout: float = float(
     os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
 )
+request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes

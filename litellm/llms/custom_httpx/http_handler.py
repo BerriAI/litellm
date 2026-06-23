@@ -42,6 +42,9 @@ from litellm.constants import (
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -134,6 +137,18 @@ _DEFAULT_TIMEOUT = httpx.Timeout(
     timeout=COMPLETION_HTTP_FALLBACK_SECONDS,
     connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
+
+
+def _default_cached_client_timeout() -> httpx.Timeout:
+    """Timeout for cached default httpx clients; honors an explicit litellm.request_timeout."""
+    configured = get_configured_request_timeout()
+    if configured is None:
+        return _DEFAULT_TIMEOUT
+    return httpx.Timeout(
+        timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+    )
+
+
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS = 5.0
 _STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=50,
@@ -1379,7 +1394,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=_DEFAULT_TIMEOUT,
+            timeout=_default_cached_client_timeout(),
             shared_session=shared_session,
         )
 
@@ -1428,7 +1443,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=_DEFAULT_TIMEOUT)
+        _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
 
     cache.set_cache(
         key=_cache_key_name,
