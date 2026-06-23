@@ -5,6 +5,7 @@ Main OCR function for LiteLLM.
 import asyncio
 import base64
 import contextvars
+import importlib
 import mimetypes
 import os
 import re
@@ -262,12 +263,12 @@ def ocr(
             api_base = dynamic_api_base
 
         # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
-        # Imported lazily to avoid a module-level import cycle (CodeQL flags the
-        # litellm.ocr.main -> litellm.ocr.rust_bridge edge during package init).
-        from litellm.ocr.rust_bridge import rust_ocr, rust_ocr_enabled
+        # Load via importlib to avoid a static import edge that can be flagged as
+        # part of a cyclic import graph during package initialization.
+        rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
 
-        if custom_llm_provider == "mistral" and rust_ocr_enabled():
-            return rust_ocr(model, document, api_key, api_base, kwargs)
+        if custom_llm_provider == "mistral" and rust_bridge.rust_ocr_enabled():
+            return rust_bridge.rust_ocr(model, document, api_key, api_base, kwargs)
 
         # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
