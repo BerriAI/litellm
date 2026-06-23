@@ -30,7 +30,10 @@ fn percent_encode(value: &str) -> String {
 /// Blank/whitespace `api_base` is treated as absent (guard at resolution time),
 /// falling back to the default. The scheme is swapped to its WebSocket
 /// equivalent (`https://`→`wss://`, `http://`→`ws://`); bases already using
-/// `ws`/`wss` are left untouched. A trailing `/` is trimmed before the path and
+/// `ws`/`wss` are left untouched. A bare host or unrecognized scheme defaults to
+/// secure `wss://` so we never hand a scheme-less URL to the connector (this is
+/// a deliberate hardening over Python's `_construct_url`, which would emit a
+/// scheme-less URL here). A trailing `/` is trimmed before the path and
 /// `?model=<encoded>` are appended.
 pub fn complete_url(api_base: Option<&str>, model: &str) -> String {
     let base = api_base
@@ -42,8 +45,10 @@ pub fn complete_url(api_base: Option<&str>, model: &str) -> String {
         format!("wss://{rest}")
     } else if let Some(rest) = base.strip_prefix("http://") {
         format!("ws://{rest}")
-    } else {
+    } else if base.starts_with("wss://") || base.starts_with("ws://") {
         base.to_string()
+    } else {
+        format!("wss://{base}")
     };
 
     let base = base.trim_end_matches('/');
@@ -135,6 +140,22 @@ mod tests {
         assert_eq!(
             complete_url(Some("https://oai.azure.example"), "gpt-4o-realtime-preview"),
             "wss://oai.azure.example/v1/realtime?model=gpt-4o-realtime-preview"
+        );
+    }
+
+    #[test]
+    fn complete_url_preserves_existing_wss_scheme() {
+        assert_eq!(
+            complete_url(Some("wss://api.openai.com"), "gpt-realtime"),
+            "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+        );
+    }
+
+    #[test]
+    fn complete_url_bare_host_defaults_to_wss() {
+        assert_eq!(
+            complete_url(Some("api.openai.com"), "gpt-realtime"),
+            "wss://api.openai.com/v1/realtime?model=gpt-realtime"
         );
     }
 
