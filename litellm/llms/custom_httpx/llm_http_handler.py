@@ -194,7 +194,7 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
 
 
-def _custom_logger_callbacks(logging_obj: Any) -> List[Any]:
+def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import (
         get_custom_logger_compatible_class,
@@ -205,7 +205,7 @@ def _custom_logger_callbacks(logging_obj: Any) -> List[Any]:
     if isinstance(dynamic_success_callbacks, (list, tuple)):
         callbacks.extend(dynamic_success_callbacks)
 
-    custom_loggers: List[Any] = []
+    custom_loggers: list[Any] = []
     for cb in callbacks:
         if isinstance(cb, str):
             resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
@@ -2276,14 +2276,14 @@ class BaseLLMHTTPHandler:
         model: str,
         input: Union[str, ResponseInputParam],
         custom_llm_provider: str,
-        response_api_optional_request_params: Dict[str, Any],
+        response_api_optional_request_params: dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Tuple[
+    ) -> tuple[
         str,
         Union[str, ResponseInputParam],
         str,
-        Dict[str, Any],
+        dict[str, Any],
         GenericLiteLLMParams,
     ]:
         if not _has_pre_call_deployment_hook(logging_obj):
@@ -2355,7 +2355,7 @@ class BaseLLMHTTPHandler:
         model: str,
         input: Union[str, ResponseInputParam],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict[str, Any],
+        response_api_optional_request_params: dict[str, Any],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
