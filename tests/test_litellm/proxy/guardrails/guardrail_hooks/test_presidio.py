@@ -2182,6 +2182,66 @@ async def test_streaming_bytes_chunks_are_yielded_not_discarded():
 
 
 @pytest.mark.asyncio
+async def test_streaming_bytes_fail_closed_raises():
+    """With mask_pii_fail_closed=True, raw byte-stream output that cannot be
+    masked must fail closed (raise) instead of passing through unmasked (#30728)."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mask_pii_fail_closed=True,
+    )
+
+    async def mock_stream():
+        yield b'data: {"delta":{"text":"SSN 078-05-1120"}}\n\n'
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    with pytest.raises(GuardrailRaisedException):
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_streaming_mixed_fail_closed_raises():
+    """With mask_pii_fail_closed=True, a mixed/unknown stream shape that cannot be
+    masked must fail closed rather than flush buffered chunks unmasked (#30728)."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mask_pii_fail_closed=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-fc-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+
+    async def mock_stream():
+        yield model_chunk
+        yield FakeResponsesEvent("response.completed")
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    with pytest.raises(GuardrailRaisedException):
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_streaming_unmask_path_bytes_passthrough():
     """
     Bytes chunks in the unmasking path should also pass through.

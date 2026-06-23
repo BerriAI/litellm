@@ -1077,9 +1077,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
+                    if self.mask_pii_fail_closed:
+                        raise GuardrailRaisedException(
+                            guardrail_name=self.guardrail_name,
+                            message="Presidio apply_to_output cannot mask raw byte-stream output; failing closed.",
+                            should_wrap_with_default_message=False,
+                        )
                     yield chunk  # type: ignore[misc]
                     continue
                 else:
+                    if self.mask_pii_fail_closed:
+                        raise GuardrailRaisedException(
+                            guardrail_name=self.guardrail_name,
+                            message="Presidio apply_to_output cannot mask this mixed/unknown stream shape; failing closed.",
+                            should_wrap_with_default_message=False,
+                        )
                     if all_chunks:
                         # Flush buffered chunks and switch to transparent passthrough for this stream shape.
                         # NOTE: these buffered chunks are emitted unmasked because this
@@ -1125,6 +1137,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             mock_response_stream = convert_model_response_to_streaming(assembled_model_response)
             yield mock_response_stream
 
+        except GuardrailRaisedException:
+            # A fail-closed signal (mask_pii_fail_closed) must propagate, not be
+            # swallowed into an unmasked passthrough below.
+            raise
         except Exception as e:
             verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
             for chunk in all_chunks:
