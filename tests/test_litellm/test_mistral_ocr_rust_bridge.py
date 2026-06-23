@@ -1,11 +1,13 @@
 import httpx
 import pytest
 
+from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+from litellm.llms.mistral.ocr.rust_provider import MistralRustOcrProvider
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.rust_bridge import loader
 from litellm.rust_bridge import ocr as rust_ocr
 from litellm.rust_bridge.ocr import providers
-from litellm.rust_bridge.ocr import RustOcrProvider
+from litellm.rust_bridge.ocr.config import RustOCRProviderConfig
 
 MODEL = "mistral-ocr-latest"
 DOCUMENT = {
@@ -61,14 +63,25 @@ class _FakeLoggingObj:
     pass
 
 
-def test_rust_ocr_provider_enum_is_explicit():
-    assert providers.RUST_OCR_PROVIDERS == {RustOcrProvider.MISTRAL.value}
+class _InheritedMistralOCRConfig(MistralOCRConfig):
+    pass
 
 
-def test_unknown_ocr_provider_uses_python_fallback():
-    fallback_config = MistralOCRConfig()
+def test_mistral_rust_ocr_provider_enum_is_owned_by_mistral():
+    assert MistralRustOcrProvider.MISTRAL.value == "mistral"
+    assert (
+        MistralOCRConfig().get_rust_ocr_provider(model=MODEL)
+        == MistralRustOcrProvider.MISTRAL.value
+    )
 
-    config = rust_ocr.get_rust_ocr_provider_config("azure_ai", fallback_config)
+
+def test_inherited_mistral_ocr_provider_uses_python_fallback():
+    fallback_config = _InheritedMistralOCRConfig()
+
+    config = rust_ocr.get_rust_ocr_provider_config(
+        model=MODEL,
+        fallback_config=fallback_config,
+    )
 
     assert config is fallback_config
 
@@ -79,7 +92,7 @@ def test_rust_ocr_provider_returns_none_when_scope_disabled(monkeypatch):
     assert (
         providers.call_ocr(
             {
-                "provider": RustOcrProvider.MISTRAL.value,
+                "provider": MistralRustOcrProvider.MISTRAL.value,
                 "operation": "map_params",
                 "non_default_params": {"extract_header": True},
             }
@@ -94,7 +107,7 @@ def test_mistral_ocr_map_params_uses_provider_gated_rust(monkeypatch):
 
     result = providers.call_ocr(
         {
-            "provider": RustOcrProvider.MISTRAL.value,
+            "provider": MistralRustOcrProvider.MISTRAL.value,
             "operation": "map_params",
             "non_default_params": {
                 "extract_header": True,
@@ -110,7 +123,13 @@ def test_mistral_ocr_provider_wrapper_uses_rust_when_enabled(monkeypatch):
     loader.set_rust_core_enabled("ocr:mistral")
     monkeypatch.setattr(loader, "_load_rust_module", lambda: _FakeRustModule)
 
-    config = rust_ocr.get_rust_ocr_provider_config("mistral", MistralOCRConfig())
+    config = rust_ocr.get_rust_ocr_provider_config(
+        model=MODEL,
+        fallback_config=MistralOCRConfig(),
+    )
+
+    assert isinstance(config, BaseOCRConfig)
+    assert isinstance(config, RustOCRProviderConfig)
 
     request = config.transform_ocr_request(
         model=MODEL,
@@ -150,7 +169,10 @@ def test_mistral_ocr_provider_wrapper_falls_back_when_rust_module_missing(
     loader.set_rust_core_enabled("ocr:mistral")
     monkeypatch.setattr(loader, "_load_rust_module", lambda: None)
 
-    config = rust_ocr.get_rust_ocr_provider_config("mistral", MistralOCRConfig())
+    config = rust_ocr.get_rust_ocr_provider_config(
+        model=MODEL,
+        fallback_config=MistralOCRConfig(),
+    )
 
     result = config.transform_ocr_request(
         model=MODEL,
@@ -166,11 +188,16 @@ def test_mistral_ocr_provider_wrapper_falls_back_when_rust_module_missing(
     }
 
 
-def test_mistral_ocr_config_stays_python_fallback(monkeypatch):
+def test_inherited_mistral_ocr_config_does_not_use_mistral_rust(monkeypatch):
     loader.set_rust_core_enabled("ocr:mistral")
     monkeypatch.setattr(loader, "_load_rust_module", lambda: _FakeRustModule)
 
-    config = MistralOCRConfig()
+    config = rust_ocr.get_rust_ocr_provider_config(
+        model=MODEL,
+        fallback_config=_InheritedMistralOCRConfig(),
+    )
+
+    assert isinstance(config, _InheritedMistralOCRConfig)
     result = config.map_ocr_params(
         non_default_params={
             "extract_header": True,

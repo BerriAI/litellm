@@ -280,7 +280,7 @@ def ocr(
         )
 
         ocr_provider_config = get_rust_ocr_provider_config(
-            custom_llm_provider=custom_llm_provider,
+            model=model,
             fallback_config=ocr_provider_config,
         )
 

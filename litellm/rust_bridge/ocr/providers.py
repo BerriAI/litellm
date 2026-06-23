@@ -1,19 +1,11 @@
-from enum import Enum
 from typing import Any, Optional
 
 from litellm.rust_bridge.loader import call_rust_function, rust_core_enabled
 
 
-class RustOcrProvider(str, Enum):
-    MISTRAL = "mistral"
-
-
-RUST_OCR_PROVIDERS = frozenset({RustOcrProvider.MISTRAL.value})
-
-
 def call_ocr(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     provider = payload.get("provider")
-    if not isinstance(provider, str) or provider not in RUST_OCR_PROVIDERS:
+    if not isinstance(provider, str):
         return None
 
     if not _rust_ocr_provider_enabled(provider):

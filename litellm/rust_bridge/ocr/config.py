@@ -1,4 +1,4 @@
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 import httpx
 
@@ -8,42 +8,69 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRRequestData,
     OCRResponse,
 )
-from litellm.rust_bridge.ocr.providers import RustOcrProvider, call_ocr
+from litellm.rust_bridge.ocr.providers import call_ocr
 
 
 def get_rust_ocr_provider_config(
-    custom_llm_provider: Optional[str],
+    model: str,
     fallback_config: BaseOCRConfig,
 ) -> BaseOCRConfig:
-    if custom_llm_provider is None:
+    rust_ocr_provider = fallback_config.get_rust_ocr_provider(model=model)
+    if not rust_ocr_provider:
         return fallback_config
 
-    provider_value = getattr(custom_llm_provider, "value", custom_llm_provider)
-    try:
-        rust_ocr_provider = RustOcrProvider(str(provider_value))
-    except ValueError:
-        return fallback_config
-
-    return cast(
-        BaseOCRConfig,
-        _RustOCRProviderConfig(
-            rust_ocr_provider=rust_ocr_provider,
-            fallback_config=fallback_config,
-        ),
+    return RustOCRProviderConfig(
+        rust_ocr_provider=rust_ocr_provider,
+        fallback_config=fallback_config,
     )
 
 
-class _RustOCRProviderConfig:
+class RustOCRProviderConfig(BaseOCRConfig):
     def __init__(
         self,
-        rust_ocr_provider: RustOcrProvider,
+        rust_ocr_provider: str,
         fallback_config: BaseOCRConfig,
     ) -> None:
+        super().__init__()
         self.rust_ocr_provider = rust_ocr_provider
         self.fallback_config = fallback_config
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.fallback_config, name)
+    def get_supported_ocr_params(self, model: str) -> list:
+        return self.fallback_config.get_supported_ocr_params(model=model)
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        **kwargs,
+    ) -> dict:
+        return self.fallback_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            **kwargs,
+        )
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: Optional[dict] = None,
+        **kwargs,
+    ) -> str:
+        return self.fallback_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            **kwargs,
+        )
 
     def map_ocr_params(
         self,
@@ -53,7 +80,7 @@ class _RustOCRProviderConfig:
     ) -> dict:
         mapped_params = call_ocr(
             {
-                "provider": self.rust_ocr_provider.value,
+                "provider": self.rust_ocr_provider,
                 "operation": "map_params",
                 "non_default_params": non_default_params,
             }
@@ -77,7 +104,7 @@ class _RustOCRProviderConfig:
         if isinstance(document, dict):
             transformed_request = call_ocr(
                 {
-                    "provider": self.rust_ocr_provider.value,
+                    "provider": self.rust_ocr_provider,
                     "operation": "transform_request",
                     "model": model,
                     "document": document,
@@ -88,7 +115,7 @@ class _RustOCRProviderConfig:
                 request_data = transformed_request.get("data")
                 if not isinstance(request_data, dict):
                     raise ValueError(
-                        f"Rust OCR provider {self.rust_ocr_provider.value} "
+                        f"Rust OCR provider {self.rust_ocr_provider} "
                         "returned invalid request data"
                     )
                 return OCRRequestData(
@@ -129,7 +156,7 @@ class _RustOCRProviderConfig:
     ) -> OCRResponse:
         transformed_response = call_ocr(
             {
-                "provider": self.rust_ocr_provider.value,
+                "provider": self.rust_ocr_provider,
                 "operation": "transform_response",
                 "model": model,
                 "response_json": raw_response.json(),
@@ -157,4 +184,16 @@ class _RustOCRProviderConfig:
             raw_response=raw_response,
             logging_obj=logging_obj,
             **kwargs,
+        )
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict,
+    ) -> Exception:
+        return self.fallback_config.get_error_class(
+            error_message=error_message,
+            status_code=status_code,
+            headers=headers,
         )

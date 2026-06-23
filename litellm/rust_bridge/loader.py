@@ -1,25 +1,18 @@
 import importlib
+from functools import lru_cache
 from types import ModuleType
 from typing import Any, Iterable, Optional, Union
 
-_rust_module: Optional[ModuleType] = None
-_rust_module_load_attempted = False
 _enabled_rust_core_scopes: set[str] = set()
 _rust_core_strict = False
 
 
+@lru_cache(maxsize=1)
 def _load_rust_module() -> Optional[ModuleType]:
-    global _rust_module, _rust_module_load_attempted
-
-    if _rust_module_load_attempted:
-        return _rust_module
-
-    _rust_module_load_attempted = True
     try:
-        _rust_module = importlib.import_module("litellm_python_bridge")
+        return importlib.import_module("litellm_python_bridge")
     except Exception:
-        _rust_module = None
-    return _rust_module
+        return None
 
 
 def rust_core_available() -> bool:
