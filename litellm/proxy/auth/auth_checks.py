@@ -3282,9 +3282,18 @@ async def _virtual_key_max_budget_check(
         ####################################
 
         if spend >= valid_token.max_budget:
+            # name the key in the error so operators don't have to reverse-map
+            # spend back to a key; key_name is the masked form (last 4 chars)
+            key_label = valid_token.key_alias or "key"
+            key_descriptor = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 
