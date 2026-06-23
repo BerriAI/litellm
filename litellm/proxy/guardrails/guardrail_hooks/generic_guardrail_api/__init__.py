@@ -12,7 +12,11 @@ def _get_config_value(
     litellm_params: Any, optional_params: Any, attribute_name: str
 ) -> Optional[Any]:
     if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
+        value = (
+            optional_params.get(attribute_name)
+            if isinstance(optional_params, dict)
+            else getattr(optional_params, attribute_name, None)
+        )
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)

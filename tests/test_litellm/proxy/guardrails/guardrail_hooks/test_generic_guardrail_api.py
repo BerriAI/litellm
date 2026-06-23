@@ -1247,6 +1247,68 @@ class TestGenericGuardrailAPIStreamingConfig:
         assert guardrail.streaming_end_of_stream_only is True
         assert guardrail.streaming_sampling_rate == 1
 
+    def test_initialize_guardrail_dict_optional_params_streaming_wins(self):
+        """Guardrail API/UI delivers optional_params as a plain dict, not a model."""
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = False  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 9  # type: ignore[attr-defined]
+        # Plain dict mirrors how configs arrive from the guardrail API/UI.
+        litellm_params.optional_params = {  # type: ignore[attr-defined]
+            "streaming_end_of_stream_only": True,
+            "streaming_sampling_rate": 1,
+        }
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-dict-optional"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 1
+
+    def test_initialize_guardrail_dict_optional_params_sibling_only_falls_through(
+        self,
+    ):
+        """Dict optional_params without streaming keys must not shadow top-level knobs."""
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = True  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 2  # type: ignore[attr-defined]
+        litellm_params.optional_params = {  # type: ignore[attr-defined]
+            "additional_provider_specific_params": {"tenant": "acme"},
+        }
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-dict-sibling"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 2
+
 
 class TestGenericGuardrailAPIStreamingViaUnified:
     """Streaming output checks routed through UnifiedLLMGuardrails."""
