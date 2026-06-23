@@ -21,6 +21,7 @@ SEARCH_PROVIDERS = [
     "searchapi",
     "serper",
     "apiserpent",
+    "tinyfish",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [

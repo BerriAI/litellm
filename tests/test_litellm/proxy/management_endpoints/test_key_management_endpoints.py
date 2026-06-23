@@ -1548,6 +1548,51 @@ async def test_prepare_key_update_data_budget_limits_serializes_windows():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_disable_global_guardrails_false_no_premium(
+    monkeypatch,
+):
+    """
+    Regression #30285: editing a key via the UI sends disable_global_guardrails=False
+    (unchanged default). A non-premium user must NOT get a 403, and False must persist.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=False)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is False
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_disable_global_guardrails_true_requires_premium(
+    monkeypatch,
+):
+    """Control: enabling the premium feature (True) without a license still 403s."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=True)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_key_update_data(data=data, existing_key_row=existing_key)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_disable_global_guardrails_true_premium_persists(
+    monkeypatch,
+):
+    """A premium user enabling the feature (True) succeeds and the value persists."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=True)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is True
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException
@@ -12448,3 +12493,80 @@ async def test_build_model_max_budget_usage_provider_prefix_cache_fallback():
 
     assert result["openai/gpt-4o"]["current_spend"] == 0.55
     assert mock_user_api_key_cache.async_get_cache.await_count == 2
+
+
+def test_list_keys_substring_matching_param_defaults_to_false():
+    """Regression guard: /key/list matched user_id/key_alias exactly before
+    substring search was added (commit 33bd570d5e). The substring_matching query
+    param must default to False so an absent param yields exact matching."""
+    import inspect
+
+    param = inspect.signature(list_keys).parameters["substring_matching"]
+    assert getattr(param.default, "default", param.default) is False
+
+
+async def _list_keys_capture_helper_kwargs(user_api_key_dict, **list_kwargs):
+    from unittest.mock import Mock, patch
+
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_api_key_dict.user_id,
+        user_email="u@example.com",
+        teams=[],
+        organization_memberships=[],
+    )
+    helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ):
+            with patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+                helper,
+            ):
+                await list_keys(
+                    request=Mock(),
+                    user_api_key_dict=user_api_key_dict,
+                    status=None,
+                    **list_kwargs,
+                )
+    return helper.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_list_keys_admin_exact_by_default():
+    """Security regression: an admin calling /key/list with an exact user_id and
+    no substring_matching flag must get exact matching, so an integration scoping
+    to one user with an admin key never receives other users' keys."""
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    kwargs = await _list_keys_capture_helper_kwargs(
+        admin, user_id="alice", substring_matching=False
+    )
+    assert kwargs["user_id"] == "alice"
+    assert kwargs["use_substring_matching"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_keys_admin_substring_opt_in():
+    """An admin may opt back into substring matching (dashboard search)."""
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    kwargs = await _list_keys_capture_helper_kwargs(
+        admin, user_id="alice", substring_matching=True
+    )
+    assert kwargs["use_substring_matching"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_keys_non_admin_cannot_opt_into_substring():
+    """substring_matching is admin-only: a non-admin requesting it still gets
+    exact matching, scoped to their own user_id."""
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    kwargs = await _list_keys_capture_helper_kwargs(
+        user, user_id=None, substring_matching=True
+    )
+    assert kwargs["use_substring_matching"] is False
+    assert kwargs["user_id"] == "alice"
