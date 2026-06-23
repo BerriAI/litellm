@@ -4,6 +4,8 @@ Tests for get_litellm_params and related helpers.
 Ensures backward compatibility after sparse kwargs extraction optimization.
 """
 
+import pytest
+
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
     _get_base_model_from_litellm_call_metadata,

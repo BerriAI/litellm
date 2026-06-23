@@ -167,6 +167,7 @@ def get_litellm_params(
         "litellm_request_debug": litellm_request_debug,
     }
 
+    # Sparse extraction: only add kwargs keys that are actually present
     if kwargs:
         for key in OPTIONAL_KWARGS_KEYS:
             if key in kwargs:
