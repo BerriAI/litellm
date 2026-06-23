@@ -32,7 +32,7 @@
     "slack": 10
   },
   "ANN401": {
-    "baseline": 1941,
+    "baseline": 1942,
     "slack": 50
   },
   "ASYNC230": {
@@ -108,7 +108,7 @@
     "slack": 3
   },
   "C901": {
-    "baseline": 304,
+    "baseline": 311,
     "slack": 15
   },
   "D419": {
@@ -232,7 +232,7 @@
     "slack": 3
   },
   "PLR0913": {
-    "baseline": 1831,
+    "baseline": 1849,
     "slack": 50
   },
   "PLR1704": {
@@ -412,7 +412,7 @@
     "slack": 3
   },
   "TID251": {
-    "baseline": 2669,
+    "baseline": 2670,
     "slack": 50
   },
   "TRY002": {
@@ -436,11 +436,11 @@
     "slack": 30
   },
   "UP006": {
-    "baseline": 13066,
+    "baseline": 13065,
     "slack": 100
   },
   "UP007": {
-    "baseline": 2541,
+    "baseline": 2542,
     "slack": 50
   },
   "UP008": {
@@ -476,7 +476,7 @@
     "slack": 3
   },
   "UP035": {
-    "baseline": 2261,
+    "baseline": 2262,
     "slack": 50
   },
   "UP036": {

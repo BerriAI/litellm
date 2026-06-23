@@ -417,8 +417,8 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
-        max_requests_before_restart: int | None = None,
-        max_requests_before_restart_jitter: int | None = None,
+        max_requests_before_restart: Optional[int] = None,
+        max_requests_before_restart_jitter: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -912,7 +912,7 @@ def run_server(
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
-    max_requests_before_restart_jitter: int | None,
+    max_requests_before_restart_jitter: Optional[int],
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,

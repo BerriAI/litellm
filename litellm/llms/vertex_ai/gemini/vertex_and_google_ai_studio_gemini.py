@@ -614,7 +614,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict) -> list[Tools]:
+    def _map_function(self, value: List[dict], optional_params: dict) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 

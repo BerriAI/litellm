@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useState, useRef, useEffect } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -153,9 +153,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <PluginModeProviderWithAuth>
-        <LayoutContent>{children}</LayoutContent>
-      </PluginModeProviderWithAuth>
+      <LayoutContent>{children}</LayoutContent>
     </Suspense>
   );
 }

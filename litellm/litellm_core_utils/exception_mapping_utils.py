@@ -1,7 +1,7 @@
 import json
 import re
 import traceback
-from typing import Any, Optional, Protocol, cast
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -124,7 +124,7 @@ class ExceptionCheckers:
         return False
 
 
-def get_error_message(error_obj) -> Optional[str]:
+def get_error_message(error_obj) -> str | None:
     """
     OpenAI Returns Error message that is nested, this extract the message
 
@@ -180,13 +180,13 @@ def _get_body_error_code(error_str: str) -> int | None:
         return None
 
 
-def _get_response_headers(original_exception: Exception) -> Optional[httpx.Headers]:
+def _get_response_headers(original_exception: Exception) -> httpx.Headers | None:
     """
     Extract and return the response headers from an exception, if present.
 
     Used for accurate retry logic.
     """
-    _response_headers: Optional[httpx.Headers] = None
+    _response_headers: httpx.Headers | None = None
     try:
         _response_headers = getattr(original_exception, "headers", None)
         error_response = getattr(original_exception, "response", None)
@@ -203,7 +203,7 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
 
 
 def extract_and_raise_litellm_exception(
-    response: Optional[Any],
+    response: Any | None,
     error_str: str,
     model: str,
     custom_llm_provider: str,
@@ -1954,7 +1954,7 @@ def _map_azure_exception(
     # Azure OpenAI (especially Images) often nests error details under
     # body["error"]. Detect content policy violations using the structured
     # payload in addition to string matching.
-    azure_error_code: Optional[str] = None
+    azure_error_code: str | None = None
     try:
         body_dict = getattr(original_exception, "body", None) or {}
         if isinstance(body_dict, dict):

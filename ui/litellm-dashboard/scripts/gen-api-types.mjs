@@ -28,11 +28,19 @@ const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
 // throwaway interpreter, so the spec the proxy actually serves is unchanged.
 const dumpSpec = [
   "import json, sys",
+  "from collections import deque",
   "from litellm.proxy.proxy_server import app",
   "from fastapi.routing import APIRoute",
-  "for route in app.routes:",
-  "    if isinstance(route, APIRoute):",
-  "        route.include_in_schema = True",
+  "q = deque(app.routes)",
+  "while q:",
+  "    r = q.popleft()",
+  "    if isinstance(r, APIRoute):",
+  "        r.include_in_schema = True",
+  "    if hasattr(r, 'routes'):",
+  "        q.extend(r.routes)",
+  "    orig = getattr(r, 'original_router', None)",
+  "    if orig and hasattr(orig, 'routes'):",
+  "        q.extend(orig.routes)",
   "app.openapi_schema = None",
   "with open(sys.argv[1], 'w') as f: json.dump(app.openapi(), f, sort_keys=True)",
 ].join("\n");

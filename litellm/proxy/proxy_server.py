@@ -419,10 +419,6 @@ from litellm.proxy.management_endpoints.workflow_management_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.memory.memory_endpoints import router as memory_router
-from litellm.proxy.plugin_routes import (
-    router as plugin_router,
-    register_plugins_from_config,
-)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -454,6 +450,10 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
+)
+from litellm.proxy.plugin_routes import (
+    register_plugins_from_config,
+    router as plugin_router,
 )
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -8758,8 +8758,8 @@ async def model_list(
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    team_id: str | None = None,
-    healthy_only: bool | None = False,
+    team_id: Optional[str] = None,
+    healthy_only: Optional[bool] = False,
 ):
     """
     Retrieve information about a specific model accessible to your API key.
@@ -16456,7 +16456,6 @@ app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
-app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
@@ -16466,6 +16465,7 @@ app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
+app.include_router(plugin_router)
 
 attach_lazy_features(app)
 app.add_middleware(

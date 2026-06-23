@@ -3,7 +3,7 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_token_base_cost,
@@ -62,7 +62,7 @@ def _compute_cache_only_cost(
 
 def cost_per_token(
     model: str, usage: "Usage", service_tier: str | None = None
-) -> tuple[float, float]:
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
