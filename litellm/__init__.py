@@ -635,6 +635,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
+orcarouter_models: Set = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -709,6 +710,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             openrouter_models.add(key)
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             vercel_ai_gateway_models.add(key)
+        elif value.get("litellm_provider") == "orcarouter":
+            orcarouter_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -1036,6 +1039,7 @@ model_list = list(
     | oci_models
     | heroku_models
     | vercel_ai_gateway_models
+    | orcarouter_models
     | volcengine_models
     | wandb_models
     | ovhcloud_models
@@ -1063,6 +1067,7 @@ models_by_provider: dict = {
     "baseten": baseten_models,
     "openrouter": openrouter_models,
     "vercel_ai_gateway": vercel_ai_gateway_models,
+    "orcarouter": orcarouter_models,
     "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models
     | vertex_text_models
@@ -1974,6 +1979,9 @@ if TYPE_CHECKING:
     )
     from .llms.vercel_ai_gateway.chat.transformation import (
         VercelAIGatewayConfig as VercelAIGatewayConfig,
+    )
+    from .llms.orcarouter.chat.transformation import (
+        OrcaRouterConfig as OrcaRouterConfig,
     )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,
