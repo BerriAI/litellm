@@ -441,15 +441,8 @@ def test_transform_request_keeps_parallel_tool_calls_for_claude():
 
 
 def _map_reasoning_effort(model: str, reasoning_effort, **extra_non_default):
-    """Run map_openai_params with reasoning_effort + optional extras.
-
-    `max_tokens` is included by default to mirror real client behavior. Without
-    it the base-class `update_optional_params_with_thinking_tokens` helper
-    KeyErrors on pure pass-through models (a pre-existing issue orthogonal to
-    this fix — `is_thinking_enabled` returns True whenever `reasoning_effort` is
-    set, but the helper then assumes `optional_params["thinking"]` exists).
-    """
-    non_default = {"reasoning_effort": reasoning_effort, "max_tokens": 1024}
+    """Run map_openai_params with reasoning_effort + optional extras."""
+    non_default = {"reasoning_effort": reasoning_effort}
     non_default.update(extra_non_default)
     return DatabricksConfig().map_openai_params(
         non_default_params=non_default,
@@ -504,6 +497,25 @@ def test_gemini_2_5_pro_translates_to_thinking_budget():
         "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     }
     assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_with_dot_notation_translates():
+    """A user passing the upstream Google-style `gemini-2.5-...` form should
+    still trigger the Anthropic-thinking translation, not pass through."""
+    params = _map_reasoning_effort("databricks-gemini-2.5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_0_does_not_match():
+    """Guard against over-matching: `gemini-2-0` (hypothetical or future) is
+    NOT a Gemini 2.5 endpoint and must not get the thinking translation."""
+    params = _map_reasoning_effort("databricks-gemini-2-0-flash", "low")
+    assert "thinking" not in params
+    assert params.get("reasoning_effort") == "low"
 
 
 def test_gemini_2_5_none_drops_thinking_and_reasoning_effort():

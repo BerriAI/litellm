@@ -276,7 +276,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_lower = model.lower()
         if "claude" in model_lower:
             return True
-        if "gemini-2" in model_lower:
+        # Match gemini-2-5 / gemini-2.5 only — not the broader 2.x range, which
+        # could catch hypothetical future 2.0/2.6/etc variants that may use a
+        # different reasoning contract.
+        if "gemini-2-5" in model_lower or "gemini-2.5" in model_lower:
             return True
         return False
 
