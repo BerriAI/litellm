@@ -1,8 +1,8 @@
 """
 Unit tests for CodeInterpreterInterceptionLogger.
 
-All sandbox dependencies are injected (dependency injection, no monkeypatch):
-a FakeSandbox stands in for the real e2b config and records how it is called.
+All sandbox dependencies are injected: a FakeSandbox stands in for the real e2b
+config and records how it is called.
 """
 
 import time
@@ -12,12 +12,16 @@ import pytest
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
+    _SANDBOX_KEY,
+)
+from litellm.types.integrations.custom_logger import (
+    CHAT_COMPLETION_AGENTIC_SURFACE,
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    is_interception_internal_key,
 )
 from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.utils import CallTypes
-
-_ACTIVE_KEY = "_code_interpreter_interception_active"
-_SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 
 
 class FakeHandle:
@@ -51,6 +55,13 @@ class FakeLogging:
     def __init__(self, litellm_call_id="k1"):
         self.litellm_call_id = litellm_call_id
         self.model_call_details = {}
+        self.dynamic_success_callbacks = []
+
+    def pre_call(self, *args, **kwargs):
+        return None
+
+    def post_call(self, *args, **kwargs):
+        return None
 
 
 def _function_call_item(call_id="c1", name=LITELLM_CODE_EXECUTION_TOOL_NAME):
@@ -59,6 +70,17 @@ def _function_call_item(call_id="c1", name=LITELLM_CODE_EXECUTION_TOOL_NAME):
         "call_id": call_id,
         "name": name,
         "arguments": '{"code":"print(40 + 2)"}',
+    }
+
+
+def _chat_function_call_item(call_id="call_1", name=LITELLM_CODE_EXECUTION_TOOL_NAME):
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": '{"code":"print(40 + 2)"}',
+        },
     }
 
 
@@ -72,6 +94,18 @@ def _iter_messages(plan):
     assert patch is not None, "plan.request_patch must be set"
     assert patch.messages is not None, "plan.request_patch.messages must be set"
     return patch.messages
+
+
+def test_interception_internal_key_prefix_sets_preserve_code_interpreter_state():
+    assert is_interception_internal_key("_code_interpreter_interception_active")
+    assert not is_interception_internal_key(
+        "_code_interpreter_interception_active",
+        prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    )
+    assert is_interception_internal_key(
+        "_websearch_interception_converted_stream",
+        prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    )
 
 
 @pytest.mark.asyncio
@@ -134,6 +168,30 @@ async def test_pre_call_converts_code_interpreter_tool():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_converts_code_interpreter_tool_for_chat_completions():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "tool_choice": {"type": "code_interpreter"},
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is not None
+    tool = result["tools"][0]
+    assert tool["type"] == "function"
+    assert tool["function"]["name"] == LITELLM_CODE_EXECUTION_TOOL_NAME
+    assert tool["function"]["parameters"]["required"] == ["code"]
+    assert result["tool_choice"] == {
+        "type": "function",
+        "function": {"name": LITELLM_CODE_EXECUTION_TOOL_NAME},
+    }
+    assert result["litellm_metadata"][_ACTIVE_KEY] is True
+    assert result["litellm_metadata"][_SANDBOX_KEY] == result[_SANDBOX_KEY]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool_choice",
     [
@@ -184,9 +242,24 @@ async def test_pre_call_noop_on_non_responses():
         "custom_llm_provider": "openai",
     }
 
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aembedding)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_noop_on_chat_completion_without_code_interpreter_tool():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "web_search"}],
+        "custom_llm_provider": "openai",
+    }
+
     result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
 
     assert result is None
+    assert _ACTIVE_KEY not in kwargs
+    assert _SANDBOX_KEY not in kwargs
 
 
 @pytest.mark.asyncio
@@ -525,13 +598,141 @@ async def test_gate_rechecks_provider_scope():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_gate_detects_code_execution_tool_call():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    response = {
+        "choices": [
+            {"message": {"tool_calls": [_chat_function_call_item(call_id="call_123")]}}
+        ]
+    }
+
+    should_run, payload = await logger.async_should_run_agentic_loop(
+        response=response,
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        tools=[],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={
+            _ACTIVE_KEY: True,
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+        },
+    )
+
+    assert should_run is True
+    assert payload["tool_calls"][0]["id"] == "call_123"
+    assert payload["tool_calls"][0]["arguments"] == '{"code":"print(40 + 2)"}'
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_gate_refuses_without_server_active_marker():
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    response = {"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]}
+
+    should_run, payload = await logger.async_should_run_agentic_loop(
+        response=response,
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        tools=[],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={"_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE},
+    )
+
+    assert should_run is False
+    assert payload == {}
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_build_plan_runs_code_and_appends_tool_message():
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    native_chat_tool = {"type": "code_interpreter", "container": {"type": "auto"}}
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"print(40 + 2)"}',
+                }
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response={
+            "choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]
+        },
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "tools": [native_chat_tool],
+            "tool_choice": {"type": "code_interpreter", "container": {"type": "auto"}},
+            "temperature": 0,
+        },
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={
+            "acompletion": True,
+            "litellm_call_id": "k1",
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "sbxkey1",
+            "_code_interpreter_interception_converted_stream": True,
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+        },
+    )
+
+    assert sandbox.run_calls[0]["code"] == "print(40 + 2)"
+    patch = plan.request_patch
+    assert patch is not None
+    assert patch.tools == [
+        {
+            "type": "function",
+            "function": {
+                "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                "description": "Execute python code in a sandbox and return stdout.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"],
+                },
+            },
+        }
+    ]
+    assert patch.optional_params == {"temperature": 0}
+    assert patch.kwargs == {
+        "litellm_call_id": "k1",
+        _ACTIVE_KEY: True,
+        _SANDBOX_KEY: "sbxkey1",
+        "_code_interpreter_interception_converted_stream": True,
+        "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+    }
+    assert patch.messages is not None
+    assert patch.messages[-2]["role"] == "assistant"
+    assert patch.messages[-2]["tool_calls"][0]["id"] == "call_1"
+    assert patch.messages[-1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "42",
+    }
+    assert plan.metadata["code_interpreter_calls"][0]["code"] == "print(40 + 2)"
+
+
+@pytest.mark.asyncio
 async def test_pre_call_strips_client_forged_marker_on_initial_request():
-    """A client cannot pre-set the active marker on the original request."""
+    """A client cannot pre-set the active marker on the original request: with no
+    native code_interpreter tool, any client-supplied interception markers in
+    litellm_metadata are scrubbed and the active flag in kwargs is cleared."""
     logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
     kwargs = {
         "tools": [{"type": "web_search"}],
         "custom_llm_provider": "openai",
         _ACTIVE_KEY: True,
+        "litellm_metadata": {
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "client-forged",
+            "safe_user_value": "kept",
+        },
     }
 
     await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
@@ -539,6 +740,42 @@ async def test_pre_call_strips_client_forged_marker_on_initial_request():
     assert _ACTIVE_KEY not in kwargs, (
         "no native code_interpreter tool was present, so a client-supplied "
         "active marker must be cleared"
+    )
+    assert kwargs["litellm_metadata"] == {"safe_user_value": "kept"}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_strips_forged_loop_controls_then_mints_own_markers():
+    """On an INITIAL request (no server-set _agentic_loop_depth) a client cannot
+    smuggle loop-control state: forged _agentic_loop_depth / max_agentic_loops and
+    interception markers in litellm_metadata are stripped before the interceptor
+    activates, so the only interception markers that survive are the ones the
+    server mints for the converted code_interpreter tool."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+        "litellm_metadata": {
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "client-forged",
+            "_agentic_loop_depth": 99,
+            "max_agentic_loops": 999,
+            "safe_user_value": "kept",
+        },
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is not None
+    metadata = result["litellm_metadata"]
+    assert metadata["safe_user_value"] == "kept"
+    assert "_agentic_loop_depth" not in metadata, "forged loop depth must be stripped"
+    assert "max_agentic_loops" not in metadata, "forged loop cap must be stripped"
+    assert metadata[_ACTIVE_KEY] is True
+    assert metadata[_SANDBOX_KEY] == result[_SANDBOX_KEY]
+    assert metadata[_SANDBOX_KEY] != "client-forged", (
+        "the surviving sandbox key must be the server-minted one, not the forged "
+        "value the client supplied"
     )
 
 
