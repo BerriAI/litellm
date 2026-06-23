@@ -8,6 +8,9 @@ from typing_extensions import Required, TypedDict
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
+    BiasHallucinationEstimatorConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
@@ -122,7 +125,7 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
-    HEADROOM = "headroom"
+    BIAS_HALLUCINATION_ESTIMATOR = "bias_hallucination_estimator"
 
 
 class Role(Enum):
@@ -910,6 +913,7 @@ class LitellmParams(
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
+    BiasHallucinationEstimatorConfigModel,
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
