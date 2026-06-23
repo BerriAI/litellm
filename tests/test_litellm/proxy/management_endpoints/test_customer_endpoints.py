@@ -360,6 +360,33 @@ def test_customer_new_documented_in_openapi_schema():
     assert json_schema["$ref"].endswith("/LiteLLM_EndUserTable")
 
 
+def test_update_customer_response_preserves_budget_id(
+    mock_prisma_client, mock_user_api_key_auth
+):
+    """
+    Regression for the response_model field-stripping concern: budget_id is a real
+    column on the end-user table that /customer/update echoes. response_model=
+    LiteLLM_EndUserTable must NOT drop it, so budget_id stays in LiteLLM_EndUserTable.
+    """
+    existing = LiteLLM_EndUserTable(user_id="cust-1", blocked=False)
+    updated = LiteLLM_EndUserTable(
+        user_id="cust-1", blocked=False, budget_id="budget-123"
+    )
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=existing
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "cust-1", "budget_id": "budget-123"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["budget_id"] == "budget-123"
+
+
 def test_block_customer_success_serializes_through_response_model(
     mock_prisma_client, mock_user_api_key_auth
 ):

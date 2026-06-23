@@ -1,6 +1,6 @@
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from litellm.models.end_user import LiteLLM_EndUserTable
 
@@ -10,7 +10,9 @@ class BlockUsersResponse(BaseModel):
 
 
 class UnblockUsersResponse(BaseModel):
-    blocked_users: List[str]
+    blocked_users: List[str] = Field(
+        description="User IDs that remain blocked after this unblock call"
+    )
 
 
 class DeleteCustomersResponse(BaseModel):
