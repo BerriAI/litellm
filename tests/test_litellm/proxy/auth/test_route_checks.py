@@ -403,6 +403,48 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.parametrize(
+    "route, method",
+    [
+        ("/mcp", "POST"),
+        ("/mcp/", "POST"),
+        ("/mcp/my-server", "POST"),  # matches the /mcp/{subpath} pattern
+        ("/mcp/tools", "GET"),
+        ("/mcp/tools/list", "POST"),
+        ("/mcp/tools/call", "POST"),
+        ("/mcp-rest/tools/list", "GET"),
+        ("/mcp-rest/tools/call", "POST"),
+        ("/v1/mcp/tools", "GET"),
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_mcp_inference_endpoints(route, method):
+    """Every MCP inference/discovery endpoint must be reachable by virtual keys
+    scoped to allowed_routes=["llm_api_routes"], the default the Create Key UI
+    applies.
+
+    /v1/mcp/tools is the most recent addition: before it joined this group a key
+    could list tools via /mcp/tools/list and /mcp-rest/tools/list but got a 403
+    on the equivalent /v1/mcp/tools. Unlike /v1/mcp/server, none of these paths
+    have a management write counterpart, so they live directly in
+    `mcp_inference_routes` rather than behind a method-aware carve-out.
+    """
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request(method),
+    )
+
+    assert result is True
+
+
 def test_spend_logs_v2_classified_as_management_not_llm_api():
     """Paginated spend logs are a management/spend read route, not an LLM API."""
 
@@ -455,6 +497,32 @@ def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
 def test_mcp_inference_routes_classified_as_llm_api(route):
     """MCP tool-call / passthrough routes must remain llm_api routes so they
     continue to be blocked by DISABLE_LLM_API_ENDPOINTS on admin nodes."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
+    ],
+)
+def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
+    """GA Realtime WebRTC HTTP routes must be classified as LLM API routes so
+    non-admin virtual keys can call them instead of hitting the admin-only
+    401 branch in non_proxy_admin_allowed_routes_check.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/29923
+    """
 
     assert RouteChecks.is_llm_api_route(route=route) is True
     assert RouteChecks.is_management_route(route=route) is False
@@ -1959,7 +2027,6 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 # corners of the codebase and represent the long tail of GETs we'd otherwise
 # need to enumerate manually. Default-allow makes them all work.
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
-    "/in_product_nudges",
     "/health/latest",
     "/credentials",
     "/v1/mcp/network/client-ip",

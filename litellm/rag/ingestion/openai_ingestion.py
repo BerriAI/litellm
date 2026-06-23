@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
 
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
@@ -28,6 +28,8 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
     - Files are uploaded and attached to vector stores directly
     - Chunking is done by OpenAI's vector store (uses 'auto' strategy)
     """
+
+    supports_existing_file_id = True
 
     def __init__(
         self,
@@ -56,6 +58,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in OpenAI vector store.
@@ -71,6 +74,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
             content_type: MIME type
             chunks: Ignored - OpenAI handles chunking
             embeddings: Ignored - OpenAI handles embedding
+            existing_file_id: Existing OpenAI file ID to attach
 
         Returns:
             Tuple of (vector_store_id, file_id)
@@ -81,6 +85,11 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         # Get credentials from vector_store_config (loaded from litellm_credential_name if provided)
         api_key = self.vector_store_config.get("api_key")
         api_base = self.vector_store_config.get("api_base")
+
+        if existing_file_id and not vector_store_id:
+            raise ValueError(
+                "vector_store_id is required when ingesting an existing file_id"
+            )
 
         # Create vector store if not provided
         if not vector_store_id:
@@ -96,9 +105,20 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
             )
             vector_store_id = create_response.get("id")
 
+        if existing_file_id and vector_store_id:
+            await vector_store_file_acreate(
+                vector_store_id=vector_store_id,
+                file_id=existing_file_id,
+                custom_llm_provider="openai",
+                chunking_strategy=cast(dict[str, Any] | None, self.chunking_strategy),
+                api_key=api_key,
+                api_base=api_base,
+            )
+            return vector_store_id, existing_file_id
+
         # Upload file and attach to vector store
         result_file_id = None
-        if file_content and filename and vector_store_id:
+        if file_content is not None and filename and vector_store_id:
             # Upload file to OpenAI
             file_response = await litellm.acreate_file(
                 file=(
@@ -118,9 +138,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 vector_store_id=vector_store_id,
                 file_id=result_file_id,
                 custom_llm_provider="openai",
-                chunking_strategy=cast(
-                    Optional[Dict[str, Any]], self.chunking_strategy
-                ),
+                chunking_strategy=cast(dict[str, Any] | None, self.chunking_strategy),
                 api_key=api_key,
                 api_base=api_base,
             )

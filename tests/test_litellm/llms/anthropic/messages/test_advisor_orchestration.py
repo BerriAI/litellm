@@ -516,3 +516,217 @@ async def test_max_uses_none_falls_back_to_default():
             )
 
     assert str(_c.ADVISOR_MAX_USES) in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# 12. Defense-in-depth: client-supplied advisor api_base/api_key are dropped
+#     unless the proxy admin opted into clientside credentials
+# ---------------------------------------------------------------------------
+
+
+ADVISOR_TOOL_WITH_CREDS = {
+    "type": "advisor_20260301",
+    "name": "advisor",
+    "model": "claude-opus-4-6",
+    "api_base": "https://other.example",
+    "api_key": "sk-other",
+}
+
+
+async def _run_advisor_and_capture_subcall_kwargs():
+    """Run one advisor turn and return the kwargs of the advisor sub-call."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    advisor_tool_use_resp = _make_advisor_tool_use_response(tool_id="toolu_01")
+    advisor_advice_resp = _make_text_response("advice", model="claude-opus-4-6")
+    final_resp = _make_text_response("final answer")
+
+    captured = {}
+    call_count = 0
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return advisor_tool_use_resp
+        if call_count == 2:
+            # The advisor sub-call — capture its routing kwargs.
+            captured["api_key"] = kwargs.get("api_key")
+            captured["api_base"] = kwargs.get("api_base")
+            return advisor_advice_resp
+        return final_resp
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL_WITH_CREDS],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_advisor_creds_dropped_when_proxy_opt_in_disabled():
+    """On the proxy without opt-in, the caller's advisor api_base/api_key must
+    NOT reach the sub-call (would redirect it / leak the server key)."""
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
+        return_value=False,
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] is None
+    assert captured["api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_advisor_creds_honored_when_proxy_opt_in_enabled():
+    """With the admin opt-in, the documented clientside routing still works."""
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
+        return_value=True,
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] == "sk-other"
+    assert captured["api_base"] == "https://other.example"
+
+
+# ---------------------------------------------------------------------------
+# 13. The proxy gate itself: _allow_client_side_advisor_credentials() and the
+#     full handle() driven by the real proxy general_settings flag.
+# ---------------------------------------------------------------------------
+
+
+def _fake_proxy_server(general_settings: Dict):
+    """A stand-in litellm.proxy.proxy_server module exposing general_settings.
+
+    The real proxy_server pulls in heavy optional deps that may be absent in a
+    unit-test environment, so the gate's
+    ``from litellm.proxy.proxy_server import general_settings`` is satisfied by
+    injecting this lightweight module into sys.modules.
+    """
+    import types
+
+    module = types.ModuleType("litellm.proxy.proxy_server")
+    module.general_settings = general_settings  # type: ignore[attr-defined]
+    return module
+
+
+def test_allow_client_side_advisor_credentials_reads_proxy_flag():
+    """The gate mirrors the proxy's allow_client_side_credentials opt-in."""
+    import sys
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _allow_client_side_advisor_credentials,
+    )
+
+    cases = (
+        ({"allow_client_side_credentials": True}, True),
+        ({"allow_client_side_credentials": False}, False),
+        # Flag absent entirely -> default deny on the proxy.
+        ({}, False),
+    )
+    for settings, expected in cases:
+        with patch.dict(
+            sys.modules,
+            {"litellm.proxy.proxy_server": _fake_proxy_server(settings)},
+        ):
+            assert _allow_client_side_advisor_credentials() is expected
+
+
+def test_allow_client_side_advisor_credentials_defaults_true_outside_proxy():
+    """Outside the proxy (proxy_server import unavailable), there is no admin
+    boundary, so the gate permits client-supplied routing."""
+    import builtins
+    import sys
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _allow_client_side_advisor_credentials,
+    )
+
+    real_import = builtins.__import__
+
+    def _blocked_import(name, *args, **kwargs):
+        if name == "litellm.proxy.proxy_server":
+            raise ImportError("proxy server unavailable")
+        return real_import(name, *args, **kwargs)
+
+    with patch.dict(sys.modules):
+        sys.modules.pop("litellm.proxy.proxy_server", None)
+        with patch.object(builtins, "__import__", _blocked_import):
+            assert _allow_client_side_advisor_credentials() is True
+
+
+def test_advisor_gate_propagates_non_import_errors():
+    """Non-ImportError failures during the proxy module probe must not
+    default permissive. If the proxy is partially loaded and raises
+    RuntimeError, the gate should surface that rather than silently
+    returning True."""
+    import sys
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors import (
+        advisor,
+    )
+
+    original = sys.modules.get("litellm.proxy.proxy_server")
+
+    class _Broken:
+        def __getattr__(self, _name):
+            raise RuntimeError("partial proxy boot")
+
+    sys.modules["litellm.proxy.proxy_server"] = _Broken()
+    try:
+        with pytest.raises(RuntimeError, match="partial proxy boot"):
+            advisor._allow_client_side_advisor_credentials()
+    finally:
+        if original is None:
+            sys.modules.pop("litellm.proxy.proxy_server", None)
+        else:
+            sys.modules["litellm.proxy.proxy_server"] = original
+
+
+@pytest.mark.asyncio
+async def test_advisor_ignores_tool_credentials_when_clientside_disabled():
+    """Driven by the real proxy flag (not a patched gate): with
+    allow_client_side_credentials False, the tool-supplied api_base/api_key must
+    not reach the advisor sub-call."""
+    import sys
+
+    with patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": _fake_proxy_server(
+                {"allow_client_side_credentials": False}
+            )
+        },
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] is None
+    assert captured["api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_advisor_uses_tool_credentials_when_clientside_enabled():
+    """Driven by the real proxy flag: with allow_client_side_credentials True,
+    the tool-supplied api_base/api_key flow through to the advisor sub-call."""
+    import sys
+
+    with patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": _fake_proxy_server(
+                {"allow_client_side_credentials": True}
+            )
+        },
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] == "sk-other"
+    assert captured["api_base"] == "https://other.example"

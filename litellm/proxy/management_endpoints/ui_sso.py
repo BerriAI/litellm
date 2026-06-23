@@ -90,7 +90,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
@@ -194,11 +194,7 @@ def _is_valid_cli_sso_user_code(user_code: str | None) -> bool:
 def _cli_sso_verification_uri_complete_enabled() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
-    return bool(
-        general_settings.get(  # any-ok: operator opt-in read from the untyped general_settings dict
-            "allow_cli_sso_verification_uri_complete", False
-        )
-    )
+    return bool(general_settings.get("allow_cli_sso_verification_uri_complete", False))
 
 
 def _cli_sso_start_response_body(
@@ -906,6 +902,7 @@ async def google_login(
     Example:
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         premium_user,
         prisma_client,
         user_api_key_cache,
@@ -952,7 +949,6 @@ async def google_login(
     missing_env_vars = show_missing_vars_in_env()
     if missing_env_vars is not None:
         return missing_env_vars
-    ui_username = os.getenv("UI_USERNAME")
 
     # get url from request - always use regular callback, but set state for CLI
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
@@ -1013,16 +1009,20 @@ async def google_login(
                     samesite="lax",
                 )
         return sso_redirect
-    elif ui_username is not None:
-        # No Google, Microsoft SSO
-        # Use UI Credentials set in .env
-        from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
-    else:
-        from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+    hide_default_credentials_hint = (
+        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
+        or general_settings.get("hide_default_credentials_hint", False) is True
+    )
+    return HTMLResponse(
+        content=build_ui_login_form(
+            show_deprecation_banner=True,
+            hide_default_credentials_hint=hide_default_credentials_hint,
+        ),
+        status_code=200,
+    )
 
 
 def generic_response_convertor(
