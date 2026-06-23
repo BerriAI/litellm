@@ -11,7 +11,7 @@ can import it statically without forming an import cycle.
 
 from __future__ import annotations
 
-from typing import Final, Optional, Protocol, Union, cast
+from typing import Final, Protocol, cast
 
 
 class RustOcr(Protocol):
@@ -21,10 +21,10 @@ class RustOcr(Protocol):
         self,
         model: str,
         document: dict[str, object],
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         optional_params: dict[str, object],
-        timeout_seconds: Optional[float],
+        timeout_seconds: float | None,
     ) -> dict[str, object]: ...
 
 
@@ -35,11 +35,11 @@ class _Unset:
 _UNSET: Final[_Unset] = _Unset()
 
 _rust_ocr_enabled = False
-_rust_ocr_impl: Optional[RustOcr] = None
+_rust_ocr_impl: RustOcr | None = None
 
 
 def use_litellm_rust(
-    enabled: bool = True, *, ocr: Union[Optional[RustOcr], _Unset] = _UNSET
+    enabled: bool = True, *, ocr: RustOcr | None | _Unset = _UNSET
 ) -> None:
     """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
 
@@ -58,7 +58,7 @@ def rust_ocr_enabled() -> bool:
     return _rust_ocr_enabled
 
 
-def load_rust_ocr() -> Optional[RustOcr]:
+def load_rust_ocr() -> RustOcr | None:
     """Return the Rust OCR callable, or ``None`` when no bridge is available.
 
     Prefers an injected implementation, otherwise loads the compiled
