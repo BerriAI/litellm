@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import time
 from dataclasses import dataclass
@@ -5,13 +7,8 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Awaitable,
-    Dict,
-    List,
     Literal,
-    Optional,
     Protocol,
-    Tuple,
-    Type,
     Union,
 )
 from urllib.parse import quote
@@ -70,26 +67,26 @@ class _AsyncGetHandler(Protocol):
     def get(
         self,
         url: str,
-        params: Optional[dict] = None,
-        headers: Optional[dict] = None,
-        follow_redirects: Optional[bool] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        params: dict | None = None,
+        headers: dict | None = None,
+        follow_redirects: bool | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> Awaitable[httpx.Response]: ...
 
 
 @dataclass(frozen=True)
 class HlidoAgentRecord:
     slug: str
-    score: Optional[int]
-    tier: Optional[str]
-    evidence_url: Optional[str]
+    score: int | None
+    tier: str | None
+    evidence_url: str | None
 
 
 @dataclass(frozen=True)
 class TrustBlocked:
     slug: str
     reason: str
-    evidence_url: Optional[str]
+    evidence_url: str | None
 
 
 @dataclass(frozen=True)
@@ -114,19 +111,19 @@ _TrustVerdict = Union[TrustAllowed, TrustBlocked, TrustUnverified, TrustLookupFa
 class HlidoGuardrail(CustomGuardrail):
     def __init__(
         self,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        min_score: Optional[int] = None,
-        allowed_tiers: Optional[Tuple[str, ...]] = None,
-        slugs: Optional[Tuple[str, ...]] = None,
-        on_unverified: Optional[str] = None,
-        on_error: Optional[str] = None,
-        cache_ttl: Optional[float] = None,
-        trust_request_slugs: Optional[bool] = None,
-        max_request_slugs: Optional[int] = None,
-        request_timeout: Optional[float] = None,
-        max_cache_entries: Optional[int] = None,
-        async_handler: Optional[_AsyncGetHandler] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        min_score: int | None = None,
+        allowed_tiers: tuple[str, ...] | None = None,
+        slugs: tuple[str, ...] | None = None,
+        on_unverified: str | None = None,
+        on_error: str | None = None,
+        cache_ttl: float | None = None,
+        trust_request_slugs: bool | None = None,
+        max_request_slugs: int | None = None,
+        request_timeout: float | None = None,
+        max_cache_entries: int | None = None,
+        async_handler: _AsyncGetHandler | None = None,
         **kwargs: Any,
     ) -> None:
         resolved_base = api_base or get_secret_str("HLIDO_API_BASE") or DEFAULT_API_BASE
@@ -141,7 +138,7 @@ class HlidoGuardrail(CustomGuardrail):
         )
         # Server-configured slugs are the source of truth. Invalid entries are
         # dropped at init with a warning rather than crashing the proxy.
-        self.static_slugs: Tuple[str, ...] = self._sanitize_slugs(
+        self.static_slugs: tuple[str, ...] = self._sanitize_slugs(
             slugs or (), source="config", limit=None
         )
         # SECURITY: caller-supplied metadata.hlido_slugs are IGNORED by default
@@ -173,7 +170,7 @@ class HlidoGuardrail(CustomGuardrail):
             ),
             connect=DEFAULT_CONNECT_TIMEOUT_SECONDS,
         )
-        self._cache: Dict[str, Tuple[float, Optional[HlidoAgentRecord]]] = {}
+        self._cache: dict[str, tuple[float, HlidoAgentRecord | None]] = {}
 
         self.async_handler: _AsyncGetHandler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -188,7 +185,7 @@ class HlidoGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.hlido import (
             HlidoGuardrailConfigModel,
         )
@@ -202,7 +199,7 @@ class HlidoGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         if (
             self.should_run_guardrail(
                 data=data, event_type=GuardrailEventHooks.pre_call
@@ -242,9 +239,7 @@ class HlidoGuardrail(CustomGuardrail):
             self._raise_on_violation(verdict)
 
     @staticmethod
-    def _sanitize_slugs(
-        raw: Any, *, source: str, limit: Optional[int]
-    ) -> Tuple[str, ...]:
+    def _sanitize_slugs(raw: Any, *, source: str, limit: int | None) -> tuple[str, ...]:
         """Validate, de-dup (preserving order) and (optionally) cap a slug list.
 
         Invalid slugs are dropped with a warning instead of being trusted —
@@ -254,7 +249,7 @@ class HlidoGuardrail(CustomGuardrail):
         if not isinstance(raw, (list, tuple)):
             return ()
         seen: set = set()
-        cleaned: List[str] = []
+        cleaned: list[str] = []
         for value in raw:
             if not isinstance(value, str):
                 continue
@@ -275,8 +270,8 @@ class HlidoGuardrail(CustomGuardrail):
                 break
         return tuple(cleaned)
 
-    def _collect_slugs(self, data: dict) -> Tuple[str, ...]:
-        request_slugs: Tuple[str, ...] = ()
+    def _collect_slugs(self, data: dict) -> tuple[str, ...]:
+        request_slugs: tuple[str, ...] = ()
         if self.trust_request_slugs:
             metadata = data.get("metadata") or data.get("litellm_metadata")
             if isinstance(metadata, dict):
@@ -370,9 +365,7 @@ class HlidoGuardrail(CustomGuardrail):
                     ),
                 )
 
-    def _cache_get(
-        self, slug: str
-    ) -> Optional[Tuple[float, Optional[HlidoAgentRecord]]]:
+    def _cache_get(self, slug: str) -> tuple[float, HlidoAgentRecord | None] | None:
         cached = self._cache.get(slug)
         if cached is None:
             return None
@@ -383,7 +376,7 @@ class HlidoGuardrail(CustomGuardrail):
         return cached
 
     def _cache_put(
-        self, slug: str, expires_at: float, record: Optional[HlidoAgentRecord]
+        self, slug: str, expires_at: float, record: HlidoAgentRecord | None
     ) -> None:
         # Refresh-in-place keeps the size stable for repeat slugs.
         if slug not in self._cache and len(self._cache) >= self.max_cache_entries:
@@ -401,7 +394,7 @@ class HlidoGuardrail(CustomGuardrail):
         oldest = min(self._cache.items(), key=lambda kv: kv[1][0])[0]
         self._cache.pop(oldest, None)
 
-    async def _get_agent_record(self, slug: str) -> Optional[HlidoAgentRecord]:
+    async def _get_agent_record(self, slug: str) -> HlidoAgentRecord | None:
         cached = self._cache_get(slug)
         if cached is not None:
             return cached[1]
@@ -418,7 +411,7 @@ class HlidoGuardrail(CustomGuardrail):
             timeout=self._request_timeout,
         )
         if response.status_code == 404:
-            record: Optional[HlidoAgentRecord] = None
+            record: HlidoAgentRecord | None = None
         else:
             response.raise_for_status()
             payload = response.json()
