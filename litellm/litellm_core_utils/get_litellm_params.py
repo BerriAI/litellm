@@ -1,6 +1,7 @@
 from typing import Optional
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.integrations.custom_logger import is_interception_internal_key
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -41,6 +42,22 @@ OPTIONAL_KWARGS_KEYS = frozenset(
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS = OPTIONAL_KWARGS_KEYS
+
+AGENTIC_INTERNAL_PARAMS = frozenset({"max_agentic_loops"})
+
+
+def is_agentic_internal_param(key: str) -> bool:
+    return (
+        key.startswith("_agentic_loop")
+        or key in AGENTIC_INTERNAL_PARAMS
+        or is_interception_internal_key(key)
+    )
+
+
+def get_internal_litellm_params(kwargs: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value for key, value in kwargs.items() if is_agentic_internal_param(key)
+    }
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -101,12 +118,6 @@ def get_litellm_params(
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     litellm_request_debug: Optional[bool] = None,
-    _agentic_loop_depth: Optional[int] = None,
-    _agentic_loop_fingerprints: Optional[list[str]] = None,
-    max_agentic_loops: Optional[int] = None,
-    _code_interpreter_interception_active: Optional[bool] = None,
-    _code_interpreter_interception_sandbox_key: Optional[str] = None,
-    _code_interpreter_interception_converted_stream: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
@@ -171,18 +182,12 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
-        "_agentic_loop_depth": _agentic_loop_depth,
-        "_agentic_loop_fingerprints": _agentic_loop_fingerprints,
-        "max_agentic_loops": max_agentic_loops,
-        "_code_interpreter_interception_active": _code_interpreter_interception_active,
-        "_code_interpreter_interception_sandbox_key": _code_interpreter_interception_sandbox_key,
-        "_code_interpreter_interception_converted_stream": _code_interpreter_interception_converted_stream,
     }
 
-    # Sparse extraction: only add kwargs keys that are actually present
     if kwargs:
         for key in OPTIONAL_KWARGS_KEYS:
             if key in kwargs:
                 litellm_params[key] = kwargs[key]
+        litellm_params.update(get_internal_litellm_params(kwargs))
 
     return litellm_params

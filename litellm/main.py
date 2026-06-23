@@ -86,7 +86,10 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_litellm_params import (
+    OPTIONAL_KWARGS_KEYS,
+    get_internal_litellm_params,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -1645,22 +1648,11 @@ def completion(  # type: ignore
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
-            _agentic_loop_depth=kwargs.get("_agentic_loop_depth"),
-            _agentic_loop_fingerprints=kwargs.get("_agentic_loop_fingerprints"),
-            max_agentic_loops=kwargs.get("max_agentic_loops"),
-            _code_interpreter_interception_active=kwargs.get(
-                "_code_interpreter_interception_active"
-            ),
-            _code_interpreter_interception_sandbox_key=kwargs.get(
-                "_code_interpreter_interception_sandbox_key"
-            ),
-            _code_interpreter_interception_converted_stream=kwargs.get(
-                "_code_interpreter_interception_converted_stream"
-            ),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
             aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            **get_internal_litellm_params(kwargs),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
