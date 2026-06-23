@@ -5044,9 +5044,7 @@ def completion(  # type: ignore
         if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
             tools=tools_for_mcp
         ):
-            # Return coroutine - acompletion will await it
-            # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
-            return acompletion_with_mcp(  # type: ignore[return-value]
+            return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
                 model=model,
                 messages=messages,
                 functions=functions,
@@ -5218,12 +5216,16 @@ def completion(  # type: ignore
         logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
-            return completion_with_fallbacks(**args)
+            return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
+                **args
+            )
         if model_list is not None:
             deployments = [
                 m["litellm_params"] for m in model_list if m["model_name"] == model
             ]
-            return litellm.batch_completion_models(deployments=deployments, **args)
+            return litellm.batch_completion_models(  # pyright: ignore[reportReturnType]  # batch path returns a list of responses, outside completion()'s single-response return type
+                deployments=deployments, **args
+            )
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -5545,7 +5547,7 @@ def completion(  # type: ignore
                 else:
                     optional_params["reasoning_effort"] = {"summary": rs_val}
 
-            return responses_api_bridge.completion(
+            return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
                 headers=headers,
