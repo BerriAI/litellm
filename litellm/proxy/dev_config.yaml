@@ -189,3 +189,19 @@ general_settings:
 litellm_settings:
   drop_params: True
   telemetry: False
+
+guardrails:
+  - guardrail_name: "pii-content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      # Not default_on: this is a shared dev config. Opt in per request with
+      # "guardrails": ["pii-content-filter"] so other contributors' unrelated
+      # local testing isn't silently affected.
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "us_ssn"
+          action: "BLOCK"
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"

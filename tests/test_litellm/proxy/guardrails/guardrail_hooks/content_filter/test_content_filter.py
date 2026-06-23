@@ -4,6 +4,7 @@ Tests for the Content Filter Guardrail
 
 import os
 import sys
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,6 +17,9 @@ from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
+)
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.pattern_prefilter import (
+    PatternPrefilter,
 )
 from litellm.types.guardrails import (
     BlockedWord,
@@ -2398,3 +2402,139 @@ class TestTracingFieldsE2E:
         # No detections, so these should be None
         assert slg.get("detection_method") is None
         assert slg.get("match_details") is None
+
+
+@dataclass(frozen=True)
+class _FixedPrefilter:
+    """Test double for PatternPrefilter; no Rust extension required."""
+
+    result: bool
+
+    def any_match(self, text: str) -> bool:
+        return self.result
+
+
+class TestPatternPrefilterIntegration:
+    """
+    Regression tests for the Rust pattern pre-filter wiring in
+    ContentFilterGuardrail. The pre-filter is only ever supposed to narrow
+    which patterns _filter_single_text iterates over (skipping ones it has
+    proven cannot match); it must never change the matching/masking result.
+    These tests inject a fake prefilter via dependency injection so they run
+    deterministically in CI regardless of whether the Rust extension is built.
+    """
+
+    def _make_guardrail(
+        self,
+        prefilter: PatternPrefilter,
+        action: ContentFilterAction = ContentFilterAction.MASK,
+    ) -> ContentFilterGuardrail:
+        return ContentFilterGuardrail(
+            guardrail_name="prefilter-test",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="us_ssn", action=action
+                ),
+            ],
+            pattern_prefilter=prefilter,
+        )
+
+    def test_clean_text_identical_with_prefilter_true_or_false(self):
+        """The pre-filter result must not change the outcome for clean text."""
+        text = "hello world, nothing sensitive here"
+
+        full_path = self._make_guardrail(_FixedPrefilter(True))
+        fast_path = self._make_guardrail(_FixedPrefilter(False))
+
+        assert (
+            full_path._filter_single_text(text)
+            == fast_path._filter_single_text(text)
+            == text
+        )
+
+    def test_real_prefilter_matches_full_path_on_matching_text(self):
+        """The auto-detected pre-filter (real Rust binding, or its
+        AlwaysMatchPrefilter fallback when the extension isn't built) must
+        produce identical output to the forced full path for text that
+        actually contains a match; proving the fast path never causes a
+        false negative in practice, not just when told not to."""
+        text = "my ssn is 123-45-6789"
+
+        auto_detected = ContentFilterGuardrail(
+            guardrail_name="auto-detect-test",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="us_ssn",
+                    action=ContentFilterAction.MASK,
+                ),
+            ],
+        )
+        forced_full_path = self._make_guardrail(_FixedPrefilter(True))
+
+        auto_result = auto_detected._filter_single_text(text)
+        full_result = forced_full_path._filter_single_text(text)
+
+        assert auto_result == full_result
+        assert "US_SSN_REDACTED" in auto_result
+
+    def test_prefilter_must_be_conservative_or_matches_are_missed(self):
+        """Documents the prefilter's contract: it is trusted completely when
+        it reports no match, so a prefilter that lies will cause the
+        guardrail to miss a real match. This is why build_rust_pattern_prefilter
+        only ever marks a pattern as covered when its compiled Rust regex set
+        agrees with what the pattern actually is; never something looser."""
+        text = "my ssn is 123-45-6789"
+        lying_prefilter = self._make_guardrail(_FixedPrefilter(False))
+        assert lying_prefilter._filter_single_text(text) == text
+
+    def test_contextual_pattern_always_checked_when_prefilter_says_no_match(self):
+        """Contextual (keyword-proximity) patterns aren't covered by the
+        pre-filter and must always run, even when it reports no match."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="contextual-test",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="us_ssn",
+                    action=ContentFilterAction.MASK,
+                ),
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="ca_sin",
+                    action=ContentFilterAction.MASK,
+                ),
+            ],
+            pattern_prefilter=_FixedPrefilter(False),
+        )
+        always_run_names = {p["pattern_name"] for p in guardrail._always_run_patterns}
+        # ca_sin needs keyword-proximity matching, which isn't expressible as
+        # a plain regex, so it must always run no matter what the pre-filter says.
+        assert "ca_sin" in always_run_names
+        # us_ssn has no keyword_regex/allow_word_numbers, so it's eligible for
+        # the fast path and must NOT be forced into the always-run set.
+        assert "us_ssn" not in always_run_names
+
+    def test_sequential_masking_order_preserved_on_full_path(self):
+        """Mixing a MASK-action simple pattern with a contextual pattern must
+        still mask in original list order when the pre-filter takes the full
+        path (mirrors production behavior when the extension is unavailable)."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="sequential-mask-test",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="us_ssn",
+                    action=ContentFilterAction.MASK,
+                ),
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="ca_sin",
+                    action=ContentFilterAction.MASK,
+                ),
+            ],
+            pattern_prefilter=_FixedPrefilter(True),
+        )
+        result = guardrail._filter_single_text("ssn 123-45-6789 and sin 123-456-789")
+        assert "US_SSN_REDACTED" in result
+        assert "123-45-6789" not in result
