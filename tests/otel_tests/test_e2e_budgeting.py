@@ -357,37 +357,6 @@ async def add_team_member(
         return await response.json()
 
 
-def _mint_cli_sso_token(
-    *,
-    user_id: str,
-    user_email: str,
-    team_id: str,
-    team_alias: str,
-    models: list[str],
-) -> str:
-    """
-    Mint the encrypted CLI session JWT returned by /sso/cli/poll after SSO login.
-    Uses the same code path as ExperimentalUIJWTToken.get_cli_jwt_auth_token.
-    """
-    from litellm.proxy import proxy_server
-    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
-
-    proxy_server.master_key = "sk-1234"
-    user_info = LiteLLM_UserTable(
-        user_id=user_id,
-        user_email=user_email,
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
-        teams=[team_id],
-        models=models,
-    )
-    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-        user_info=user_info,
-        team_id=team_id,
-        team_alias=team_alias,
-    )
-
-
 async def obtain_cli_sso_token_via_poll_flow(
     session,
     *,
@@ -424,13 +393,7 @@ async def obtain_cli_sso_token_via_poll_flow(
         browser_complete_token=browser_complete_token,
     )
     if not seeded:
-        return _mint_cli_sso_token(
-            user_id=user_id,
-            user_email=user_email,
-            team_id=team_id,
-            team_alias=team_alias,
-            models=models,
-        )
+        pytest.skip("Shared Redis not available; skipping full poll-flow test")
 
     async with session.post(
         f"{PROXY_BASE}/sso/cli/complete/{login_id}",
@@ -469,6 +432,7 @@ async def _seed_cli_sso_flow_in_shared_redis(
 ) -> bool:
     """Seed the CLI SSO flow in Redis when tests share the proxy's Redis instance."""
     import ast
+    import json
     import os
 
     try:
@@ -509,18 +473,21 @@ async def _seed_cli_sso_flow_in_shared_redis(
     if not isinstance(flow, dict):
         return False
 
-    flow["sso_complete"] = True
-    flow["user_code_verified"] = False
-    flow["session_data"] = {
-        "user_id": user_id,
-        "user_role": "internal_user",
-        "models": models,
-        "user_email": user_email,
-        "teams": [team_id],
-        "team_details": [{"team_id": team_id, "team_alias": team_alias}],
+    updated_flow = {
+        **flow,
+        "sso_complete": True,
+        "user_code_verified": False,
+        "session_data": {
+            "user_id": user_id,
+            "user_role": "internal_user",
+            "models": models,
+            "user_email": user_email,
+            "teams": [team_id],
+            "team_details": [{"team_id": team_id, "team_alias": team_alias}],
+        },
+        "browser_complete_token_hash": _hash_cli_sso_secret(browser_complete_token),
     }
-    flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
-    client.setex(cache_key, 600, str(flow))
+    client.setex(cache_key, 600, json.dumps(updated_flow))
     return True
 
 
