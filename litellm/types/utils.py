@@ -37,6 +37,8 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    SkipValidation,
+    field_serializer,
     field_validator,
 )
 from typing_extensions import Required, TypedDict
@@ -435,6 +437,14 @@ class CallTypes(str, Enum):
     alist_container_files = "alist_container_files"
     upload_container_file = "upload_container_file"
     aupload_container_file = "aupload_container_file"
+    create_sandbox = "create_sandbox"
+    acreate_sandbox = "acreate_sandbox"
+    delete_sandbox = "delete_sandbox"
+    adelete_sandbox = "adelete_sandbox"
+    run_code = "run_code"
+    arun_code = "arun_code"
+    code_interpreter_tool = "code_interpreter_tool"
+    acode_interpreter_tool = "acode_interpreter_tool"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -3490,6 +3500,15 @@ class SearchProviders(str, Enum):
 SearchProvidersSet = {provider.value for provider in SearchProviders}
 
 
+class SandboxProviders(str, Enum):
+    """
+    Enum for code execution sandbox provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+
+    E2B = "e2b"
+
+
 class LiteLLMLoggingBaseClass:
     """
     Base class for logging pre and post call
@@ -3593,9 +3612,19 @@ class LiteLLMBatch(Batch):
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
-    results: OpenAIRealtimeStreamList
+    # Events are already well-formed provider dicts. Validating them against the
+    # OpenAIRealtimeEvents union makes Pydantic try every member per event, which
+    # floods thousands of ValidationErrors for events outside the union (e.g.
+    # rate_limits.updated), blocks the event loop, and discards the session usage.
+    results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     _hidden_params: dict = {}
+
+    @field_serializer("results")
+    def _serialize_results(
+        self, results: OpenAIRealtimeStreamList
+    ) -> List[Dict[str, Any]]:
+        return [dict(event) for event in results]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
