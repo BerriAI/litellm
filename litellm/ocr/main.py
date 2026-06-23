@@ -39,8 +39,6 @@ async def aocr(
     extra_headers: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> OCRResponse:
-    from litellm.ocr.rust_bridge import rust_ocr, rust_ocr_enabled
-
     """
     Async OCR function.
 
@@ -264,6 +262,10 @@ def ocr(
             api_base = dynamic_api_base
 
         # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
+        # Imported lazily to avoid a module-level import cycle (CodeQL flags the
+        # litellm.ocr.main -> litellm.ocr.rust_bridge edge during package init).
+        from litellm.ocr.rust_bridge import rust_ocr, rust_ocr_enabled
+
         if custom_llm_provider == "mistral" and rust_ocr_enabled():
             return rust_ocr(model, document, api_key, api_base, kwargs)
 
