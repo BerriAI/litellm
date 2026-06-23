@@ -20,7 +20,6 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.ocr.rust_bridge import rust_ocr, rust_ocr_enabled
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -40,6 +39,8 @@ async def aocr(
     extra_headers: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> OCRResponse:
+    from litellm.ocr.rust_bridge import rust_ocr, rust_ocr_enabled
+
     """
     Async OCR function.
 
