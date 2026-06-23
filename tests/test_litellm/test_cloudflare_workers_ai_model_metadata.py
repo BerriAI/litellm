@@ -13,6 +13,8 @@ the ``cloudflare/`` namespace.
 import json
 import os
 
+import pytest
+
 import litellm
 
 ROOT_MAP = os.path.join(
@@ -23,6 +25,17 @@ BACKUP_MAP = os.path.join(
     os.path.dirname(litellm.__file__),
     "model_prices_and_context_window_backup.json",
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
 
 
 def _load(path: str) -> dict:
@@ -43,6 +56,12 @@ def test_glm_5_2_entry_is_present_and_well_formed():
     assert entry["output_cost_per_token"] > 0
 
 
+def test_vision_model_is_flagged_supports_vision():
+    entry = litellm.model_cost["cloudflare/@cf/meta/llama-3.2-11b-vision-instruct"]
+    assert entry["litellm_provider"] == "cloudflare"
+    assert entry.get("supports_vision") is True
+
+
 def test_additional_current_models_are_present():
     for key in (
         "cloudflare/@cf/openai/gpt-oss-120b",
@@ -57,12 +76,14 @@ def test_additional_current_models_are_present():
 
 
 def test_root_and_backup_have_identical_cloudflare_keys():
-    root = _cloudflare_keys(_load(ROOT_MAP))
-    backup = _cloudflare_keys(_load(BACKUP_MAP))
-    assert root == backup
+    if not os.path.exists(ROOT_MAP):
+        pytest.skip("root cost map only ships in source checkouts")
+    assert _cloudflare_keys(_load(ROOT_MAP)) == _cloudflare_keys(_load(BACKUP_MAP))
 
 
 def test_root_and_backup_cloudflare_entries_are_byte_for_byte_equal():
+    if not os.path.exists(ROOT_MAP):
+        pytest.skip("root cost map only ships in source checkouts")
     root = {k: v for k, v in _load(ROOT_MAP).items() if k.startswith("cloudflare/")}
     backup = {k: v for k, v in _load(BACKUP_MAP).items() if k.startswith("cloudflare/")}
     assert root == backup
