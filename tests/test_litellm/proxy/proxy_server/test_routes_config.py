@@ -360,11 +360,11 @@ def test_redact_secret_values_in_obj_fails_closed_at_max_depth():
     branch to fail-open would surface here."""
     from litellm.proxy import proxy_server as ps
 
-    # build a non-secret-keyed wrap chain deeper than the cap, with a real
-    # secret at the bottom. Using a non-secret key ("wrap") forces the
-    # recursor down the recursion branch instead of short-circuiting on the
-    # key name itself.
-    nested: object = {"aws_web_identity_token": "sk-leak-bottom"}
+    # leaf and wrap keys are both NON-secret so neither the key-name
+    # short-circuit nor the explicit-secret set catches the leak. The cap is
+    # the only thing standing between the secret and the response — flip the
+    # cap to fail-open and the secret comes back verbatim.
+    nested: object = {"notes": "sk-leak-bottom"}
     for _ in range(ps._REDACT_SECRET_MAX_DEPTH + 2):
         nested = {"wrap": nested}
 
