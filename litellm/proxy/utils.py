@@ -2128,11 +2128,20 @@ class ProxyLogging:
         # compute preprocessing latency after the logging object is popped.
         _logging_obj = request_data.get("litellm_logging_obj")
         if _logging_obj is not None:
-            _first_handoff = getattr(_logging_obj, "model_call_details", {}).get(
-                "first_api_call_start_time"
-            )
+            _model_call_details = getattr(_logging_obj, "model_call_details", {})
+            _first_handoff = _model_call_details.get("first_api_call_start_time")
             if _first_handoff is not None:
                 request_data["first_api_call_start_time"] = _first_handoff
+
+            # A stream that broke mid-flight still billed the provider for the
+            # chunks already delivered; the streaming handler stashes that
+            # recovered usage and cost here. Lift them onto request_data so the
+            # failure-path spend callbacks (which run after the logging object
+            # is popped) record the real partial spend instead of zero.
+            _recovered_usage = _model_call_details.get("combined_usage_object")
+            if _recovered_usage is not None:
+                request_data["combined_usage_object"] = _recovered_usage
+                request_data["response_cost"] = _model_call_details.get("response_cost")
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
@@ -3432,6 +3441,7 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and team_id is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
@@ -3782,6 +3792,10 @@ class PrismaClient:
             db_data["members_with_roles"], list
         ):
             db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
+        if db_data.get("budget_limits", None) is not None and isinstance(
+            db_data["budget_limits"], list
+        ):
+            db_data["budget_limits"] = json.dumps(db_data["budget_limits"])
         return db_data
 
     # Define a retrying strategy with exponential backoff
@@ -4452,6 +4466,14 @@ class PrismaClient:
                 "prisma-query-engine PID %s already dead at watch start.",
                 pid,
             )
+            if self._consume_expected_death(pid):
+                verbose_proxy_logger.info(
+                    "PID %s death was planned (engine already replaced); "
+                    "not reconnecting.",
+                    pid,
+                )
+                self._cleanup_engine_watcher()
+                return True
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
             self._cleanup_engine_watcher()
@@ -4496,11 +4518,38 @@ class PrismaClient:
         except RuntimeError:
             pass
 
+    def _consume_expected_death(self, pid: int) -> bool:
+        """True iff ``pid`` was killed on purpose by a planned recreate.
+
+        `PrismaWrapper.recreate_prisma_client` records the old engine PID in
+        `_expected_engine_deaths` before SIGTERM-ing it (IAM token refresh,
+        guarded reconnect). When the watcher then sees that PID die, this lets
+        it recognize the death as planned and skip its own reconnect, which
+        would otherwise kill the engine the recreate just spawned (#29176).
+
+        Consumes (removes) the PID so a later real crash of a reused PID is
+        still handled. Tolerant of `self.db` stand-ins (tests / older clients)
+        that don't expose a real set.
+        """
+        expected = getattr(self.db, "_expected_engine_deaths", None)
+        if isinstance(expected, set) and pid in expected:
+            expected.discard(pid)
+            return True
+        return False
+
     def _on_engine_death_from_thread(self, dead_pid: int) -> None:
         """Called on the event loop thread when the waitpid thread detects engine death."""
         if self._engine_confirmed_dead:
             return
         if dead_pid != self._engine_pid:
+            return
+        if self._consume_expected_death(dead_pid):
+            verbose_proxy_logger.info(
+                "prisma-query-engine PID %s exited as part of a planned restart; "
+                "not reconnecting (engine already replaced).",
+                dead_pid,
+            )
+            self._cleanup_engine_watcher()
             return
         verbose_proxy_logger.error(
             "prisma-query-engine PID %s exited (waitpid thread); triggering reconnect.",
@@ -4556,6 +4605,14 @@ class PrismaClient:
                 self._engine_pidfd = -1
             return
         dead_pid = self._engine_pid
+        if self._consume_expected_death(dead_pid):
+            verbose_proxy_logger.info(
+                "prisma-query-engine PID %s exited (pidfd event) as part of a "
+                "planned restart; not reconnecting (engine already replaced).",
+                dead_pid,
+            )
+            self._cleanup_engine_watcher()
+            return
         verbose_proxy_logger.error(
             "prisma-query-engine PID %s exited (pidfd event); triggering reconnect.",
             dead_pid,
@@ -4579,9 +4636,18 @@ class PrismaClient:
             try:
                 os.kill(self._engine_pid, 0)
             except ProcessLookupError:
+                dead_pid = self._engine_pid
+                if self._consume_expected_death(dead_pid):
+                    verbose_proxy_logger.info(
+                        "prisma-query-engine PID %s gone as part of a planned "
+                        "restart; not reconnecting (engine already replaced).",
+                        dead_pid,
+                    )
+                    self._cleanup_engine_watcher()
+                    return
                 verbose_proxy_logger.error(
                     "prisma-query-engine PID %s gone; triggering reconnect.",
-                    self._engine_pid,
+                    dead_pid,
                 )
                 self._engine_confirmed_dead = True
                 self._reap_all_zombies()
@@ -4668,6 +4734,22 @@ class PrismaClient:
         self._engine_confirmed_dead = False
         verbose_proxy_logger.debug("Stopped engine process watcher.")
 
+    def _handle_writer_engine_replaced(self) -> None:
+        """Re-arm the engine watcher after a planned writer-engine restart.
+
+        Wired as `PrismaWrapper.on_engine_replaced` and invoked from inside
+        `recreate_prisma_client` once the new engine is connected (IAM token
+        refresh, guarded reconnect). The old watcher was tracking the engine
+        we just intentionally killed, so we tear it down and re-arm on the new
+        PID. Scheduling `_start_engine_watcher` as a task (rather than awaiting)
+        keeps us from blocking the recreate while it still holds the wrapper's
+        reconnection lock. Without this re-arm, a planned restart would leave
+        the proxy with no engine-death detection until the next reconnect.
+        """
+        self._engine_confirmed_dead = False
+        self._cleanup_engine_watcher()
+        asyncio.create_task(self._start_engine_watcher())
+
     async def _run_reconnect_cycle(
         self, timeout_seconds: Optional[float] = None
     ) -> None:
@@ -4687,6 +4769,17 @@ class PrismaClient:
             if timeout_seconds is not None
             else self._db_watchdog_reconnect_timeout_seconds
         )
+
+        # Snapshot the writer's engine generation BEFORE any await. Both
+        # reconnect branches forward it to recreate_prisma_client as an
+        # optimistic-lock token: if a concurrent IAM token refresh replaces the
+        # engine after this point, the generation moves and the recreate becomes
+        # a no-op instead of killing the engine the refresh just spawned
+        # (#29176). Captured here — atomically with the dead-engine decision
+        # below — rather than inside the reconnect closures, because those run
+        # after an `asyncio.wait_for(...)` yield during which a refresh could
+        # otherwise slip in and bump the very generation the closure then reads.
+        expected_generation = getattr(self.writer_db, "_engine_generation", None)
 
         engine_is_dead = self._engine_confirmed_dead or (
             self._engine_pid > 0 and not self._is_engine_alive()
@@ -4708,7 +4801,16 @@ class PrismaClient:
                         "DATABASE_URL not set; cannot recreate Prisma client."
                     )
                     raise RuntimeError("DATABASE_URL not set")
-                await self.db.recreate_prisma_client(db_url)
+                # Forward the entry-snapshot generation. The engine was
+                # confirmed dead, but a concurrent IAM refresh may have already
+                # respawned it; the guard makes this recreate a no-op in that
+                # case rather than killing the fresh engine (#29176). Unlike the
+                # direct path there is no SELECT 1 probe here, so the generation
+                # guard is the only thing standing between a crash-reconnect and
+                # a refresh that raced it.
+                await self.db.recreate_prisma_client(
+                    db_url, expected_generation=expected_generation
+                )
                 await self._start_engine_watcher()
 
             await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
@@ -4730,13 +4832,36 @@ class PrismaClient:
                         "DATABASE_URL not set; cannot reconnect Prisma client."
                     )
                     raise RuntimeError("DATABASE_URL not set")
+                # Probe the writer BEFORE recreating. A concurrent IAM token
+                # refresh may have just replaced the engine (issue #29176); if
+                # the writer answers SELECT 1 the connection is already healthy
+                # and recreating would needlessly kill that fresh engine. If we
+                # do recreate, the entry-snapshot generation lets the wrapper
+                # detect a refresh that landed since cycle entry and skip the
+                # redundant restart.
+                writer = self.writer_db
+                try:
+                    await writer.query_raw("SELECT 1")
+                    verbose_proxy_logger.info(
+                        "Writer healthy on probe; skipping recreate (engine "
+                        "likely already replaced by a token refresh)."
+                    )
+                    await self._start_engine_watcher()
+                    return
+                except Exception as probe_err:
+                    verbose_proxy_logger.warning(
+                        "Writer probe failed (%s); recreating Prisma client.",
+                        probe_err,
+                    )
                 # Fresh Prisma client + new engine subprocess. The previous
                 # "lightweight" path called `disconnect()` which blocks the
                 # event loop on `subprocess.Popen.wait()`; since that call
                 # ends up killing the engine anyway, we do it non-blockingly
                 # via `_kill_engine_process` inside `recreate_prisma_client`.
                 self._cleanup_engine_watcher()
-                await self.db.recreate_prisma_client(db_url)
+                await self.db.recreate_prisma_client(
+                    db_url, expected_generation=expected_generation
+                )
                 await self._start_engine_watcher()
                 # Smoke-test the writer specifically; query_raw on the routing
                 # wrapper sends to the reader, which would not validate the
@@ -4897,6 +5022,11 @@ class PrismaClient:
             return
         if self._db_health_watchdog_task is not None:
             return
+        # Let planned writer-engine restarts (IAM token refresh, guarded
+        # reconnect) re-arm the watcher on the new PID instead of being
+        # mistaken for a crash (issue #29176). Set on the writer wrapper since
+        # the watcher tracks the writer engine.
+        self.writer_db.on_engine_replaced = self._handle_writer_engine_replaced
         self._db_health_watchdog_task = asyncio.create_task(
             self._db_health_watchdog_loop()
         )
@@ -6328,15 +6458,37 @@ def create_model_info_response(
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+
+    # Surface context-window limits for OpenAI-compatible discovery clients.
+    # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    # Limits are best-effort enrichment, so a single malformed deployment degrades
+    # to the base response rather than 500-ing the whole listing.
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model_id)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "create_model_info_response: get_model_group_info failed for %s: %s",
+                model_id,
+                e,
+            )
+            model_group_info = None
+        if model_group_info is not None:
+            if model_group_info.max_input_tokens is not None:
+                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
+            if model_group_info.max_output_tokens is not None:
+                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
+
     if not include_metadata:
         return base
 
     effective_fallback_type = fallback_type if fallback_type is not None else "general"
-    valid_fallback_types = ("general", "context_window", "content_policy")
+
+    valid_fallback_types = ["general", "context_window", "content_policy"]
     if effective_fallback_type not in valid_fallback_types:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid fallback_type. Must be one of: {list(valid_fallback_types)}",
+            detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
         )
 
     fallbacks = get_all_fallbacks(

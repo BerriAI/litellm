@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -571,3 +572,162 @@ class TestGPT5ReasoningEffortPreservation:
 
         assert optional_params.get("temperature") == 0.5
         assert non_default_params.get("reasoning_effort") == "none"
+
+
+class TestCacheControlPreservationForCustomEndpoint:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/30319
+
+    The AnthropicCacheControlHook injects cache_control when a user passes
+    cache_control_injection_points, but the base OpenAIGPTConfig used to strip
+    it unconditionally, making the feature a guaranteed no-op for the generic
+    openai provider pointed at a cache_control-aware endpoint (a LiteLLM proxy,
+    vLLM, an Anthropic-compatible gateway). cache_control must survive there
+    while still being stripped for real api.openai.com.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _cache_controlled_messages():
+        return [
+            {
+                "role": "system",
+                "content": "You are helpful.",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "role": "user",
+                "content": "Hello",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+
+    def _transform(self, custom_llm_provider, api_base, optional_params=None):
+        return self.config.transform_request(
+            model="claude-sonnet-4",
+            messages=self._cache_controlled_messages(),
+            optional_params=optional_params or {},
+            litellm_params={
+                "custom_llm_provider": custom_llm_provider,
+                "api_base": api_base,
+            },
+            headers={},
+        )
+
+    def test_predicate_openai_provider_custom_api_base_preserves(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "openai", "http://localhost:4000/v1"
+            )
+            is True
+        )
+
+    def test_predicate_real_openai_no_api_base_strips(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint("openai", None)
+            is False
+        )
+
+    def test_predicate_explicit_openai_host_strips(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "openai", "https://api.openai.com/v1"
+            )
+            is False
+        )
+
+    def test_predicate_non_openai_provider_strips(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "deepseek", "https://api.deepseek.com"
+            )
+            is False
+        )
+
+    def test_predicate_resolves_openai_base_url_env(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:4000/v1")
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint("openai", None)
+            is True
+        )
+
+    def test_predicate_resolves_openai_api_base_env(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_BASE", "http://localhost:4000/v1")
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint("openai", None)
+            is True
+        )
+
+    def test_predicate_lookalike_host_is_not_treated_as_openai(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "openai", "https://api.openai.com.evil.example/v1"
+            )
+            is True
+        )
+
+    def test_predicate_openai_subdomain_strips(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "openai", "https://eu.api.openai.com/v1"
+            )
+            is False
+        )
+
+    def test_transform_request_preserves_for_custom_api_base(self):
+        body = self._transform("openai", "http://localhost:4000/v1")
+        assert all("cache_control" in m for m in body["messages"])
+
+    def test_transform_request_strips_for_real_openai(self):
+        body = self._transform("openai", None)
+        assert all("cache_control" not in m for m in body["messages"])
+
+    def test_transform_request_strips_for_non_openai_provider(self):
+        body = self._transform("fireworks_ai", "https://api.fireworks.ai/inference/v1")
+        assert all("cache_control" not in m for m in body["messages"])
+
+    def test_transform_request_preserves_tool_cache_control(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": {}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        body = self._transform(
+            "openai", "http://localhost:4000/v1", optional_params={"tools": tools}
+        )
+        assert "cache_control" in body["tools"][0]
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_preserves_for_custom_api_base(self):
+        body = await self.config.async_transform_request(
+            model="claude-sonnet-4",
+            messages=self._cache_controlled_messages(),
+            optional_params={},
+            litellm_params={
+                "custom_llm_provider": "openai",
+                "api_base": "http://localhost:4000/v1",
+            },
+            headers={},
+        )
+        assert all("cache_control" in m for m in body["messages"])
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_strips_for_real_openai(self):
+        body = await self.config.async_transform_request(
+            model="gpt-4o",
+            messages=self._cache_controlled_messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert all("cache_control" not in m for m in body["messages"])

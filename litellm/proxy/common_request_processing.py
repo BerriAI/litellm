@@ -1037,6 +1037,8 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if not general_settings.get("expose_fallback_errors_to_caller"):
+            self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
             await _authorize_response_file_search_vector_stores(
                 data=self.data,
@@ -2513,6 +2515,7 @@ class ProxyBaseLLMRequestProcessing:
         debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
         client_disconnected = False
+        delivered_chunk = False
         try:
             str_so_far = ""
             async for (
@@ -2529,36 +2532,38 @@ class ProxyBaseLLMRequestProcessing:
                         "async_data_generator: received streaming chunk - %s", chunk
                     )
 
-                if fast_path:
-                    yield serialize_chunk(chunk)
-                    continue
+                if not fast_path:
+                    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        response=chunk,
+                        data=request_data,
+                        str_so_far=str_so_far,
+                    )
 
-                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=chunk,
-                    data=request_data,
-                    str_so_far=str_so_far,
-                )
+                    if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                        response_str = litellm.get_response_string(response_obj=chunk)
+                        str_so_far += response_str
+                    elif hasattr(chunk, "model_dump"):
+                        try:
+                            d = chunk.model_dump(mode="json", exclude_none=True)
+                            if isinstance(d, dict):
+                                str_so_far += str(d.get("content", ""))
+                        except Exception:
+                            pass
+                    elif isinstance(chunk, dict):
+                        str_so_far += str(chunk.get("content", ""))
 
-                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                    response_str = litellm.get_response_string(response_obj=chunk)
-                    str_so_far += response_str
-                elif hasattr(chunk, "model_dump"):
-                    try:
-                        d = chunk.model_dump(mode="json", exclude_none=True)
-                        if isinstance(d, dict):
-                            str_so_far += str(d.get("content", ""))
-                    except Exception:
-                        pass
-                elif isinstance(chunk, dict):
-                    str_so_far += str(chunk.get("content", ""))
-
-                model_name = request_data.get("model", "")
-                chunk = (
-                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                    model_name = request_data.get("model", "")
+                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
                     )
-                )
+
+                # Set before the yield: an async generator suspends at the yield,
+                # so a GeneratorExit on client disconnect is raised there and any
+                # statement after the yield never runs. The slow-path hook is
+                # awaited above, so a cancellation during it still leaves this
+                # False and refunds.
+                delivered_chunk = True
                 yield serialize_chunk(chunk)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
@@ -2573,6 +2578,14 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict
                 )
                 client_disconnected = True
+            if not delivered_chunk:
+                from litellm.proxy.spend_tracking.budget_reservation import (
+                    release_budget_reservation_on_cancel,
+                )
+
+                await release_budget_reservation_on_cancel(
+                    getattr(user_api_key_dict, "budget_reservation", None)
+                )
             raise
         except Exception as e:
             verbose_proxy_logger.exception(

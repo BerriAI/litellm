@@ -44,6 +44,37 @@ def test_agentops_exporter_factory_is_registered():
     assert _AGENTOPS_EXPORTER_KIND in providers._EXPORTER_FACTORIES
 
 
+def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
+    """Each dynamic-credential preset must tag the exporter it contributes with
+    its own callback name, so per-request tenant routing
+    (``TenantTracerCache``) applies that integration's credentials only to its
+    own exporter and never bleeds them onto a co-configured backend.
+    """
+    from litellm.integrations.otel.presets import (
+        DYNAMIC_HEADERS_BY_CALLBACK,
+        PRESET_BY_CALLBACK,
+    )
+
+    monkeypatch.setenv("ARIZE_SPACE_ID", "S")
+    monkeypatch.setenv("ARIZE_API_KEY", "K")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    monkeypatch.setenv("WANDB_API_KEY", "w")
+    monkeypatch.setenv("WANDB_PROJECT_ID", "entity/project")
+
+    from litellm.integrations.otel.model.config import ExporterOwner
+
+    for callback_name in DYNAMIC_HEADERS_BY_CALLBACK:
+        cfg = PRESET_BY_CALLBACK[callback_name]()
+        owners = {e.owner for e in cfg.exporters}
+        assert ExporterOwner(callback_name) in owners, (
+            f"{callback_name} preset did not tag its exporter with "
+            f"owner={callback_name!r}; tenant credentials would leak across "
+            f"exporters. owners present: {owners}"
+        )
+
+
 def test_agentops_exporter_mints_jwt_lazily(monkeypatch):
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
     monkeypatch.setattr(

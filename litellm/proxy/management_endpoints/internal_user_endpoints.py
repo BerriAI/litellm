@@ -57,6 +57,9 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ENTERPRISE_METADATA_KEY,
+)
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
@@ -719,6 +722,17 @@ async def _get_user_info_teams(
     return team_list, teams_1
 
 
+def _redact_scim_enterprise_metadata(
+    metadata: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """SCIM enterprise attributes are persisted in user metadata so reporting can
+    group on them, but they are directory-only fields that generic user-info
+    endpoints must not surface; SCIM clients read them through the SCIM endpoints."""
+    if not isinstance(metadata, dict) or SCIM_ENTERPRISE_METADATA_KEY not in metadata:
+        return metadata
+    return {k: v for k, v in metadata.items() if k != SCIM_ENTERPRISE_METADATA_KEY}
+
+
 def _build_user_info_response(
     user_id: Optional[str],
     user_info: Optional[Any],
@@ -739,6 +753,9 @@ def _build_user_info_response(
     )
     if isinstance(_user_info, dict):
         _user_info.pop("password", None)
+        _user_info["metadata"] = _redact_scim_enterprise_metadata(
+            _user_info.get("metadata")
+        )
 
     return UserInfoResponse(
         user_id=user_id,
@@ -983,7 +1000,7 @@ async def user_info_v2(
             models=user_data.get("models") or [],
             budget_duration=user_data.get("budget_duration"),
             budget_reset_at=user_data.get("budget_reset_at"),
-            metadata=user_data.get("metadata"),
+            metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
             created_at=user_data.get("created_at"),
             updated_at=user_data.get("updated_at"),
             sso_user_id=user_data.get("sso_user_id"),
@@ -2098,9 +2115,13 @@ async def get_users(
     user_list: List[LiteLLM_UserTableWithKeyCount] = []
     if users is not None:
         for user in users:
+            user_dump = user.model_dump()
+            user_dump["metadata"] = _redact_scim_enterprise_metadata(
+                user_dump.get("metadata")
+            )
             user_list.append(
                 LiteLLM_UserTableWithKeyCount(
-                    **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
+                    **user_dump, key_count=user_key_counts.get(user.user_id, 0)
                 )
             )
     else:
@@ -2596,6 +2617,25 @@ async def ui_view_users(
 # Using shared metric helper implementations from common_daily_activity
 
 
+async def _resolve_user_email_metadata(
+    prisma_client: "PrismaClient", records: list[Any]
+) -> dict[str, dict]:
+    """Map each user_id on the page to its email/alias so the Usage dashboard can
+    label the 'Spend Per User' chart with the email instead of the raw UUID."""
+    user_ids = {
+        record.user_id for record in records if getattr(record, "user_id", None)
+    }
+    if not user_ids:
+        return {}
+    users = await UserRepository(prisma_client).table.find_many(
+        where={"user_id": {"in": list(user_ids)}}
+    )
+    return {
+        user.user_id: {"user_email": user.user_email, "user_alias": user.user_alias}
+        for user in users
+    }
+
+
 @router.get(
     "/user/daily/activity",
     tags=["Budget & Spend Tracking", "Internal User management"],
@@ -2698,6 +2738,9 @@ async def get_user_daily_activity(
             page=page,
             page_size=page_size,
             timezone_offset_minutes=timezone,
+            resolve_entity_metadata=lambda records: _resolve_user_email_metadata(
+                prisma_client, records
+            ),
         )
 
     except HTTPException:

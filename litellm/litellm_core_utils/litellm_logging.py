@@ -2975,7 +2975,12 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
-        self.model_call_details["response_cost"] = 0
+        # A stream interrupted mid-flight still billed the provider for the
+        # chunks already delivered; the router stashes that recovered usage as
+        # ``combined_usage_object`` and pre-computes its cost, so preserve it
+        # here instead of zeroing the spend on an otherwise-failed request.
+        if self.model_call_details.get("combined_usage_object") is None:
+            self.model_call_details["response_cost"] = 0
 
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):
             self.model_call_details.setdefault("litellm_params", {})
@@ -5416,19 +5421,20 @@ class StandardLoggingPayloadSetup:
                     tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
                 )  # Limit to first 100 lines
 
+        # Prefer the `.message` attribute (set by ProxyException and every
+        # litellm.exceptions.* class) over str(exc); ProxyException does not
+        # call super().__init__() nor define __str__, so str() on it returns
+        # an empty string, which used to silently strip the human-readable
+        # message from spend_logs.metadata.error_information.
+        # Use isinstance, not truthiness: an explicit empty string on
+        # `.message` is a deliberate value and must not be replaced by
+        # `str(exc)`.
         explicit_message = getattr(original_exception, "message", None)
-        error_message = (
-            explicit_message
-            if isinstance(explicit_message, str) and explicit_message
-            else str(original_exception)
-        )
+        if isinstance(explicit_message, str):
+            error_message = explicit_message
+        else:
+            error_message = str(original_exception) if original_exception else ""
 
-        # Duck-typed read so bare-Exception subclasses like
-        # `litellm.BudgetExceededError` can participate without joining the
-        # RateLimitError hierarchy (which would break `except BudgetExceededError`).
-        # Validated against the enum value sets so a third-party exception that
-        # happens to declare a `.category` or `.rate_limit_type` string attribute
-        # can't leak garbage into the payload or Prometheus label cardinality.
         rate_limit_category = validate_rate_limit_category(
             getattr(original_exception, "category", None)
         )
@@ -5441,7 +5447,7 @@ class StandardLoggingPayloadSetup:
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
             traceback=traceback_info,
-            error_message=error_message if original_exception else "",
+            error_message=error_message,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
         )
