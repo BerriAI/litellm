@@ -68,6 +68,38 @@ def test_get_complete_url_is_idempotent_for_full_base():
     )
 
 
+def test_get_complete_url_raises_when_account_id_and_base_missing(monkeypatch):
+    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
+    config = CloudflareChatConfig()
+
+    with pytest.raises(ValueError, match="Missing CLOUDFLARE_ACCOUNT_ID"):
+        config.get_complete_url(
+            api_base=None,
+            api_key="cf-key",
+            model="@cf/meta/llama-2-7b-chat-int8",
+            optional_params={},
+            litellm_params={},
+        )
+
+
+def test_get_complete_url_migrates_legacy_ai_run_base():
+    config = CloudflareChatConfig()
+
+    url = config.get_complete_url(
+        api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/run/",
+        api_key="cf-key",
+        model="@cf/meta/llama-2-7b-chat-int8",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert (
+        url
+        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
+    )
+    assert "/ai/run" not in url
+
+
 def test_transform_request_passes_tools_through_in_openai_format():
     config = CloudflareChatConfig()
     tools = [

@@ -4236,13 +4236,7 @@ def completion(  # type: ignore
                 or litellm.api_key
                 or get_secret("CLOUDFLARE_API_KEY")
             )
-            account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("CLOUDFLARE_API_BASE")
-                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
-            )
+            api_base = api_base or litellm.api_base or get_secret("CLOUDFLARE_API_BASE")
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             response = base_llm_http_handler.completion(
