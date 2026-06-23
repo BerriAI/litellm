@@ -203,9 +203,7 @@ def test_tokenizers():
         try:
             llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
         except Exception as e:
-            pytest.skip(
-                f"custom tokenizer download failed (HF hub unreachable): {e}"
-            )
+            pytest.skip(f"custom tokenizer download failed (HF hub unreachable): {e}")
         llama3_tokens_2 = token_counter(
             custom_tokenizer=llama3_tokenizer, text=sample_text
         )

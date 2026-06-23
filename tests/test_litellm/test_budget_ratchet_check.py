@@ -10,7 +10,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
+_MODULE_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
+)
 _spec = importlib.util.spec_from_file_location("budget_ratchet_check", _MODULE_PATH)
 ratchet = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ratchet)

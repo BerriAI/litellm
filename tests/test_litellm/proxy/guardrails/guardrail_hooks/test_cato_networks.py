@@ -49,7 +49,9 @@ def test_cato_guard_config_no_api_key(monkeypatch):
     monkeypatch.delenv("CATO_API_KEY", raising=False)
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
-    with pytest.raises(CatoNetworksGuardrailMissingSecrets, match="Couldn't get Cato Networks api key"):
+    with pytest.raises(
+        CatoNetworksGuardrailMissingSecrets, match="Couldn't get Cato Networks api key"
+    ):
         init_guardrails_v2(
             all_guardrails=[
                 {
@@ -82,7 +84,9 @@ async def test_block_callback(mode: str):
         config_file_path="",
     )
     cato_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, CatoNetworksGuardrail)
     ]
     assert len(cato_guardrails) == 1
     cato_guardrail = cato_guardrails[0]
@@ -145,7 +149,9 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
         config_file_path="",
     )
     cato_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, CatoNetworksGuardrail)
     ]
     assert len(cato_guardrails) == 1
     cato_guardrail = cato_guardrails[0]
@@ -192,7 +198,9 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
         config_file_path="",
     )
     cato_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, CatoNetworksGuardrail)
     ]
     assert len(cato_guardrails) == 1
     cato_guardrail = cato_guardrails[0]
@@ -375,7 +383,9 @@ def test_init_uses_cato_api_base_env_var(monkeypatch):
 def test_init_explicit_args_take_precedence_over_env(monkeypatch):
     monkeypatch.setenv("CATO_API_KEY", "env-key")
     monkeypatch.setenv("CATO_API_BASE", "https://env.example.com")
-    guard = CatoNetworksGuardrail(api_key="explicit-key", api_base="https://explicit.example.com")
+    guard = CatoNetworksGuardrail(
+        api_key="explicit-key", api_base="https://explicit.example.com"
+    )
     assert guard.api_key == "explicit-key"
     assert guard.api_base == "https://explicit.example.com"
     assert guard.ws_api_base == "wss://explicit.example.com"
@@ -386,10 +396,13 @@ def test_init_http_api_base_maps_to_ws():
     assert guard.ws_api_base == "ws://insecure.example.com"
 
 
-@pytest.mark.parametrize("api_base", [
-    "https://api.aisec.catonetworks.com/",
-    "https://api.aisec.catonetworks.com",
-])
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.aisec.catonetworks.com/",
+        "https://api.aisec.catonetworks.com",
+    ],
+)
 def test_base_url_trailing_slash(monkeypatch, api_base):
     monkeypatch.setenv("CATO_API_KEY", "test-key")
     guardrail = CatoNetworksGuardrail(api_base=api_base)
@@ -684,9 +697,7 @@ async def test_call_cato_guardrail_inspects_responses_api_input():
             await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
 
     assert exc.value.status_code == 400
-    assert any(
-        "hunter2" in (m.get("content") or "") for m in captured["messages"]
-    )
+    assert any("hunter2" in (m.get("content") or "") for m in captured["messages"])
 
 
 @pytest.mark.asyncio
@@ -1642,7 +1653,10 @@ async def test_post_call_success_hook_anonymize_action_redacts_content():
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "hi"},
@@ -1680,7 +1694,10 @@ async def test_post_call_success_hook_anonymize_action_applies_empty_redacted_ou
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "hi"},
@@ -1718,7 +1735,10 @@ async def test_post_call_success_hook_anonymize_action_empty_redacted_messages_k
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {"all_redacted_messages": []},
         }
     )
@@ -1751,7 +1771,10 @@ async def test_post_call_success_hook_anonymize_action_missing_content_key_keeps
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "hi"},
@@ -1794,7 +1817,10 @@ async def test_post_call_success_hook_anonymize_action_partial_redacted_keeps_ou
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "[REDACTED_INPUT_1]"},
@@ -1984,7 +2010,10 @@ async def test_post_call_success_hook_redacts_tool_call_arguments_keeps_none_con
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "email my doctor"},
@@ -2165,7 +2194,10 @@ async def test_post_call_success_hook_redacts_responses_api_output_text():
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "hi"},
@@ -2210,7 +2242,10 @@ async def test_post_call_success_hook_redacts_responses_api_function_call_argume
     anonymize_response = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
-            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "required_action": {
+                "action_type": "anonymize_action",
+                "policy_name": "PII",
+            },
             "redacted_chat": {
                 "all_redacted_messages": [
                     {"role": "user", "content": "email my doctor"},

@@ -38,7 +38,6 @@ from litellm.interactions.agents.utils import get_provider_agents_api_config
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
 
-
 _HANDLER_PATH = "litellm.interactions.agents.main.agents_http_handler"
 
 

@@ -38,7 +38,7 @@ class SlowHandler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if self.path != "/cygnal/monitor":
             self.send_error(404, "Not Found")
             return

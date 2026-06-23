@@ -181,6 +181,8 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
     assert blocked_field in str(
         body
     ), f"Response should mention '{blocked_field}': {body}"
+
+
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected
@@ -222,7 +224,9 @@ class TestRagIngestSSRFBlocked:
         error_text = (
             detail.get("error", "") if isinstance(detail, dict) else str(detail)
         )
-        assert field in error_text, f"Error should name the offending field: {error_text}"
+        assert (
+            field in error_text
+        ), f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
         with patch(
@@ -239,6 +243,6 @@ class TestRagIngestSSRFBlocked:
                     },
                 },
             )
-        assert response.status_code != 400, (
-            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
-        )
+        assert (
+            response.status_code != 400
+        ), f"Clean Bedrock ingest_options should not be rejected: {response.json()}"

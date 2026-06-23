@@ -32,7 +32,9 @@ def _make_guardrail(name="g", should_run=True, override=None):
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_returns_response_when_no_callbacks(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_post_call_success_hook_returns_response_when_no_callbacks(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     response = {"original": True, "model": "m", "choices": []}
     out = await proxy_logging.post_call_success_hook(
         data={}, response=response, user_api_key_dict=make_user_api_key_auth()

@@ -152,7 +152,9 @@ class TestTensormeshCostMap:
             "tensormesh/google/gemma-4-31B-it",
         }
         for model in TENSORMESH_MODELS:
-            assert litellm.supports_reasoning(model) is (model in reasoning_models), model
+            assert litellm.supports_reasoning(model) is (
+                model in reasoning_models
+            ), model
 
     def test_cost_is_wired_and_cache_reads_are_free(self):
         prompt_cost, completion_cost = litellm.cost_per_token(

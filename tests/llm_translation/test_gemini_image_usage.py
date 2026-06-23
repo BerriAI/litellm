@@ -1,7 +1,7 @@
 """
 Test for Gemini image generation usage metadata extraction.
 
-This test verifies the fix for issue #18323 where image_generation() 
+This test verifies the fix for issue #18323 where image_generation()
 was returning usage=0 while completion() returned proper token usage.
 """
 

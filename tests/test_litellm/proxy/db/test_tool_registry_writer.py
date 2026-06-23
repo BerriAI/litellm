@@ -325,10 +325,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_tools_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_tools_lookup_failure"
     assert registry.is_initialized()
 
 
@@ -361,7 +358,4 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
     assert len(perms_invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_perms_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_perms_lookup_failure"

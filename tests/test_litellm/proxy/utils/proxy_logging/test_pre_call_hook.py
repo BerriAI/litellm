@@ -37,7 +37,9 @@ async def test_process_pre_call_hook_response_dict_returns_response(proxy_loggin
 
 
 @pytest.mark.asyncio
-async def test_process_pre_call_hook_response_string_completion_raises_rejected(proxy_logging):
+async def test_process_pre_call_hook_response_string_completion_raises_rejected(
+    proxy_logging,
+):
     with pytest.raises(RejectedRequestError):
         await proxy_logging.process_pre_call_hook_response(
             response="rejected",
@@ -47,7 +49,9 @@ async def test_process_pre_call_hook_response_string_completion_raises_rejected(
 
 
 @pytest.mark.asyncio
-async def test_process_pre_call_hook_response_string_other_call_type_raises_http(proxy_logging):
+async def test_process_pre_call_hook_response_string_other_call_type_raises_http(
+    proxy_logging,
+):
     with pytest.raises(HTTPException) as info:
         await proxy_logging.process_pre_call_hook_response(
             response="bad",
@@ -80,8 +84,14 @@ async def test_process_pre_call_hook_response_other_type_returns_data(proxy_logg
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_returns_data_when_no_callbacks(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
-    data = {"messages": [{"role": "user", "content": "hi"}], "model": "m", "temperature": 0.7}
+async def test_pre_call_hook_returns_data_when_no_callbacks(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
+    data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": "m",
+        "temperature": 0.7,
+    }
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     out = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
@@ -92,7 +102,9 @@ async def test_pre_call_hook_returns_data_when_no_callbacks(proxy_logging, make_
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_returns_none_for_none_data(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_pre_call_hook_returns_none_for_none_data(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     out = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
@@ -103,7 +115,9 @@ async def test_pre_call_hook_returns_none_for_none_data(proxy_logging, make_user
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_invokes_pre_call_override(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_pre_call_hook_invokes_pre_call_override(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     captured: Dict[str, Any] = {}
 
     class _Cb(CustomLogger):
@@ -133,7 +147,9 @@ async def test_pre_call_hook_invokes_pre_call_override(proxy_logging, make_user_
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_propagates_callback_error_raises(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_pre_call_hook_propagates_callback_error_raises(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _BadCb(CustomLogger):
         async def async_pre_call_hook(self, **kwargs):  # type: ignore[override]
             raise RuntimeError("rejected")
@@ -149,9 +165,15 @@ async def test_pre_call_hook_propagates_callback_error_raises(proxy_logging, mak
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     """Even when no callback overrides exist, ``_process_guardrail_metadata`` runs."""
-    data = {"messages": [{"role": "user"}], "model": "m", "metadata": {"guardrails": ["g1"]}}
+    data = {
+        "messages": [{"role": "user"}],
+        "model": "m",
+        "metadata": {"guardrails": ["g1"]},
+    }
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     invoked = {}
 

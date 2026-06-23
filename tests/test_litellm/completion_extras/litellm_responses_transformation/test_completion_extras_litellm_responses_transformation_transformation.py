@@ -887,9 +887,7 @@ def test_transform_request_system_only_message_maps_to_system_input_item():
         {
             "type": "message",
             "role": "system",
-            "content": [
-                {"type": "input_text", "text": "You are a helpful assistant."}
-            ],
+            "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
         }
     ]
     # System content lives in input only; not duplicated into instructions.

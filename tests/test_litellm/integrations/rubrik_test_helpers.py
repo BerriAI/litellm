@@ -5,9 +5,7 @@ from typing import Any, Dict
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
-def make_tool_call_dict(
-    tc_id: str, name: str, arguments: str = "{}"
-) -> Dict[str, Any]:
+def make_tool_call_dict(tc_id: str, name: str, arguments: str = "{}") -> Dict[str, Any]:
     """Create a tool call dict matching the ChatCompletionMessageToolCall schema."""
     return {
         "id": tc_id,

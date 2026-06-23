@@ -142,7 +142,9 @@ class TestSnowflakeToolTransformation:
                                 "type": "function",
                                 "function": {
                                     "name": "get_weather",
-                                    "arguments": json.dumps({"location": "Paris, France", "unit": "celsius"}),
+                                    "arguments": json.dumps(
+                                        {"location": "Paris, France", "unit": "celsius"}
+                                    ),
                                 },
                             }
                         ],
@@ -215,7 +217,9 @@ class TestSnowflakeToolTransformation:
                                 "type": "function",
                                 "function": {
                                     "name": "get_weather",
-                                    "arguments": json.dumps({"location": "Tokyo, Japan"}),
+                                    "arguments": json.dumps(
+                                        {"location": "Tokyo, Japan"}
+                                    ),
                                 },
                             }
                         ],

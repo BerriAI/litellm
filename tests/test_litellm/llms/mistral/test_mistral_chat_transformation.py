@@ -44,6 +44,27 @@ async def test_mistral_chat_transformation():
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
 
+    def test_mistral_strips_metadata_from_messages(self):
+        from litellm.llms.mistral.chat.transformation import MistralConfig
+
+        config = MistralConfig()
+        messages = [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "hi",
+                "metadata": {
+                    "tool_outputs_trimmed": True,
+                    "trimmed_by": "async_context_compression",
+                },
+            },
+        ]
+        result = config._transform_messages(messages, model="mistral-large-latest")
+        for msg in result:
+            assert (
+                "metadata" not in msg
+            ), "metadata should be stripped before sending to Mistral"
+
     def test_get_supported_openai_params_magistral_model(self):
         """Test that magistral models support reasoning parameters."""
         mistral_config = MistralConfig()

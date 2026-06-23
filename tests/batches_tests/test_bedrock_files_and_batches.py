@@ -21,7 +21,6 @@ from unittest.mock import patch, MagicMock
 import httpx
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-
 _BEDROCK_TEST_AWS_ENV = {
     "AWS_ACCESS_KEY_ID": "test-access-key",
     "AWS_SECRET_ACCESS_KEY": "test-secret-key",
@@ -99,7 +98,9 @@ class _CaptureAsyncHTTPHandler(AsyncHTTPHandler):
         raw = json if json is not None else (data if data is not None else content)
         payload = raw if isinstance(raw, dict) else json_module.loads(raw)
         job_name = payload["jobName"]
-        job_arn = f"arn:aws:bedrock:us-west-2:941277531214:model-invocation-job/{job_name}"
+        job_arn = (
+            f"arn:aws:bedrock:us-west-2:941277531214:model-invocation-job/{job_name}"
+        )
         self.batch_jobs[job_arn] = {
             "jobArn": job_arn,
             "jobName": job_name,

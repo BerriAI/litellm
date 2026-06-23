@@ -1282,7 +1282,6 @@ def test_process_gemini_media():
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 
-
 def test_get_image_mime_type_from_url():
     """Test the _get_image_mime_type_from_url function for different image URLs"""
     from litellm.llms.vertex_ai.gemini.transformation import (
@@ -1519,8 +1518,8 @@ def test_vertex_parallel_tool_calls_true():
 
 def test_vertex_parallel_tool_calls_false_multiple_tools_dropped():
     """
-    parallel_tool_calls=False with multiple tools is dropped for Gemini
-  (unsupported upstream). Request should succeed without the param.
+      parallel_tool_calls=False with multiple tools is dropped for Gemini
+    (unsupported upstream). Request should succeed without the param.
     """
     tools = [
         {"type": "function", "function": {"name": "get_weather"}},

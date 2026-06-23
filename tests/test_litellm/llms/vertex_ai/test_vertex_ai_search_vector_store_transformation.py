@@ -232,7 +232,9 @@ def test_datastore_search_request_rejects_target_selecting_fields(field):
 
 
 def test_search_request_rejects_unsupported_extra_body_field():
-    with pytest.raises(BadRequestError, match="Unsupported Vertex AI Search extra_body"):
+    with pytest.raises(
+        BadRequestError, match="Unsupported Vertex AI Search extra_body"
+    ):
         _search_request(extra_body={"notARealField": True})
 
 
@@ -257,9 +259,7 @@ def test_search_request_forwards_supported_extra_body_fields():
 
 
 def test_datastore_search_request_forwards_supported_extra_body_fields():
-    _, body = _datastore_search_request(
-        extra_body={"filter": 'category: ANY("docs")'}
-    )
+    _, body = _datastore_search_request(extra_body={"filter": 'category: ANY("docs")'})
 
     assert body["filter"] == 'category: ANY("docs")'
 

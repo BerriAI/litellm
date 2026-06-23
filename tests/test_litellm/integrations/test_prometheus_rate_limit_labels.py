@@ -31,7 +31,6 @@ from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
 )
 
-
 # ---------------------------------------------------------------------------
 # Label / enum wiring
 # ---------------------------------------------------------------------------

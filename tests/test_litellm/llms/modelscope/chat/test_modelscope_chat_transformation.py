@@ -122,7 +122,10 @@ class TestModelScopeConfig:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What is this?"},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img.png"},
+                    },
                 ],
             }
         ]
@@ -173,7 +176,10 @@ class TestModelScopeConfig:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Describe this image"},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/photo.jpg"},
+                    },
                 ],
             },
         ]
@@ -303,11 +309,17 @@ class TestModelScopeConfig:
                             "finish_reason": "stop",
                         }
                     ],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 1,
+                        "total_tokens": 6,
+                    },
                 },
             )
 
-        respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=capture_request)
+        respx_mock.post(f"{api_base}/chat/completions").mock(
+            side_effect=capture_request
+        )
 
         response = completion(
             model=f"modelscope/{DEFAULT_MODEL}",
@@ -358,11 +370,17 @@ class TestModelScopeConfig:
                             "finish_reason": "stop",
                         }
                     ],
-                    "usage": {"prompt_tokens": 100, "completion_tokens": 8, "total_tokens": 108},
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 8,
+                        "total_tokens": 108,
+                    },
                 },
             )
 
-        respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=capture_request)
+        respx_mock.post(f"{api_base}/chat/completions").mock(
+            side_effect=capture_request
+        )
 
         response = completion(
             model=f"modelscope/{DEFAULT_MODEL}",

@@ -11,6 +11,7 @@ reader to write tests that kill the survivors.
 Run after `mutmut run` and `mutmut export-cicd-stats`. Expects mutmut to be
 invokable as `uv run --no-sync --with mutmut==<version> mutmut <subcommand>`.
 """
+
 from __future__ import annotations
 
 import ast
@@ -373,9 +374,7 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
 
     out.append("## Task")
     out.append("")
-    out.append(
-        dedent(
-            """\
+    out.append(dedent("""\
             For each surviving mutant listed above, write a new test in the
             existing test file (matching its conventions, fixtures, and naming
             style) that:
@@ -388,9 +387,7 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
             which mutant numbers in the test name or docstring.
 
             Do not modify the source file. Only add tests.
-            """
-        ).strip()
-    )
+            """).strip())
     out.append("")
 
     return "\n".join(out)

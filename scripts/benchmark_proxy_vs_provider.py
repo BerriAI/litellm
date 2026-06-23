@@ -11,7 +11,7 @@ USAGE EXAMPLES:
    export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
    export LITELLM_PROXY_API_KEY='sk-1234'
    export PROVIDER_API_KEY='sk-openai-key'
-   
+
    # Run from scripts directory
    cd scripts
    python benchmark_proxy_vs_provider.py
@@ -266,7 +266,7 @@ async def benchmark_endpoint(
     print(f"\nStarting benchmark for {url}")
 
     if warmup:
-        print(f"   Warming up with 5 requests...")
+        print("   Warming up with 5 requests...")
         await warmup_endpoint(
             url, headers, payload, num_warmup=5, timeout_seconds=timeout_seconds
         )
@@ -359,7 +359,7 @@ def print_results(name: str, results: BenchmarkResults):
 
     if "latency_stats" in stats:
         latency = stats["latency_stats"]
-        print(f"\nLatency Statistics (seconds):")
+        print("\nLatency Statistics (seconds):")
         print(f"   Mean:               {latency['mean']:.4f}s")
         print(f"   Median (p50):       {latency['median']:.4f}s")
         print(f"   Min:                {latency['min']:.4f}s")
@@ -369,12 +369,12 @@ def print_results(name: str, results: BenchmarkResults):
         print(f"   p99:                {latency['p99']:.4f}s")
 
     if stats["status_codes"]:
-        print(f"\nStatus Codes:")
+        print("\nStatus Codes:")
         for code, count in sorted(stats["status_codes"].items()):
             print(f"   {code}: {count}")
 
     if results.errors:
-        print(f"\nErrors (showing first 5 unique):")
+        print("\nErrors (showing first 5 unique):")
         unique_errors = list(set(results.errors))[:5]
         for error in unique_errors:
             count = results.errors.count(error)
@@ -439,7 +439,7 @@ def print_run_variance(name: str, results_list: List[BenchmarkResults]):
         throughputs.append(stats["requests_per_second"])
 
     if mean_latencies:
-        print(f"\nMean Latency Variance:")
+        print("\nMean Latency Variance:")
         print(f"   Runs:           {len(mean_latencies)}")
         print(f"   Mean:           {mean(mean_latencies):.4f}s")
         print(f"   Min:            {min(mean_latencies):.4f}s")
@@ -456,7 +456,7 @@ def print_run_variance(name: str, results_list: List[BenchmarkResults]):
         )
 
     if throughputs:
-        print(f"\nThroughput Variance:")
+        print("\nThroughput Variance:")
         print(f"   Mean:           {mean(throughputs):.2f} req/s")
         print(f"   Min:            {min(throughputs):.2f} req/s")
         print(f"   Max:            {max(throughputs):.2f} req/s")
@@ -475,18 +475,18 @@ def compare_results(
     provider_stats = provider_results.calculate_stats()
 
     print(f"\n{'='*60}")
-    print(f"Comparison: LiteLLM Proxy vs Direct Provider")
+    print("Comparison: LiteLLM Proxy vs Direct Provider")
     print(f"{'='*60}")
 
     # Success Rate Comparison
-    print(f"\nSuccess Rate:")
+    print("\nSuccess Rate:")
     print(f"   Proxy:   {proxy_stats['success_rate']:.2f}%")
     print(f"   Provider: {provider_stats['success_rate']:.2f}%")
     diff = proxy_stats["success_rate"] - provider_stats["success_rate"]
     print(f"   Difference: {diff:+.2f}%")
 
     # Throughput Comparison
-    print(f"\nThroughput (requests/second):")
+    print("\nThroughput (requests/second):")
     print(f"   Proxy:   {proxy_stats['requests_per_second']:.2f}")
     print(f"   Provider: {provider_stats['requests_per_second']:.2f}")
     diff = proxy_stats["requests_per_second"] - provider_stats["requests_per_second"]
@@ -494,7 +494,7 @@ def compare_results(
 
     # Latency Comparison
     if "latency_stats" in proxy_stats and "latency_stats" in provider_stats:
-        print(f"\nLatency Comparison (seconds):")
+        print("\nLatency Comparison (seconds):")
         proxy_latency = proxy_stats["latency_stats"]
         provider_latency = provider_stats["latency_stats"]
 
@@ -509,7 +509,7 @@ def compare_results(
             )
 
     # Total Time Comparison
-    print(f"\nTotal Time:")
+    print("\nTotal Time:")
     print(f"   Proxy:   {proxy_stats['total_time']:.2f}s")
     print(f"   Provider: {provider_stats['total_time']:.2f}s")
     diff = proxy_stats["total_time"] - provider_stats["total_time"]
@@ -662,7 +662,7 @@ Examples:
     print("=" * 60)
     print("LiteLLM Proxy vs Provider Benchmark")
     print("=" * 60)
-    print(f"Configuration (from environment variables):")
+    print("Configuration (from environment variables):")
     print(f"  Proxy URL:    {LITELLM_PROXY_URL}")
     print(f"  Provider URL: {PROVIDER_URL}")
     print(
@@ -685,15 +685,15 @@ Examples:
     )
 
     if not args.max_concurrent:
-        print(f"\nTip: Use --max-concurrent 100 for more realistic load testing")
-        print(f"   (prevents overwhelming the server with all requests at once)")
+        print("\nTip: Use --max-concurrent 100 for more realistic load testing")
+        print("   (prevents overwhelming the server with all requests at once)")
 
     if args.parallel:
-        print(f"\nWARNING: Running benchmarks in parallel may affect results due to:")
-        print(f"   - Shared network bandwidth")
-        print(f"   - Provider endpoint receiving double load (via proxy + direct)")
-        print(f"   - Potential rate limiting issues")
-        print(f"   - Resource contention")
+        print("\nWARNING: Running benchmarks in parallel may affect results due to:")
+        print("   - Shared network bandwidth")
+        print("   - Provider endpoint receiving double load (via proxy + direct)")
+        print("   - Potential rate limiting issues")
+        print("   - Resource contention")
 
     # Run benchmarks multiple times if requested
     all_proxy_results = []
@@ -703,7 +703,7 @@ Examples:
 
     if args.runs > 1:
         print(f"\nRunning {args.runs} benchmark runs for statistical accuracy...")
-        print(f"   Results will be averaged across all runs.\n")
+        print("   Results will be averaged across all runs.\n")
 
     overall_start_time = time.perf_counter()
 
@@ -718,7 +718,7 @@ Examples:
             print(f"{'='*60}")
 
         if args.parallel:
-            print(f"\nRunning both benchmarks in parallel...")
+            print("\nRunning both benchmarks in parallel...")
             proxy_results, provider_results = await asyncio.gather(
                 benchmark_endpoint(
                     LITELLM_PROXY_URL,
@@ -740,9 +740,9 @@ Examples:
                 ),
             )
         else:
-            print(f"\nRunning benchmarks sequentially (proxy first, then provider)...")
+            print("\nRunning benchmarks sequentially (proxy first, then provider)...")
             if run_num == 1:
-                print(f"   This ensures accurate results without interference.\n")
+                print("   This ensures accurate results without interference.\n")
 
             proxy_results = await benchmark_endpoint(
                 LITELLM_PROXY_URL,
@@ -755,7 +755,7 @@ Examples:
             )
 
             if run_num < args.runs or args.runs == 1:
-                print(f"\nWaiting 3 seconds before starting provider benchmark...")
+                print("\nWaiting 3 seconds before starting provider benchmark...")
                 await asyncio.sleep(3)  # Longer pause to ensure clean separation
 
             provider_results = await benchmark_endpoint(
@@ -773,7 +773,7 @@ Examples:
 
         # Brief pause between runs
         if run_num < args.runs:
-            print(f"\nWaiting 5 seconds before next run...")
+            print("\nWaiting 5 seconds before next run...")
             await asyncio.sleep(5)
 
     overall_benchmark_time = time.perf_counter() - overall_start_time
@@ -790,7 +790,7 @@ Examples:
             raise RuntimeError("Benchmark results not initialized")
         final_proxy_results = proxy_results
         final_provider_results = provider_results
-        print(f"\nResults:")
+        print("\nResults:")
 
     # Print individual results
     print_results("LiteLLM Proxy", final_proxy_results)

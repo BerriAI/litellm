@@ -132,7 +132,7 @@ def run_scenario(
     else:
         runner = lambda: bench_with_chunk(
             wrapper, spec["chunk_factory"], iterations
-        )  # noqa: E731
+        )
 
     for _ in range(warmup):
         runner()

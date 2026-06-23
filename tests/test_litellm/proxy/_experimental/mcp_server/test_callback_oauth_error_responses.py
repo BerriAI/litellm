@@ -75,9 +75,7 @@ class TestCallbackOAuthErrorResponses:
         # Sanity: must not leak the Pydantic validation error.
         assert "Field required" not in body
 
-    def test_idp_error_html_escapes_user_controlled_fields(
-        self, callback_test_client
-    ):
+    def test_idp_error_html_escapes_user_controlled_fields(self, callback_test_client):
         """A malicious IdP must not be able to inject HTML/JS via error params."""
         resp = callback_test_client.get(
             "/callback",

@@ -191,7 +191,11 @@ def test_deepseek_fill_reasoning_content_multiturn():
     # Case 1: assistant message already has reasoning_content — should be left as-is
     messages_with_rc = [
         {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi", "reasoning_content": "I thought about it"},
+        {
+            "role": "assistant",
+            "content": "Hi",
+            "reasoning_content": "I thought about it",
+        },
         {"role": "user", "content": "Follow up"},
     ]
     result = config._fill_reasoning_content(messages_with_rc)
@@ -259,9 +263,9 @@ def test_deepseek_fill_reasoning_content_guard_in_transform_request():
         litellm_params={},
         headers={},
     )
-    assert result["messages"][1].get("reasoning_content") == " ", (
-        "reasoning_content should be injected when thinking is enabled"
-    )
+    assert (
+        result["messages"][1].get("reasoning_content") == " "
+    ), "reasoning_content should be injected when thinking is enabled"
 
     # Case 2: reasoning model + thinking NOT in optional_params -> no injection
     result = config.transform_request(
@@ -271,9 +275,9 @@ def test_deepseek_fill_reasoning_content_guard_in_transform_request():
         litellm_params={},
         headers={},
     )
-    assert "reasoning_content" not in result["messages"][1], (
-        "reasoning_content should not be injected when thinking is not enabled"
-    )
+    assert (
+        "reasoning_content" not in result["messages"][1]
+    ), "reasoning_content should not be injected when thinking is not enabled"
 
     # Case 3: non-reasoning model + thinking enabled -> no injection
     result = config.transform_request(
@@ -283,6 +287,6 @@ def test_deepseek_fill_reasoning_content_guard_in_transform_request():
         litellm_params={},
         headers={},
     )
-    assert "reasoning_content" not in result["messages"][1], (
-        "reasoning_content should not be injected for non-reasoning models"
-    )
+    assert (
+        "reasoning_content" not in result["messages"][1]
+    ), "reasoning_content should not be injected for non-reasoning models"

@@ -17,7 +17,6 @@ import pytest
 
 from .conftest import normalize
 
-
 # ---------------------------------------------------------------------------
 # GET /
 # ---------------------------------------------------------------------------
@@ -75,9 +74,11 @@ def test_get_routes_invalid_method_405(client):
     """POST against the GET-only /routes endpoint is rejected (error path)."""
     response = client.post("/routes")
     assert response.status_code == 405
-    body = response.json() if response.headers.get("content-type", "").startswith(
-        "application/json"
-    ) else {}
+    body = (
+        response.json()
+        if response.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     assert isinstance(body, dict)
 
 
@@ -139,7 +140,9 @@ def test_get_logo_url_returns_http_url_when_set(client, monkeypatch):
     monkeypatch.setenv("UI_LOGO_PATH", "https://example.invalid/logo.png")
     response = client.get("/get_logo_url")
     assert response.status_code == 200
-    assert normalize(response.json()) == {"logo_url": "https://example.invalid/logo.png"}
+    assert normalize(response.json()) == {
+        "logo_url": "https://example.invalid/logo.png"
+    }
 
 
 def test_get_logo_url_blank_when_local_path(client, monkeypatch):

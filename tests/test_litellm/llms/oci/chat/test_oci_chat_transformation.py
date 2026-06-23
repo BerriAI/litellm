@@ -1478,6 +1478,7 @@ class TestOCIChatConfigErrorPaths:
             drop_params=False,
         )
         assert "max_retries" not in result
+
     def test_map_openai_params_cohere_n_default_dropped(self):
         """Cohere has no numGenerations field, but n=1 (and None) is the OpenAI
         default single-generation request. It must be dropped silently rather

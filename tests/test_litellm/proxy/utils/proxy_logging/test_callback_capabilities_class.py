@@ -49,7 +49,9 @@ def _clear_caps_cache():
     ProxyLogging._callback_capabilities_cache.clear()
 
 
-def test_callback_capabilities_with_no_callbacks_returns_defaults(mock_callbacks_disabled):
+def test_callback_capabilities_with_no_callbacks_returns_defaults(
+    mock_callbacks_disabled,
+):
     caps = ProxyLogging._callback_capabilities()
     snapshot = {
         "headers": caps.has_post_call_response_headers,
@@ -128,17 +130,23 @@ def test_callback_capabilities_callback_resolution_error_raises(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_has_post_call_response_headers_callbacks_truth_table(monkeypatch, mock_callbacks_disabled):
+def test_has_post_call_response_headers_callbacks_truth_table(
+    monkeypatch, mock_callbacks_disabled
+):
     """One snapshot covering true + false + cache invalidation."""
     snapshot = {
         "empty_returns_false": ProxyLogging.has_post_call_response_headers_callbacks(),
     }
     monkeypatch.setattr(litellm, "callbacks", [_OverridesResponseHeaders()])
     ProxyLogging._callback_capabilities_cache.clear()
-    snapshot["override_returns_true"] = ProxyLogging.has_post_call_response_headers_callbacks()
+    snapshot["override_returns_true"] = (
+        ProxyLogging.has_post_call_response_headers_callbacks()
+    )
     monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
     ProxyLogging._callback_capabilities_cache.clear()
-    snapshot["plain_logger_false"] = ProxyLogging.has_post_call_response_headers_callbacks()
+    snapshot["plain_logger_false"] = (
+        ProxyLogging.has_post_call_response_headers_callbacks()
+    )
     assert snapshot == {
         "empty_returns_false": False,
         "override_returns_true": True,
@@ -185,13 +193,17 @@ def test_has_streaming_callbacks_error_when_resolution_fails(monkeypatch):
         ProxyLogging.has_streaming_callbacks()
 
 
-def test_has_streaming_chunk_hook_overrides_truth_table(monkeypatch, mock_callbacks_disabled):
+def test_has_streaming_chunk_hook_overrides_truth_table(
+    monkeypatch, mock_callbacks_disabled
+):
     snapshot = {
         "empty_false": ProxyLogging.has_streaming_chunk_hook_overrides(),
     }
     monkeypatch.setattr(litellm, "callbacks", [_OverridesPerChunk()])
     ProxyLogging._callback_capabilities_cache.clear()
-    snapshot["per_chunk_override_true"] = ProxyLogging.has_streaming_chunk_hook_overrides()
+    snapshot["per_chunk_override_true"] = (
+        ProxyLogging.has_streaming_chunk_hook_overrides()
+    )
     monkeypatch.setattr(litellm, "callbacks", [_OverridesIterator()])
     ProxyLogging._callback_capabilities_cache.clear()
     snapshot["only_iterator_false"] = ProxyLogging.has_streaming_chunk_hook_overrides()
@@ -213,7 +225,9 @@ def test_has_streaming_chunk_hook_overrides_error_raises(monkeypatch):
         ProxyLogging.has_streaming_chunk_hook_overrides()
 
 
-def test_needs_iterator_wrap_truth_table(proxy_logging, monkeypatch, mock_callbacks_disabled):
+def test_needs_iterator_wrap_truth_table(
+    proxy_logging, monkeypatch, mock_callbacks_disabled
+):
     snapshot = {
         "empty_false": proxy_logging.needs_iterator_wrap(),
     }
@@ -241,7 +255,9 @@ def test_needs_iterator_wrap_error_raises(proxy_logging, monkeypatch):
         proxy_logging.needs_iterator_wrap()
 
 
-def test_needs_per_chunk_streaming_hook_truth_table(proxy_logging, monkeypatch, mock_callbacks_disabled):
+def test_needs_per_chunk_streaming_hook_truth_table(
+    proxy_logging, monkeypatch, mock_callbacks_disabled
+):
     snapshot = {
         "empty_false": proxy_logging.needs_per_chunk_streaming_hook(),
     }
@@ -250,7 +266,9 @@ def test_needs_per_chunk_streaming_hook_truth_table(proxy_logging, monkeypatch, 
     snapshot["per_chunk_override_true"] = proxy_logging.needs_per_chunk_streaming_hook()
     monkeypatch.setattr(litellm, "callbacks", [_OverridesIterator()])
     ProxyLogging._callback_capabilities_cache.clear()
-    snapshot["only_iter_override_false"] = proxy_logging.needs_per_chunk_streaming_hook()
+    snapshot["only_iter_override_false"] = (
+        proxy_logging.needs_per_chunk_streaming_hook()
+    )
     assert snapshot == {
         "empty_false": False,
         "per_chunk_override_true": True,

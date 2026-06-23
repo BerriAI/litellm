@@ -31,9 +31,7 @@ from litellm.proxy.utils import (
 
 
 @pytest.fixture(autouse=True)
-def _swap_config_cache(
-    monkeypatch: pytest.MonkeyPatch, mock_dual_cache: Any
-) -> Any:
+def _swap_config_cache(monkeypatch: pytest.MonkeyPatch, mock_dual_cache: Any) -> Any:
     """Replace the module-level cache so tests see a clean store per run."""
     monkeypatch.setattr(utils_mod, "litellm_config_cache", mock_dual_cache)
     return mock_dual_cache
@@ -198,7 +196,9 @@ async def test_invalidate_config_param_evicts_from_cache(
     _swap_config_cache: Any,
 ) -> None:
     cache_key = _config_cache_key("p4")
-    await _swap_config_cache.async_set_cache(cache_key, {"param_name": "p4", "param_value": 1})
+    await _swap_config_cache.async_set_cache(
+        cache_key, {"param_name": "p4", "param_value": 1}
+    )
     await invalidate_config_param("p4")
     actual = {
         "store_empty": _swap_config_cache._store == {},

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import testing.postgresql
 
-
 DESTRUCTIVE_PATTERN = re.compile(r"\bDROP\s+(COLUMN|TABLE|INDEX)\b", re.IGNORECASE)
 DEFAULT_BASE_BRANCH = "litellm_internal_staging"
 
@@ -45,7 +44,7 @@ def _print_freshness_failure(
     print("", file=out)
     print("Options:", file=out)
     print(
-        f"  - Fix the above and re-run, OR pass --base-branch <name> if your", file=out
+        "  - Fix the above and re-run, OR pass --base-branch <name> if your", file=out
     )
     print(
         f"    base branch is not '{base_branch}', OR pass --skip-freshness-check",

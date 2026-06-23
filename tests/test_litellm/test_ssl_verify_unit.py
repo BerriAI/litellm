@@ -19,7 +19,9 @@ import litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks as _
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
-from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import CatoNetworksGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import (
+    CatoNetworksGuardrail,
+)
 
 
 class TestBaseAWSLLMSSLVerify:
@@ -156,7 +158,7 @@ class TestCatoNetworksGuardrailSSLVerify:
         # Use patch.object on the actual module reference for reliable patching
         # across different import orders / CI environments
         with patch.object(
-                _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
+            _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
         ) as mock_get_client:
             # Initialize with ssl_verify
             cert_path = "/path/to/cato_cert.pem"
@@ -179,10 +181,12 @@ class TestCatoNetworksGuardrailSSLVerify:
 
         # Use patch.object on the actual module reference for reliable patching
         with patch.object(
-                _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
+            _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
         ) as mock_get_client:
             # Initialize without ssl_verify
-            CatoNetworksGuardrail(api_key="test_key", api_base="https://test.catonetworks.api")
+            CatoNetworksGuardrail(
+                api_key="test_key", api_base="https://test.catonetworks.api"
+            )
 
             # Should still work, just without custom SSL
             assert mock_get_client.called

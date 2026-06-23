@@ -1178,9 +1178,7 @@ def test_check_provider_match_none_value_matches_any_provider():
         is True
     )
     # When custom_llm_provider is also None nothing constrains the match.
-    assert (
-        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
-    )
+    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
 
 
 def test_get_provider_rerank_config():
@@ -1545,8 +1543,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1561,8 +1558,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1924,8 +1920,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1978,8 +1973,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2193,8 +2187,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2247,8 +2240,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2462,8 +2454,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2516,8 +2507,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -4178,7 +4168,9 @@ def test_deepseek_v4_models_in_cost_map():
         ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
     ]:
         info = model_cost.get(key)
-        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
         assert info["litellm_provider"] == "deepseek"
         assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == expected_input
@@ -4194,7 +4186,9 @@ def test_deepseek_v4_models_in_cost_map():
         ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
     ]:
         info = model_cost.get(key)
-        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
         assert info["litellm_provider"] == "deepseek"
         assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == expected_input
@@ -4212,7 +4206,11 @@ def test_deepseek_v4_models_in_backup_cost_map():
     import json
     from pathlib import Path
 
-    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
+    json_path = (
+        Path(__file__).parents[2]
+        / "litellm"
+        / "model_prices_and_context_window_backup.json"
+    )
     with open(json_path) as f:
         model_cost = json.load(f)
 
@@ -4556,4 +4554,3 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
-

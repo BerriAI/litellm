@@ -21,7 +21,6 @@ from litellm.proxy.utils import (
     ProxyLogging,
 )
 
-
 # ---------------------------------------------------------------------------
 # __init__
 # ---------------------------------------------------------------------------
@@ -218,9 +217,14 @@ def test_get_proxy_hook_returns_registered_instance(proxy_logging):
         "max_parallel_request_limiter": s_parallel,
     }
     snapshot = {
-        "cache_control_check": proxy_logging.get_proxy_hook("cache_control_check") is s_cache,
-        "max_budget_limiter": proxy_logging.get_proxy_hook("max_budget_limiter") is s_budget,
-        "max_parallel_request_limiter": proxy_logging.get_proxy_hook("max_parallel_request_limiter") is s_parallel,
+        "cache_control_check": proxy_logging.get_proxy_hook("cache_control_check")
+        is s_cache,
+        "max_budget_limiter": proxy_logging.get_proxy_hook("max_budget_limiter")
+        is s_budget,
+        "max_parallel_request_limiter": proxy_logging.get_proxy_hook(
+            "max_parallel_request_limiter"
+        )
+        is s_parallel,
         "unknown_returns_none": proxy_logging.get_proxy_hook("unknown") is None,
     }
     assert snapshot == {
@@ -249,7 +253,9 @@ def test_get_proxy_hook_non_string_key_raises(proxy_logging):
 # ---------------------------------------------------------------------------
 
 
-def test_init_litellm_callbacks_replaces_string_with_instance(proxy_logging, monkeypatch):
+def test_init_litellm_callbacks_replaces_string_with_instance(
+    proxy_logging, monkeypatch
+):
     from litellm.proxy import utils as utils_mod
 
     sentinel_instance = MagicMock(spec=litellm.integrations.custom_logger.CustomLogger)
@@ -278,7 +284,9 @@ def test_init_litellm_callbacks_replaces_string_with_instance(proxy_logging, mon
     }
 
 
-def test_init_litellm_callbacks_string_resolution_failure_keeps_string(proxy_logging, monkeypatch):
+def test_init_litellm_callbacks_string_resolution_failure_keeps_string(
+    proxy_logging, monkeypatch
+):
     from litellm.proxy import utils as utils_mod
 
     monkeypatch.setattr(litellm, "callbacks", ["unknown-logger"])
@@ -293,7 +301,9 @@ def test_init_litellm_callbacks_string_resolution_failure_keeps_string(proxy_log
     assert litellm.callbacks[0] == "unknown-logger"
 
 
-def test_init_litellm_callbacks_propagates_resolver_error_raises(proxy_logging, monkeypatch):
+def test_init_litellm_callbacks_propagates_resolver_error_raises(
+    proxy_logging, monkeypatch
+):
     from litellm.proxy import utils as utils_mod
 
     monkeypatch.setattr(litellm, "callbacks", ["raises-on-init"])
@@ -322,7 +332,9 @@ async def test_update_request_status_when_alerting_set_writes_cache(proxy_loggin
         captured.update(kwargs)
 
     proxy_logging.internal_usage_cache.async_set_cache = fake_set_cache  # type: ignore[assignment]
-    await proxy_logging.update_request_status(litellm_call_id="call-1", status="success")
+    await proxy_logging.update_request_status(
+        litellm_call_id="call-1", status="success"
+    )
     snapshot = {
         "key": captured["key"],
         "value": captured["value"],
@@ -341,14 +353,18 @@ async def test_update_request_status_when_alerting_set_writes_cache(proxy_loggin
 async def test_update_request_status_no_alerting_skips_cache(proxy_logging):
     proxy_logging.alerting = None
     proxy_logging.internal_usage_cache.async_set_cache = AsyncMock()
-    await proxy_logging.update_request_status(litellm_call_id="call-1", status="success")
+    await proxy_logging.update_request_status(
+        litellm_call_id="call-1", status="success"
+    )
     proxy_logging.internal_usage_cache.async_set_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_update_request_status_cache_error_raises(proxy_logging):
     proxy_logging.alerting = ["slack"]
-    proxy_logging.internal_usage_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis"))
+    proxy_logging.internal_usage_cache.async_set_cache = AsyncMock(
+        side_effect=ConnectionError("redis")
+    )
     with pytest.raises(ConnectionError):
         await proxy_logging.update_request_status(litellm_call_id="x", status="fail")
 
@@ -358,7 +374,9 @@ async def test_update_request_status_cache_error_raises(proxy_logging):
 # ---------------------------------------------------------------------------
 
 
-def test_convert_user_api_key_auth_to_dict_pydantic_uses_model_dump(proxy_logging, make_user_api_key_auth):
+def test_convert_user_api_key_auth_to_dict_pydantic_uses_model_dump(
+    proxy_logging, make_user_api_key_auth
+):
     auth = make_user_api_key_auth(user_id="u-1", team_id="t-1")
     result = proxy_logging._convert_user_api_key_auth_to_dict(auth)
     snapshot = {
@@ -385,7 +403,9 @@ def test_convert_user_api_key_auth_to_dict_none_returns_empty_dict(proxy_logging
     assert proxy_logging._convert_user_api_key_auth_to_dict(None) == {}
 
 
-def test_convert_user_api_key_auth_to_dict_unconvertible_object_returns_empty(proxy_logging):
+def test_convert_user_api_key_auth_to_dict_unconvertible_object_returns_empty(
+    proxy_logging,
+):
     class NoDict:
         __slots__ = ()
 

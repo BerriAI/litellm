@@ -80,9 +80,7 @@ async def async_call(router: Router, list_of_messages) -> Any:
 
 
 def sync_call(router: Router, list_of_messages) -> Any:
-    return [
-        router.completion(model="gpt-5-mini", messages=m) for m in list_of_messages
-    ]
+    return [router.completion(model="gpt-5-mini", messages=m) for m in list_of_messages]
 
 
 class ExpectNoException(Exception):

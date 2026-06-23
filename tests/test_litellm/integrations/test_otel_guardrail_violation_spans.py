@@ -43,7 +43,6 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 
-
 GUARDRAIL_SPAN_NAME = "guardrail"
 PROXY_SPAN_NAME = "Received Proxy Server Request"
 

@@ -360,7 +360,7 @@ class LiteLLMHealthCheckClient:
 
         # Print detailed results for each model (matching Go output format)
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"Starting health check queries\n", file=sys.stderr)
+        print("Starting health check queries\n", file=sys.stderr)
 
         for model_id, result in results.items():
             if result.get("healthy"):
@@ -383,7 +383,7 @@ class LiteLLMHealthCheckClient:
                 print(f"---- {model_id} ----\n❌ ERROR: {error}\n\n", file=sys.stderr)
 
         print(f"{'='*60}", file=sys.stderr)
-        print(f"Health Check Summary", file=sys.stderr)
+        print("Health Check Summary", file=sys.stderr)
         print(f"{'='*60}", file=sys.stderr)
         print(f"Total models: {len(results)}", file=sys.stderr)
         print(f"Healthy: {healthy_count}", file=sys.stderr)

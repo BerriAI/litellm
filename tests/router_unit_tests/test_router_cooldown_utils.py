@@ -112,9 +112,7 @@ def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     Test the _should_cooldown_deployment function when a rate limit error occurs
     """
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
-    _exception = litellm.exceptions.RateLimitError(
-        "Rate limit", "openai", "gpt-5-mini"
-    )
+    _exception = litellm.exceptions.RateLimitError("Rate limit", "openai", "gpt-5-mini")
     assert (
         _should_cooldown_deployment(
             testing_litellm_router, "test_deployment", 429, _exception
@@ -150,9 +148,7 @@ async def test_should_cooldown_deployment(testing_litellm_router):
     verbose_router_logger.setLevel(logging.DEBUG)
 
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
-    _exception = litellm.exceptions.RateLimitError(
-        "Rate limit", "openai", "gpt-5-mini"
-    )
+    _exception = litellm.exceptions.RateLimitError("Rate limit", "openai", "gpt-5-mini")
     assert (
         _should_cooldown_deployment(
             testing_litellm_router, "test_deployment", 429, _exception

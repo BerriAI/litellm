@@ -43,7 +43,9 @@ def test_scan_comments_tokenizes_every_comment():
 def test_scan_comments_does_not_crash_on_malformed_source():
     # A dedent mismatch makes tokenize raise IndentationError (a SyntaxError subclass);
     # scan_comments must swallow it, not propagate and crash the whole run.
-    comments, violations = checker.scan_comments(Path("x.py"), "if True:\n    a = 1\n  b = 2\n")
+    comments, violations = checker.scan_comments(
+        Path("x.py"), "if True:\n    a = 1\n  b = 2\n"
+    )
     assert violations == ()
     assert comments.cast_ok_lines == frozenset()
 
@@ -59,7 +61,9 @@ def test_noqa_without_codes_is_flagged(tmp_path):
 
 
 def test_noqa_with_codes_and_reason_is_clean(tmp_path):
-    assert "LIT003" not in _codes(tmp_path, "x = 1  # noqa: TID251  # legacy import, removed in #123\n")
+    assert "LIT003" not in _codes(
+        tmp_path, "x = 1  # noqa: TID251  # legacy import, removed in #123\n"
+    )
 
 
 def test_ignore_without_reason_is_flagged(tmp_path):
@@ -67,13 +71,18 @@ def test_ignore_without_reason_is_flagged(tmp_path):
 
 
 def test_ignore_with_codes_and_reason_is_clean(tmp_path):
-    assert "LIT004" not in _codes(tmp_path, "x = 1  # pyright: ignore[reportArgumentType]  # upstream stub is wrong\n")
+    assert "LIT004" not in _codes(
+        tmp_path,
+        "x = 1  # pyright: ignore[reportArgumentType]  # upstream stub is wrong\n",
+    )
 
 
 def test_ok_suppression_without_reason_is_flagged(tmp_path):
     codes = _codes(tmp_path, "y = []  # mutable-ok\n")
     assert "LIT005" in codes  # reasonless suppression
-    assert "LIT002" in codes  # and it does not suppress, so the construction still trips
+    assert (
+        "LIT002" in codes
+    )  # and it does not suppress, so the construction still trips
 
 
 # --------------------------------------------------------------------------- #
@@ -91,8 +100,15 @@ def test_typing_alias_and_forward_ref_annotations_are_flagged(tmp_path):
 
 
 def test_readonly_annotations_are_clean(tmp_path):
-    for ann in ("Mapping[str, int]", "Sequence[int]", "tuple[int, ...]", "frozenset[int]"):
-        assert "LIT001" not in _codes(tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n")
+    for ann in (
+        "Mapping[str, int]",
+        "Sequence[int]",
+        "tuple[int, ...]",
+        "frozenset[int]",
+    ):
+        assert "LIT001" not in _codes(
+            tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n"
+        )
 
 
 def test_mutable_construction_is_flagged(tmp_path):
@@ -103,7 +119,8 @@ def test_mutable_construction_is_flagged(tmp_path):
 def test_construction_inside_annotation_is_exempt(tmp_path):
     # `Callable[[int], str]` carries a list display that is type syntax, not construction.
     assert "LIT002" not in _codes(
-        tmp_path, "from typing import Callable\ndef f(cb: Callable[[int], str]) -> None:\n    return None\n"
+        tmp_path,
+        "from typing import Callable\ndef f(cb: Callable[[int], str]) -> None:\n    return None\n",
     )
 
 
@@ -123,11 +140,16 @@ def test_dict_list_set_method_calls_are_not_construction(tmp_path):
 def test_qualified_collections_constructors_still_count(tmp_path):
     # collections concretes are rarely method names, so a qualified call still flags.
     assert "LIT002" in _codes(tmp_path, "import collections\nq = collections.deque()\n")
-    assert "LIT002" in _codes(tmp_path, "import collections\nm = collections.defaultdict(list)\n")
+    assert "LIT002" in _codes(
+        tmp_path, "import collections\nm = collections.defaultdict(list)\n"
+    )
 
 
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
-    codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
+    codes = _codes(
+        tmp_path,
+        "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n",
+    )
     assert "LIT001" not in codes
     assert "LIT002" not in codes
 
@@ -138,12 +160,15 @@ def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
 
 
 def test_cast_call_is_flagged(tmp_path):
-    assert "LIT006" in _codes(tmp_path, "from typing import cast\ny = cast(int, object())\n")
+    assert "LIT006" in _codes(
+        tmp_path, "from typing import cast\ny = cast(int, object())\n"
+    )
 
 
 def test_cast_ok_with_reason_suppresses(tmp_path):
     assert "LIT006" not in _codes(
-        tmp_path, "from typing import cast\ny = cast(int, object())  # cast-ok: validated by schema above\n"
+        tmp_path,
+        "from typing import cast\ny = cast(int, object())  # cast-ok: validated by schema above\n",
     )
 
 
@@ -183,9 +208,12 @@ def test_kwargs_parameter_is_flagged(tmp_path):
 
 
 def test_typed_args_is_clean_but_kwargs_ok_suppresses(tmp_path):
-    assert "LIT008" not in _codes(tmp_path, "def f(*args: int) -> None:\n    return None\n")
     assert "LIT008" not in _codes(
-        tmp_path, "def f(**kwargs: int) -> None:  # kwargs-ok: passthrough to a third-party sink\n    return None\n"
+        tmp_path, "def f(*args: int) -> None:\n    return None\n"
+    )
+    assert "LIT008" not in _codes(
+        tmp_path,
+        "def f(**kwargs: int) -> None:  # kwargs-ok: passthrough to a third-party sink\n    return None\n",
     )
 
 

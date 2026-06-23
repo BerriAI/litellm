@@ -445,7 +445,9 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         ("user", {"user_id": "uid-all-1"}),
         ("team", {"team_id": "tid-all-1"}),
     ]:
-        writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == table_name]
+        writes = [
+            c for c in mock_prisma_client.db.batch_calls if c["table"] == table_name
+        ]
         assert len(writes) == 1, f"expected 1 {table_name} write, got {len(writes)}"
         assert writes[0]["where"] == where
         assert writes[0]["data"]["spend"] == 0
@@ -1525,7 +1527,9 @@ def test_reset_does_not_zero_counter_when_db_write_fails(monkeypatch):
     counter_cache.in_memory_cache.set_cache.assert_not_called()
 
 
-def test_reset_budget_for_keys_writes_only_spend_and_reset_at(reset_budget_job, mock_prisma_client):
+def test_reset_budget_for_keys_writes_only_spend_and_reset_at(
+    reset_budget_job, mock_prisma_client
+):
     """
     Regression for #27730 (the trigger-half).
 
@@ -1543,8 +1547,8 @@ def test_reset_budget_for_keys_writes_only_spend_and_reset_at(reset_budget_job, 
             "budget_duration": "30d",
             "budget_reset_at": now,
             "token": "sk-problematic",
-            "object_permission_id": "perm-abc",   # would be rejected on update
-            "budget_limits": [{"max_budget": 5}],   # would be rejected on update
+            "object_permission_id": "perm-abc",  # would be rejected on update
+            "budget_limits": [{"max_budget": 5}],  # would be rejected on update
             "metadata": {"some": "thing"},
         },
     )

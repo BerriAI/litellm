@@ -1719,7 +1719,9 @@ class TestBedrockLLMProxyRoute:
         }
 
         with pytest.raises(HTTPException) as exc_info:
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
 
         assert exc_info.value.status_code == 400
         assert "Blocked by guardrail" in str(exc_info.value.detail)

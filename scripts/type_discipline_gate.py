@@ -98,7 +98,9 @@ def base_counts(ref: str) -> dict:
         # the body (or the `worktree add` itself) failed. rmtree is already best-effort.
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
 
@@ -110,7 +112,8 @@ def over_ceiling(head: dict, budget: dict) -> frozenset:
     comparison cannot change the verdict and the base worktree scan can be skipped.
     """
     return frozenset(
-        rule for rule, spec in budget.items()
+        rule
+        for rule, spec in budget.items()
         if head.get(rule, 0) > spec["baseline"] + spec["slack"]
     )
 

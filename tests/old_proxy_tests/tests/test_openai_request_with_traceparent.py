@@ -8,7 +8,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-
 trace.set_tracer_provider(TracerProvider())
 memory_exporter = InMemorySpanExporter()
 span_processor = SimpleSpanProcessor(memory_exporter)

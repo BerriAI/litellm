@@ -16,7 +16,6 @@ import pytest
 
 from .conftest import normalize
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -126,9 +125,7 @@ def test_onboarding_get_token_master_key_missing_500(client, monkeypatch, mock_p
     assert "Master Key not set" in str(err_blob)
 
 
-def test_onboarding_get_token_invalid_invite_link_401(
-    client, monkeypatch, mock_prisma
-):
+def test_onboarding_get_token_invalid_invite_link_401(client, monkeypatch, mock_prisma):
     """Unknown invite link → 401 with the not-in-db error message."""
     from litellm.proxy import proxy_server as ps
 
@@ -161,7 +158,9 @@ def test_onboarding_get_token_expired_invite_401(client, monkeypatch, mock_prism
 
     response = client.get("/onboarding/get_token", params={"invite_link": "inv-123"})
     assert response.status_code == 401
-    assert response.json().get("detail", {}).get("error") == "Invitation link has expired."
+    assert (
+        response.json().get("detail", {}).get("error") == "Invitation link has expired."
+    )
 
 
 def test_onboarding_get_token_missing_query_param_422(client, monkeypatch, mock_prisma):
@@ -270,9 +269,7 @@ def test_claim_onboarding_link_invalid_invite_401(client, monkeypatch, mock_pris
     }
 
 
-def test_claim_onboarding_link_user_id_mismatch_401(
-    client, monkeypatch, mock_prisma
-):
+def test_claim_onboarding_link_user_id_mismatch_401(client, monkeypatch, mock_prisma):
     """Invitation belongs to a different user_id → 401 with mismatch error."""
     from litellm.proxy import proxy_server as ps
 
@@ -317,9 +314,7 @@ def test_claim_onboarding_link_missing_field_422(client, monkeypatch, mock_prism
     assert any("password" in str(item) for item in body["detail"])
 
 
-def test_claim_onboarding_link_bad_onboarding_jwt_401(
-    client, monkeypatch, mock_prisma
-):
+def test_claim_onboarding_link_bad_onboarding_jwt_401(client, monkeypatch, mock_prisma):
     """Onboarding JWT decodes but token_type / invitation_link don't match → 401."""
     from litellm.proxy import proxy_server as ps
 

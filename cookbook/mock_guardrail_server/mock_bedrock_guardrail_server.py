@@ -515,11 +515,10 @@ if __name__ == "__main__":
     print("=" * 80)
     print(f"Server starting on: http://{host}:{port}")
     print(f"Bearer Token: {bearer_token}")
-    print(f"Endpoint: POST /guardrail/{{id}}/version/{{version}}/apply")
+    print("Endpoint: POST /guardrail/{id}/version/{version}/apply")
     print("=" * 80)
     print("\nExample curl command:")
-    print(
-        f"""
+    print(f"""
 curl -X POST "http://{host}:{port}/guardrail/test-guardrail/version/1/apply" \\
   -H "Authorization: Bearer {bearer_token}" \\
   -H "Content-Type: application/json" \\
@@ -533,8 +532,7 @@ curl -X POST "http://{host}:{port}/guardrail/test-guardrail/version/1/apply" \\
       }}
     ]
   }}'
-    """
-    )
+    """)
     print("=" * 80)
 
     uvicorn.run(app, host=host, port=port)

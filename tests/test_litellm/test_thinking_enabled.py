@@ -14,6 +14,7 @@ class TestIsThinkingEnabled:
     @pytest.fixture
     def transformer(self):
         """Create a BaseConfig instance for testing."""
+
         # BaseConfig is abstract, so we create a minimal concrete subclass
         class ConcreteConfig(BaseConfig):
             def __init__(self):
@@ -39,6 +40,7 @@ class TestIsThinkingEnabled:
 
             def get_error_class(self, *args, **kwargs):
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
                 return BaseLLMException(500, "test error")
 
         return ConcreteConfig()
@@ -69,6 +71,6 @@ class TestIsThinkingEnabled:
     def test_is_thinking_enabled(self, transformer, non_default_params, expected):
         """Test is_thinking_enabled with various parameter combinations."""
         result = transformer.is_thinking_enabled(non_default_params)
-        assert result == expected, (
-            f"Expected {expected} for params {non_default_params}, got {result}"
-        )
+        assert (
+            result == expected
+        ), f"Expected {expected} for params {non_default_params}, got {result}"

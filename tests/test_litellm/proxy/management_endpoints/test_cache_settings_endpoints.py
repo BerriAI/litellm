@@ -289,10 +289,7 @@ class TestCacheSettingsManager:
         assert len(invocations) == 2
         mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
         reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-        assert (
-            reconnect_kwargs["reason"]
-            == "init_cache_settings_in_db_lookup_failure"
-        )
+        assert reconnect_kwargs["reason"] == "init_cache_settings_in_db_lookup_failure"
 
 
 # ── Audit-log emission for /cache/settings ────────────────────────────────────

@@ -439,6 +439,5 @@ async def test_litellm_call_info_hidden_params_takes_priority():
         )
 
         assert (
-            inspector.received_call_info["custom_llm_provider"]
-            == "hidden_params_value"
+            inspector.received_call_info["custom_llm_provider"] == "hidden_params_value"
         )

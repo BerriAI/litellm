@@ -325,6 +325,7 @@ def test_cache_read_input_tokens_retained():
     assert usage.cache_read_input_tokens == 11775
     assert usage.prompt_tokens_details.cached_tokens == 11775
 
+
 def test_cache_read_input_tokens_retained_genericstreamingchunk():
     chunk1 = GenericStreamingChunk(
         text="Test1",
@@ -361,6 +362,7 @@ def test_cache_read_input_tokens_retained_genericstreamingchunk():
     )
 
     assert usage.prompt_tokens_details.cached_tokens == 543
+
 
 def test_stream_chunk_builder_litellm_usage_chunks():
     """

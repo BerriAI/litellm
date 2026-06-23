@@ -2,7 +2,7 @@
 Simple xAI Voice Agent using LiveKit SDK with LiteLLM Gateway
 
 This example shows how to use LiveKit's xAI realtime plugin through LiteLLM proxy.
-LiteLLM acts as a unified interface, allowing you to switch between xAI, OpenAI, 
+LiteLLM acts as a unified interface, allowing you to switch between xAI, OpenAI,
 and Azure realtime APIs without changing your agent code.
 """
 
@@ -28,7 +28,7 @@ async def run_voice_agent():
     url = f"ws://{PROXY_URL.replace('http://', '').replace('https://', '')}/v1/realtime?model={MODEL}"
     headers = {"Authorization": f"Bearer {API_KEY}"}
 
-    print(f"🎙️  Connecting to voice agent...")
+    print("🎙️  Connecting to voice agent...")
     print(f"   Model: {MODEL}")
     print(f"   Proxy: {PROXY_URL}")
     print()
@@ -114,7 +114,7 @@ def main():
     except Exception as e:
         print(f"\n❌ Error: {e}")
         print("\nMake sure LiteLLM proxy is running:")
-        print(f"  litellm --config config.yaml --port 4000")
+        print("  litellm --config config.yaml --port 4000")
 
 
 if __name__ == "__main__":

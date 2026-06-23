@@ -11,7 +11,6 @@ import sys
 import time
 from unittest.mock import patch, MagicMock, AsyncMock
 
-
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
 API_KEY = "sk-1234"  # Replace with your actual API key
 
@@ -234,7 +233,9 @@ async def test_list_batches_with_target_model_names():
 
     # Test data
     target_model_names = "gpt-5.5,gpt-5-mini"
-    expected_model = "gpt-5.5"  # Should use the first model from the comma-separated list
+    expected_model = (
+        "gpt-5.5"  # Should use the first model from the comma-separated list
+    )
 
     # Mock response for list_batches
     mock_batch_response = {

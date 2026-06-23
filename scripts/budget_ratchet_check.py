@@ -66,7 +66,12 @@ def _load_head(rel: str) -> dict | None:
 
 
 def _ref_is_commit(ref: str) -> bool:
-    return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]).returncode == 0
+    return (
+        _run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]
+        ).returncode
+        == 0
+    )
 
 
 def _load_base(rel: str, ref: str) -> dict | None:
@@ -102,9 +107,11 @@ def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regr
         Regression(
             rel,
             rule,
-            f"rule dropped (ceiling {base_cap} -> removed)"
-            if rule not in head_caps
-            else f"ceiling raised {base_cap} -> {head_caps[rule]}",
+            (
+                f"rule dropped (ceiling {base_cap} -> removed)"
+                if rule not in head_caps
+                else f"ceiling raised {base_cap} -> {head_caps[rule]}"
+            ),
         )
         for rule, base_cap in sorted(base_caps.items())
         if rule not in head_caps or head_caps[rule] > base_cap
@@ -141,7 +148,9 @@ def main() -> int:
         regressions.extend(regressions_for(rel, base, head))
 
     if regressions:
-        print(f"FAIL: budget ceiling(s) loosened vs base {args.base} (merge-base {ref[:12]}):")
+        print(
+            f"FAIL: budget ceiling(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
+        )
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
         print(

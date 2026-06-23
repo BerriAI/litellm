@@ -3,7 +3,7 @@ import csv
 import json
 import asyncio
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 import os
 
@@ -172,7 +172,7 @@ async def migrate_verification_tokens():
                     )
                     continue
 
-            print(f"\nMigration completed!")
+            print("\nMigration completed!")
             print(f"Successfully processed: {processed_count} records")
             print(f"Errors encountered: {error_count} records")
 

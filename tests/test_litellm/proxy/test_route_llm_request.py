@@ -149,9 +149,9 @@ async def test_route_request_vector_store_routes_model_none_no_api_key_in_body()
         mock_method.assert_called_once()
         actual_kwargs = mock_method.call_args.kwargs
         for key, value in data.items():
-            assert actual_kwargs.get(key) == value, (
-                f"{route_type}: expected {key}={value!r}, got {actual_kwargs.get(key)!r}"
-            )
+            assert (
+                actual_kwargs.get(key) == value
+            ), f"{route_type}: expected {key}={value!r}, got {actual_kwargs.get(key)!r}"
         llm_router.reset_mock()
 
 

@@ -4826,9 +4826,7 @@ async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
             "team_id": "standalone-uncapped-123",
             "organization_id": None,
             "max_budget": None,
-            "members_with_roles": [
-                {"user_id": "uncapped-team-admin", "role": "admin"}
-            ],
+            "members_with_roles": [{"user_id": "uncapped-team-admin", "role": "admin"}],
         }
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team

@@ -53,7 +53,6 @@ from agent_shin_shared import (  # noqa: E402
 )
 from triage_with_llm import (  # noqa: E402
     DEFAULT_MODEL,
-    call_llm_judge,
     fetch_issue,
     fetch_pr,
     gh,

@@ -88,7 +88,9 @@ def _all_run_blocks(workflow: dict) -> list[str]:
 
 
 @pytest.mark.parametrize("workflow_file,env_var", sorted(DESTRUCTIVE_GATE_ENV.items()))
-def test_should_use_failsafe_equals_true_comparison(workflow_file: str, env_var: str) -> None:
+def test_should_use_failsafe_equals_true_comparison(
+    workflow_file: str, env_var: str
+) -> None:
     """The destructive `--close` gate must use `= "true"` (fail-safe), not
     `!= "false"` (which would treat "True", "yes", "1", or any typo as
     enabling closure).
@@ -101,9 +103,9 @@ def test_should_use_failsafe_equals_true_comparison(workflow_file: str, env_var:
     """
     workflow = _load_workflow(workflow_file)
     text = "\n".join(_all_run_blocks(workflow))
-    assert env_var in text, (
-        f"{workflow_file} no longer references {env_var}; was the gating env var renamed without updating this test?"
-    )
+    assert (
+        env_var in text
+    ), f"{workflow_file} no longer references {env_var}; was the gating env var renamed without updating this test?"
     accepted_patterns = (
         f'"${{{env_var}}}" = "true"',
         f'"${{{env_var}:-false}}" = "true"',
@@ -186,14 +188,18 @@ def test_triage_requirements_are_fully_hash_pinned() -> None:
     install time. A loosened pin or a missing hash here would silently widen
     the supply-chain surface for all the installer workflows.
     """
-    assert REQUIREMENTS_FILE.exists(), (
-        f"the hash-pinned requirements file the triage workflows install from is missing at {REQUIREMENTS_FILE}"
-    )
+    assert (
+        REQUIREMENTS_FILE.exists()
+    ), f"the hash-pinned requirements file the triage workflows install from is missing at {REQUIREMENTS_FILE}"
     joined = REQUIREMENTS_FILE.read_text().replace("\\\n", " ")
-    entries = [line.strip() for line in joined.splitlines() if line.strip() and not line.strip().startswith("#")]
-    assert any(e.split()[0].startswith("openai==") for e in entries), (
-        "openai must be pinned to an exact version in the triage requirements"
-    )
+    entries = [
+        line.strip()
+        for line in joined.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert any(
+        e.split()[0].startswith("openai==") for e in entries
+    ), "openai must be pinned to an exact version in the triage requirements"
     for entry in entries:
         spec = entry.split()[0]
         assert "==" in spec, (
@@ -209,7 +215,10 @@ def test_triage_requirements_are_fully_hash_pinned() -> None:
 def _heads_up_run_step() -> dict:
     workflow = _load_workflow("triage_rollout_heads_up.yml")
     for step in workflow["jobs"]["heads-up"]["steps"]:
-        if isinstance(step.get("run"), str) and "triage_rollout_heads_up.py" in step["run"]:
+        if (
+            isinstance(step.get("run"), str)
+            and "triage_rollout_heads_up.py" in step["run"]
+        ):
             return step
     raise AssertionError("no run step invokes triage_rollout_heads_up.py")
 
@@ -226,15 +235,15 @@ def test_rollout_heads_up_push_trigger_never_posts() -> None:
     post real comments on every push that touches the script.
     """
     run = _heads_up_run_step()["run"]
-    assert '"${GITHUB_EVENT_NAME:-}" = "workflow_dispatch"' in run, (
-        "the real (--close) run must be a manual workflow_dispatch, not the automatic push trigger"
-    )
-    assert '"${DRY_RUN_INPUT:-true}" = "false"' in run, (
-        "the real run must require the dry_run input to be the exact string 'false' (fail-safe); any other value stays dry-run"
-    )
-    assert run.count("ARGS+=(--close)") == 1, (
-        "--close must appear once, inside the manual real-run branch; a second occurrence means the push path posts real comments on merge"
-    )
+    assert (
+        '"${GITHUB_EVENT_NAME:-}" = "workflow_dispatch"' in run
+    ), "the real (--close) run must be a manual workflow_dispatch, not the automatic push trigger"
+    assert (
+        '"${DRY_RUN_INPUT:-true}" = "false"' in run
+    ), "the real run must require the dry_run input to be the exact string 'false' (fail-safe); any other value stays dry-run"
+    assert (
+        run.count("ARGS+=(--close)") == 1
+    ), "--close must appear once, inside the manual real-run branch; a second occurrence means the push path posts real comments on merge"
 
 
 def test_rollout_heads_up_key_is_dispatch_gated() -> None:
@@ -244,9 +253,9 @@ def test_rollout_heads_up_key_is_dispatch_gated() -> None:
     key to the automatic push run, which must stay a no-op dry-run preview.
     """
     key_expr = (_heads_up_run_step().get("env") or {}).get("OPENAI_API_KEY", "")
-    assert "github.event_name == 'workflow_dispatch'" in key_expr, (
-        f"OPENAI_API_KEY must be gated on workflow_dispatch so the automatic push trigger gets no key; found: {key_expr!r}"
-    )
+    assert (
+        "github.event_name == 'workflow_dispatch'" in key_expr
+    ), f"OPENAI_API_KEY must be gated on workflow_dispatch so the automatic push trigger gets no key; found: {key_expr!r}"
 
 
 def _reconsider_steps() -> list[dict]:
@@ -266,7 +275,9 @@ def _reaction_steps(steps: list[dict], content: str) -> list[tuple[int, dict]]:
     return [
         (i, s)
         for i, s in enumerate(steps)
-        if isinstance(s.get("run"), str) and f"content={content}" in s["run"] and "/reactions" in s["run"]
+        if isinstance(s.get("run"), str)
+        and f"content={content}" in s["run"]
+        and "/reactions" in s["run"]
     ]
 
 
@@ -289,13 +300,15 @@ class TestReconsiderReactions:
         assert len(eyes) == 1, "expected exactly one 👀 (eyes) reaction step"
         idx, step = eyes[0]
         assert idx < run_idx, "👀 must be posted BEFORE the slow triage run, not after"
-        assert "github.event.comment.id" in (step.get("env") or {}).get("COMMENT_ID", ""), (
-            "👀 must react to the comment that triggered the workflow"
-        )
-        assert "${COMMENT_ID}" in step["run"], "👀 must react to the triggering comment, not a hardcoded id"
-        assert "vars.AGENT_SHIN_ENABLED == 'true'" in step["if"], (
-            "👀 must be gated on AGENT_SHIN_ENABLED so dry-run stays inert"
-        )
+        assert "github.event.comment.id" in (step.get("env") or {}).get(
+            "COMMENT_ID", ""
+        ), "👀 must react to the comment that triggered the workflow"
+        assert (
+            "${COMMENT_ID}" in step["run"]
+        ), "👀 must react to the triggering comment, not a hardcoded id"
+        assert (
+            "vars.AGENT_SHIN_ENABLED == 'true'" in step["if"]
+        ), "👀 must be gated on AGENT_SHIN_ENABLED so dry-run stays inert"
 
     def test_thumbs_up_reaction_is_posted_after_a_successful_run(self) -> None:
         steps = _reconsider_steps()
@@ -304,7 +317,9 @@ class TestReconsiderReactions:
         assert len(thumbs) == 1, "expected exactly one 👍 (+1) reaction step"
         idx, step = thumbs[0]
         assert idx > run_idx, "👍 must come AFTER the triage run"
-        assert "success()" in step["if"], "👍 must only fire when the reconsider run succeeded"
-        assert "vars.AGENT_SHIN_ENABLED == 'true'" in step["if"], (
-            "👍 must be gated on AGENT_SHIN_ENABLED so dry-run stays inert"
-        )
+        assert (
+            "success()" in step["if"]
+        ), "👍 must only fire when the reconsider run succeeded"
+        assert (
+            "vars.AGENT_SHIN_ENABLED == 'true'" in step["if"]
+        ), "👍 must be gated on AGENT_SHIN_ENABLED so dry-run stays inert"

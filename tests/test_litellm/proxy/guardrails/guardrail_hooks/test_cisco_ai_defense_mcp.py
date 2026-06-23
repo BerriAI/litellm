@@ -126,7 +126,11 @@ class TestCiscoAIDefenseMCPMode:
     @pytest.mark.parametrize(
         "verdict_extra",
         [
-            {"sanitized_payload": {"params": {"arguments": {"note": "ssn [REDACTED]"}}}},
+            {
+                "sanitized_payload": {
+                    "params": {"arguments": {"note": "ssn [REDACTED]"}}
+                }
+            },
             {"sanitized_text": "ssn [REDACTED]"},
         ],
         ids=["structured_arguments", "sanitized_text_fallback"],

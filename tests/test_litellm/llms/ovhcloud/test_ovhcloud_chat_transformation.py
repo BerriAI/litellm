@@ -301,7 +301,7 @@ class TestOVHCloudReasoningFieldMigration:
         """New `reasoning` field should be mapped to `reasoning_content`."""
         handler = OVHCloudChatCompletionStreamingHandler(
             streaming_response=iter([]),
-                        sync_stream=True,
+            sync_stream=True,
         )
         chunk = {
             "id": "test-id",
@@ -324,7 +324,7 @@ class TestOVHCloudReasoningFieldMigration:
         """Legacy `reasoning_content` field should pass through untouched."""
         handler = OVHCloudChatCompletionStreamingHandler(
             streaming_response=iter([]),
-                        sync_stream=True,
+            sync_stream=True,
         )
         chunk = {
             "id": "test-id",
@@ -341,13 +341,15 @@ class TestOVHCloudReasoningFieldMigration:
             ],
         }
         result = handler.chunk_parser(chunk)
-        assert result.choices[0]["delta"]["reasoning_content"] == "Already correct field."
+        assert (
+            result.choices[0]["delta"]["reasoning_content"] == "Already correct field."
+        )
 
     def test_streaming_both_fields_legacy_wins(self):
         """When both fields present, existing `reasoning_content` is not overwritten."""
         handler = OVHCloudChatCompletionStreamingHandler(
             streaming_response=iter([]),
-                        sync_stream=True,
+            sync_stream=True,
         )
         chunk = {
             "id": "test-id",
@@ -365,5 +367,3 @@ class TestOVHCloudReasoningFieldMigration:
         }
         result = handler.chunk_parser(chunk)
         assert result.choices[0]["delta"]["reasoning_content"] == "legacy field"
-
-
