@@ -857,9 +857,9 @@ class ProxyInitializationHelpers:
     is_flag=True,
     default=False,
     help=(
-        "Deprecated and ignored: the v2 migration resolver is now the default, "
-        "so this flag has no effect. It is still accepted for backwards "
-        "compatibility. Pass --use_legacy_migration_resolver to opt back into v1."
+        "Deprecated: this flag has no effect anymore; the v2 migration resolver "
+        "is now the default. It is still accepted for backwards compatibility. "
+        "Pass --use_legacy_migration_resolver to opt back into v1."
     ),
 )
 @click.option(
@@ -1264,8 +1264,8 @@ def run_server(
 
                 if use_v2_migration_resolver:
                     print(
-                        "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is deprecated "
-                        "and has no effect — the v2 migration resolver is now the default. "
+                        "\033[1;33mLiteLLM Proxy: the --use_v2_migration_resolver flag has no "
+                        "effect anymore; the v2 migration resolver is now the default. "
                         "You can safely remove the flag. To opt back into the legacy v1 "
                         "resolver, pass --use_legacy_migration_resolver.\033[0m"
                     )
