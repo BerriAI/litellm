@@ -33,7 +33,14 @@ def decrypt_and_resolve_litellm_params(
             value=value, key=key, return_original_value=True
         )
         if isinstance(decrypted, str) and decrypted.startswith("os.environ/"):
-            return get_secret_str(decrypted)
+            resolved = get_secret_str(decrypted)
+            if resolved is None:
+                verbose_proxy_logger.warning(
+                    "os.environ/ reference '%s' not found in environment; setting %s=None",
+                    decrypted,
+                    key,
+                )
+            return resolved
         return decrypted
 
     return {key: resolve(key, value) for key, value in litellm_params.items()}
