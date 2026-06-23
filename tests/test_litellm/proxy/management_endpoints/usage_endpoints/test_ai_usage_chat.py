@@ -12,10 +12,22 @@ from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     TOOLS_ADMIN,
     TOOLS_BASE,
     _build_system_prompt,
+    _is_router_model,
     _summarise_entity_data,
     _summarise_usage_data,
     stream_usage_ai_chat,
 )
+
+
+def _make_fake_router(model_names, *, alias=None, model_ids=()):
+    """A stand-in proxy router exposing only the attributes the model-resolution
+    logic touches, so tests can inject it without a real Router."""
+    router = MagicMock()
+    router.model_names = set(model_names)
+    router.model_group_alias = dict(alias or {})
+    router.has_model_id = lambda candidate: candidate in set(model_ids)
+    router.acompletion = AsyncMock()
+    return router
 
 
 SAMPLE_AGGREGATED_RESPONSE = {
@@ -466,3 +478,136 @@ class TestUsageAiChatServiceAccountGuard:
                 is_admin=False,
             )
         assert "Endpoint-level guard missing" in str(exc_info.value)
+
+
+class TestIsRouterModel:
+    """The predicate that decides whether a selected model can be resolved by
+    the proxy router rather than treated as a raw provider/model string."""
+
+    def test_configured_model_group(self):
+        router = _make_fake_router({"glm-5"})
+        assert _is_router_model(router, "glm-5") is True
+
+    def test_model_group_alias(self):
+        router = _make_fake_router(set(), alias={"my-alias": "openai/gpt-4o-mini"})
+        assert _is_router_model(router, "my-alias") is True
+
+    def test_concrete_deployment_id(self):
+        router = _make_fake_router(set(), model_ids={"deployment-123"})
+        assert _is_router_model(router, "deployment-123") is True
+
+    def test_unknown_model_is_not_router_resolvable(self):
+        router = _make_fake_router({"glm-5"})
+        assert _is_router_model(router, "openai/gpt-4o-mini") is False
+
+
+def _tool_call_then_stream():
+    """Build (first_response_with_tool_call, streaming_response) mock pair that
+    drives stream_usage_ai_chat through both of its completion calls."""
+    tool_call = MagicMock()
+    tool_call.id = "call_1"
+    tool_call.function.name = "get_usage_data"
+    tool_call.function.arguments = json.dumps(
+        {"start_date": "2025-01-01", "end_date": "2025-01-31"}
+    )
+
+    first_response = MagicMock()
+    first_response.choices = [MagicMock()]
+    first_response.choices[0].message.tool_calls = [tool_call]
+    first_response.choices[0].message.model_dump.return_value = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "get_usage_data",
+                    "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
+                },
+            }
+        ],
+    }
+
+    async def stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "Total spend is $50.25"
+        yield chunk
+
+    return first_response, stream()
+
+
+class TestModelResolutionRouting:
+    """Regression for GitHub #24513: a selected proxy alias / model group must
+    resolve through the router instead of being passed to litellm.acompletion
+    as a raw provider/model string."""
+
+    @pytest.mark.asyncio
+    async def test_proxy_model_group_routes_through_router(self):
+        first_response, stream = _tool_call_then_stream()
+        fake_router = _make_fake_router({"mylitellmmodel"})
+        fake_router.acompletion = AsyncMock(side_effect=[first_response, stream])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+                return_value=SAMPLE_AGGREGATED_RESPONSE,
+            ),
+        ):
+            mock_litellm.acompletion = AsyncMock()
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "What is my total spend?"}],
+                model="mylitellmmodel",
+                user_id="user-1",
+                is_admin=True,
+                llm_router=fake_router,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            mock_litellm.acompletion.assert_not_called()
+            assert fake_router.acompletion.await_count == 2
+            assert (
+                fake_router.acompletion.await_args_list[0].kwargs["model"]
+                == "mylitellmmodel"
+            )
+            assert (
+                fake_router.acompletion.await_args_list[1].kwargs["model"]
+                == "mylitellmmodel"
+            )
+            assert any(e["type"] == "done" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_model_falls_back_to_litellm(self):
+        first_response, stream = _tool_call_then_stream()
+        fake_router = _make_fake_router({"some-other-group"})
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+                return_value=SAMPLE_AGGREGATED_RESPONSE,
+            ),
+        ):
+            mock_litellm.acompletion = AsyncMock(side_effect=[first_response, stream])
+
+            async for _ in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "spend?"}],
+                model="openai/gpt-4o-mini",
+                user_id="user-1",
+                is_admin=True,
+                llm_router=fake_router,
+            ):
+                pass
+
+            fake_router.acompletion.assert_not_called()
+            assert mock_litellm.acompletion.await_count == 2

@@ -5,7 +5,19 @@ usage/spend data by querying the aggregated daily activity endpoints.
 
 import json
 from datetime import date
-from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+    cast,
+)
 
 from typing_extensions import TypedDict
 
@@ -15,6 +27,10 @@ from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
+    from litellm.utils import CustomStreamWrapper, ModelResponse
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -518,13 +534,37 @@ async def _process_tool_call(
     )
 
 
+def _is_router_model(llm_router: "Router", model: str) -> bool:
+    """True when ``model`` is a name the proxy router can resolve: a configured
+    model group, a model_group_alias, or a concrete deployment id."""
+    return (
+        model in llm_router.model_names
+        or model in llm_router.model_group_alias
+        or llm_router.has_model_id(model)
+    )
+
+
+def _completion_fn(
+    llm_router: Optional["Router"], model: str
+) -> Callable[..., Awaitable[Union["ModelResponse", "CustomStreamWrapper"]]]:
+    """Pick the completion entrypoint for ``model``: the proxy router when it
+    can resolve the name (a configured model group, a model_group_alias, or a
+    deployment id) so Usage AI chat accepts the same names as the UI dropdown,
+    otherwise a direct litellm call."""
+    if llm_router is not None and _is_router_model(llm_router, model):
+        return llm_router.acompletion
+    return litellm.acompletion
+
+
 async def _stream_final_response(
-    model: str, chat_messages: List[Dict[str, Any]]
+    model: str,
+    chat_messages: List[Dict[str, Any]],
+    llm_router: Optional["Router"],
 ) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response = await litellm.acompletion(
+    response = await _completion_fn(llm_router, model)(
         model=model,
         messages=chat_messages,
         stream=True,
@@ -541,6 +581,7 @@ async def stream_usage_ai_chat(
     model: Optional[str] = None,
     user_id: Optional[str] = None,
     is_admin: bool = False,
+    llm_router: Optional["Router"] = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
@@ -555,7 +596,7 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools = get_tools_for_role(is_admin)
-        response = await litellm.acompletion(
+        response = await _completion_fn(llm_router, resolved_model)(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
@@ -573,7 +614,9 @@ async def stream_usage_ai_chat(
         for tc in choice.message.tool_calls:
             async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages):
+        async for event in _stream_final_response(
+            resolved_model, chat_messages, llm_router
+        ):
             yield event
         yield _sse({"type": "done"})
 
