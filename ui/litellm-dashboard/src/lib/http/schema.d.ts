@@ -25112,6 +25112,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -25156,8 +25158,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -25194,6 +25200,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -25208,8 +25216,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -25255,6 +25267,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -25285,8 +25301,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -25295,6 +25315,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -25303,6 +25325,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -32794,6 +32820,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -32838,8 +32866,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -32876,6 +32908,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -32890,8 +32924,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -32937,6 +32975,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -32967,8 +33009,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -32977,6 +33023,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -32985,6 +33033,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
