@@ -77,9 +77,9 @@ class FakeOCRConfig:
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge.use_litellm_rust(False)
+    rust_bridge.use_litellm_rust(False, ocr=None)
     yield
-    rust_bridge.use_litellm_rust(False)
+    rust_bridge.use_litellm_rust(False, ocr=None)
 
 
 @pytest.fixture
@@ -102,6 +102,30 @@ def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
     litellm.use_litellm_rust(True, ocr=bridge)
     assert rust_bridge.load_rust_ocr() is bridge
+
+
+def test_toggle_without_ocr_arg_preserves_injected_impl():
+    """Regression: routine enable/disable calls must not clobber a prior injection.
+
+    Earlier, ``use_litellm_rust()`` unconditionally assigned the keyword default
+    of ``None`` to ``_rust_ocr_impl``, silently dropping a custom bridge whenever
+    a caller toggled the flag without re-passing ``ocr=``.
+    """
+    bridge = RecordingBridge()
+    litellm.use_litellm_rust(True, ocr=bridge)
+
+    litellm.use_litellm_rust(False)
+    assert rust_bridge.load_rust_ocr() is bridge
+    litellm.use_litellm_rust(True)
+    assert rust_bridge.load_rust_ocr() is bridge
+
+
+def test_explicit_ocr_none_clears_injected_impl():
+    bridge = RecordingBridge()
+    litellm.use_litellm_rust(True, ocr=bridge)
+
+    litellm.use_litellm_rust(True, ocr=None)
+    assert rust_bridge.load_rust_ocr() is None
 
 
 def test_load_rust_ocr_none_when_extension_absent():

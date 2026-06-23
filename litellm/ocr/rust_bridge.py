@@ -11,7 +11,7 @@ can import it statically without forming an import cycle.
 
 from __future__ import annotations
 
-from typing import Optional, Protocol, cast
+from typing import Final, Optional, Protocol, Union, cast
 
 
 class RustOcr(Protocol):
@@ -28,20 +28,29 @@ class RustOcr(Protocol):
     ) -> dict[str, object]: ...
 
 
+class _Unset:
+    """Sentinel type so ``ocr=None`` can clear a prior injection while omission preserves it."""
+
+
+_UNSET: Final[_Unset] = _Unset()
+
 _rust_ocr_enabled = False
 _rust_ocr_impl: Optional[RustOcr] = None
 
 
-def use_litellm_rust(enabled: bool = True, *, ocr: Optional[RustOcr] = None) -> None:
+def use_litellm_rust(
+    enabled: bool = True, *, ocr: Union[Optional[RustOcr], _Unset] = _UNSET
+) -> None:
     """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
 
     ``ocr`` injects the bridge callable; when omitted the compiled extension is
-    loaded on demand. Supplying it lets an embedder (or a test) provide an
-    alternative bridge without reaching into ``sys.modules``.
+    loaded on demand and any previously injected bridge is preserved. Pass
+    ``ocr=None`` explicitly to clear a prior injection.
     """
     global _rust_ocr_enabled, _rust_ocr_impl
     _rust_ocr_enabled = enabled
-    _rust_ocr_impl = ocr
+    if not isinstance(ocr, _Unset):
+        _rust_ocr_impl = ocr
 
 
 def rust_ocr_enabled() -> bool:
