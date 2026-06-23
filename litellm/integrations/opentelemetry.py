@@ -2117,6 +2117,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
+            # MCP tool calls pass a Pydantic response (e.g. mcp.types.CallToolResult)
+            # rather than a dict. set_attributes accesses response_obj via .get()
+            # throughout, so a non-dict payload raises AttributeError and the span
+            # output is silently dropped. Normalize it to a dict here. See #30651.
+            if response_obj is not None and not hasattr(response_obj, "get"):
+                if hasattr(response_obj, "model_dump"):
+                    try:
+                        response_obj = response_obj.model_dump()
+                    except Exception:
+                        response_obj = None
+                else:
+                    response_obj = None
+
             # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
             # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
             #############################################
