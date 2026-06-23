@@ -1291,11 +1291,11 @@ def run_server(
                             use_v2_resolver=not use_legacy_migration_resolver,
                         )
                     except RuntimeError as e:
-                        # v2 resolver (the default) raises on unrecoverable
-                        # migration errors (e.g. non-idempotent failures,
-                        # permission issues). v1 never raises here, so this only
-                        # fires unless the operator opted into v1 via
-                        # --use_legacy_migration_resolver.
+                        # Unrecoverable migration error (v2 raises on
+                        # non-idempotent failures; both resolvers raise on
+                        # permission errors). Unlike a False return, which is
+                        # gated by --enforce_prisma_migration_check below, this
+                        # always aborts startup.
                         print(
                             "\033[1;31mLiteLLM Proxy: Database migration cannot proceed. "
                             f"{e}\033[0m",

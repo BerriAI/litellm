@@ -689,7 +689,8 @@ class ProxyExtrasDBManager:
             use_v2_resolver: Opt into the v2 migration resolver (safer during
                 rolling deploys; does not run the diff-and-force recovery
                 that causes schema thrashing). Defaults to False for
-                backwards compatibility.
+                backwards compatibility; the proxy CLI passes True, so the
+                proxy runtime default is v2.
 
         Returns:
             bool: True if setup was successful, False otherwise
