@@ -1,0 +1,10 @@
+# Building the python-bridge cdylib directly with `cargo build` (outside maturin)
+# requires the standard pyo3/macOS linker flag so Python's C-API symbols
+# (`_PyUnicode_*`, `_Py_*`, …) are resolved at load time by the host interpreter
+# instead of at link time. This mirrors what maturin/setuptools-rust pass when
+# building the extension module wheel.
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
