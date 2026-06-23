@@ -81,30 +81,6 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: t("mcpHubTableColumns.colUrl"),
-      accessorKey: "url",
-      enableSorting: true,
-      sortingFn: "alphanumeric",
-      cell: ({ row }) => {
-        const server = row.original;
-
-        return (
-          <div className="flex items-center space-x-2">
-            <Text className="text-xs truncate max-w-xs">{server.url}</Text>
-            <Tooltip title={t("mcpHubTableColumns.copyUrl")}>
-              <CopyOutlined
-                onClick={() => copyToClipboard(server.url)}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs flex-shrink-0"
-              />
-            </Tooltip>
-          </div>
-        );
-      },
-      meta: {
-        className: "hidden lg:table-cell",
-      },
-    },
-    {
       header: t("mcpHubTableColumns.colTransport"),
       accessorKey: "transport",
       enableSorting: true,

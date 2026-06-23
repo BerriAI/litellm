@@ -328,7 +328,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: i18n.t("viewLogs.columns.colKeyName"),
+    header: i18n.t("viewLogs.columns.colKeyAlias"),
     accessorKey: "metadata.user_api_key_alias",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>

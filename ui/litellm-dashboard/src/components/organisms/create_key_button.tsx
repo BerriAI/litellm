@@ -33,6 +33,7 @@ import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/Budg
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -1437,6 +1438,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           accessToken={accessToken}
                           teamId={selectedCreateKeyTeam?.team_id ?? null}
                           placeholder={t("organisms.createKeyButton.allowedMcpServersPlaceholder")}
+                          allowNoMcpServers
                         />
                       </Form.Item>
 
@@ -1456,7 +1458,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <div className="mt-6">
                             <MCPToolPermissions
                               accessToken={accessToken}
-                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
+                              selectedServers={(
+                                form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []
+                              ).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
                               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
                               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                             />

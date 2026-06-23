@@ -26,6 +26,7 @@ import LoggingSettings from "./Settings/AdminSettings/LoggingSettings/LoggingSet
 import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
 import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVault";
+import PluginSettings from "./Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "./SSOModals";
 import UIAccessControlForm from "./UIAccessControlForm";
 
@@ -374,6 +375,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       key: "hashicorp-vault",
       label: t("adminPanel.tabs.hashicorpVault"),
       children: <HashicorpVault />,
+    },
+    {
+      key: "plugins",
+      label: "Plugins",
+      children: <PluginSettings />,
     },
   ];
 
