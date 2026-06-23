@@ -10,6 +10,7 @@ name = "litellm_python_bridge"
 crate-type = ["cdylib"]
 
 [dependencies]
+litellm-core.workspace = true
 litellm-providers.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 serde_json.workspace = true
