@@ -9,9 +9,10 @@ from litellm.constants import (
     OPEN_SANDBOX_API_BASE,
     OPEN_SANDBOX_API_BASE_ENV_VAR,
     OPEN_SANDBOX_API_KEY_ENV_VAR,
+    OPEN_SANDBOX_DEFAULT_CPU_LIMIT,
     OPEN_SANDBOX_DEFAULT_ENTRYPOINT,
     OPEN_SANDBOX_DEFAULT_LANGUAGE,
-    OPEN_SANDBOX_DEFAULT_RESOURCE_LIMITS,
+    OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT,
     OPEN_SANDBOX_DEFAULT_TEMPLATE,
     OPEN_SANDBOX_DEFAULT_TIMEOUT,
     OPEN_SANDBOX_EXECD_PORT,
@@ -390,7 +391,8 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             "image": {"uri": template or OPEN_SANDBOX_DEFAULT_TEMPLATE},
             "entrypoint": list(entrypoint or OPEN_SANDBOX_DEFAULT_ENTRYPOINT),
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
-            "resourceLimits": resource_limits or OPEN_SANDBOX_DEFAULT_RESOURCE_LIMITS,
+            "resourceLimits": resource_limits
+            or OpenSandboxSandboxConfig._default_resource_limits(),
         }
         if metadata:
             body["metadata"] = metadata
@@ -405,6 +407,13 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         if secure_access:
             body["secureAccess"] = True
         return body
+
+    @staticmethod
+    def _default_resource_limits() -> dict[str, str]:
+        return {
+            "cpu": OPEN_SANDBOX_DEFAULT_CPU_LIMIT,
+            "memory": OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT,
+        }
 
     @staticmethod
     def _sandbox_state(data: object) -> str | None:

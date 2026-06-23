@@ -10,12 +10,20 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 import litellm
+from litellm.integrations.code_interpreter_interception.handler import (
+    CodeInterpreterInterceptionLogger,
+    LITELLM_CODE_EXECUTION_TOOL_NAME,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+
+_ACTIVE_KEY = "_code_interpreter_interception_active"
+_SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 
 
 def test_prepare_fake_stream_request():
@@ -160,6 +168,71 @@ def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
     assert hook_mock.call_args.kwargs["messages"] == [
         {"role": "user", "content": "hi"}
     ]
+
+
+def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://api.openai.com/v1/responses"
+    config.sign_request.return_value = ({}, None)
+    initial_response = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="gpt-5",
+    )
+    config.transform_response_api_response.return_value = initial_response
+
+    def transform_responses_api_request(**kwargs):
+        return {
+            "model": kwargs["model"],
+            "input": kwargs["input"],
+            **kwargs["response_api_optional_request_params"],
+        }
+
+    config.transform_responses_api_request.side_effect = transform_responses_api_request
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+        )
+    )
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    old_callbacks = list(litellm.callbacks)
+    litellm.callbacks = [CodeInterpreterInterceptionLogger()]
+    try:
+        response = handler.response_api_handler(
+            model="gpt-5",
+            input="use code",
+            responses_api_provider_config=config,
+            response_api_optional_request_params={
+                "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]
+            },
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+            logging_obj=logging_obj,
+            client=client,
+        )
+    finally:
+        litellm.callbacks = old_callbacks
+
+    assert response is initial_response
+    transform_kwargs = config.transform_responses_api_request.call_args.kwargs
+    tools = transform_kwargs["response_api_optional_request_params"]["tools"]
+    assert not any(tool.get("type") == "code_interpreter" for tool in tools)
+    assert any(
+        tool.get("type") == "function"
+        and tool.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
+        for tool in tools
+    )
+    hook_litellm_params = transform_kwargs["litellm_params"]
+    assert hook_litellm_params.get(_ACTIVE_KEY) is True
+    assert hook_litellm_params.get(_SANDBOX_KEY)
 
 
 @pytest.mark.asyncio

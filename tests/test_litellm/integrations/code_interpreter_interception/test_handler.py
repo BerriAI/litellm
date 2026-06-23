@@ -5,12 +5,10 @@ All sandbox dependencies are injected (dependency injection, no monkeypatch):
 a FakeSandbox stands in for the real e2b config and records how it is called.
 """
 
-import importlib
 import time
 
 import pytest
 
-import litellm
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
@@ -20,7 +18,6 @@ from litellm.types.utils import CallTypes
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
-responses_main = importlib.import_module("litellm.responses.main")
 
 
 class FakeHandle:
@@ -134,44 +131,6 @@ async def test_pre_call_converts_code_interpreter_tool():
     ), "code_interpreter tool must be removed"
     names = [t.get("name") or (t.get("function") or {}).get("name") for t in tools]
     assert LITELLM_CODE_EXECUTION_TOOL_NAME in names
-
-
-def test_sync_responses_runs_pre_call_conversion(monkeypatch):
-    captured = {}
-
-    def fake_response_api_handler(**kwargs):
-        captured.update(kwargs)
-        return responses_main.mock_responses_api_response("ok")
-
-    old_callbacks = list(litellm.callbacks)
-    litellm.callbacks = [
-        CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
-    ]
-    monkeypatch.setattr(
-        responses_main.base_llm_http_handler,
-        "response_api_handler",
-        fake_response_api_handler,
-    )
-
-    try:
-        litellm.responses(
-            model="gpt-5",
-            input="use code",
-            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
-            api_key="sk-test",
-        )
-    finally:
-        litellm.callbacks = old_callbacks
-
-    tools = captured["response_api_optional_request_params"]["tools"]
-    assert not any(tool.get("type") == "code_interpreter" for tool in tools)
-    assert any(
-        tool.get("type") == "function"
-        and tool.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
-        for tool in tools
-    )
-    assert captured["litellm_params"].get(_ACTIVE_KEY) is True
-    assert captured["litellm_params"].get(_SANDBOX_KEY)
 
 
 @pytest.mark.asyncio

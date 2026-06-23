@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.constants import _parse_open_sandbox_entrypoint
 from litellm.llms.base_llm.sandbox.transformation import ContainerHandle
 from litellm.llms.opensandbox.sandbox.transformation import (
     MAX_OUTPUT_BYTES,
@@ -222,6 +223,30 @@ def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
     )
     assert body["networkPolicy"] == {"egress": [{"domain": "example.com"}]}
     assert body["secureAccess"] is True
+    assert _parse_open_sandbox_entrypoint('["/bin/sh", "-lc", "echo a,b"]') == (
+        "/bin/sh",
+        "-lc",
+        "echo a,b",
+    )
+    assert _parse_open_sandbox_entrypoint("/bin/sh\n-lc\necho ok") == (
+        "/bin/sh",
+        "-lc",
+        "echo ok",
+    )
+
+    other_body = config._create_body(
+        template=None,
+        timeout=None,
+        allow_internet_access=False,
+        metadata=None,
+        env_vars=None,
+        resource_limits=None,
+        resource_requests=None,
+        entrypoint=None,
+        network_policy=None,
+        secure_access=False,
+    )
+    assert body["resourceLimits"] is not other_body["resourceLimits"]
 
     assert config._sandbox_state(None) is None
     assert config._sandbox_state({"status": "Running"}) is None

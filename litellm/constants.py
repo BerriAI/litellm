@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from typing import List, Literal, Optional
@@ -211,24 +212,48 @@ OPEN_SANDBOX_DEFAULT_TEMPLATE = str(
 )
 _OPEN_SANDBOX_FALLBACK_ENTRYPOINT = "/opt/code-interpreter/code-interpreter.sh"
 _OPEN_SANDBOX_ENTRYPOINT_ENV = str(
-    os.getenv("OPEN_SANDBOX_DEFAULT_ENTRYPOINT", _OPEN_SANDBOX_FALLBACK_ENTRYPOINT)
+    os.getenv(
+        "OPEN_SANDBOX_DEFAULT_ENTRYPOINT",
+        f'["{_OPEN_SANDBOX_FALLBACK_ENTRYPOINT}"]',
+    )
 )
-OPEN_SANDBOX_DEFAULT_ENTRYPOINT = tuple(
-    entrypoint.strip()
-    for entrypoint in _OPEN_SANDBOX_ENTRYPOINT_ENV.split(",")
-    if entrypoint.strip()
-) or (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+
+
+def _parse_open_sandbox_entrypoint(entrypoint_env: str) -> tuple[str, ...]:
+    try:
+        parsed = json.loads(entrypoint_env)
+    except json.JSONDecodeError:
+        return tuple(
+            entrypoint.strip()
+            for entrypoint in entrypoint_env.splitlines()
+            if entrypoint.strip()
+        ) or (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+
+    if isinstance(parsed, str):
+        return (parsed,) if parsed else (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+    if not isinstance(parsed, list):
+        return (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+    return tuple(
+        entrypoint
+        for entrypoint in parsed
+        if isinstance(entrypoint, str) and entrypoint
+    ) or (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+
+
+OPEN_SANDBOX_DEFAULT_ENTRYPOINT = _parse_open_sandbox_entrypoint(
+    _OPEN_SANDBOX_ENTRYPOINT_ENV
+)
 OPEN_SANDBOX_DEFAULT_LANGUAGE = str(
     os.getenv("OPEN_SANDBOX_DEFAULT_LANGUAGE", "python")
 )
-OPEN_SANDBOX_DEFAULT_RESOURCE_LIMITS = {
-    "cpu": str(os.getenv("OPEN_SANDBOX_DEFAULT_CPU_LIMIT", "1")),
-    "memory": str(os.getenv("OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT", "2Gi")),
-}
-OPEN_SANDBOX_EXECD_PORT = int(os.getenv("OPEN_SANDBOX_EXECD_PORT", 44772))
-OPEN_SANDBOX_DEFAULT_TIMEOUT = int(os.getenv("OPEN_SANDBOX_DEFAULT_TIMEOUT", 300))
-OPEN_SANDBOX_READY_TIMEOUT = float(os.getenv("OPEN_SANDBOX_READY_TIMEOUT", 30.0))
-OPEN_SANDBOX_POLL_INTERVAL = float(os.getenv("OPEN_SANDBOX_POLL_INTERVAL", 0.2))
+OPEN_SANDBOX_DEFAULT_CPU_LIMIT = str(os.getenv("OPEN_SANDBOX_DEFAULT_CPU_LIMIT", "1"))
+OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT = str(
+    os.getenv("OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT", "2Gi")
+)
+OPEN_SANDBOX_EXECD_PORT = int(os.getenv("OPEN_SANDBOX_EXECD_PORT", "44772"))
+OPEN_SANDBOX_DEFAULT_TIMEOUT = int(os.getenv("OPEN_SANDBOX_DEFAULT_TIMEOUT", "300"))
+OPEN_SANDBOX_READY_TIMEOUT = float(os.getenv("OPEN_SANDBOX_READY_TIMEOUT", "30.0"))
+OPEN_SANDBOX_POLL_INTERVAL = float(os.getenv("OPEN_SANDBOX_POLL_INTERVAL", "0.2"))
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)

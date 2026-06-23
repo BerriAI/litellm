@@ -47,7 +47,6 @@ from litellm.types.llms.openai import (
     ToolChoice,
     ToolParam,
 )
-from litellm.types.utils import CallTypes
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
@@ -61,7 +60,6 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
-    async_pre_call_deployment_hook,
     client,
 )
 
@@ -77,100 +75,6 @@ from .streaming_iterator import BaseResponsesAPIStreamingIterator
 base_llm_http_handler = BaseLLMHTTPHandler()
 litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandler()
 #################################################
-
-_RESPONSES_NAMED_PARAM_NAMES = {
-    "input",
-    "model",
-    "include",
-    "instructions",
-    "max_output_tokens",
-    "prompt",
-    "metadata",
-    "parallel_tool_calls",
-    "previous_response_id",
-    "reasoning",
-    "store",
-    "background",
-    "stream",
-    "temperature",
-    "text",
-    "text_format",
-    "tool_choice",
-    "tools",
-    "top_p",
-    "truncation",
-    "user",
-    "service_tier",
-    "safety_identifier",
-    "extra_headers",
-    "extra_query",
-    "extra_body",
-    "timeout",
-    "allowed_openai_params",
-    "custom_llm_provider",
-}
-
-
-def _responses_named_param_values(local_vars: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        name: local_vars[name]
-        for name in _RESPONSES_NAMED_PARAM_NAMES
-        if name in local_vars
-    }
-
-
-def _responses_deployment_hook_kwargs(
-    *, local_vars: Dict[str, Any], kwargs: Dict[str, Any]
-) -> Dict[str, Any]:
-    return {**kwargs, **_responses_named_param_values(local_vars)}
-
-
-def _apply_responses_hook_result_to_local_vars(
-    *, modified_kwargs: Dict[str, Any], local_vars: Dict[str, Any]
-) -> Dict[str, Any]:
-    named_params = {
-        name: modified_kwargs[name]
-        for name in _RESPONSES_NAMED_PARAM_NAMES
-        if name in modified_kwargs
-    }
-    local_vars.update(
-        {
-            **_responses_named_param_values(local_vars),
-            **named_params,
-        }
-    )
-    kwargs = {
-        k: v
-        for k, v in modified_kwargs.items()
-        if k not in _RESPONSES_NAMED_PARAM_NAMES
-    }
-    local_vars["kwargs"] = kwargs
-    return kwargs
-
-
-def _run_sync_responses_deployment_hook(
-    *,
-    litellm_logging_obj: Optional[LiteLLMLoggingObj],
-    local_vars: Dict[str, Any],
-    kwargs: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    if (
-        litellm_logging_obj is None
-        or not base_llm_http_handler._has_agentic_completion_hook(litellm_logging_obj)
-    ):
-        return None
-
-    modified_kwargs = run_async_function(
-        async_pre_call_deployment_hook,
-        _responses_deployment_hook_kwargs(local_vars=local_vars, kwargs=kwargs),
-        CallTypes.responses.value,
-    )
-    if modified_kwargs is None:
-        return None
-    return _apply_responses_hook_result_to_local_vars(
-        modified_kwargs=modified_kwargs,
-        local_vars=local_vars,
-    )
 
 
 def _has_file_search_tool(tools: Optional[Any]) -> bool:
@@ -1081,45 +985,6 @@ def responses(
             litellm_params=litellm_params,
             local_vars=local_vars,
         )
-
-        if not _is_async:
-            hook_kwargs = _run_sync_responses_deployment_hook(
-                litellm_logging_obj=litellm_logging_obj,
-                local_vars=local_vars,
-                kwargs=kwargs,
-            )
-            if hook_kwargs is not None:
-                kwargs = hook_kwargs
-                litellm_params = GenericLiteLLMParams(**kwargs)
-                input = cast(Union[str, ResponseInputParam], local_vars["input"])
-                model = cast(str, local_vars["model"])
-                include = local_vars.get("include")
-                instructions = local_vars.get("instructions")
-                max_output_tokens = local_vars.get("max_output_tokens")
-                prompt = local_vars.get("prompt")
-                metadata = local_vars.get("metadata")
-                parallel_tool_calls = local_vars.get("parallel_tool_calls")
-                previous_response_id = local_vars.get("previous_response_id")
-                reasoning = local_vars.get("reasoning")
-                store = local_vars.get("store")
-                background = local_vars.get("background")
-                stream = local_vars.get("stream")
-                temperature = local_vars.get("temperature")
-                text = local_vars.get("text")
-                text_format = local_vars.get("text_format")
-                tool_choice = local_vars.get("tool_choice")
-                tools = local_vars.get("tools")
-                top_p = local_vars.get("top_p")
-                truncation = local_vars.get("truncation")
-                user = local_vars.get("user")
-                service_tier = local_vars.get("service_tier")
-                safety_identifier = local_vars.get("safety_identifier")
-                extra_headers = local_vars.get("extra_headers")
-                extra_query = local_vars.get("extra_query")
-                extra_body = local_vars.get("extra_body")
-                timeout = local_vars.get("timeout")
-                allowed_openai_params = local_vars.get("allowed_openai_params")
-                custom_llm_provider = local_vars.get("custom_llm_provider")
 
         #########################################################
         # PROMPT MANAGEMENT
