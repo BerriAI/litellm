@@ -39,7 +39,6 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
-    LlmProviders,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
