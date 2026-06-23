@@ -15,10 +15,12 @@ from litellm.llms.base_llm.chat.transformation import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
-    ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    Delta,
     GenericStreamingChunk,
     ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
     Usage,
 )
 
@@ -224,57 +226,78 @@ class CloudflareChatConfig(BaseConfig):
 
 
 class CloudflareChatResponseIterator(BaseModelResponseIterator):
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(
+        self, chunk: dict
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
-            finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
-            provider_specific_fields = None
-
-            index = int(chunk.get("index", 0))
-
-            if "response" in chunk and chunk["response"] is not None:
-                text = chunk["response"]
-            elif "response_text" in chunk and chunk["response_text"] is not None:
-                text = chunk["response_text"]
-            else:
-                # OpenAI-style stream (reasoning + newer models): text and
-                # chain-of-thought arrive on choices[0].delta.
-                choices = chunk.get("choices") or []
-                if choices and isinstance(choices[0], dict):
-                    index = int(choices[0].get("index", index))
-                    delta = choices[0].get("delta") or {}
-                    text = delta.get("content") or ""
-                    reasoning = delta.get("reasoning") or delta.get("reasoning_content")
-                    if reasoning:
-                        provider_specific_fields = {"reasoning_content": reasoning}
-                    finish_reason = choices[0].get("finish_reason") or ""
-                    is_finished = bool(finish_reason)
-
-            usage_block = chunk.get("usage")
-            if usage_block:
-                prompt_tokens = usage_block.get("prompt_tokens", 0)
-                completion_tokens = usage_block.get("completion_tokens", 0)
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=usage_block.get("total_tokens")
-                    or (prompt_tokens + completion_tokens),
+            # Legacy plain-model stream: text arrives on the flat "response" /
+            # "response_text" field (no OpenAI-style choices, no reasoning).
+            if (
+                chunk.get("response") is not None
+                or chunk.get("response_text") is not None
+            ):
+                text = chunk.get("response")
+                if text is None:
+                    text = chunk.get("response_text") or ""
+                usage: Optional[ChatCompletionUsageBlock] = None
+                usage_block = chunk.get("usage")
+                if usage_block:
+                    prompt_tokens = usage_block.get("prompt_tokens", 0)
+                    completion_tokens = usage_block.get("completion_tokens", 0)
+                    usage = ChatCompletionUsageBlock(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=usage_block.get("total_tokens")
+                        or (prompt_tokens + completion_tokens),
+                    )
+                return GenericStreamingChunk(
+                    text=text,
+                    tool_use=None,
+                    is_finished=False,
+                    finish_reason="",
+                    usage=usage,
+                    index=int(chunk.get("index", 0)),
+                    provider_specific_fields=None,
                 )
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-                provider_specific_fields=provider_specific_fields,
-            )
+            # OpenAI-style stream (reasoning + newer models): emit a
+            # ModelResponseStream so reasoning lands on the redaction-covered
+            # delta.reasoning_content. (A nested provider_specific_fields entry
+            # is NOT scrubbed by message-log redaction, so it must not be used.)
+            streaming_choices: List[StreamingChoices] = []
+            for choice in chunk.get("choices") or []:
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta") or {}
+                reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+                streaming_choices.append(
+                    StreamingChoices(
+                        index=int(choice.get("index", 0)),
+                        delta=Delta(
+                            content=delta.get("content"),
+                            role=delta.get("role") or "assistant",
+                            reasoning_content=reasoning,
+                        ),
+                        finish_reason=choice.get("finish_reason"),
+                    )
+                )
 
-            return returned_chunk
+            usage_payload = chunk.get("usage")
+            if usage_payload is not None and usage_payload.get("total_tokens") is None:
+                usage_payload = {
+                    **usage_payload,
+                    "total_tokens": (usage_payload.get("prompt_tokens") or 0)
+                    + (usage_payload.get("completion_tokens") or 0),
+                }
+
+            return ModelResponseStream(
+                id=chunk.get("id"),
+                created=chunk.get("created"),
+                model=chunk.get("model"),
+                object="chat.completion.chunk",
+                choices=streaming_choices,
+                usage=usage_payload,
+            )
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")

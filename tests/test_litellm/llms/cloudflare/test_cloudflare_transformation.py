@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.redact_messages import _redact_choice_content
 from litellm.llms.cloudflare.chat.transformation import (
     CloudflareChatConfig,
     CloudflareChatResponseIterator,
@@ -152,7 +153,7 @@ def test_transform_response_respects_provider_zero_completion_tokens():
     assert resp.usage.total_tokens == 20
 
 
-def test_chunk_parser_openai_style_delta_and_total_default():
+def test_chunk_parser_openai_style_delta_reasoning_and_total_default():
     it = CloudflareChatResponseIterator(streaming_response=iter([]), sync_stream=True)
 
     content_chunk = it.chunk_parser(
@@ -161,17 +162,31 @@ def test_chunk_parser_openai_style_delta_and_total_default():
             "usage": {"prompt_tokens": 20, "completion_tokens": 30},
         }
     )
-    assert content_chunk["text"] == " Paris"
+    assert content_chunk.choices[0].delta.content == " Paris"
     # total_tokens defaults to prompt + completion when the provider omits it.
-    assert content_chunk["usage"]["total_tokens"] == 50
+    assert content_chunk.usage.total_tokens == 50
 
     reasoning_chunk = it.chunk_parser(
         {"choices": [{"delta": {"reasoning": "Thinking"}, "index": 0}]}
     )
-    assert reasoning_chunk["text"] == ""
-    assert reasoning_chunk["provider_specific_fields"] == {
-        "reasoning_content": "Thinking"
-    }
+    delta = reasoning_chunk.choices[0].delta
+    assert delta.content is None
+    # Reasoning is surfaced on the redaction-covered reasoning_content field,
+    # not a nested provider_specific_fields entry.
+    assert delta.reasoning_content == "Thinking"
+    assert getattr(delta, "provider_specific_fields", None) is None
+
+
+def test_chunk_parser_streaming_reasoning_is_redactable():
+    # turn_off_message_logging scrubs delta.reasoning_content; streamed Cloudflare
+    # reasoning must land there so it is redacted, rather than leaking via a nested
+    # provider_specific_fields entry the redactor does not touch.
+    it = CloudflareChatResponseIterator(streaming_response=iter([]), sync_stream=True)
+    chunk = it.chunk_parser(
+        {"choices": [{"delta": {"reasoning": "secret chain of thought"}, "index": 0}]}
+    )
+    _redact_choice_content(chunk.choices[0])
+    assert chunk.choices[0].delta.reasoning_content == "redacted-by-litellm"
 
 
 def test_chunk_parser_legacy_response_field_still_works():
