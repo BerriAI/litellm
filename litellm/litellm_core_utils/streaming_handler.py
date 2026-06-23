@@ -1948,11 +1948,29 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception as e:
+                    # stream_chunk_builder can re-raise (as APIError) on large agentic
+                    # streams. The raise originates inside this except-StopIteration block,
+                    # so the sibling `except Exception` below does not catch it; it would
+                    # escape __next__ and drop the request from SpendLogs. Recover
+                    # best-effort usage from the raw chunks so cost is still tracked
+                    verbose_logger.warning(
+                        "stream_chunk_builder raised at end-of-stream (%s); logging "
+                        "best-effort usage from chunks.",
+                        str(e),
+                    )
+                    try:
+                        complete_streaming_response = self.model_response_creator(
+                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                        )
+                    except Exception:
+                        complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
@@ -2177,11 +2195,27 @@ class CustomStreamWrapper:
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception as e:
+                    # see sync __next__: a raise from stream_chunk_builder inside this
+                    # except handler escapes __anext__ and drops the request from SpendLogs.
+                    # Recover best-effort usage from the raw chunks so cost is still tracked
+                    verbose_logger.warning(
+                        "stream_chunk_builder raised at end-of-stream (%s); logging "
+                        "best-effort usage from chunks.",
+                        str(e),
+                    )
+                    try:
+                        complete_streaming_response = self.model_response_creator(
+                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                        )
+                    except Exception:
+                        complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
