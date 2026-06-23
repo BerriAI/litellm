@@ -242,7 +242,7 @@ class ResponsesAPIRequestUtils:
     def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
         """Encode model_id into an output item ID for encrypted-content items.
 
-        Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
+        Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}`` (without base64 trailing = padding)
         """
         assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
         encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8").rstrip("=")
@@ -283,7 +283,7 @@ class ResponsesAPIRequestUtils:
         When Codex or other clients send items with encrypted_content but no ID,
         we encode the model_id directly into the encrypted_content itself.
 
-        Format: ``litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}``
+        Format: ``litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}`` (without base64 trailing = padding)
         """
         metadata = f"model_id:{model_id}"
         encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8").rstrip("=")
