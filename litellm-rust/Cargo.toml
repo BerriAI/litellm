@@ -3,7 +3,6 @@ members = [
     "crates/core",
     "crates/providers",
     "crates/python-bridge",
-    "crates/router",
     "crates/ai-gateway",
 ]
 resolver = "2"
@@ -16,7 +15,6 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-providers = { path = "crates/providers" }
-litellm-router = { path = "crates/router" }
 axum = "0.7"
 pyo3 = "0.23.5"
 rand = "0.8"
