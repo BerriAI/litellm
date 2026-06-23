@@ -7,15 +7,17 @@ import * as networking from "../networking";
 
 // Mock the networking module
 vi.mock("../networking", () => ({
-  fetchMCPServers: vi.fn(),
-  fetchMCPServerHealth: vi.fn(),
+  fetchMCPServers: vi.fn().mockResolvedValue([]),
+  fetchMCPServerHealth: vi.fn().mockResolvedValue([]),
   deleteMCPServer: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
   fetchMCPClientIp: vi.fn().mockResolvedValue(null),
+  getConfigFieldSetting: vi.fn().mockResolvedValue({ field_value: null }),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
+  modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
 // Mock NotificationsManager
@@ -65,6 +67,33 @@ describe("MCPServers", () => {
 
     // Verify the title is rendered
     expect(getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it("should only show Platform MCP tab to proxy admins", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} userRole="proxy_admin" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("tab", { name: /Platform MCP/ })).toBeInTheDocument();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} userRole="proxy_admin_viewer" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: /Platform MCP/ })).not.toBeInTheDocument();
+    });
   });
 
   it("should render mocked MCP servers data in the table", async () => {

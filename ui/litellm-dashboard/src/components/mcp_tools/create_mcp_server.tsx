@@ -1112,6 +1112,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               externalIsLoading={isLoadingTools}
               externalError={toolsError}
               externalCanFetch={canFetchTools}
+              defaultViewMode="flat"
             />
           </div>
 

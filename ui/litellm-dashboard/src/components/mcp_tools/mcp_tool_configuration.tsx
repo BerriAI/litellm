@@ -30,6 +30,7 @@ interface MCPToolConfigurationProps {
   externalCanFetch?: boolean;
   /** When true, do not auto-select all tools for servers with no stored allowlist. */
   isEditMode?: boolean;
+  defaultViewMode?: "crud" | "flat";
 }
 
 interface ToolEntry {
@@ -69,7 +70,11 @@ const ToolRow: React.FC<ToolRowProps> = ({
   >
     <div className="p-4 cursor-pointer" onClick={() => onToggle(tool.name)}>
       <div className="flex items-start gap-3">
-        <Checkbox checked={isEnabled} onChange={() => onToggle(tool.name)} />
+        <Checkbox
+          checked={isEnabled}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => onToggle(tool.name)}
+        />
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <Text className="font-medium text-gray-900">{toolNameToDisplayName[tool.name] || tool.name}</Text>
@@ -158,10 +163,11 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   externalError,
   externalCanFetch,
   isEditMode = false,
+  defaultViewMode = "crud",
 }) => {
   const previousToolsRef = useRef<ToolEntry[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
-  const [viewMode, setViewMode] = useState<"crud" | "flat">("crud");
+  const [viewMode, setViewMode] = useState<"crud" | "flat">(defaultViewMode);
   const hasInitializedRef = useRef(false);
   const previousSuggestedToolNamesRef = useRef<string>("");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());

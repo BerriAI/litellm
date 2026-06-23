@@ -1,4 +1,4 @@
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import NewBadge from "../common_components/NewBadge";
@@ -20,6 +20,7 @@ import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilt
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
+import PlatformMCPTab from "./PlatformMCPTab";
 import { getSecureItem } from "@/utils/secureStorage";
 import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
 import UserEnvVarsModal from "./UserEnvVarsModal";
@@ -506,6 +507,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 </span>
               </Tab>
             )}
+            {isProxyAdminRole(userRole) && (
+              <Tab>
+                <span className="flex items-center gap-2">
+                  Platform MCP <NewBadge />
+                </span>
+              </Tab>
+            )}
           </div>
         </TabList>
         <TabPanels>
@@ -661,6 +669,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           {isAdminRole(userRole) && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />
+            </TabPanel>
+          )}
+          {isProxyAdminRole(userRole) && (
+            <TabPanel>
+              <PlatformMCPTab accessToken={accessToken} />
             </TabPanel>
           )}
         </TabPanels>

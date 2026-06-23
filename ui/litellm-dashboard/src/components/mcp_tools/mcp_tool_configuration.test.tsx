@@ -30,6 +30,69 @@ const renderToolConfiguration = (onAllowedToolsChange = vi.fn()) => {
 };
 
 describe("MCPToolConfiguration", () => {
+  it("can start new-server onboarding in the flat checklist view", async () => {
+    render(
+      <MCPToolConfiguration
+        accessToken="token"
+        formValues={{ url: "https://example.com/mcp", transport: "http", auth_type: "none" }}
+        allowedTools={[]}
+        existingAllowedTools={null}
+        onAllowedToolsChange={vi.fn()}
+        toolNameToDisplayName={{}}
+        toolNameToDescription={{}}
+        onToolNameToDisplayNameChange={vi.fn()}
+        onToolNameToDescriptionChange={vi.fn()}
+        externalTools={tools}
+        externalCanFetch
+        defaultViewMode="flat"
+      />,
+    );
+
+    expect(screen.getByLabelText("Flat List")).toBeChecked();
+  });
+
+  it("toggles a flat-list checkbox once without bubbling to the row", async () => {
+    const onAllowedToolsChange = vi.fn();
+
+    const Wrapper = () => {
+      const [allowedTools, setAllowedTools] = useState<string[]>([]);
+
+      return (
+        <MCPToolConfiguration
+          accessToken="token"
+          formValues={{ url: "https://example.com/mcp", transport: "http", auth_type: "none" }}
+          allowedTools={allowedTools}
+          existingAllowedTools={null}
+          onAllowedToolsChange={(nextAllowedTools) => {
+            onAllowedToolsChange(nextAllowedTools);
+            setAllowedTools(nextAllowedTools);
+          }}
+          toolNameToDisplayName={{}}
+          toolNameToDescription={{}}
+          onToolNameToDisplayNameChange={vi.fn()}
+          onToolNameToDescriptionChange={vi.fn()}
+          externalTools={tools}
+          externalCanFetch
+          defaultViewMode="flat"
+        />
+      );
+    };
+
+    render(<Wrapper />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2 of 2 tools enabled for user access")).toBeInTheDocument();
+    });
+    onAllowedToolsChange.mockClear();
+
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+
+    await waitFor(() => {
+      expect(onAllowedToolsChange).toHaveBeenCalledTimes(1);
+      expect(onAllowedToolsChange).toHaveBeenCalledWith(["delete_user"]);
+    });
+  });
+
   it("shows legacy unrestricted edit tools enabled in flat view", async () => {
     const onAllowedToolsChange = renderToolConfiguration();
 

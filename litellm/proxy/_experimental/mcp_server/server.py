@@ -322,6 +322,19 @@ if MCP_AVAILABLE:
         notification_options: Optional[NotificationOptions] = None,
         experimental_capabilities: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> InitializationOptions:
+        notification_options = NotificationOptions(
+            prompts_changed=(
+                notification_options.prompts_changed
+                if notification_options is not None
+                else False
+            ),
+            resources_changed=(
+                notification_options.resources_changed
+                if notification_options is not None
+                else False
+            ),
+            tools_changed=True,
+        )
         opts = Server.create_initialization_options(
             self,
             notification_options=notification_options,
@@ -660,6 +673,25 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
             )
+            from litellm.proxy._experimental.mcp_server.platform_mcp import (
+                get_platform_mcp_settings,
+                is_platform_mcp_tool,
+            )
+
+            if is_platform_mcp_tool(name):
+                platform_mcp_enabled, _ = await get_platform_mcp_settings()
+                if platform_mcp_enabled:
+                    return await _handle_platform_mcp_tool_call(
+                        name=name,
+                        arguments=arguments,
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_servers=mcp_servers,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                    )
+
             host_progress_callback = None
             try:
                 host_ctx = server.request_context
@@ -2169,6 +2201,25 @@ if MCP_AVAILABLE:
         # Resolve toolset permissions and merge into the key's object_permission
         # so that the existing filter_tools_by_key_team_permissions logic picks them up.
         user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            build_platform_mcp_tools,
+            get_enabled_server_names_for_session,
+            get_platform_mcp_settings,
+            should_compress_tools,
+            should_include_platform_meta_tools,
+        )
+
+        platform_mcp_enabled, platform_mcp_threshold = (
+            await get_platform_mcp_settings()
+        )
+        enabled_server_names = get_enabled_server_names_for_session(
+            get_active_mcp_session()
+        )
+        effective_mcp_servers = (
+            list(enabled_server_names)
+            if platform_mcp_enabled and mcp_servers is None and enabled_server_names
+            else mcp_servers
+        )
 
         # Get tools from managed MCP servers with error handling
         managed_tools = []
@@ -2176,7 +2227,7 @@ if MCP_AVAILABLE:
             managed_tools = await _get_tools_from_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
+                mcp_servers=effective_mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
@@ -2192,7 +2243,146 @@ if MCP_AVAILABLE:
             )
             # Continue with empty managed tools list instead of failing completely
 
+        if should_compress_tools(
+            platform_mcp_enabled=platform_mcp_enabled,
+            threshold=platform_mcp_threshold,
+            tool_count=len(managed_tools),
+            requested_mcp_servers=mcp_servers,
+            enabled_server_names=enabled_server_names,
+        ):
+            return build_platform_mcp_tools()
+
+        if should_include_platform_meta_tools(
+            platform_mcp_enabled=platform_mcp_enabled,
+            requested_mcp_servers=mcp_servers,
+            enabled_server_names=enabled_server_names,
+        ):
+            return build_platform_mcp_tools() + managed_tools
+
         return managed_tools
+
+    async def _handle_platform_mcp_tool_call(
+        name: str,
+        arguments: Optional[Dict[str, Any]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> CallToolResult:
+        from litellm.proxy._experimental.mcp_server.platform_mcp import (
+            PLATFORM_MCP_ENABLE_SERVER_TOOL_NAME,
+            PLATFORM_MCP_LIST_SERVERS_TOOL_NAME,
+            enable_server_for_session,
+            extract_enable_server_name,
+            get_platform_mcp_settings,
+            serialize_server_tool_response,
+            serialize_servers_response,
+        )
+
+        platform_mcp_enabled, _ = await get_platform_mcp_settings()
+        if not platform_mcp_enabled:
+            return CallToolResult(
+                content=[TextContent(text="Platform MCP is disabled.", type="text")],
+                isError=True,
+            )
+
+        allowed_servers = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+        )
+
+        if name == PLATFORM_MCP_LIST_SERVERS_TOOL_NAME:
+            return CallToolResult(
+                content=[
+                    TextContent(text=serialize_servers_response(allowed_servers), type="text")
+                ],
+                isError=False,
+            )
+
+        if name != PLATFORM_MCP_ENABLE_SERVER_TOOL_NAME:
+            return CallToolResult(
+                content=[TextContent(text=f"Unknown Platform MCP tool: {name}", type="text")],
+                isError=True,
+            )
+
+        requested_server_name = extract_enable_server_name(arguments)
+        if requested_server_name is None:
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text="Missing required argument: server_name",
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
+
+        requested_server_name_lower = requested_server_name.lower()
+        selected_server = next(
+            (
+                server
+                for server in allowed_servers
+                if requested_server_name_lower
+                in [
+                    known_name.lower()
+                    for known_name in iter_known_server_prefixes(server)
+                    if known_name
+                ]
+            ),
+            None,
+        )
+        if selected_server is None:
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=f"MCP server '{requested_server_name}' is not available to this key.",
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
+
+        selected_server_name = (
+            selected_server.alias or selected_server.server_name or selected_server.name
+        )
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=[selected_server_name],
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+        active_session = get_active_mcp_session()
+        enable_server_for_session(active_session, selected_server)
+        await _send_platform_mcp_tool_list_changed(active_session)
+
+        return CallToolResult(
+            content=[
+                TextContent(
+                    text=serialize_server_tool_response(
+                        server=selected_server,
+                        tools=tools,
+                    ),
+                    type="text",
+                )
+            ],
+            isError=False,
+        )
+
+    async def _send_platform_mcp_tool_list_changed(session: Optional[Any]) -> None:
+        if session is None or not hasattr(session, "send_tool_list_changed"):
+            return
+        try:
+            import inspect
+
+            result = session.send_tool_list_changed()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as e:
+            verbose_logger.debug("Platform MCP tool-list notification failed: %s", e)
 
     async def _list_mcp_prompts(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,

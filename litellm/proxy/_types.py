@@ -2339,6 +2339,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
     )
+    platform_mcp_enabled: Optional[bool] = Field(
+        False,
+        description="If True, enables Platform MCP staged tool loading for aggregate MCP tools/list responses.",
+    )
+    platform_mcp_tool_threshold: Optional[int] = Field(
+        10,
+        description="When Platform MCP is enabled, aggregate MCP tools/list responses with more than this many tools are compressed to Platform MCP meta-tools.",
+    )
     mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",
