@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
+    SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -560,6 +561,15 @@ class MCPRequestHandler:
                     user_api_key_auth
                 )
             )
+
+            # The key explicitly opted out of every MCP server. This overrides
+            # team inheritance and additive grants (mirrors no-default-models).
+            if (
+                SpecialMCPServerNames.no_mcp_servers.value
+                in allowed_mcp_servers_for_key
+            ):
+                return []
+
             allowed_mcp_servers_for_team = (
                 await MCPRequestHandler._get_allowed_mcp_servers_for_team(
                     user_api_key_auth
@@ -908,6 +918,13 @@ class MCPRequestHandler:
                     )
             if key_object_permission is None:
                 return []
+
+            # Sentinel opt-out: surface it unexpanded so the caller can short-circuit
+            # to zero servers instead of inheriting the team.
+            if SpecialMCPServerNames.no_mcp_servers.value in (
+                key_object_permission.mcp_servers or []
+            ):
+                return [SpecialMCPServerNames.no_mcp_servers.value]
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
