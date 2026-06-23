@@ -289,6 +289,7 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_and_resolve_litellm_params,
     decrypt_value_helper,
     encrypt_value_helper,
 )
@@ -5202,15 +5203,9 @@ class ProxyConfig:
         for m in db_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, dict):
-                # decrypt values
-                for k, v in _litellm_params.items():
-                    if isinstance(v, str):
-                        # decrypt value - returns original value if decryption fails or no key is set
-                        _value = decrypt_value_helper(
-                            value=v, key=k, return_original_value=True
-                        )
-                        _litellm_params[k] = _value
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params(
+                    **decrypt_and_resolve_litellm_params(_litellm_params)
+                )
 
             else:
                 verbose_proxy_logger.error(
@@ -5240,13 +5235,9 @@ class ProxyConfig:
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
-                # decrypt values
-                for k, v in _litellm_params.items():
-                    decrypted_value = decrypt_value_helper(
-                        value=v, key=k, return_original_value=True
-                    )
-                    _litellm_params[k] = decrypted_value
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params(
+                    **decrypt_and_resolve_litellm_params(_litellm_params)
+                )
             else:
                 verbose_proxy_logger.error(
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"

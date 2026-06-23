@@ -16,6 +16,29 @@ def _get_salt_key():
     return salt_key
 
 
+def decrypt_and_resolve_litellm_params(
+    litellm_params: dict[str, object],
+) -> dict[str, object]:
+    """
+    Decrypt each DB-stored litellm_param, then resolve ``os.environ/`` references
+    to their environment values - mirroring ``Router.set_model_list`` so DB-stored
+    models behave identically to ``config.yaml`` ones.
+    """
+    from litellm.secret_managers.main import get_secret_str
+
+    def resolve(key: str, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        decrypted = decrypt_value_helper(
+            value=value, key=key, return_original_value=True
+        )
+        if isinstance(decrypted, str) and decrypted.startswith("os.environ/"):
+            return get_secret_str(decrypted)
+        return decrypted
+
+    return {key: resolve(key, value) for key, value in litellm_params.items()}
+
+
 def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
     signing_key = new_encryption_key or _get_salt_key()
 

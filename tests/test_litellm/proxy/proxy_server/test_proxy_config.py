@@ -929,6 +929,43 @@ def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
     assert out == []
 
 
+def test_ProxyConfig_decrypt_model_list_from_db_resolves_os_environ(monkeypatch):
+    monkeypatch.setenv("MY_DB_MODEL_KEY", "sk-resolved-from-env")
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="m-1",
+        model_name="gpt-4o",
+        model_info={"id": "m-1"},
+        litellm_params={"api_key": "os.environ/MY_DB_MODEL_KEY", "model": "gpt-4o"},
+        blocked=False,
+    )
+    out = pc.decrypt_model_list_from_db(new_models=[m])
+    assert out[0]["litellm_params"]["api_key"] == "sk-resolved-from-env"
+
+
+def test_ProxyConfig__add_deployment_resolves_os_environ(monkeypatch):
+    monkeypatch.setenv("MY_DB_MODEL_KEY", "sk-resolved-from-env")
+    captured = {}
+
+    def capture(deployment):
+        captured["api_key"] = deployment.litellm_params.api_key
+        return deployment
+
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(side_effect=capture)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="m-1",
+        model_name="gpt-4o",
+        model_info={"id": "m-1"},
+        litellm_params={"api_key": "os.environ/MY_DB_MODEL_KEY", "model": "gpt-4o"},
+        blocked=False,
+    )
+    pc._add_deployment(db_models=[m])
+    assert captured["api_key"] == "sk-resolved-from-env"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_llm_router
 # ---------------------------------------------------------------------------
