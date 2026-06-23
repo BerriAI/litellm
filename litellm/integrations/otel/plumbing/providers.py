@@ -290,6 +290,7 @@ def build_tracer_provider(
     exporter: SpanExporter | None = None,
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
+    tenant_fan_out_owner: str | None = None,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -298,6 +299,13 @@ def build_tracer_provider(
     ``config.exporters`` entry — this is what fans spans out to multiple
     backends. ``exporter`` and ``use_simple_processor`` are explicit overrides:
     pass a single exporter to attach exactly that one (used by tests).
+
+    ``tenant_fan_out_owner`` — when set, attach a ``TenantFanOutSpanProcessor``
+    that forwards each finished span to the admin-resolved per-tenant
+    destinations whose ``callback_name`` matches the owner. Only the MAIN v2
+    logger provider opts in; the per-tenant clone providers (built by
+    ``TenantTracerCache``) intentionally do not, so the LLM-call span exported
+    through them is not also fanned out here.
     """
     provider = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -305,6 +313,15 @@ def build_tracer_provider(
             allowed_keys=config.baggage_promoted_keys
         )
     provider.add_span_processor(baggage_processor)
+
+    if tenant_fan_out_owner is not None:
+        from litellm.integrations.otel.plumbing.fan_out import (
+            TenantFanOutSpanProcessor,
+        )
+
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(owner_callback_name=tenant_fan_out_owner)
+        )
 
     if exporter is not None:
         provider.add_span_processor(_processor_for(exporter, use_simple_processor))

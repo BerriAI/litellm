@@ -110,7 +110,11 @@ class OpenTelemetryV2(CustomLogger):
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
-            tracer_provider if tracer_provider is not None else build_tracer_provider(self.config)
+            tracer_provider
+            if tracer_provider is not None
+            else build_tracer_provider(
+                self.config, tenant_fan_out_owner=callback_name
+            )
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)

@@ -682,7 +682,9 @@ async def _resolve_logging_exporters(
 
 
 async def _apply_admin_logging_exporters(
-    data: dict, user_api_key_dict: UserAPIKeyAuth
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    cached_destinations: "list | None" = None,
 ) -> None:
     """Stamp the resolved fan-out destinations onto ``data`` and activate their
     backends.
@@ -691,8 +693,23 @@ async def _apply_admin_logging_exporters(
     ``all_litellm_params``, so scrubbed from the provider request body), not a
     top-level key, so an unknown field cannot leak to the provider. Default-deny
     means an identity with no assignment gets no per-tenant destination here.
+
+    ``cached_destinations`` -- when ``user_api_key_auth`` already resolved the
+    destinations on this request (the FastAPI path), reuse the result instead of
+    running the resolver a second time. The SDK path passes ``None`` and the
+    resolver runs here.
     """
-    destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
+    if cached_destinations is not None:
+        destinations = list(cached_destinations)
+        backends = list(
+            dict.fromkeys(
+                str(d["callback_name"])
+                for d in destinations
+                if isinstance(d, dict) and d.get("callback_name")
+            )
+        )
+    else:
+        destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
     if not destinations:
         return
     proxy_metadata = data.get("litellm_metadata")
@@ -2012,8 +2029,13 @@ async def add_litellm_data_to_request(
 
     # Admin-owned exporter assignment: resolve the union of exporters assigned across
     # the request's identity chain (key + team + org) into fan-out destinations and
-    # activate their backends. Default-deny: an unassigned identity gets none.
-    await _apply_admin_logging_exporters(data, user_api_key_dict)
+    # activate their backends. Default-deny: an unassigned identity gets none. Reuse
+    # the result ``user_api_key_auth`` already cached on ``request.state`` so the
+    # resolver runs once per request, not twice.
+    cached = getattr(getattr(request, "state", None), "otel_destinations", None)
+    await _apply_admin_logging_exporters(
+        data, user_api_key_dict, cached_destinations=cached
+    )
 
     # Add disabled callbacks from key metadata
     if (

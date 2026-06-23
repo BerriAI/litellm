@@ -949,6 +949,51 @@ async def _resolve_jwt_to_virtual_key(
     return None
 
 
+async def _hoist_request_destinations(
+    request: Request, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    """Resolve admin-owned OTEL destinations for this request and anchor them.
+
+    Runs after the auth builder, while we are still inside the request task, so
+    the ``ContextVar`` is visible to every ``SpanProcessor.on_end`` that fires
+    for spans this request opens. Stashes the same list on ``request.state`` so
+    ``_apply_admin_logging_exporters`` can reuse it without a second DB pass.
+
+    Best-effort: a resolver failure must not break the request. The contextvar
+    is left at its default (empty tuple), so the fan-out processor no-ops.
+    """
+    try:
+        from litellm.integrations.otel.model.destination import OtelDestination
+        from litellm.integrations.otel.plumbing.context import (
+            set_request_destinations,
+        )
+        from litellm.proxy.litellm_pre_call_utils import (
+            _resolve_logging_exporters,
+        )
+
+        destinations_raw, _backends = await _resolve_logging_exporters(
+            user_api_key_dict
+        )
+        destinations = tuple(
+            OtelDestination(
+                callback_name=item.get("callback_name"),
+                endpoint=item.get("endpoint", ""),
+                headers=item.get("headers") or {},
+            )
+            for item in destinations_raw
+            if isinstance(item, dict) and item.get("endpoint")
+        )
+        set_request_destinations(destinations)
+        try:
+            request.state.otel_destinations = destinations_raw
+        except Exception:
+            pass
+    except Exception as exc:
+        verbose_proxy_logger.debug(
+            "OTel V2: hoist destination resolution failed: %s", exc
+        )
+
+
 def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     """Idempotently create the OTEL SERVER span and stash it on
     ``request.state.parent_otel_span``. Safe to call multiple times.
@@ -2597,6 +2642,15 @@ async def user_api_key_auth(
             custom_litellm_key_header=custom_litellm_key_header,
         )
         user_api_key_auth_obj.budget_reservation = None
+
+        # Admin-resolved OTEL destinations: anchor them on this request's task
+        # context BEFORE downstream spans close, so the global-provider fan-out
+        # processor forwards every span (server, auth, db, batch-write) to the
+        # admin-assigned per-tenant backends -- not just the gen-AI span the
+        # ``TenantTracerCache`` already routes. Also stashed on ``request.state``
+        # so ``_apply_admin_logging_exporters`` reuses the result instead of
+        # re-resolving.
+        await _hoist_request_destinations(request, user_api_key_auth_obj)
 
         ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
         RouteChecks.should_call_route(
