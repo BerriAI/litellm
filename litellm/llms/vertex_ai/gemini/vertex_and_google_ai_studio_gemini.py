@@ -1380,6 +1380,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _content_str = ""
             if "text" in part:
                 text_content = part["text"]
+                if text_content is None:
+                    continue
                 # Check if text content is audio data URI - if so, exclude from text content
                 if text_content.startswith("data:audio") and ";base64," in text_content:
                     try:
