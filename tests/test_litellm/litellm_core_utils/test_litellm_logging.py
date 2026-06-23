@@ -3585,3 +3585,32 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["status"] == "failure"
     assert payload["response_cost"] == 0
     assert payload["total_tokens"] == 0
+
+
+def test_init_custom_logger_compatible_class_asqav_singleton(monkeypatch, tmp_path):
+    """callbacks=["asqav"] constructs one AsqavLogger and reuses it on re-init."""
+    monkeypatch.setenv("ASQAV_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    from litellm.integrations.asqav import AsqavLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        first = logging_module._init_custom_logger_compatible_class(
+            logging_integration="asqav",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+        second = logging_module._init_custom_logger_compatible_class(
+            logging_integration="asqav",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+
+        assert type(first) is AsqavLogger
+        assert second is first
+        assert any(
+            isinstance(cb, AsqavLogger) for cb in logging_module._in_memory_loggers
+        )
+    finally:
+        logging_module._in_memory_loggers.clear()
