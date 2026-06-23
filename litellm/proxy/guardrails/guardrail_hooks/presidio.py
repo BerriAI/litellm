@@ -43,6 +43,10 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    iter_message_text,
+    walk_user_text,
+)
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
@@ -746,66 +750,35 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            messages = data.get("messages", None)
-            if messages is None:
+
+            # Collect every text fragment from BOTH `messages` and the
+            # Responses-API `input` field. A hook that only reads
+            # `data["messages"]` silently skips `/v1/responses` input; the
+            # shared `_content_utils` helpers normalise both request shapes.
+            fragments = list(dict.fromkeys(iter_message_text(data)))
+            if not fragments:
                 return data
-            tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
 
-            for msg_idx, m in enumerate(messages):
-                content = m.get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str):
-                    tasks.append(
-                        self.check_pii(
-                            text=content,
-                            output_parse_pii=self.output_parse_pii,
-                            presidio_config=presidio_config,
-                            request_data=data,
-                        )
+            # Mask each unique fragment via the analyzer in parallel.
+            masked = await asyncio.gather(
+                *[
+                    self.check_pii(
+                        text=fragment,
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=presidio_config,
+                        request_data=data,
                     )
-                    task_mappings.append(
-                        (msg_idx, None)
-                    )  # None indicates string content
-                elif isinstance(content, list):
-                    for content_idx, c in enumerate(content):
-                        text_str = c.get("text", None)
-                        if text_str is None:
-                            continue
-                        tasks.append(
-                            self.check_pii(
-                                text=text_str,
-                                output_parse_pii=self.output_parse_pii,
-                                presidio_config=presidio_config,
-                                request_data=data,
-                            )
-                        )
-                        task_mappings.append((msg_idx, int(content_idx)))
+                    for fragment in fragments
+                ]
+            )
+            mask_map = dict(zip(fragments, masked))
 
-            responses = await asyncio.gather(*tasks)
-
-            # Map responses back to the correct message and content item
-            for task_idx, r in enumerate(responses):
-                mapping = task_mappings[task_idx]
-                msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(Optional[int], mapping[1])
-                content = messages[msg_idx].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str) and content_idx_optional is None:
-                    messages[msg_idx][
-                        "content"
-                    ] = r  # replace content with redacted string
-                elif isinstance(content, list) and content_idx_optional is not None:
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = r
+            # Rewrite the request body in place across `messages` and `input`.
+            walk_user_text(data, lambda text: mask_map.get(text, text))
 
             verbose_proxy_logger.debug(
-                f"Presidio PII Masking: Redacted pii message: {data['messages']}"
+                "Presidio PII Masking: redacted request body (messages + input)"
             )
-            data["messages"] = messages
             return data
         except Exception as e:
             raise e
