@@ -57,9 +57,10 @@ export default function MemberTable({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, totalPages);
   const pagedMembers = withPagination ? members.slice((safePage - 1) * pageSize, safePage * pageSize) : members;
-  const countDisplay = totalMembers !== undefined && total !== totalMembers
-    ? `${total} of ${totalMembers} Members`
-    : `${total} Member${total !== 1 ? "s" : ""}`;
+  const countDisplay =
+    totalMembers !== undefined && total !== totalMembers
+      ? `${total} of ${totalMembers} Members`
+      : `${total} Member${total !== 1 ? "s" : ""}`;
   const baseColumns: ColumnsType<Member> = [
     {
       title: "User Email",
@@ -129,9 +130,7 @@ export default function MemberTable({
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       <div className="flex items-center justify-between w-full">
-        <span className="text-sm text-gray-700">
-          {countDisplay}
-        </span>
+        <span className="text-sm text-gray-700">{countDisplay}</span>
         {withPagination && (
           <Pagination
             size="small"

@@ -20,7 +20,6 @@ interface TeamMemberTabProps {
   setIsAddMemberModalVisible: (visible: boolean) => void;
 }
 
-
 export default function TeamMemberTab({
   teamData,
   canEditTeam,
@@ -37,9 +36,7 @@ export default function TeamMemberTab({
   const membershipsMap = useMemo(
     () =>
       new Map<string, TeamMembership>(
-        teamData.team_memberships
-          .filter((tm) => tm.user_id)
-          .map((tm) => [tm.user_id, tm]),
+        teamData.team_memberships.filter((tm) => tm.user_id).map((tm) => [tm.user_id, tm]),
       ),
     [teamData.team_memberships],
   );
@@ -54,10 +51,7 @@ export default function TeamMemberTab({
         if (roleFilter === "non-admin" && isAdmin) return false;
       }
       if (!q) return true;
-      return (
-        m.user_email?.toLowerCase().includes(q) ||
-        m.user_id?.toLowerCase().includes(q)
-      );
+      return m.user_email?.toLowerCase().includes(q) || m.user_id?.toLowerCase().includes(q);
     });
   }, [teamData.team_info.members_with_roles, searchText, roleFilter]);
 
@@ -221,8 +215,14 @@ export default function TeamMemberTab({
           placeholder="Search by email or user ID"
           allowClear
           style={{ width: 280 }}
-          onChange={(e) => { setSearchText(e.target.value); setMemberTablePage(1); }}
-          onSearch={(v) => { setSearchText(v); setMemberTablePage(1); }}
+          onChange={(e) => {
+            setSearchText(e.target.value);
+            setMemberTablePage(1);
+          }}
+          onSearch={(v) => {
+            setSearchText(v);
+            setMemberTablePage(1);
+          }}
         />
         <Select
           aria-label="Filter by role"
@@ -233,7 +233,10 @@ export default function TeamMemberTab({
             { value: "admin", label: "Admin" },
             { value: "non-admin", label: "Non-admin" },
           ]}
-          onChange={(v) => { setRoleFilter(v ?? null); setMemberTablePage(1); }}
+          onChange={(v) => {
+            setRoleFilter(v ?? null);
+            setMemberTablePage(1);
+          }}
         />
       </Space>
       <MemberTable
