@@ -1,15 +1,68 @@
 """Typed upstream-credential resolution for MCP servers.
 
-This subpackage will house ``resolve_credentials`` and its per-mode typed configs.
-Failures are modeled as values via :mod:`.result` (``Result[T, CredError]``) rather
-than raised, so every seam is total. Nothing here is wired onto a live request path
-yet; later PRs add the typed vocabulary, the resolver, and the v1 graft.
+This subpackage houses the typed credential vocabulary and (in a later PR) the
+``resolve_credentials`` dispatch. A server declares one per-mode config from the
+``AuthConfig`` discriminated union; failures are modeled as values via :mod:`.result`
+(``Result[T, CredError]``) rather than raised, so every seam is total. Nothing here is
+wired onto a live request path yet.
 """
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+    NoOpAuth,
+    StaticHeaderAuth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    Ambient,
+    ApiKeyConfig,
+    ApiKeySource,
+    AssumeRole,
+    AuthConfig,
+    AuthorizationCodeConfig,
+    AuthSpecKind,
+    AwsCredentialSource,
+    AwsSigV4Config,
+    Byok,
+    ClientCredentialsConfig,
+    CredError,
+    NoneConfig,
+    PassthroughConfig,
+    ServerSpec,
+    SharedKey,
+    StaticKeys,
+    Subject,
+    TokenExchangeConfig,
+    parse_auth_spec_kind,
+)
 
-__all__ = ["Ok", "Error", "Result"]
+__all__ = [
+    "Ok",
+    "Error",
+    "Result",
+    "NoOpAuth",
+    "StaticHeaderAuth",
+    "AuthSpecKind",
+    "CredError",
+    "Subject",
+    "ServerSpec",
+    "AuthConfig",
+    "parse_auth_spec_kind",
+    "AuthorizationCodeConfig",
+    "ClientCredentialsConfig",
+    "TokenExchangeConfig",
+    "ApiKeyConfig",
+    "ApiKeySource",
+    "SharedKey",
+    "Byok",
+    "PassthroughConfig",
+    "NoneConfig",
+    "AwsSigV4Config",
+    "AwsCredentialSource",
+    "StaticKeys",
+    "AssumeRole",
+    "Ambient",
+]
