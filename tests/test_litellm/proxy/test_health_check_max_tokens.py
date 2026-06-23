@@ -2,6 +2,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
@@ -9,6 +11,7 @@ from litellm.proxy.health_check import (
     _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
 )
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 @pytest.mark.asyncio
@@ -516,3 +519,40 @@ def test_autodetected_embedding_skips_reasoning_effort():
 
     assert "reasoning_effort" not in updated
     assert "max_tokens" not in updated
+
+
+def test_azure_gpt_chat_latest_health_check_uses_metadata_max_completion_tokens(
+    monkeypatch,
+):
+    """Azure gpt-chat-latest metadata chooses max_completion_tokens for health."""
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    model_info = {"base_model": "gpt-chat-latest"}
+    litellm_params = {"model": "azure/gpt-chat-latest-gs"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_completion_tokens"] == 16
+    assert "max_tokens" not in updated
+
+
+def test_deployment_model_info_overrides_health_check_max_completion_tokens(
+    monkeypatch,
+):
+    """Deployment model_info wins over model-map health-check metadata."""
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    model_info = {
+        "base_model": "gpt-chat-latest",
+        "map_max_tokens_to_max_completion_tokens": False,
+    }
+    litellm_params = {"model": "azure/gpt-chat-latest-gs"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_tokens"] == 16
+    assert "max_completion_tokens" not in updated

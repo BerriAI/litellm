@@ -5,7 +5,10 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 class TestAzureOpenAIConfig:
@@ -54,3 +57,38 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def test_map_openai_params_translates_max_tokens_for_flagged_model(monkeypatch):
+    """Models flagged in the cost map translate max_tokens -> max_completion_tokens.
+
+    Azure gpt-chat-latest rejects `max_tokens` and requires
+    `max_completion_tokens`, but it does not route through the GPT-5/o-series
+    config. The `map_max_tokens_to_max_completion_tokens` flag drives the
+    translation for normal chat completions too (not just health checks).
+    """
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    config = AzureOpenAIConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": 42},
+        optional_params={},
+        model="azure/gpt-chat-latest",
+        drop_params=False,
+    )
+    assert optional_params["max_completion_tokens"] == 42
+    assert "max_tokens" not in optional_params
+
+
+def test_map_openai_params_keeps_max_tokens_for_unflagged_model(monkeypatch):
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    config = AzureOpenAIConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": 42},
+        optional_params={},
+        model="azure/gpt-4o",
+        drop_params=False,
+    )
+    assert optional_params["max_tokens"] == 42
+    assert "max_completion_tokens" not in optional_params

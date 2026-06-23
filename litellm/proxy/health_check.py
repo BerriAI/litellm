@@ -72,6 +72,52 @@ def _resolve_health_check_mode(
         return None
 
 
+def _resolve_health_check_model_info(model_info: dict, litellm_params: dict) -> dict:
+    """Merge model-cost metadata with deployment model_info for health checks.
+
+    Model-specific health-check flags belong in model metadata, but Azure
+    deployment names can include suffixes that do not exist in the model map.
+    Try the deployment model first, then provider/base_model (for example
+    azure/gpt-chat-latest) when a deployment provides base_model metadata.
+    Deployment-level model_info overrides model-map metadata.
+    """
+    metadata: dict = {}
+    candidates: list[str] = []
+    deployment_model = litellm_params.get("model")
+    if isinstance(deployment_model, str):
+        candidates.append(deployment_model)
+
+    base_model = model_info.get("base_model")
+    if isinstance(base_model, str):
+        candidates.append(base_model)
+        if isinstance(deployment_model, str) and "/" in deployment_model:
+            provider = deployment_model.split("/", 1)[0]
+            candidates.append(f"{provider}/{base_model}")
+
+    for candidate in candidates:
+        if candidate in litellm.model_cost:
+            metadata = litellm.model_cost[candidate]
+            break
+        try:
+            from litellm.litellm_core_utils.get_model_cost_map import (
+                GetModelCostMap,
+            )
+
+            local_model_cost = GetModelCostMap.load_local_model_cost_map()
+            if candidate in local_model_cost:
+                metadata = local_model_cost[candidate]
+                break
+        except Exception:
+            pass
+        try:
+            metadata = dict(litellm.get_model_info(model=candidate))
+            break
+        except Exception:
+            continue
+
+    return {**metadata, **dict(model_info)}
+
+
 def _should_inject_health_check_max_tokens(
     model_info: Mapping[str, object], mode: str | None
 ) -> bool:
@@ -456,27 +502,33 @@ def _update_litellm_params_for_health_check(
     mode = _resolve_health_check_mode(
         model_info, litellm_params  # any-ok: untyped router config dict
     )
+    resolved_model_info = _resolve_health_check_model_info(model_info, litellm_params)
     litellm_params["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
-        model_info, mode  # any-ok: untyped router config dict
+        resolved_model_info, mode  # any-ok: untyped router config dict
     ):
         _resolved_max_tokens = _resolve_health_check_max_tokens(
-            model_info, litellm_params
+            resolved_model_info, litellm_params
         )
         if _resolved_max_tokens is not None:
-            litellm_params["max_tokens"] = _resolved_max_tokens
+            if resolved_model_info.get("map_max_tokens_to_max_completion_tokens"):
+                litellm_params["max_completion_tokens"] = _resolved_max_tokens
+            else:
+                litellm_params["max_tokens"] = _resolved_max_tokens
 
     # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
     if mode in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
-        _hc_reasoning_effort = model_info.get("health_check_reasoning_effort", None)
+        _hc_reasoning_effort = resolved_model_info.get(
+            "health_check_reasoning_effort", None
+        )
         if _hc_reasoning_effort is not None:
             litellm_params["reasoning_effort"] = _hc_reasoning_effort
 
-    _health_check_model = model_info.get("health_check_model", None)
+    _health_check_model = resolved_model_info.get("health_check_model", None)
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
     if mode == "audio_speech":
-        litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+        litellm_params["voice"] = resolved_model_info.get("health_check_voice", "alloy")
 
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
