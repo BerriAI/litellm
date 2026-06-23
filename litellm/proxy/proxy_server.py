@@ -38,7 +38,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json
+from pydantic import BaseModel, Json, JsonValue
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -15183,6 +15183,68 @@ async def update_config_general_settings(
     return response
 
 
+# Secret-bearing general_settings fields the segment masker does not match by
+# name: database_url and database_extra_connection_params embed DB credentials,
+# pass_through_endpoints carry upstream Authorization headers, and
+# alert_to_webhook_url is itself a webhook secret
+_EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
+    {
+        "database_url",
+        "database_extra_connection_params",
+        "pass_through_endpoints",
+        "alert_to_webhook_url",
+    }
+)
+
+
+def _is_secret_general_setting_field(field_name: str) -> bool:
+    return (
+        field_name in _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS
+        or SENSITIVE_DATA_MASKER.is_sensitive_key(field_name)
+    )
+
+
+# Matches the cap on _redact_sensitive_litellm_params (the closest analog in the
+# proxy). Past this depth we fail closed by returning "REDACTED" for the whole
+# subtree rather than recursing further — better to over-redact a pathological
+# config than to silently return a deeply-nested credential verbatim
+_REDACT_SECRET_MAX_DEPTH = 10
+
+
+def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
+    """Recursively redact secret leaves inside a structured field so a nested
+    credential (e.g. aws_web_identity_token under database_args) is never
+    returned to a non-admin, while non-secret siblings stay visible. At
+    _REDACT_SECRET_MAX_DEPTH the whole subtree is replaced with "REDACTED"
+    so depth-overrun fails closed."""
+    if depth >= _REDACT_SECRET_MAX_DEPTH:
+        return "REDACTED"
+    if isinstance(value, dict):
+        return {
+            key: (
+                "REDACTED"
+                if _is_secret_general_setting_field(key)
+                else _redact_secret_values_in_obj(sub, depth + 1)
+            )
+            for key, sub in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secret_values_in_obj(item, depth + 1) for item in value]
+    return value
+
+
+def _redact_general_setting_value(
+    field_name: str, value: JsonValue, is_full_admin: bool
+) -> JsonValue:
+    if is_full_admin:
+        return value
+    if _is_secret_general_setting_field(field_name):
+        return "REDACTED"
+    if isinstance(value, (dict, list)):
+        return _redact_secret_values_in_obj(value)
+    return value
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -15235,9 +15297,11 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            field_value = general_settings[field_name]
-            # Redact plugin_key from plugin configs so the shared credential
-            # is never returned even to admin-viewer callers.
+            field_value = _redact_general_setting_value(
+                field_name,
+                general_settings[field_name],
+                user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            )
             if field_name == "plugins" and isinstance(field_value, list):
                 field_value = [
                     (
@@ -15293,6 +15357,8 @@ async def get_config_list(
             },
         )
 
+    is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
     ## get general settings from db
     db_general_settings = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "general_settings"}
@@ -15341,7 +15407,11 @@ async def get_config_list(
                             field_name=sub_field,
                             field_type=sub_field_type.__name__,
                             field_description="",  # Add custom logic if descriptions are available
-                            field_default_value=general_settings.get(sub_field, None),
+                            field_default_value=_redact_general_setting_value(
+                                sub_field,
+                                general_settings.get(sub_field, None),
+                                is_full_admin,
+                            ),
                             stored_in_db=None,
                         )
                         for sub_field, sub_field_type in pydantic_class.__annotations__.items()
@@ -15371,7 +15441,11 @@ async def get_config_list(
                         field_name=field_name,
                         field_type=allowed_args[field_name]["type"],
                         field_description=field_info.description or "",
-                        field_value=general_settings.get(field_name, None),
+                        field_value=_redact_general_setting_value(
+                            field_name,
+                            general_settings.get(field_name, None),
+                            is_full_admin,
+                        ),
                         stored_in_db=_stored_in_db,
                         field_default_value=field_info.default,
                         nested_fields=nested_fields,
@@ -15395,7 +15469,9 @@ async def get_config_list(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=_field_value,
+                    field_value=_redact_general_setting_value(
+                        field_name, _field_value, is_full_admin
+                    ),
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
