@@ -3521,6 +3521,7 @@ class SandboxProviders(str, Enum):
     """
 
     E2B = "e2b"
+    OPENSANDBOX = "opensandbox"
 
 
 class LiteLLMLoggingBaseClass:
