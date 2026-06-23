@@ -4,6 +4,7 @@
 //! (simple-shuffle) → `providers::realtime::realtime()` invokes OpenAI. The
 //! server owns transport + config; routing lives in the `router` crate.
 
+mod dispatch;
 mod gil;
 #[cfg(feature = "python-config")]
 mod python;
@@ -12,7 +13,7 @@ mod state;
 
 use std::sync::Arc;
 
-use litellm_router::{Deployment, LiteLLMParams, Router};
+use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
 use crate::state::AppState;
 

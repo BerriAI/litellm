@@ -32,9 +32,7 @@ pub async fn invoke(
 ) -> Result<Json<RealtimeResponse>, (StatusCode, String)> {
     authorize(&state, &headers)?;
 
-    let events = state
-        .router
-        .realtime(&request.model, request.input, None)
+    let events = crate::dispatch::realtime(&state.router, &request.model, request.input, None)
         .await
         .map_err(|err| {
             // `Routing` means the model has no deployment — a client-side error

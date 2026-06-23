@@ -8,8 +8,8 @@
 //! Compiled only under the `python-config` feature.
 
 use litellm_core::error::CoreError;
+use litellm_core::router::{Deployment, Router};
 use litellm_core::CoreResult;
-use litellm_router::{Deployment, Router};
 use pyo3::prelude::*;
 
 use crate::gil;

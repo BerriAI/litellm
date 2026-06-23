@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_router::Router;
+use litellm_core::router::Router;
 
 /// Shared application state handed to every route handler.
 #[derive(Clone)]
