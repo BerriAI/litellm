@@ -4,9 +4,10 @@ Tests for is_tool_name_prefixed with known_server_prefixes parameter.
 Verifies fix for https://github.com/BerriAI/litellm/issues/25081
 """
 
-import pytest
-
-from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
+from litellm.proxy._experimental.mcp_server.utils import (
+    is_tool_name_prefixed,
+    split_server_prefix_from_name,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ class TestLegacyBehaviour:
 class TestWithKnownPrefixes:
     """When known_server_prefixes is supplied, only real prefixes match."""
 
-    PREFIXES = {"myserver", "weather_api", "code_tools"}
+    PREFIXES = {"myserver", "weather_api", "code_tools", "deepwiki-mcp"}
 
     def test_known_prefix_returns_true(self):
         assert (
@@ -82,3 +83,21 @@ class TestWithKnownPrefixes:
             )
             is True
         )
+
+    def test_hyphenated_server_prefix_returns_true(self):
+        assert (
+            is_tool_name_prefixed(
+                "deepwiki-mcp-read_wiki_structure",
+                known_server_prefixes=self.PREFIXES,
+            )
+            is True
+        )
+
+    def test_hyphenated_server_prefix_split_uses_longest_known_prefix(self):
+        tool_name, server_name = split_server_prefix_from_name(
+            "deepwiki-mcp-read_wiki_structure",
+            known_server_prefixes=self.PREFIXES,
+        )
+
+        assert tool_name == "read_wiki_structure"
+        assert server_name == "deepwiki-mcp"

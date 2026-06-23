@@ -2688,8 +2688,15 @@ if MCP_AVAILABLE:
         # translate it back to the original prefixed name before any routing.
         name = _resolve_display_name_to_original(name, allowed_mcp_servers)
 
-        # Remove prefix from tool name for logging and processing
-        original_tool_name, server_name = split_server_prefix_from_name(name)
+        allowed_server_prefixes = {
+            normalize_server_name(prefix)
+            for server in allowed_mcp_servers
+            for prefix in iter_known_server_prefixes(server)
+            if prefix
+        }
+        original_tool_name, server_name = split_server_prefix_from_name(
+            name, known_server_prefixes=allowed_server_prefixes
+        )
 
         requested_server: Optional[MCPServer] = None
         if requested_server_id:

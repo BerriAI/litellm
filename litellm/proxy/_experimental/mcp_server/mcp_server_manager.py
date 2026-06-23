@@ -3852,7 +3852,9 @@ class MCPServerManager:
             (
                 original_tool_name,
                 server_name_from_prefix,
-            ) = split_server_prefix_from_name(tool_name)
+            ) = split_server_prefix_from_name(
+                tool_name, known_server_prefixes=set(prefix_to_server.keys())
+            )
             normalised_prefix = normalize_server_name(server_name_from_prefix)
             matched_server = prefix_to_server.get(normalised_prefix)
             if matched_server is not None and (

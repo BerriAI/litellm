@@ -323,8 +323,18 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     yield from _emit(server_id)
 
 
-def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
+def split_server_prefix_from_name(
+    prefixed_name: str,
+    known_server_prefixes: Optional[Set[str]] = None,
+) -> Tuple[str, str]:
     """Return the unprefixed name plus the server name used as prefix."""
+    if known_server_prefixes:
+        for prefix in sorted(known_server_prefixes, key=len, reverse=True):
+            normalized_prefix = normalize_server_name(prefix)
+            separator = f"{normalized_prefix}{MCP_TOOL_PREFIX_SEPARATOR}"
+            if prefixed_name.startswith(separator):
+                return prefixed_name[len(separator) :], normalized_prefix
+
     if MCP_TOOL_PREFIX_SEPARATOR in prefixed_name:
         parts = prefixed_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)
         if len(parts) == 2:
@@ -360,8 +370,12 @@ def is_tool_name_prefixed(
         return False
 
     if known_server_prefixes is not None:
-        candidate_prefix = tool_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)[0]
-        return normalize_server_name(candidate_prefix) in known_server_prefixes
+        return any(
+            tool_name.startswith(
+                f"{normalize_server_name(prefix)}{MCP_TOOL_PREFIX_SEPARATOR}"
+            )
+            for prefix in known_server_prefixes
+        )
 
     # Legacy fallback – separator present somewhere in the name.
     return True
