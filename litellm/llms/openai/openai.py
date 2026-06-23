@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.types.integrations.custom_logger import is_interception_internal_key
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -541,7 +542,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     @staticmethod
     def _get_agentic_hook_kwargs(litellm_params: Dict) -> Dict:
-        return dict(litellm_params)
+        hook_kwargs = dict(litellm_params)
+        litellm_metadata = litellm_params.get("litellm_metadata")
+        if isinstance(litellm_metadata, dict):
+            hook_kwargs.update(
+                {
+                    key: value
+                    for key, value in litellm_metadata.items()
+                    if key.startswith("_agentic_loop")
+                    or key == "max_agentic_loops"
+                    or is_interception_internal_key(key)
+                }
+            )
+        return hook_kwargs
 
     def mock_streaming(
         self,

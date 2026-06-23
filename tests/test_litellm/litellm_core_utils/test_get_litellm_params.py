@@ -7,7 +7,6 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
     _get_base_model_from_litellm_call_metadata,
-    get_internal_litellm_params,
     get_litellm_params,
 )
 
@@ -124,43 +123,6 @@ class TestGetLitellmParamsExplicitFields:
     def test_no_log_from_explicit_param(self):
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
-
-    def test_agentic_loop_control_fields_are_preserved(self):
-        result = get_litellm_params(
-            _agentic_loop_depth=1,
-            _agentic_loop_fingerprints=["fp-1"],
-            max_agentic_loops=4,
-            _code_interpreter_interception_active=True,
-            _code_interpreter_interception_sandbox_key="sbxkey1",
-            _code_interpreter_interception_converted_stream=True,
-            _websearch_interception_converted_stream=True,
-            unrelated_kwarg="ignored",
-        )
-
-        assert result["_agentic_loop_depth"] == 1
-        assert result["_agentic_loop_fingerprints"] == ["fp-1"]
-        assert result["max_agentic_loops"] == 4
-        assert result["_code_interpreter_interception_active"] is True
-        assert result["_code_interpreter_interception_sandbox_key"] == "sbxkey1"
-        assert result["_code_interpreter_interception_converted_stream"] is True
-        assert result["_websearch_interception_converted_stream"] is True
-        assert "unrelated_kwarg" not in result
-
-    def test_get_internal_litellm_params_omits_public_kwargs(self):
-        result = get_internal_litellm_params(
-            {
-                "_agentic_loop_depth": 2,
-                "max_agentic_loops": 4,
-                "_code_interpreter_interception_active": True,
-                "temperature": 0.1,
-            }
-        )
-
-        assert result == {
-            "_agentic_loop_depth": 2,
-            "max_agentic_loops": 4,
-            "_code_interpreter_interception_active": True,
-        }
 
 
 class TestGetLitellmParamsDataResidency:

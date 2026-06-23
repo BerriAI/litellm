@@ -5165,6 +5165,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        self._add_agentic_loop_metadata(kwargs_for_followup)
 
         try:
             response = await litellm.acompletion(
@@ -5201,6 +5202,19 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                     model=model,
                 )
+
+    @staticmethod
+    def _add_agentic_loop_metadata(kwargs_for_followup: Dict) -> None:
+        metadata = kwargs_for_followup.get("litellm_metadata")
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        for key, value in kwargs_for_followup.items():
+            if (
+                key.startswith("_agentic_loop")
+                or key == "max_agentic_loops"
+                or is_interception_internal_key(key)
+            ):
+                metadata[key] = value
+        kwargs_for_followup["litellm_metadata"] = metadata
 
     async def _call_agentic_completion_hooks(
         self,

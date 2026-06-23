@@ -86,10 +86,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.get_litellm_params import (
-    OPTIONAL_KWARGS_KEYS,
-    get_internal_litellm_params,
-)
+from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -1652,7 +1649,6 @@ def completion(  # type: ignore
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
             aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
-            **get_internal_litellm_params(kwargs),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,

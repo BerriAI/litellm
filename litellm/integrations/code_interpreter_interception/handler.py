@@ -40,6 +40,8 @@ from litellm.types.utils import (
 LITELLM_CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
 _INTERCEPTION_ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+_CONVERTED_STREAM_KEY = "_code_interpreter_interception_converted_stream"
+_LITELLM_METADATA_KEY = "litellm_metadata"
 _CACHE_TTL_SECONDS = 15 * 60
 
 
@@ -175,6 +177,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         if not kwargs.get("_agentic_loop_depth"):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
             kwargs.pop(_SANDBOX_KEY, None)
+            self._strip_interception_metadata(kwargs)
         if not self.enabled:
             return None
         if call_type not in (
@@ -203,7 +206,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         kwargs[_SANDBOX_KEY] = uuid.uuid4().hex
         if kwargs.get("stream"):
             kwargs["stream"] = False
-            kwargs["_code_interpreter_interception_converted_stream"] = True
+            kwargs[_CONVERTED_STREAM_KEY] = True
+        self._write_interception_metadata(kwargs)
 
         function_tool = self._get_function_tool(call_type=call_type)
         kwargs["tools"] = [
@@ -217,6 +221,32 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         if self._tool_choice_targets_code_interpreter(kwargs.get("tool_choice")):
             kwargs["tool_choice"] = self._get_function_tool_choice(call_type=call_type)
         return kwargs
+
+    @staticmethod
+    def _strip_interception_metadata(kwargs: dict[str, Any]) -> None:
+        metadata = kwargs.get(_LITELLM_METADATA_KEY)
+        if not isinstance(metadata, dict):
+            return
+        filtered_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if not is_interception_internal_key(key)
+            and not key.startswith("_agentic_loop")
+            and key != "max_agentic_loops"
+        }
+        if filtered_metadata:
+            kwargs[_LITELLM_METADATA_KEY] = filtered_metadata
+        else:
+            kwargs.pop(_LITELLM_METADATA_KEY, None)
+
+    @staticmethod
+    def _write_interception_metadata(kwargs: dict[str, Any]) -> None:
+        metadata = kwargs.get(_LITELLM_METADATA_KEY)
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        for key in (_INTERCEPTION_ACTIVE_KEY, _SANDBOX_KEY, _CONVERTED_STREAM_KEY):
+            if key in kwargs:
+                metadata[key] = kwargs[key]
+        kwargs[_LITELLM_METADATA_KEY] = metadata
 
     @staticmethod
     def _get_function_parameters() -> CodeExecutionFunctionParameters:

@@ -1,7 +1,6 @@
 from typing import Optional
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.types.integrations.custom_logger import is_interception_internal_key
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -42,22 +41,6 @@ OPTIONAL_KWARGS_KEYS = frozenset(
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS = OPTIONAL_KWARGS_KEYS
-
-AGENTIC_INTERNAL_PARAMS = frozenset({"max_agentic_loops"})
-
-
-def is_agentic_internal_param(key: str) -> bool:
-    return (
-        key.startswith("_agentic_loop")
-        or key in AGENTIC_INTERNAL_PARAMS
-        or is_interception_internal_key(key)
-    )
-
-
-def get_internal_litellm_params(kwargs: dict[str, object]) -> dict[str, object]:
-    return {
-        key: value for key, value in kwargs.items() if is_agentic_internal_param(key)
-    }
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -188,6 +171,5 @@ def get_litellm_params(
         for key in OPTIONAL_KWARGS_KEYS:
             if key in kwargs:
                 litellm_params[key] = kwargs[key]
-        litellm_params.update(get_internal_litellm_params(kwargs))
 
     return litellm_params

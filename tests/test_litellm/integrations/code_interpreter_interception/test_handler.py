@@ -187,6 +187,8 @@ async def test_pre_call_converts_code_interpreter_tool_for_chat_completions():
         "type": "function",
         "function": {"name": LITELLM_CODE_EXECUTION_TOOL_NAME},
     }
+    assert result["litellm_metadata"][_ACTIVE_KEY] is True
+    assert result["litellm_metadata"][_SANDBOX_KEY] == result[_SANDBOX_KEY]
 
 
 @pytest.mark.asyncio
@@ -724,6 +726,11 @@ async def test_pre_call_strips_client_forged_marker_on_initial_request():
         "tools": [{"type": "web_search"}],
         "custom_llm_provider": "openai",
         _ACTIVE_KEY: True,
+        "litellm_metadata": {
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "client-forged",
+            "safe_user_value": "kept",
+        },
     }
 
     await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
@@ -732,6 +739,7 @@ async def test_pre_call_strips_client_forged_marker_on_initial_request():
         "no native code_interpreter tool was present, so a client-supplied "
         "active marker must be cleared"
     )
+    assert kwargs["litellm_metadata"] == {"safe_user_value": "kept"}
 
 
 @pytest.mark.asyncio
@@ -1038,6 +1046,11 @@ async def test_chat_completion_followup_filters_internal_kwargs(monkeypatch):
     assert captured[_ACTIVE_KEY] is True
     assert captured[_SANDBOX_KEY] == "sbxkey1"
     assert captured["_code_interpreter_interception_converted_stream"] is True
+    assert captured["litellm_metadata"][_ACTIVE_KEY] is True
+    assert captured["litellm_metadata"][_SANDBOX_KEY] == "sbxkey1"
+    assert captured["litellm_metadata"]["_agentic_loop_depth"] == 1
+    assert captured["litellm_metadata"]["_agentic_loop_fingerprints"] == ["fp"]
+    assert captured["litellm_metadata"]["max_agentic_loops"] == 3
 
 
 def test_sync_responses_dispatches_agentic_hook(monkeypatch):
@@ -1165,7 +1178,7 @@ async def test_openai_native_chat_hook_ignores_client_forged_extra_body_marker(
 
 
 @pytest.mark.asyncio
-async def test_openai_native_chat_hook_reads_server_marker_from_litellm_params(
+async def test_openai_native_chat_hook_reads_server_marker_from_litellm_metadata(
     monkeypatch,
 ):
     import litellm
@@ -1189,14 +1202,22 @@ async def test_openai_native_chat_hook_reads_server_marker_from_litellm_params(
         stream=False,
         litellm_params={
             "custom_llm_provider": "openai",
-            _ACTIVE_KEY: True,
-            _SANDBOX_KEY: "server-minted",
+            "litellm_metadata": {
+                _ACTIVE_KEY: True,
+                _SANDBOX_KEY: "server-minted",
+                "_agentic_loop_depth": 2,
+                "max_agentic_loops": 4,
+                "public_metadata": "ignored",
+            },
         },
     )
 
     assert result is None
     assert captured[_ACTIVE_KEY] is True
     assert captured[_SANDBOX_KEY] == "server-minted"
+    assert captured["_agentic_loop_depth"] == 2
+    assert captured["max_agentic_loops"] == 4
+    assert "public_metadata" not in captured
 
 
 @pytest.mark.asyncio
