@@ -6,7 +6,10 @@ then routes supported Mistral calls through the compiled ``litellm_python_bridge
 extension, which performs the whole OCR call (URL, headers, HTTP, parse) in Rust.
 """
 
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 _RUST_OCR_ENABLED = False
 
