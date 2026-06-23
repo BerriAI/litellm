@@ -10,7 +10,6 @@ import os
 import re
 from functools import partial
 from io import IOBase
-from pathlib import Path
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
@@ -21,6 +20,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.ocr.rust_bridge import rust_ocr, rust_ocr_enabled
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -262,6 +262,10 @@ def ocr(
         if dynamic_api_base:
             api_base = dynamic_api_base
 
+        # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
+        if custom_llm_provider == "mistral" and rust_ocr_enabled():
+            return rust_ocr(model, document, api_key, api_base, kwargs)
+
         # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
             ProviderConfigManager.get_provider_ocr_config(
@@ -376,10 +380,12 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     with an inline base64 data URI.
 
     Accepts document dicts like:
-        {"type": "file", "file": "/path/to/document.pdf"}        # file path string
         {"type": "file", "file": Path("/path/to/doc.pdf")}       # pathlib.Path
         {"type": "file", "file": <binary file-like object>}      # file-like object (BinaryIO)
         {"type": "file", "file": b"raw bytes"}                   # raw bytes
+
+    Bare ``str`` paths are not accepted — pass a ``pathlib.Path`` or
+    ``open(path, "rb")`` instead. See the str check below for the rationale.
 
     Returns:
         {"type": "document_url", "document_url": "data:<mime>;base64,<data>"}
@@ -389,14 +395,28 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     if file_input is None:
         raise ValueError(
             "document with type='file' must include a 'file' field containing "
-            "a file path (str), pathlib.Path, file-like object, or bytes"
+            "a pathlib.Path, file-like object, or bytes"
         )
 
     file_bytes: bytes
     mime_type: str = "application/octet-stream"
     file_name: Optional[str] = None
 
-    if isinstance(file_input, (str, Path)):
+    if isinstance(file_input, str):
+        # Bare strings are rejected here. The OCR ``document`` accepts a
+        # ``{"type": "file", "file": <value>}`` shape, and when this helper
+        # runs in a proxy request handler ``<value>`` is attacker-controlled.
+        # Opening it as a path is an arbitrary local file read on the proxy
+        # host, which is then base64-encoded and forwarded to the OCR
+        # provider — an exfiltration primitive.
+        raise ValueError(
+            "OCR file input does not accept bare str values. Pass bytes, "
+            "a pathlib.Path, or a file-like object. To OCR a local file "
+            "from a path, call open(path, 'rb') yourself."
+        )
+    if isinstance(file_input, os.PathLike):
+        # os.PathLike (pathlib.Path and custom __fspath__ classes) is a
+        # Python-level type that HTTP form values can't fabricate.
         file_path = str(file_input)
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -417,7 +437,7 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     else:
         raise ValueError(
             f"Unsupported file input type: {type(file_input)}. "
-            "Expected str (file path), pathlib.Path, bytes, or a file-like object."
+            "Expected pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:
