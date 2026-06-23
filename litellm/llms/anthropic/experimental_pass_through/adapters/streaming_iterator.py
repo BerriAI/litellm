@@ -402,7 +402,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                is_final_chunk = chunk.choices[0].finish_reason is not None
+                is_final_chunk = (
+                    bool(chunk.choices) and chunk.choices[0].finish_reason is not None
+                )
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
@@ -622,7 +624,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 will_merge_into_held = (
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
-                is_final_chunk = chunk.choices[0].finish_reason is not None
+                is_final_chunk = (
+                    bool(chunk.choices) and chunk.choices[0].finish_reason is not None
+                )
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
@@ -852,6 +856,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         # Example logic - customize based on your needs:
+        # Usage-only / keepalive chunks carry no choices (choices=[]) — they
+        # don't open a new content block. See #30761.
+        if not chunk.choices:
+            return False
         # If chunk indicates a tool call
         if chunk.choices[0].finish_reason is not None:
             return False
