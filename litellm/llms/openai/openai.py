@@ -268,30 +268,9 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
-        optional_params = {
-            k: v
-            for k, v in optional_params.items()
-            if not (
-                k.startswith("_code_interpreter_interception")
-                or k.startswith("_agentic_loop")
-                or k == "max_agentic_loops"
-            )
-        }
-        extra_body = optional_params.get("extra_body")
-        if isinstance(extra_body, dict):
-            extra_body = {
-                k: v
-                for k, v in extra_body.items()
-                if not (
-                    k.startswith("_code_interpreter_interception")
-                    or k.startswith("_agentic_loop")
-                    or k == "max_agentic_loops"
-                )
-            }
-            if extra_body:
-                optional_params["extra_body"] = extra_body
-            else:
-                optional_params.pop("extra_body", None)
+        optional_params = litellm.openAIGPTConfig._filter_agentic_internal_params(
+            optional_params
+        )
         return {"model": model, "messages": messages, **optional_params}
 
     def transform_response(
@@ -540,17 +519,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
 
-        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
-        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
+        Delegates to the HTTP handler so native SDK calls use the same agentic
+        hook dispatch and safety guards as custom-httpx chat completions.
 
         Returns the response from agentic loop, or None if no hook runs.
         """
         from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
         custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
-        hook_kwargs = self._get_agentic_hook_kwargs(
-            litellm_params=litellm_params, optional_params=optional_params
-        )
+        hook_kwargs = self._get_agentic_hook_kwargs(litellm_params=litellm_params)
         return await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
             response=response,
             model=model,
@@ -563,19 +540,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
 
     @staticmethod
-    def _get_agentic_hook_kwargs(litellm_params: Dict, optional_params: Dict) -> Dict:
-        hook_kwargs = dict(litellm_params)
-        for params in (optional_params, optional_params.get("extra_body")):
-            if not isinstance(params, dict):
-                continue
-            hook_kwargs.update(
-                {
-                    k: v
-                    for k, v in params.items()
-                    if k.startswith("_code_interpreter_interception")
-                }
-            )
-        return hook_kwargs
+    def _get_agentic_hook_kwargs(litellm_params: Dict) -> Dict:
+        return dict(litellm_params)
 
     def mock_streaming(
         self,

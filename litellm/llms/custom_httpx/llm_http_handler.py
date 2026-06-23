@@ -138,6 +138,8 @@ from litellm.utils import (
     ProviderConfigManager,
 )
 
+_CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
+
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
@@ -632,10 +634,6 @@ class BaseLLMHTTPHandler:
             kwargs=litellm_params,
         )
         result = final_response if final_response is not None else initial_response
-        if self._should_wrap_chat_completion_response_as_fake_stream(
-            kwargs=litellm_params, logging_obj=logging_obj
-        ):
-            return self._wrap_chat_completion_response_as_fake_stream(result)
         return result
 
     def make_sync_call(
@@ -4878,6 +4876,19 @@ class BaseLLMHTTPHandler:
         except Exception:
             return str(tools)
 
+    @staticmethod
+    def _is_interception_internal_key(
+        key: str, *, strip_code_interpreter: bool = True
+    ) -> bool:
+        return (
+            key.startswith("_websearch_interception")
+            or key.startswith("_compression_interception")
+            or (
+                strip_code_interpreter
+                and key.startswith("_code_interpreter_interception")
+            )
+        )
+
     async def _execute_anthropic_agentic_plan(
         self,
         plan: AgenticLoopPlan,
@@ -4923,8 +4934,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
+            if not self._is_interception_internal_key(k)
             and k not in internal_keys
             and k not in optional_params
         }
@@ -4932,9 +4942,7 @@ class BaseLLMHTTPHandler:
             {
                 k: v
                 for k, v in patch.kwargs.items()
-                if not k.startswith("_websearch_interception")
-                and not k.startswith("_compression_interception")
-                and not k.startswith("_code_interpreter_interception")
+                if not self._is_interception_internal_key(k)
                 and k not in internal_keys
                 and k not in optional_params
             }
@@ -5004,9 +5012,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
-            and not k.startswith("_code_interpreter_interception")
+            if not self._is_interception_internal_key(k, strip_code_interpreter=False)
             and k not in internal_keys
             and k not in optional_params
         }
@@ -5014,9 +5020,9 @@ class BaseLLMHTTPHandler:
             {
                 k: v
                 for k, v in patch.kwargs.items()
-                if not k.startswith("_websearch_interception")
-                and not k.startswith("_compression_interception")
-                and not k.startswith("_code_interpreter_interception")
+                if not self._is_interception_internal_key(
+                    k, strip_code_interpreter=False
+                )
                 and k not in internal_keys
                 and k not in optional_params
             }
@@ -5140,7 +5146,6 @@ class BaseLLMHTTPHandler:
                 optional_params_for_followup.pop("tool_choice", None)
 
         internal_params = {
-            "_websearch_interception",
             "acompletion",
             "litellm_logging_obj",
             "custom_llm_provider",
@@ -5151,18 +5156,16 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
-            and not k.startswith("_code_interpreter_interception")
+            if not self._is_interception_internal_key(k, strip_code_interpreter=False)
             and k not in internal_params
         }
         kwargs_for_followup.update(
             {
                 k: v
                 for k, v in patch.kwargs.items()
-                if not k.startswith("_websearch_interception")
-                and not k.startswith("_compression_interception")
-                and not k.startswith("_code_interpreter_interception")
+                if not self._is_interception_internal_key(
+                    k, strip_code_interpreter=False
+                )
                 and k not in internal_params
                 and k not in optional_params_for_followup
             }
@@ -5416,8 +5419,8 @@ class BaseLLMHTTPHandler:
         """
         Call agentic chat completion hooks for all custom loggers (Chat Completions API).
 
-        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
-        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
+        Prefer the shared agentic-loop hook used by Responses. Fall back to the
+        legacy chat-completion hook for callbacks that still override it.
 
         Returns the response from agentic loop, or None if no hook runs.
         """
@@ -5431,28 +5434,57 @@ class BaseLLMHTTPHandler:
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
                 continue
-            if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
-                continue
 
             should_run: bool = False
             tool_calls: Any = None
+            use_shared_agentic_hook = False
+            shared_gate_overridden = (
+                callback.__class__.async_should_run_agentic_loop
+                is not CustomLogger.async_should_run_agentic_loop
+            )
+            legacy_chat_gate_overridden = (
+                callback.__class__.async_should_run_chat_completion_agentic_loop
+                is not CustomLogger.async_should_run_chat_completion_agentic_loop
+            )
+            if not shared_gate_overridden and not legacy_chat_gate_overridden:
+                continue
+
             try:
-                (
-                    should_run,
-                    tool_calls,
-                ) = await callback.async_should_run_chat_completion_agentic_loop(
-                    response=response,
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    stream=stream,
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
-                )
+                if shared_gate_overridden:
+                    kwargs_with_surface = kwargs.copy() if kwargs else {}
+                    kwargs_with_surface["_agentic_loop_api_surface"] = (
+                        _CHAT_COMPLETION_AGENTIC_SURFACE
+                    )
+                    should_run, tool_calls = (
+                        await callback.async_should_run_agentic_loop(
+                            response=response,
+                            model=model,
+                            messages=messages,
+                            tools=tools,
+                            stream=stream,
+                            custom_llm_provider=custom_llm_provider,
+                            kwargs=kwargs_with_surface,
+                        )
+                    )
+                    use_shared_agentic_hook = should_run
+
+                if not should_run and legacy_chat_gate_overridden:
+                    (
+                        should_run,
+                        tool_calls,
+                    ) = await callback.async_should_run_chat_completion_agentic_loop(
+                        response=response,
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        stream=stream,
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=kwargs,
+                    )
             except Exception as e:
                 verbose_logger.exception(
                     "LiteLLM.AgenticHookError: Exception in "
-                    "async_should_run_chat_completion_agentic_loop: %s",
+                    "chat completion agentic gate: %s",
                     str(e),
                 )
                 continue
@@ -5473,12 +5505,56 @@ class BaseLLMHTTPHandler:
             try:
                 kwargs_with_provider = kwargs.copy() if kwargs else {}
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                build_plan_overridden = (
-                    callback.__class__.async_build_chat_completion_agentic_loop_plan
-                    is not CustomLogger.async_build_chat_completion_agentic_loop_plan
-                )
-                if not build_plan_overridden:
-                    return await callback.async_run_chat_completion_agentic_loop(
+                if use_shared_agentic_hook:
+                    kwargs_with_provider["_agentic_loop_api_surface"] = (
+                        _CHAT_COMPLETION_AGENTIC_SURFACE
+                    )
+                    build_plan_overridden = (
+                        callback.__class__.async_build_agentic_loop_plan
+                        is not CustomLogger.async_build_agentic_loop_plan
+                    )
+                    if not build_plan_overridden:
+                        return await callback.async_run_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            anthropic_messages_provider_config=None,
+                            anthropic_messages_optional_request_params=optional_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
+
+                    plan = await callback.async_build_agentic_loop_plan(
+                        tools=tool_calls,
+                        model=model,
+                        messages=messages,
+                        response=response,
+                        anthropic_messages_provider_config=None,
+                        anthropic_messages_optional_request_params=optional_params,
+                        logging_obj=logging_obj,
+                        stream=stream,
+                        kwargs=kwargs_with_provider,
+                    )
+                else:
+                    build_plan_overridden = (
+                        callback.__class__.async_build_chat_completion_agentic_loop_plan
+                        is not CustomLogger.async_build_chat_completion_agentic_loop_plan
+                    )
+                    if not build_plan_overridden:
+                        return await callback.async_run_chat_completion_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            optional_params=optional_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
+
+                    plan = await callback.async_build_chat_completion_agentic_loop_plan(
                         tools=tool_calls,
                         model=model,
                         messages=messages,
@@ -5488,17 +5564,6 @@ class BaseLLMHTTPHandler:
                         stream=stream,
                         kwargs=kwargs_with_provider,
                     )
-
-                plan = await callback.async_build_chat_completion_agentic_loop_plan(
-                    tools=tool_calls,
-                    model=model,
-                    messages=messages,
-                    response=response,
-                    optional_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    kwargs=kwargs_with_provider,
-                )
 
                 if plan.response_override is not None:
                     return plan.response_override
@@ -5543,7 +5608,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _should_wrap_chat_completion_response_as_fake_stream(
-        kwargs: dict[str, Any], logging_obj: "LiteLLMLoggingObj"
+        kwargs: dict[str, Any], logging_obj: Optional["LiteLLMLoggingObj"]
     ) -> bool:
         if kwargs.get("_agentic_loop_depth"):
             return False

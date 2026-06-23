@@ -101,6 +101,9 @@ def get_litellm_params(
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     litellm_request_debug: Optional[bool] = None,
+    _code_interpreter_interception_active: Optional[bool] = None,
+    _code_interpreter_interception_sandbox_key: Optional[str] = None,
+    _code_interpreter_interception_converted_stream: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
@@ -165,6 +168,9 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "_code_interpreter_interception_active": _code_interpreter_interception_active,
+        "_code_interpreter_interception_sandbox_key": _code_interpreter_interception_sandbox_key,
+        "_code_interpreter_interception_converted_stream": _code_interpreter_interception_converted_stream,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present

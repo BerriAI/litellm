@@ -1645,6 +1645,15 @@ def completion(  # type: ignore
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            _code_interpreter_interception_active=kwargs.get(
+                "_code_interpreter_interception_active"
+            ),
+            _code_interpreter_interception_sandbox_key=kwargs.get(
+                "_code_interpreter_interception_sandbox_key"
+            ),
+            _code_interpreter_interception_converted_stream=kwargs.get(
+                "_code_interpreter_interception_converted_stream"
+            ),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
