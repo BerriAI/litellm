@@ -16,8 +16,14 @@ use crate::mistral::ocr::transformation as mistral;
 use crate::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
 /// OCR over large documents can take a while; bound it generously rather than
-/// hanging forever on an unresponsive upstream.
+/// hanging forever on an unresponsive upstream. The client-level limit is the
+/// outer ceiling; callers can tighten it per request via ``run_ocr``'s ``timeout``.
 const OCR_TIMEOUT_SECS: u64 = 600;
+
+/// Maximum upstream body characters retained in error messages. OCR responses
+/// can echo document contents and prompts; keep enough for debugging without
+/// forwarding sensitive payloads across the host boundary.
+const ERROR_BODY_MAX_CHARS: usize = 256;
 
 /// Process-wide blocking HTTP client (connection pool + TLS reused across calls).
 fn http_client() -> &'static reqwest::blocking::Client {
@@ -30,6 +36,14 @@ fn http_client() -> &'static reqwest::blocking::Client {
     })
 }
 
+fn truncate_error_body(body: &str) -> String {
+    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
+        return body.to_string();
+    }
+    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
+    format!("{truncated}... (truncated)")
+}
+
 /// Perform a Mistral OCR call end to end and return the normalized response as
 /// JSON (the shape the Python `OCRResponse` model expects).
 ///
@@ -40,6 +54,7 @@ pub fn run_ocr(
     api_key: Option<&str>,
     api_base: Option<&str>,
     optional_params: Map<String, Value>,
+    timeout: Option<Duration>,
 ) -> CoreResult<Value> {
     let config = &MISTRAL_OCR_CONFIG;
 
@@ -50,10 +65,12 @@ pub fn run_ocr(
         .transform_ocr_request(model, document, filtered_params)?
         .data;
 
-    let response = http_client()
-        .post(&url)
-        .bearer_auth(&api_key)
-        .json(&body)
+    let mut request = http_client().post(&url).bearer_auth(&api_key).json(&body);
+    if let Some(duration) = timeout {
+        request = request.timeout(duration);
+    }
+
+    let response = request
         .send()
         .map_err(|err| CoreError::Network(err.to_string()))?;
 
@@ -65,7 +82,7 @@ pub fn run_ocr(
     if !status.is_success() {
         return Err(CoreError::Http {
             status: status.as_u16(),
-            body: text,
+            body: truncate_error_body(&text),
         });
     }
 
@@ -75,4 +92,36 @@ pub fn run_ocr(
     Ok(config
         .transform_ocr_response(model, response_json)?
         .into_json())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_error_body_passes_short_strings_through() {
+        let body = "Unauthorized";
+        assert_eq!(truncate_error_body(body), "Unauthorized");
+    }
+
+    #[test]
+    fn truncate_error_body_caps_long_payloads() {
+        let body = "x".repeat(ERROR_BODY_MAX_CHARS + 50);
+        let truncated = truncate_error_body(&body);
+
+        assert!(truncated.ends_with("... (truncated)"));
+        let prefix_chars = truncated
+            .strip_suffix("... (truncated)")
+            .expect("truncated marker present")
+            .chars()
+            .count();
+        assert_eq!(prefix_chars, ERROR_BODY_MAX_CHARS);
+    }
+
+    #[test]
+    fn truncate_error_body_does_not_split_multibyte_chars() {
+        let body = "é".repeat(ERROR_BODY_MAX_CHARS + 10);
+        let truncated = truncate_error_body(&body);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
 }

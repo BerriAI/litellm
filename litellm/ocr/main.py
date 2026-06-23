@@ -29,6 +29,22 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def _timeout_to_seconds(
+    timeout: Optional[Union[float, httpx.Timeout]],
+) -> Optional[float]:
+    """Convert the Python OCR timeout to a single seconds value for the Rust bridge.
+
+    The Rust HTTP client takes one duration; ``httpx.Timeout`` carries separate
+    connect/read/write/pool values, so pick the read deadline as the closest
+    analog to a total-request timeout.
+    """
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return float(timeout)
+
+
 @client
 async def aocr(
     model: str,
@@ -262,25 +278,6 @@ def ocr(
         if dynamic_api_base:
             api_base = dynamic_api_base
 
-        # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
-        # Load via importlib to avoid a static import edge that can be flagged as
-        # part of a cyclic import graph during package initialization.
-        rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
-
-        if custom_llm_provider == "mistral" and rust_bridge.rust_ocr_enabled():
-            # Resolve the key the same way the Python path does so secret-manager
-            # backends (AWS/Azure/GCP/Vault) work — the Rust bridge's own fallback
-            # only reads the process environment.
-            from litellm.secret_managers.main import get_secret_str
-
-            resolved_api_key = api_key or get_secret_str("MISTRAL_API_KEY")
-            return OCRResponse(
-                **rust_bridge.rust_ocr(
-                    model, document, resolved_api_key, api_base, kwargs
-                )
-            )
-
-        # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
             ProviderConfigManager.get_provider_ocr_config(
                 model=model,
@@ -297,17 +294,14 @@ def ocr(
             f"OCR call - model: {model}, provider: {custom_llm_provider}"
         )
 
-        # Get litellm params using GenericLiteLLMParams (same as responses API)
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        # Extract OCR-specific parameters from kwargs
         supported_params = ocr_provider_config.get_supported_ocr_params(model=model)
         non_default_params = {}
         for param in supported_params:
             if param in kwargs:
                 non_default_params[param] = kwargs.pop(param)
 
-        # Map parameters to provider-specific format
         optional_params = ocr_provider_config.map_ocr_params(
             non_default_params=non_default_params,
             optional_params={},
@@ -316,7 +310,8 @@ def ocr(
 
         verbose_logger.debug(f"OCR optional_params after mapping: {optional_params}")
 
-        # Pre Call logging
+        effective_timeout = timeout or request_timeout
+
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
@@ -328,12 +323,56 @@ def ocr(
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Call the handler - pass document dict directly
+        # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
+        # Load via importlib to avoid a static import edge that can be flagged as
+        # part of a cyclic import graph during package initialization.
+        rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
+
+        if custom_llm_provider == "mistral" and rust_bridge.rust_ocr_enabled():
+            try:
+                importlib.import_module("litellm_python_bridge")
+            except ImportError:
+                # Rust extension wheel isn't installed: degrade to the Python
+                # path instead of hard-failing the request.
+                verbose_logger.debug(
+                    "Rust OCR bridge unavailable; falling back to Python path"
+                )
+            else:
+                # Resolve the key the same way the Python path does so
+                # secret-manager backends (AWS/Azure/GCP/Vault) work — the Rust
+                # bridge's own fallback only reads the process environment.
+                from litellm.secret_managers.main import get_secret_str
+
+                resolved_api_key = api_key or get_secret_str("MISTRAL_API_KEY")
+                litellm_logging_obj.pre_call(
+                    input="OCR document processing",
+                    api_key=resolved_api_key,
+                    additional_args={
+                        "complete_input_dict": {
+                            "model": model,
+                            "document": document,
+                            **optional_params,
+                        },
+                        "api_base": api_base,
+                        "headers": {},
+                    },
+                )
+                return OCRResponse(
+                    **rust_bridge.rust_ocr(
+                        model=model,
+                        document=document,
+                        api_key=resolved_api_key,
+                        api_base=api_base,
+                        optional_params=optional_params,
+                        timeout_seconds=_timeout_to_seconds(effective_timeout),
+                    )
+                )
+
         response = base_llm_http_handler.ocr(
             model=model,
-            document=document,  # Pass the entire document dict
+            document=document,
             optional_params=optional_params,
-            timeout=timeout or request_timeout,
+            timeout=effective_timeout,
             logging_obj=litellm_logging_obj,
             api_key=api_key,
             api_base=api_base,

@@ -28,6 +28,7 @@ def rust_ocr(
     api_key: str | None,
     api_base: str | None,
     optional_params: dict,
+    timeout_seconds: float | None = None,
 ) -> dict:
     """Call the Rust bridge and return the raw OCR response dict.
 
@@ -38,5 +39,5 @@ def rust_ocr(
     import litellm_python_bridge
 
     return litellm_python_bridge.ocr(
-        model, document, api_key, api_base, optional_params
+        model, document, api_key, api_base, optional_params, timeout_seconds
     )

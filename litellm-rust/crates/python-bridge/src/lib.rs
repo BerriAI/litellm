@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use litellm_core::error::CoreError;
 use litellm_providers::ocr::run_ocr;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -35,7 +37,7 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
 
 /// Perform a Mistral OCR call end to end and return the response as a dict.
 #[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, optional_params=None))]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, optional_params=None, timeout_seconds=None))]
 fn ocr(
     py: Python<'_>,
     model: String,
@@ -43,6 +45,7 @@ fn ocr(
     api_key: Option<String>,
     api_base: Option<String>,
     optional_params: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
     let document = py_to_json(py, document.bind(py))?;
 
@@ -54,6 +57,14 @@ fn ocr(
         None => Map::new(),
     };
 
+    let timeout = timeout_seconds.and_then(|secs| {
+        if secs.is_finite() && secs > 0.0 {
+            Some(Duration::from_secs_f64(secs))
+        } else {
+            None
+        }
+    });
+
     // Release the GIL during the blocking HTTP call (counted for observability).
     let result = gil::release_gil(py, || {
         run_ocr(
@@ -62,6 +73,7 @@ fn ocr(
             api_key.as_deref(),
             api_base.as_deref(),
             optional_params,
+            timeout,
         )
     });
 
