@@ -7,12 +7,15 @@ on:
       - litellm_internal_staging
       - litellm_oss_branch
       - "litellm_**"
+  # On push the branches filter matches the branch being pushed to, not the PR
+  # target, so the "litellm_**" glob used above would fire post-merge-budget on
+  # every short-lived feature branch carrying the litellm_ prefix. Restrict push
+  # to the long-lived branches PRs actually merge into, where accumulation happens.
   push:
     branches:
       - main
       - litellm_internal_staging
       - litellm_oss_branch
-      - "litellm_**"
 
 permissions:
   contents: read
