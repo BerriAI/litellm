@@ -245,7 +245,7 @@ class ResponsesAPIRequestUtils:
         Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
         """
         assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
-        encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
+        encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8").rstrip("=")
         return f"encitem_{encoded}"
 
     @staticmethod
@@ -286,7 +286,7 @@ class ResponsesAPIRequestUtils:
         Format: ``litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}``
         """
         metadata = f"model_id:{model_id}"
-        encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8")
+        encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8").rstrip("=")
         return f"litellm_enc:{encoded_metadata};{encrypted_content}"
 
     @staticmethod
