@@ -139,9 +139,19 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             buffer = ""
 
         if buffer.strip():
+            # A row never parsed (truncated/malformed, or it swallowed the rows
+            # that followed it). Returning the partial `output` would silently
+            # drop those rows; return the unchanged original so the provider
+            # rejects the batch loudly instead of accepting a truncated one.
             verbose_logger.error(
                 f"error parsing trailing batch content: {buffer[:100]}..."
             )
+            if hasattr(source, "seek"):
+                try:
+                    source.seek(0)  # type: ignore[attr-defined]
+                except (OSError, ValueError):
+                    pass
+            return file_content
 
         # If no valid JSON objects were found, return the original content
         if not wrote_any:
