@@ -8,7 +8,9 @@ repository.workspace = true
 [dependencies]
 litellm-core.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
