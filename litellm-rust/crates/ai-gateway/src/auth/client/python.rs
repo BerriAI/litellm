@@ -47,12 +47,12 @@ impl PythonAuthClient {
 
 #[axum::async_trait]
 impl KeyAuthenticator for PythonAuthClient {
-    async fn verify(&self, key: &str) -> Result<UserApiKeyAuth, AuthError> {
+    async fn verify(&self, key: &str, route: &str) -> Result<UserApiKeyAuth, AuthError> {
         let response = self
             .http
             .post(&self.verify_url)
             .header(DATA_PLANE_KEY_HEADER, &self.data_plane_key)
-            .json(&serde_json::json!({ "api_key": key }))
+            .json(&serde_json::json!({ "api_key": key, "route": route }))
             .send()
             .await
             .map_err(|err| AuthError::Upstream(err.to_string()))?;
