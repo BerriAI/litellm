@@ -205,7 +205,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> str:
         from ..ai_gateway import (
             build_chat_url,
-            gateway_available,
             has_explicit_custom_path,
             parse_use_ai_gateway_flag,
             resolve_surface,
@@ -225,12 +224,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         resolved_base = self._get_api_base(api_base)
         host = workspace_host_from_base(resolved_base)
 
+        # Pure, no-network surface resolution: optimistic gateway-first unless this
+        # host is already cached as gateway-absent (learned reactively from a prior
+        # request — see `databricks_chat_completion_with_surface_fallback`).
         use_ai_gateway = parse_use_ai_gateway_flag(litellm_params, optional_params)
-        probe_headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         surface = resolve_surface(
             api_base=user_api_base,
             use_ai_gateway=use_ai_gateway,
-            gateway_available=lambda: gateway_available(host, probe_headers),
+            host=host,
         )
         return build_chat_url(host, surface)
 

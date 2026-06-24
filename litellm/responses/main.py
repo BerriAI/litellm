@@ -898,6 +898,30 @@ def _responses_try_dispatch_emulated_file_search(
     )
 
 
+def _emulate_or_reraise_primary(emulate_fn, stamp_fn, primary_exc):
+    """Sync: emulate via chat completions; if that also fails, re-raise the
+    primary surface's original error (clearer than a chat-emulation error)."""
+    try:
+        return stamp_fn(emulate_fn())
+    except Exception:
+        if primary_exc is not None:
+            raise primary_exc
+        raise
+
+
+async def _aemulate_or_reraise_primary(emulate_fn, primary_exc):
+    """Async counterpart of :func:`_emulate_or_reraise_primary`."""
+    try:
+        res = emulate_fn()
+        if asyncio.iscoroutine(res):
+            res = await res
+        return res
+    except Exception:
+        if primary_exc is not None:
+            raise primary_exc
+        raise
+
+
 def _execute_responses_with_surface_fallback(
     *,
     responses_api_provider_config: BaseResponsesAPIConfig,
@@ -1025,6 +1049,7 @@ def _execute_responses_with_surface_fallback(
         # handler returns a coroutine for real async calls but may return a plain
         # value (e.g. a mocked/sync handler), so only await when awaitable.
         async def _aresponses_with_fallback():
+            primary_exc = None
             for cfg in configs_to_try:
                 try:
                     res = _run_responses_config(cfg)
@@ -1032,24 +1057,28 @@ def _execute_responses_with_surface_fallback(
                         res = await res
                     return res
                 except Exception as inner_exc:
+                    primary_exc = primary_exc or inner_exc
                     if _should_try_next_surface(inner_exc):
                         continue
                     raise
-            res = _emulate_via_chat_completions()
-            if asyncio.iscoroutine(res):
-                res = await res
-            return res
+            return await _aemulate_or_reraise_primary(
+                _emulate_via_chat_completions, primary_exc
+            )
 
         return _aresponses_with_fallback()
 
+    primary_exc = None
     for cfg in configs_to_try:
         try:
             return _stamp_response(_run_responses_config(cfg))
         except Exception as inner_exc:
+            primary_exc = primary_exc or inner_exc
             if _should_try_next_surface(inner_exc):
                 continue
             raise
-    return _stamp_response(_emulate_via_chat_completions())
+    return _emulate_or_reraise_primary(
+        _emulate_via_chat_completions, _stamp_response, primary_exc
+    )
 
 
 @client

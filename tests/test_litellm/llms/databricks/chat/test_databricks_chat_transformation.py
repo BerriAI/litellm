@@ -315,27 +315,26 @@ def test_get_complete_url_flag_false_forces_serving_endpoints():
     assert url == f"{HOST}/serving-endpoints/chat/completions"
 
 
-def test_get_complete_url_auto_mode_probes_and_falls_back():
-    """In auto mode a bare host probes the gateway; a 404 falls back to serving."""
+def test_get_complete_url_auto_mode_is_optimistic_gateway_no_probe():
+    """In auto mode a bare host routes to the gateway optimistically, with NO
+    network probe (pure cache lookup)."""
     from litellm.llms.databricks import ai_gateway
 
     ai_gateway.clear_gateway_cache()
-    with patch.object(
-        ai_gateway, "default_gateway_probe", return_value=False
-    ) as mock_probe:
-        config = DatabricksConfig()
-        url = _get_url(config, HOST)
-    assert url == f"{HOST}/serving-endpoints/chat/completions"
-    mock_probe.assert_called_once()
-    ai_gateway.clear_gateway_cache()
-
-
-def test_get_complete_url_auto_mode_uses_gateway_when_probe_succeeds():
-    from litellm.llms.databricks import ai_gateway
-
-    ai_gateway.clear_gateway_cache()
-    with patch.object(ai_gateway, "default_gateway_probe", return_value=True):
-        config = DatabricksConfig()
-        url = _get_url(config, HOST)
+    config = DatabricksConfig()
+    url = _get_url(config, HOST)
     assert url == f"{HOST}/ai-gateway/mlflow/v1/chat/completions"
+    ai_gateway.clear_gateway_cache()
+
+
+def test_get_complete_url_auto_mode_uses_serving_when_host_known_absent():
+    """Once a host is cached gateway-absent (learned reactively), auto mode routes
+    straight to serving-endpoints."""
+    from litellm.llms.databricks import ai_gateway
+
+    ai_gateway.clear_gateway_cache()
+    ai_gateway.mark_gateway_absent(HOST)
+    config = DatabricksConfig()
+    url = _get_url(config, HOST)
+    assert url == f"{HOST}/serving-endpoints/chat/completions"
     ai_gateway.clear_gateway_cache()

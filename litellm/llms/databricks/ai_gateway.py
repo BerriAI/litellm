@@ -22,7 +22,7 @@ import re
 import threading
 import time
 from enum import Enum
-from typing import Callable, Dict, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional, Tuple
 
 # Prefixes stripped from a model id before name-pattern matching. Supports both
 # "databricks/databricks-claude-..." and bare "databricks-claude-..." forms.
@@ -199,21 +199,25 @@ def _coerce_tristate(value) -> Optional[bool]:
 def resolve_surface(
     api_base: Optional[str],
     use_ai_gateway: Optional[bool],
-    gateway_available: Callable[[], bool],
+    host: str,
 ) -> Surface:
-    """Decide which Databricks surface to target. Pure given ``gateway_available``.
+    """Decide which Databricks surface to target. Pure, no network call.
 
     Precedence (highest first):
 
     1. Explicit ``api_base`` ending in ``/serving-endpoints`` or ``/ai-gateway``
        always wins (strict Q4 — never auto-rewrite an explicit surface).
     2. The ``databricks_use_ai_gateway`` flag: ``True`` -> gateway, ``False`` ->
-       serving-endpoints (no probe).
-    3. Auto (flag is ``None``): gateway by default, probing once per host and
-       falling back to serving-endpoints only when the gateway is unavailable.
+       serving-endpoints.
+    3. Auto (flag is ``None``): **optimistic gateway-first**. We target the
+       gateway unless this host is already *known* (cached) to not serve it. There
+       is intentionally NO preflight probe — gateway absence is learned reactively
+       from a real request (see :func:`is_gateway_absent_error` /
+       :func:`mark_gateway_absent`) and cached per host, so the next request for a
+       gateway-less host routes straight to serving-endpoints.
 
-    ``gateway_available`` is a zero-arg callable so the (possibly networked)
-    probe is evaluated lazily — only when auto mode actually needs it.
+    This keeps the gateway the default while never blocking on (or even issuing) a
+    network probe from the request hot path.
     """
     if is_serving_endpoints_base(api_base):
         return "serving_endpoints"
@@ -225,8 +229,8 @@ def resolve_surface(
     if use_ai_gateway is False:
         return "serving_endpoints"
 
-    # Auto: default to the gateway, fall back only if the probe says it's absent.
-    return "ai_gateway" if gateway_available() else "serving_endpoints"
+    # Auto: optimistic gateway-first; only avoid it for a host known to lack it.
+    return "serving_endpoints" if gateway_known_absent(host) else "ai_gateway"
 
 
 def build_surface_base(host_or_base: str, surface: Surface) -> str:
@@ -288,17 +292,28 @@ def build_chat_url(host_or_base: str, surface: Surface) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-host gateway capability cache + probe
+# Per-host gateway capability cache (reactive — no preflight probe)
 # ---------------------------------------------------------------------------
+#
+# We never probe the gateway proactively (that would put blocking network I/O on
+# the request hot path, including the proxy's async path). Instead we route
+# optimistically to the gateway and learn absence *reactively*: when a real
+# request to the gateway surface comes back with a host-level "absent" signal
+# (see :func:`is_gateway_absent_error`), the connector calls
+# :func:`mark_gateway_absent` and retries serving-endpoints. Gateway presence is a
+# host-level fact, so a single observation is cached and authoritative for the
+# host until the TTL expires.
 
 # host -> (available, epoch_seconds_cached_at)
 _GATEWAY_CACHE: Dict[str, Tuple[bool, float]] = {}
 _GATEWAY_CACHE_LOCK = threading.Lock()
-# Cache lifetime. Gateway enablement changes rarely, so an hour keeps the probe
-# cost negligible while still picking up enablement within a session lifetime.
+# Cache lifetime. Gateway enablement changes rarely; an hour re-checks enablement
+# within a session lifetime while keeping at most one reactive fallback per host/hour.
 GATEWAY_CACHE_TTL_SECONDS = 3600.0
-# Statuses that indicate the gateway surface is NOT served by this workspace.
-_GATEWAY_ABSENT_STATUSES = (404, 501)
+# HTTP statuses that indicate the gateway surface is NOT served by this workspace.
+GATEWAY_ABSENT_STATUSES = (404, 501)
+# Error-body markers (lowercased) that indicate the gateway path is not served.
+GATEWAY_ABSENT_MARKERS = ("endpoint_not_found",)
 
 
 def _cache_get(host: str) -> Optional[bool]:
@@ -315,7 +330,7 @@ def _cache_get(host: str) -> Optional[bool]:
 
 def _cache_set(host: str, available: bool) -> None:
     with _GATEWAY_CACHE_LOCK:
-        _GATEWAY_CACHE[host] = (available, time.time())
+        _GATEWAY_CACHE[workspace_host_from_base(host)] = (available, time.time())
 
 
 def clear_gateway_cache() -> None:
@@ -324,46 +339,37 @@ def clear_gateway_cache() -> None:
         _GATEWAY_CACHE.clear()
 
 
-def gateway_available(
-    host: str,
-    headers: Optional[dict] = None,
-    *,
-    probe_fn: Optional[Callable[[str, Optional[dict]], bool]] = None,
-) -> bool:
-    """Return whether the AI Gateway surface is served by ``host`` (cached per host).
+def mark_gateway_absent(host: str) -> None:
+    """Record that ``host`` does not serve the AI Gateway surface (reactive)."""
+    _cache_set(host, False)
 
-    On a cache miss the (injectable) ``probe_fn`` is invoked and its result
-    cached. ``probe_fn`` defaults to :func:`default_gateway_probe`.
+
+def mark_gateway_present(host: str) -> None:
+    """Record that ``host`` serves the AI Gateway surface (reactive)."""
+    _cache_set(host, True)
+
+
+def gateway_known_absent(host: str) -> bool:
+    """True only if ``host`` is *cached* as not serving the gateway. Unknown hosts
+    return ``False`` (so :func:`resolve_surface` stays optimistic gateway-first)."""
+    return _cache_get(workspace_host_from_base(host)) is False
+
+
+def is_gateway_absent_error(exc: Exception) -> bool:
+    """True if ``exc`` from a real gateway request indicates the workspace does not
+    serve the AI Gateway path (a host-level signal), so the caller should mark the
+    host absent and retry serving-endpoints.
+
+    Keyed on ``404``/``501`` or an ``endpoint_not_found`` body marker. A false
+    positive (e.g. a model-level 404) is self-limiting: it only routes the host to
+    the proven serving-endpoints surface for the cache TTL, which still works.
     """
-    host = workspace_host_from_base(host)
-    cached = _cache_get(host)
-    if cached is not None:
-        return cached
-
-    probe = probe_fn or default_gateway_probe
+    status = getattr(exc, "status_code", None)
     try:
-        available = probe(host, headers)
-    except Exception:
-        # Network/transport failure during probe: assume the gateway is present
-        # rather than silently degrading every host on a transient blip. A real
-        # 404/501 (handled inside the probe) is what marks it absent.
-        available = True
-    _cache_set(host, available)
-    return available
-
-
-def default_gateway_probe(host: str, headers: Optional[dict]) -> bool:
-    """Probe ``<host>/ai-gateway/mlflow/v1/chat/completions`` to detect the gateway.
-
-    A bare ``GET`` against the chat path returns 404/501 when the gateway is not
-    served by the workspace, and 4xx (e.g. 400/401/405) when it *is* served but
-    the request is rejected for other reasons. We therefore treat 404/501 as
-    "absent" and everything else as "present".
-    """
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-
-    probe_url = normalize_gateway_base(host) + AI_GATEWAY_PATHS["chat"]
-    timeout = float(os.getenv("DATABRICKS_GATEWAY_PROBE_TIMEOUT", "3.0"))
-    client = _get_httpx_client()
-    response = client.get(url=probe_url, headers=headers or {}, timeout=timeout)
-    return response.status_code not in _GATEWAY_ABSENT_STATUSES
+        status_int = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status_int = None
+    if status_int in GATEWAY_ABSENT_STATUSES:
+        return True
+    msg = (str(getattr(exc, "message", "") or "") + " " + str(exc)).lower()
+    return any(marker in msg for marker in GATEWAY_ABSENT_MARKERS)

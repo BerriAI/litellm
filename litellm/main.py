@@ -3295,8 +3295,15 @@ def completion(  # type: ignore # noqa: PLR0915
             headers = headers or litellm.headers
 
             ## COMPLETION CALL
+            from litellm.llms.databricks.chat.surface_fallback import (
+                databricks_chat_completion_with_surface_fallback,
+            )
+
             try:
-                response = base_llm_http_handler.completion(
+                # Optimistic AI Gateway routing with reactive serving-endpoints
+                # fallback (self-contained in the Databricks connector).
+                response = databricks_chat_completion_with_surface_fallback(
+                    base_llm_http_handler,
                     model=model,
                     stream=stream,
                     messages=messages,

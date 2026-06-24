@@ -34,7 +34,6 @@ from litellm.types.utils import LlmProviders
 
 from ..ai_gateway import (
     AI_GATEWAY_PATHS,
-    gateway_available,
     has_explicit_custom_path,
     normalize_gateway_base,
     parse_use_ai_gateway_flag,
@@ -123,10 +122,13 @@ class _DatabricksResponsesBase(DatabricksBase, OpenAIResponsesAPIConfig):
         else:
             params = litellm_params if isinstance(litellm_params, dict) else {}
             use_ai_gateway = parse_use_ai_gateway_flag(params, None)
+            # Pure, no-network resolution: optimistic gateway-first unless the host
+            # is cached gateway-absent. When the gateway surface rejects the model,
+            # the responses() surface-fallback chain retries the next surface.
             surface = resolve_surface(
                 api_base=user_api_base,
                 use_ai_gateway=use_ai_gateway,
-                gateway_available=lambda: gateway_available(host),
+                host=host,
             )
         if surface == "ai_gateway":
             return normalize_gateway_base(host) + self.gateway_path

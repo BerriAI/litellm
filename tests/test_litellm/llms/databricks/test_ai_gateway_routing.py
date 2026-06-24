@@ -16,10 +16,13 @@ from litellm.llms.databricks.ai_gateway import (
     build_gemini_generate_content_url,
     clear_gateway_cache,
     detect_family,
-    gateway_available,
+    gateway_known_absent,
     has_explicit_custom_path,
+    is_gateway_absent_error,
     is_gateway_base,
     is_serving_endpoints_base,
+    mark_gateway_absent,
+    mark_gateway_present,
     normalize_gateway_base,
     parse_use_ai_gateway_flag,
     resolve_surface,
@@ -217,43 +220,47 @@ class TestParseUseAiGatewayFlag:
 
 
 class TestResolveSurface:
-    def _gw(self, value):
-        return lambda: value
+    """resolve_surface is pure + no-network: optimistic gateway-first, consulting
+    only the per-host absence cache for the auto case."""
+
+    HOST = "https://h.databricks.com"
+
+    def setup_method(self):
+        clear_gateway_cache()
+
+    def teardown_method(self):
+        clear_gateway_cache()
 
     def test_explicit_serving_endpoints_wins(self):
-        # Even with the gateway available and flag forcing gateway, an explicit
-        # /serving-endpoints base stays on serving-endpoints (strict Q4).
+        # Even with the flag forcing gateway, an explicit /serving-endpoints base
+        # stays on serving-endpoints (strict Q4).
         assert (
-            resolve_surface(
-                "https://h/serving-endpoints", True, self._gw(True)
-            )
+            resolve_surface("https://h/serving-endpoints", True, self.HOST)
             == "serving_endpoints"
         )
 
     def test_explicit_gateway_base(self):
-        assert (
-            resolve_surface("https://h/ai-gateway", False, self._gw(False))
-            == "ai_gateway"
-        )
+        assert resolve_surface("https://h/ai-gateway", False, self.HOST) == "ai_gateway"
 
-    def test_flag_true_forces_gateway_no_probe(self):
-        probe_called = {"n": 0}
+    def test_flag_true_forces_gateway(self):
+        assert resolve_surface(None, True, self.HOST) == "ai_gateway"
 
-        def probe():
-            probe_called["n"] += 1
-            return False
+    def test_flag_false_forces_serving(self):
+        # Even if cached present, an explicit False forces serving-endpoints.
+        mark_gateway_present(self.HOST)
+        assert resolve_surface(None, False, self.HOST) == "serving_endpoints"
 
-        assert resolve_surface(None, True, probe) == "ai_gateway"
-        assert probe_called["n"] == 0
+    def test_auto_defaults_gateway_optimistically(self):
+        # Unknown host -> optimistic gateway, no probe.
+        assert resolve_surface(None, None, self.HOST) == "ai_gateway"
 
-    def test_flag_false_forces_serving_no_probe(self):
-        assert resolve_surface(None, False, self._gw(True)) == "serving_endpoints"
+    def test_auto_uses_serving_when_host_known_absent(self):
+        mark_gateway_absent(self.HOST)
+        assert resolve_surface(None, None, self.HOST) == "serving_endpoints"
 
-    def test_auto_defaults_gateway_when_available(self):
-        assert resolve_surface(None, None, self._gw(True)) == "ai_gateway"
-
-    def test_auto_falls_back_when_unavailable(self):
-        assert resolve_surface(None, None, self._gw(False)) == "serving_endpoints"
+    def test_auto_uses_gateway_when_host_known_present(self):
+        mark_gateway_present(self.HOST)
+        assert resolve_surface(None, None, self.HOST) == "ai_gateway"
 
 
 class TestBuildChatUrl:
@@ -310,45 +317,66 @@ class TestBuildNativeUrls:
         )
 
 
-class TestGatewayAvailableCache:
+class TestReactiveGatewayCache:
+    """The per-host cache is populated reactively (no preflight probe)."""
+
     def setup_method(self):
         clear_gateway_cache()
 
     def teardown_method(self):
         clear_gateway_cache()
 
-    def test_probe_called_once_then_cached(self):
-        calls = {"n": 0}
+    def test_unknown_host_not_absent(self):
+        # Unknown host is NOT "known absent" -> resolve_surface stays optimistic.
+        assert gateway_known_absent("https://h.databricks.com") is False
 
-        def probe(host, headers):
-            calls["n"] += 1
-            return True
-
+    def test_mark_absent_then_known_absent(self):
         host = "https://h.databricks.com"
-        assert gateway_available(host, probe_fn=probe) is True
-        assert gateway_available(host, probe_fn=probe) is True
-        assert calls["n"] == 1  # second call served from cache
+        mark_gateway_absent(host)
+        assert gateway_known_absent(host) is True
 
-    def test_negative_result_cached(self):
-        def probe(host, headers):
-            return False
-
+    def test_mark_present_then_not_absent(self):
         host = "https://h.databricks.com"
-        assert gateway_available(host, probe_fn=probe) is False
-
-    def test_probe_exception_assumes_available(self):
-        def probe(host, headers):
-            raise RuntimeError("connection refused")
-
-        host = "https://h.databricks.com"
-        # Transient failure should not permanently disable the gateway.
-        assert gateway_available(host, probe_fn=probe) is True
+        mark_gateway_present(host)
+        assert gateway_known_absent(host) is False
 
     def test_cache_is_per_host(self):
-        results = {"a": True, "b": False}
+        mark_gateway_absent("https://host-a.databricks.com")
+        assert gateway_known_absent("https://host-a.databricks.com") is True
+        assert gateway_known_absent("https://host-b.databricks.com") is False
 
-        def probe(host, headers):
-            return results["a"] if "host-a" in host else results["b"]
+    def test_mark_absent_normalizes_suffix(self):
+        # Marking via a suffixed base and reading via the bare host agree.
+        mark_gateway_absent("https://h.databricks.com/serving-endpoints")
+        assert gateway_known_absent("https://h.databricks.com") is True
 
-        assert gateway_available("https://host-a.databricks.com", probe_fn=probe) is True
-        assert gateway_available("https://host-b.databricks.com", probe_fn=probe) is False
+
+class TestIsGatewayAbsentError:
+    def _exc(self, status=None, message=""):
+        e = Exception(message)
+        if status is not None:
+            e.status_code = status  # type: ignore[attr-defined]
+        e.message = message  # type: ignore[attr-defined]
+        return e
+
+    def test_404_is_absent(self):
+        assert is_gateway_absent_error(self._exc(status=404)) is True
+
+    def test_501_is_absent(self):
+        assert is_gateway_absent_error(self._exc(status=501)) is True
+
+    def test_endpoint_not_found_marker_is_absent(self):
+        assert (
+            is_gateway_absent_error(self._exc(message="ENDPOINT_NOT_FOUND: no path"))
+            is True
+        )
+
+    def test_400_without_marker_is_not_absent(self):
+        # A plain 400 (e.g. bad params) must NOT be treated as gateway-absent.
+        assert is_gateway_absent_error(self._exc(status=400, message="bad input")) is False
+
+    def test_500_without_absent_marker_is_not_absent(self):
+        assert (
+            is_gateway_absent_error(self._exc(status=500, message="internal_error"))
+            is False
+        )
