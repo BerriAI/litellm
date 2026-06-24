@@ -11,6 +11,10 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
+from litellm.llms.anthropic.workload_identity_federation import (
+    AnthropicWorkloadIdentityFederationError,
+    exchange_anthropic_workload_identity_federation_token,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -488,7 +492,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             "computer_20241022": "computer-use-2024-10-22",
         }
         return computer_tool_beta_mapping.get(
-            computer_tool_version, "computer-use-2024-10-22"  # Default fallback
+            computer_tool_version,
+            "computer-use-2024-10-22",  # Default fallback
         )
 
     def get_anthropic_beta_list(
@@ -637,7 +642,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
         auth_token: Optional[str] = None
         if api_key is None:
-            auth_token = AnthropicModelInfo.get_auth_token()
+            try:
+                auth_token = AnthropicModelInfo.get_auth_token(api_base=api_base)
+            except AnthropicWorkloadIdentityFederationError as exc:
+                raise litellm.AuthenticationError(
+                    message=str(exc),
+                    llm_provider="anthropic",
+                    model=model,
+                )
         if api_key is None and auth_token is None:
             raise litellm.AuthenticationError(
                 message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in your environment vars",
@@ -708,30 +720,45 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
-    def get_auth_token(auth_token: Optional[str] = None) -> Optional[str]:
-        """Get auth token from ANTHROPIC_AUTH_TOKEN env var.
+    def get_auth_token(
+        auth_token: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Optional[str]:
+        """Get auth token from ANTHROPIC_AUTH_TOKEN env var, or exchange one
+        via Workload Identity Federation when the ANTHROPIC_FEDERATION_*
+        env vars are set.
 
         Unlike api_key (which uses X-Api-Key header), auth_token uses
         Authorization: Bearer header, matching the official Anthropic SDK behavior.
         """
         from litellm.secret_managers.main import get_secret_str
 
-        return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
+        return (
+            auth_token
+            or get_secret_str("ANTHROPIC_AUTH_TOKEN")
+            or exchange_anthropic_workload_identity_federation_token(
+                api_base=AnthropicModelInfo.get_api_base(api_base),
+            )
+        )
 
     @staticmethod
     def get_auth_header(api_key: Optional[str] = None) -> Optional[dict]:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
-        Checks ANTHROPIC_API_KEY first (-> x-api-key), then
-        ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
-        Returns None if neither is available.
+        Checks ANTHROPIC_API_KEY first (-> x-api-key), then ANTHROPIC_AUTH_TOKEN
+        / exchanged Workload Identity Federation token via get_auth_token
+        (-> Authorization: Bearer).
+        Returns None if no credential source is available.
         """
         resolved_key = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
             return {"x-api-key": resolved_key}
-        auth_token = AnthropicModelInfo.get_auth_token()
+        try:
+            auth_token = AnthropicModelInfo.get_auth_token()
+        except AnthropicWorkloadIdentityFederationError:
+            return None
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}
         return None
