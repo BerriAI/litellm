@@ -1880,6 +1880,62 @@ async def test_acompletion_streaming_iterator_preserves_hidden_params():
     assert result._hidden_params.get("_response_ms") == 500.0
 
 
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_unwraps_content_policy_violation():
+    """A MidStreamFallbackError wrapping a ContentPolicyViolationError must
+    pass the original exception to the fallback utils, so the dedicated
+    content_policy_fallbacks branch matches on its isinstance check.
+    Regression test for https://github.com/BerriAI/litellm/issues/28599
+    """
+    from litellm.exceptions import ContentPolicyViolationError, MidStreamFallbackError
+
+    cpv_error = ContentPolicyViolationError(
+        message="content blocked", model="gpt-4", llm_provider="openai"
+    )
+    mid_stream_error = MidStreamFallbackError(
+        message=str(cpv_error),
+        model="gpt-4",
+        llm_provider="openai",
+        original_exception=cpv_error,
+        is_pre_first_chunk=True,
+    )
+
+    class FailingStream:
+        model = "gpt-4"
+        custom_llm_provider = "openai"
+        logging_obj = MagicMock()
+        chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise mid_stream_error
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+        content_policy_fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+    )
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", return_value=object()
+    ) as mock_fallback_utils:
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailingStream(),
+            messages=[{"role": "user", "content": "Hello"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        async for _ in result:
+            pass
+
+    assert mock_fallback_utils.call_args.kwargs["e"] is cpv_error
+
+
 def test_completion_streaming_iterator_fallback_on_429():
     """Sync streaming: MidStreamFallbackError (429 pre-first-chunk) triggers fallback.
 

@@ -987,6 +987,41 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exception_class",
+    [litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError],
+)
+async def test_streaming_dedicated_fallback_error_triggers_midstream_fallback(
+    logging_obj: Logging, exception_class
+):
+    """400s with dedicated fallback configs (content_policy_fallbacks /
+    context_window_fallbacks) must wrap into MidStreamFallbackError instead
+    of raising directly, so the Router's fallback chain can engage.
+    Regression test for https://github.com/BerriAI/litellm/issues/28599
+    """
+    from litellm.exceptions import MidStreamFallbackError
+
+    async def _raise_dedicated_fallback_error(**kwargs):
+        raise exception_class(
+            message="content blocked", model="gpt-4", llm_provider="openai"
+        )
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=_raise_dedicated_fallback_error,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert isinstance(excinfo.value.original_exception, exception_class)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_async_streaming_read_timeout_triggers_midstream_fallback(
     logging_obj: Logging,
 ):
