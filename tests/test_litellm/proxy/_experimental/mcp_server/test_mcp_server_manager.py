@@ -4692,6 +4692,50 @@ class TestCreateMcpClientV2Graft:
 
         assert exc.value.status_code == 401
 
+    async def test_per_request_override_defers_to_v1(self):
+        # A per-request override (mcp_auth_header) must win over the shared static token,
+        # exactly as v1 did, so a migrated static server defers to v1 when one is present.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(
+                auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"
+            ),
+            mcp_auth_header="caller-override",
+        )
+
+        assert client._resolved_auth is None
+        assert client._mcp_auth_value == "caller-override"
+
+    async def test_conflicting_extra_header_defers_to_v1(self):
+        # An Authorization already supplied via extra_headers (guardrail hook like the JWT
+        # signer, static_headers, or a forwarded caller header) must not be clobbered by the
+        # resolved static credential, so the static server defers to v1.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(
+                auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"
+            ),
+            extra_headers={"Authorization": "Bearer hook-jwt"},
+        )
+
+        assert client._resolved_auth is None
+        assert client._mcp_auth_value == "shared-tok"
+        # v1 applies extra_headers last, so the inbound header wins on the wire.
+        assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
+
+    async def test_none_with_extra_header_stays_v2_without_clobbering(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            NoOpAuth,
+        )
+
+        # none resolves to NoOpAuth, which writes no header, so it cannot clobber an inbound
+        # Authorization; it stays on the v2 path and the inbound header is preserved verbatim.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(auth_type=None),
+            extra_headers={"Authorization": "Bearer hook-jwt"},
+        )
+
+        assert isinstance(client._resolved_auth, NoOpAuth)
+        assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
