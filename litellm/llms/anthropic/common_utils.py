@@ -372,6 +372,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return None
 
     @staticmethod
+    def _get_exact_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the exact model-map entry only.
+
+        Unlike ``_get_model_capability``, does not walk stripped provider aliases.
+        Use when a feature is tied to a specific host (e.g. Anthropic API fast mode).
+        """
+        value = litellm.model_cost.get(model, {}).get(key)
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
     def _supports_model_capability(model: str, key: str) -> bool:
         """Check a boolean capability ``key`` in the model map.
 

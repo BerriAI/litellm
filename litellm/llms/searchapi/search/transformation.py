@@ -74,7 +74,13 @@ class SearchAPIConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("SEARCHAPI_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SEARCHAPI_API_KEY",),
+            base_env_var="SEARCHAPI_API_BASE",
+            default_api_base=self.SEARCHAPI_API_BASE,
+        )
 
         if not api_key:
             raise ValueError(
@@ -114,6 +120,7 @@ class SearchAPIConfig(BaseSearchConfig):
         query: Union[str, List[str]],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: str | None = None,
         search_engine_id: Optional[str] = None,
         **kwargs,
     ) -> Dict:
@@ -137,8 +144,16 @@ class SearchAPIConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        # Get API key from parameter or environment
-        api_key = api_key or get_secret_str("SEARCHAPI_API_KEY")
+        # Get API key from parameter or environment. The key is sent as a query
+        # param to api_base, so resolve it host-aware to avoid leaking a
+        # server-managed key to a caller-supplied host.
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SEARCHAPI_API_KEY",),
+            base_env_var="SEARCHAPI_API_BASE",
+            default_api_base=self.SEARCHAPI_API_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable."

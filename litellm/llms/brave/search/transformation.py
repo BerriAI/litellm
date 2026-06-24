@@ -115,7 +115,13 @@ class BraveSearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("BRAVE_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("BRAVE_API_KEY",),
+            base_env_var="BRAVE_API_BASE",
+            default_api_base=self.BRAVE_API_BASE,
+        )
 
         if not api_key:
             raise ValueError(
