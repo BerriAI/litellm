@@ -17,6 +17,7 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
+use litellm_providers::realtime_pool::RealtimePool;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
@@ -55,13 +56,19 @@ async fn handle(
     }
 
     let router = state.router.clone();
+    let pool = state.realtime_pool.clone();
     let model = query.model;
-    Ok(ws.on_upgrade(move |socket| bridge(socket, router, model)))
+    Ok(ws.on_upgrade(move |socket| bridge(socket, router, pool, model)))
 }
 
 /// Adapt the axum socket (text frames) to the typed-event `Stream`/`Sink` the
 /// service wants, keeping axum types out of `service`.
-async fn bridge(socket: WebSocket, router: Arc<ModelRouter>, model: String) {
+async fn bridge(
+    socket: WebSocket,
+    router: Arc<ModelRouter>,
+    pool: Arc<RealtimePool>,
+    model: String,
+) {
     let (ws_sink, ws_stream) = socket.split();
 
     let client_in = ws_stream.filter_map(|message| async move {
@@ -77,5 +84,5 @@ async fn bridge(socket: WebSocket, router: Arc<ModelRouter>, model: String) {
     });
 
     futures_util::pin_mut!(client_in, client_out);
-    let _ = service::run(&router, &model, None, client_in, client_out).await;
+    let _ = service::run(&router, &pool, &model, None, client_in, client_out).await;
 }
