@@ -3062,6 +3062,36 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["custom_llm_provider"] == "bedrock"
 
 
+def test_get_deployment_credentials_with_provider_includes_bucket_name():
+    """
+    Regression: bucket_name must survive the CredentialLiteLLMParams filter so
+    managed-files batch retrieval can resolve the GCS/S3 bucket. Previously it was
+    dropped, causing "GCS bucket_name is required" when fetching batch output files.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "my-batch-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="vertex-gemini"
+    )
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "my-batch-bucket"
+    assert credentials["vertex_project"] == "my-project"
+    assert credentials["custom_llm_provider"] == "vertex_ai"
+
+
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves
@@ -4901,3 +4931,107 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
         )
         is True
     )
+
+
+class TestRouterRequestTimeoutPropagation:
+    """litellm_settings.request_timeout must act as an independent per-attempt timeout.
+
+    Regression for LIT-2369: request_timeout was shadowed by router_settings.timeout,
+    so Bedrock (and other provider) calls fell back to the hardcoded 600s httpx
+    default instead of the configured value.
+    """
+
+    def _make_router(self, timeout=None, stream_timeout=None):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-test",
+                    },
+                }
+            ],
+            timeout=timeout,
+            stream_timeout=stream_timeout,
+        )
+
+    @pytest.fixture
+    def explicit_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        try:
+            yield 300
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_request_timeout_stored_independently_when_both_set(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert router.timeout == 330
+        assert router.request_timeout == 300
+
+    def test_request_timeout_none_when_not_explicitly_configured(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        try:
+            router = self._make_router(timeout=330)
+            assert router.timeout == 330
+            assert router.request_timeout is None
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_non_stream_prefers_request_timeout_over_router_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert router._get_non_stream_timeout(kwargs={}, data={}) == 300
+
+    def test_stream_prefers_request_timeout_over_router_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        # stream=True resolves through _get_stream_timeout; request_timeout must win.
+        assert router._get_timeout(kwargs={"stream": True}, data={}) == 300
+
+    def test_explicit_stream_timeout_still_wins_over_request_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330, stream_timeout=45)
+        assert router._get_stream_timeout(kwargs={}, data={}) == 45
+
+    def test_non_stream_falls_through_to_router_timeout_without_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        try:
+            router = self._make_router(timeout=330)
+            assert router._get_non_stream_timeout(kwargs={}, data={}) == 330
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_per_deployment_timeout_overrides_request_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert router._get_non_stream_timeout(kwargs={}, data={"timeout": 120}) == 120
+
+    def test_per_request_timeout_overrides_request_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert (
+            router._get_non_stream_timeout(
+                kwargs={"timeout": 60}, data={"timeout": 120}
+            )
+            == 60
+        )

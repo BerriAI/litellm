@@ -38,6 +38,7 @@ class CooldownCache:
             visible_prefix=50,  # Show first 50 characters
             visible_suffix=0,  # Show last 0 characters
             mask_char="*",  # Use * for masking
+            mask_short_values=False,  # Truncate long messages only; keep short ones readable
         )
 
     def _common_add_cooldown_logic(
