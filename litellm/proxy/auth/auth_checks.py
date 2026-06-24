@@ -2462,7 +2462,6 @@ class ExperimentalUIJWTToken:
             key_name=session_alias,
             key_alias=session_alias,
             expires=expires,
-            max_budget=litellm.max_ui_session_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
