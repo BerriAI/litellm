@@ -770,6 +770,40 @@ def test_generic_response_convertor_normalizes_email():
 
 
 @pytest.mark.asyncio
+async def test_free_sso_login_blocks_existing_users_when_over_limit():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _enforce_free_sso_user_limit,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=6)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce_free_sso_user_limit(
+            prisma_client=mock_prisma,
+            premium_user=False,
+            block_at_limit=False,
+        )
+
+    assert str(exc_info.value.code) == "403"
+
+
+@pytest.mark.asyncio
+async def test_free_sso_login_allows_existing_users_at_limit():
+    from litellm.proxy.management_endpoints.ui_sso import _enforce_free_sso_user_limit
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=5)
+
+    await _enforce_free_sso_user_limit(
+        prisma_client=mock_prisma,
+        premium_user=False,
+        block_at_limit=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_insert_sso_user_blocks_when_at_user_limit():
     """
     Non-premium: insert_sso_user raises ProxyException when the DB already has 5 users.

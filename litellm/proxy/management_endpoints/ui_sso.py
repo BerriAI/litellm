@@ -863,6 +863,11 @@ async def google_login(
                     param="premium_user",
                     code=status.HTTP_403_FORBIDDEN,
                 )
+            await _enforce_free_sso_user_limit(
+                prisma_client=prisma_client,
+                premium_user=premium_user,
+                block_at_limit=False,
+            )
 
     ####### Detect DB + MASTER KEY in .env #######
     missing_env_vars = show_missing_vars_in_env()
@@ -1493,6 +1498,29 @@ def get_disabled_non_admin_personal_key_creation():
     personal_key_generation = key_generation_settings.get("personal_key_generation") or {}
     allowed_user_roles = personal_key_generation.get("allowed_user_roles") or []
     return bool("proxy_admin" in allowed_user_roles)
+
+
+def _free_tier_sso_user_limit_error() -> ProxyException:
+    return ProxyException(
+        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+        type=ProxyErrorTypes.auth_error,
+        param="premium_user",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def _enforce_free_sso_user_limit(
+    prisma_client: PrismaClient | None,
+    premium_user: bool,
+    block_at_limit: bool,
+) -> None:
+    if premium_user or prisma_client is None:
+        return
+    total_users = await prisma_client.db.litellm_usertable.count()
+    if total_users is None:
+        return
+    if total_users > 5 or (block_at_limit and total_users >= 5):
+        raise _free_tier_sso_user_limit_error()
 
 
 async def get_existing_user_info_from_db(
@@ -2220,16 +2248,11 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
-    if not premium_user and prisma_client is not None:
-        # Check if under 'free SSO user' limit
-        total_users = await prisma_client.db.litellm_usertable.count()
-        if total_users is not None and total_users >= 5:
-            raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                type=ProxyErrorTypes.auth_error,
-                param="premium_user",
-                code=status.HTTP_403_FORBIDDEN,
-            )
+    await _enforce_free_sso_user_limit(
+        prisma_client=prisma_client,
+        premium_user=premium_user,
+        block_at_limit=True,
+    )
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
         # Preserve the SSO-extracted role if it's a valid LiteLLM role,
@@ -3046,7 +3069,14 @@ class SSOAuthenticationHandler:
         from litellm.proxy.utils import get_prisma_client_or_throw
         from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
-        prisma_client = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+        await _enforce_free_sso_user_limit(
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+            block_at_limit=False,
+        )
 
         # User is Authe'd in - generate key for the UI to access Proxy
         parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(

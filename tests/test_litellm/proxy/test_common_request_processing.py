@@ -3508,6 +3508,77 @@ class TestStreamingClientDisconnectLogging:
         assert order == ["aclose", "bill"]
 
     @pytest.mark.asyncio
+    async def test_async_streaming_data_generator_bills_partial_chunks_without_response_chunks(
+        self, monkeypatch
+    ):
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            MagicMock(),
+        )
+
+        chunk = {
+            "id": "chatcmpl-test",
+            "model": "gpt-4",
+            "choices": [{"delta": {"content": "partial"}}],
+        }
+        partial_response = MagicMock()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"metadata": {}, "litellm_params": {}}
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.dispatch_success_handlers = AsyncMock()
+
+        class StreamWithoutChunks:
+            aclose = AsyncMock()
+
+        async def mock_streaming_iterator(*_args, **_kwargs):
+            yield chunk
+
+        mock_proxy_logging = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging.async_post_call_streaming_iterator_hook = (
+            mock_streaming_iterator
+        )
+        mock_proxy_logging._release_max_parallel_requests_on_disconnect = MagicMock()
+        ProxyLogging._callback_capabilities_cache.clear()
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "model": "gpt-4",
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+            "litellm_logging_obj": logging_obj,
+        }
+
+        with patch.object(
+            litellm, "stream_chunk_builder", return_value=partial_response
+        ) as builder:
+            gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=StreamWithoutChunks(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data=request_data,
+                proxy_logging_obj=mock_proxy_logging,
+                serialize_chunk=lambda stream_chunk: stream_chunk,
+                serialize_error=lambda proxy_exc: proxy_exc,
+                request=mock_request,
+            )
+            assert await gen.__anext__() is chunk
+            await gen.aclose()
+
+        builder.assert_called_once()
+        assert builder.call_args.kwargs["chunks"] == [chunk]
+        logging_obj.dispatch_success_handlers.assert_awaited_once_with(
+            partial_response,
+            start_time=None,
+            end_time=None,
+            cache_hit=False,
+            prefer_async_handlers=True,
+        )
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
     async def test_async_streaming_data_generator_records_499_on_early_aclose(
         self, monkeypatch
     ):

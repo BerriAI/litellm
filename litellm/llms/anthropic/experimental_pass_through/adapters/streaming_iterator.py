@@ -97,6 +97,14 @@ class _CombinedChunkSplitter:
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
 
+    @property
+    def chunks(self) -> Any:
+        return getattr(self._stream, "chunks", None)
+
+    @property
+    def messages(self) -> Any:
+        return getattr(self._stream, "messages", None)
+
     def __iter__(self) -> "Iterator[Any]":
         return self
 
@@ -188,6 +196,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             type="text",
             text="",
         )
+
+    @property
+    def chunks(self) -> Any:
+        return getattr(self.completion_stream, "chunks", None)
+
+    @property
+    def messages(self) -> Any:
+        return getattr(self.completion_stream, "messages", None)
+
+    @staticmethod
+    def _is_empty_choices_without_usage(chunk: Any) -> bool:
+        if getattr(chunk, "choices", None):
+            return False
+        if getattr(chunk, "usage", None) is not None:
+            return False
+        hidden_params = getattr(chunk, "_hidden_params", None)
+        return not (isinstance(hidden_params, dict) and hidden_params.get("usage"))
 
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> Dict[str, Any]:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
@@ -388,7 +413,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                if not chunk.choices and getattr(chunk, "usage", None) is None:
+                if self._is_empty_choices_without_usage(chunk):
                     continue
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
@@ -612,7 +637,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                if not chunk.choices and getattr(chunk, "usage", None) is None:
+                if self._is_empty_choices_without_usage(chunk):
                     continue
 
                 # Check if we need to start a new content block

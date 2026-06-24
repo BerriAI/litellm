@@ -256,7 +256,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _normalize_checks(checks: object | None) -> dict[str, Any] | None:
         """Normalize the configured `checks` into a plain dict for the API body.
 
-        Accepts a pydantic ``BedrockChecksConfigModel`` or a raw dict; drops empty /
+        Accepts a pydantic ``BedrockChecksConfigModel`` or a raw dict; drops None /
         unknown keys. Returns None when no usable check is configured (=> ApplyGuardrail).
         """
         if checks is None:
@@ -268,7 +268,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         cleaned = {
             key: value
             for key, value in checks.items()
-            if key in _BEDROCK_CHECKS_KNOWN_KEYS and value
+            if key in _BEDROCK_CHECKS_KNOWN_KEYS and value is not None
         }
         return cleaned or None
 

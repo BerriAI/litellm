@@ -14,6 +14,12 @@ from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
+def test_bedrock_normalize_checks_keeps_empty_known_check_config():
+    assert BedrockGuardrail._normalize_checks({"contentFilter": {}}) == {
+        "contentFilter": {}
+    }
+
+
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_pii_masking():
     # Create proper mock objects

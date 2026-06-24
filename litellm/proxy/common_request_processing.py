@@ -2407,6 +2407,7 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         stream_completed: bool = False,
         client_disconnected: bool = False,
+        streamed_chunks: list[Any] | None = None,
     ) -> None:
         with anyio.CancelScope(shield=True):
             should_record_client_disconnect = client_disconnected or (not stream_completed)
@@ -2433,11 +2434,12 @@ class ProxyBaseLLMRequestProcessing:
                 await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
                     response,
                     request_data,
+                    streamed_chunks,
                 )
 
     @staticmethod
     async def _bill_partial_stream_on_disconnect(
-        response: object, request_data: dict
+        response: object, request_data: dict, streamed_chunks: list[Any] | None = None
     ) -> None:
         """Record SpendLogs for tokens already produced when a stream is cut off.
 
@@ -2451,8 +2453,21 @@ class ProxyBaseLLMRequestProcessing:
         normal completion already logged.
         """
         logging_obj = request_data.get("litellm_logging_obj")
-        chunks = getattr(response, "chunks", None)
+        response_chunks = getattr(response, "chunks", None)
+        chunks = (
+            response_chunks
+            if isinstance(response_chunks, list) and response_chunks
+            else streamed_chunks
+        )
         if logging_obj is None or not chunks:
+            return
+        first_chunk = chunks[0]
+        if isinstance(first_chunk, (bytes, bytearray)):
+            return
+        if isinstance(first_chunk, dict):
+            if "choices" not in first_chunk:
+                return
+        elif not isinstance(first_chunk, str) and not hasattr(first_chunk, "choices"):
             return
         # Optimization, not a correctness guard: dispatch_success_handlers is the
         # authoritative de-dup via has_dispatched_final_stream_success. This just
@@ -2530,6 +2545,7 @@ class ProxyBaseLLMRequestProcessing:
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
+        streamed_chunks: list[Any] = []
         try:
             str_so_far = ""
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -2572,6 +2588,8 @@ class ProxyBaseLLMRequestProcessing:
                 # awaited above, so a cancellation during it still leaves this
                 # False and refunds.
                 delivered_chunk = True
+                if not isinstance(chunk, (bytes, bytearray)):
+                    streamed_chunks.append(chunk)
                 yield serialize_chunk(chunk)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
@@ -2625,6 +2643,7 @@ class ProxyBaseLLMRequestProcessing:
                 response=response,
                 stream_completed=stream_completed,
                 client_disconnected=client_disconnected,
+                streamed_chunks=streamed_chunks,
             )
 
     @staticmethod

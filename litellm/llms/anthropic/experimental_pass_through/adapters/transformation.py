@@ -1480,9 +1480,25 @@ class LiteLLMAnthropicMessagesAdapter:
         current_content_block_index: int,
         applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
+        if getattr(response, "usage", None) is not None:
+            litellm_usage_chunk: Optional[Usage] = response.usage  # type: ignore
+        elif (
+            hasattr(response, "_hidden_params")
+            and "usage" in response._hidden_params
+        ):
+            litellm_usage_chunk = response._hidden_params["usage"]
+        else:
+            litellm_usage_chunk = None
+
         ## base case - final chunk w/ finish reason, or a usage-only chunk
         ## (choices=[]) that carries trailing usage. See #30761.
-        if not response.choices or response.choices[0].finish_reason is not None:
+        has_finish_reason = (
+            bool(response.choices) and response.choices[0].finish_reason is not None
+        )
+        has_usage_only_chunk = (
+            not response.choices and litellm_usage_chunk is not None
+        )
+        if has_finish_reason or has_usage_only_chunk:
             stop_reason = (
                 self._translate_openai_finish_reason_to_anthropic(
                     response.choices[0].finish_reason
@@ -1491,12 +1507,6 @@ class LiteLLMAnthropicMessagesAdapter:
                 else None
             )
             delta = MessageDelta(stop_reason=stop_reason)
-            if getattr(response, "usage", None) is not None:
-                litellm_usage_chunk: Optional[Usage] = response.usage  # type: ignore
-            elif hasattr(response, "_hidden_params") and "usage" in response._hidden_params:
-                litellm_usage_chunk = response._hidden_params["usage"]
-            else:
-                litellm_usage_chunk = None
             if litellm_usage_chunk is not None:
                 usage_delta = self._translate_openai_usage_to_anthropic_usage_delta(litellm_usage_chunk)
             else:

@@ -177,6 +177,16 @@ def test_is_combined_false_when_choices_empty():
     assert _CombinedChunkSplitter._is_combined(SimpleNamespace(choices=[])) is False
 
 
+def test_wrapper_exposes_underlying_chunks_for_disconnect_billing():
+    chunks = [SimpleNamespace(choices=[])]
+    messages = [{"role": "user", "content": "hi"}]
+    upstream = SimpleNamespace(chunks=chunks, messages=messages)
+    wrapper = AnthropicStreamWrapper(completion_stream=upstream, model="claude-x")
+
+    assert wrapper.chunks is chunks
+    assert wrapper.messages is messages
+
+
 def test_is_combined_false_when_delta_missing():
     """A finish chunk whose choice has no delta is not combined."""
     chunk = SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", delta=None)])
