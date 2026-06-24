@@ -361,14 +361,15 @@ def test_claude_platform_messages_strips_auth_params_from_request_body():
     )
     assert config is not None
 
+    input_params = {
+        "workspace_id": "wrkspc_test",
+        "aws_region_name": "us-west-2",
+        "max_tokens": 10,
+    }
     request_body = config.transform_anthropic_messages_request(
         model="claude_platform/claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
-        anthropic_messages_optional_request_params={
-            "workspace_id": "wrkspc_test",
-            "aws_region_name": "us-west-2",
-            "max_tokens": 10,
-        },
+        anthropic_messages_optional_request_params=input_params,
         litellm_params={},
         headers={},
     )
@@ -376,6 +377,8 @@ def test_claude_platform_messages_strips_auth_params_from_request_body():
     assert "workspace_id" not in request_body
     assert "aws_region_name" not in request_body
     assert request_body["max_tokens"] == 10
+    assert input_params["aws_region_name"] == "us-west-2"
+    assert input_params["workspace_id"] == "wrkspc_test"
 
 
 def test_claude_platform_strips_unsupported_context_management_param(caplog):
@@ -433,19 +436,48 @@ def test_claude_platform_messages_strips_unsupported_context_management_param():
     )
     assert config is not None
 
+    input_params = {
+        "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        "max_tokens": 10,
+    }
     request_body = config.transform_anthropic_messages_request(
         model="claude_platform/claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
-        anthropic_messages_optional_request_params={
-            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
-            "max_tokens": 10,
-        },
+        anthropic_messages_optional_request_params=input_params,
         litellm_params={},
         headers={},
     )
 
     assert "context_management" not in request_body
     assert request_body["max_tokens"] == 10
+    assert "context_management" in input_params
+
+
+def test_claude_platform_unsupported_override_allows_context_management():
+    """
+    Operators can pass claude_platform_unsupported_params=[] in litellm_params
+    to stop filtering context_management once the AWS endpoint supports it.
+    """
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+    optional_params = {
+        "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        "max_tokens": 10,
+    }
+
+    request_body = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional_params,
+        litellm_params={"claude_platform_unsupported_params": []},
+        headers={},
+    )
+
+    assert request_body["max_tokens"] == 10
+    assert "context_management" in request_body
 
 
 def test_chat_completion_claude_platform_sigv4_body_has_no_auth_params():

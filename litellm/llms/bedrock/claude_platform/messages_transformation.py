@@ -10,6 +10,7 @@ from litellm.types.router import GenericLiteLLMParams
 
 from .common_utils import (
     BedrockClaudePlatformMixin,
+    _resolve_unsupported_override,
     filter_claude_platform_request_body,
     strip_claude_platform_route,
 )
@@ -66,13 +67,11 @@ class BedrockClaudePlatformMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        # Strip auth/routing config (workspace_id, aws_*) and Messages API
-        # fields the AWS endpoint does not support (e.g. context_management)
-        # from the body — the API rejects unknown fields with "Extra inputs
-        # are not permitted".
+        unsupported_override = _resolve_unsupported_override(litellm_params)
         anthropic_messages_optional_request_params = (
             filter_claude_platform_request_body(
-                anthropic_messages_optional_request_params
+                anthropic_messages_optional_request_params,
+                unsupported_override=unsupported_override,
             )
         )
         return super().transform_anthropic_messages_request(
