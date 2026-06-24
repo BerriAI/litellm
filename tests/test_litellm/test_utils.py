@@ -865,6 +865,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
+                "supports_speed": {"type": "boolean"},
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
