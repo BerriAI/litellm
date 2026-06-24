@@ -269,31 +269,26 @@ class TestImageEditCustomPricing:
         assert use_custom_pricing_for_model(litellm_params) is False
 
 
-class TestImageEditOpenRouterImageConfig:
+class TestImageEditDefaultPathForwardsNonDefaultParams:
     """
     Regression test for https://github.com/BerriAI/litellm/issues/30753
 
     image_config is honored on OpenRouter image generation but was silently dropped on
     image edits: the default edit path never merged non_default_params (which still carries
     image_config) before calling the handler, unlike the bedrock/stability/black_forest_labs
-    branches. OpenRouter's transform forwards extra top-level params, so once image_config
-    survives the merge it reaches the provider.
+    branches. The merge is now unconditional on the default handler path, so every provider
+    that reaches it (openrouter, openai, azure, vertex_ai, ...) forwards those params instead
+    of dropping them. OpenRouter's transform forwards extra top-level params, so once
+    image_config survives the merge it reaches the provider.
     """
 
-    def test_openrouter_image_edit_forwards_image_config(self):
+    def _run_image_edit_and_capture(self, provider: str, model: str, image_config: dict):
         from litellm.images.main import image_edit
-
-        image_config = {"aspect_ratio": "16:9", "image_size": "2K"}
 
         with (
             patch(
                 "litellm.images.main.get_llm_provider",
-                return_value=(
-                    "google/gemini-3-pro-image-preview",
-                    "openrouter",
-                    None,
-                    None,
-                ),
+                return_value=(model, provider, None, None),
             ),
             patch(
                 "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
@@ -313,13 +308,31 @@ class TestImageEditOpenRouterImageConfig:
             image_edit(
                 image=b"fake-image-data",
                 prompt="add a red border",
-                model="openrouter/google/gemini-3-pro-image-preview",
+                model=f"{provider}/{model}",
                 image_config=image_config,
             )
 
-        forwarded = mock_handler.image_edit_handler.call_args.kwargs[
+        return mock_handler.image_edit_handler.call_args.kwargs[
             "image_edit_optional_request_params"
         ]
+
+    def test_openrouter_image_edit_forwards_image_config(self):
+        image_config = {"aspect_ratio": "16:9", "image_size": "2K"}
+        forwarded = self._run_image_edit_and_capture(
+            provider="openrouter",
+            model="google/gemini-3-pro-image-preview",
+            image_config=image_config,
+        )
+        assert forwarded.get("image_config") == image_config
+
+    def test_default_path_forwards_image_config_for_non_openrouter_provider(self):
+        # The same silent-drop affected every fallthrough provider, not just openrouter.
+        image_config = {"aspect_ratio": "1:1", "image_size": "1K"}
+        forwarded = self._run_image_edit_and_capture(
+            provider="openai",
+            model="gpt-image-1",
+            image_config=image_config,
+        )
         assert forwarded.get("image_config") == image_config
 
 
