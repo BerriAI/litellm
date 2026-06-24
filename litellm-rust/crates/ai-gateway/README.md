@@ -35,8 +35,14 @@ route/model permissions are enforced in exactly one place. A client presents
 - **Virtual key** (`sk-…`) → the gateway POSTs `{api_key, route, model}` to the proxy's
   **`POST /internal/v1/auth/verify`**, which runs the proxy's real `user_api_key_auth`
   (key lookup, expiry, budget, rate-limit, and route **+ model** permissions via
-  `can_key_call_model`) and returns the resolved identity. The answer is cached
-  in-memory (bounded ≤200 entries, short TTL), so it is not a round-trip per request.
+  `can_key_call_model`) and returns the resolved identity. The result is cached
+  in-memory (bounded ≤200 entries) **for performance** so the verify endpoint
+  isn't a per-request bottleneck under load — the same reason the LiteLLM proxy
+  caches key-auth in-process. The TTL is the perf/freshness knob
+  (`LITELLM_AUTH_CACHE_TTL_SECS`, default 60s): budget/block/rate-limit changes
+  take effect within the TTL window. For **strict per-connection enforcement** on
+  billable routes (every connection re-verified, zero staleness), set the TTL to
+  `0`.
 
 Data plane → control plane is itself authenticated with a **dedicated data-plane key**
 (NOT the master key — least privilege): the gateway sends
@@ -46,7 +52,7 @@ without it. Set the **same** secret on both sides.
 ```text
 client ──Bearer sk-…──▶ ai-gateway ──POST /internal/v1/auth/verify──▶ LiteLLM proxy
                          (X-LiteLLM-Data-Plane-Key)                    user_api_key_auth()
-                         cache ≤200 / TTL                              → UserAPIKeyAuth | 401
+                         cache on (TTL, default 60s)                   → UserAPIKeyAuth | 401
 ```
 
 ### Wiring it up
@@ -68,7 +74,7 @@ export LITELLM_AUTH_VERIFY_URL=https://<proxy-host>/internal/v1/auth/verify
 
 Fails closed: a missing/wrong data-plane key, an unreachable proxy, or a rejected key
 all yield `401`. Revocation and budget changes take effect within the cache TTL
-(`LITELLM_AUTH_CACHE_TTL_SECS`, default 60s). Keep the proxy on a private network —
+(`LITELLM_AUTH_CACHE_TTL_SECS`, default 60s; set `0` for strict per-connection verification). Keep the proxy on a private network —
 the verify endpoint is internal-only and excluded from the public OpenAPI spec.
 
 ## Configuration (config.yaml)
@@ -112,7 +118,7 @@ overridden at deploy time (e.g. a Render secret file mounted at the same path).
 | `LITELLM_MASTER_KEY` | yes | — | Admin bearer token (checked locally, no proxy call). Unset ⇒ the master-key path is disabled. |
 | `LITELLM_DATA_PLANE_KEY` | for virtual keys | — | Dedicated secret the gateway sends as `X-LiteLLM-Data-Plane-Key` to authenticate itself to the proxy's verify endpoint. **Must match the proxy's `LITELLM_DATA_PLANE_KEY`.** Not the master key. |
 | `LITELLM_AUTH_VERIFY_URL` | for virtual keys | `http://localhost:4000/internal/v1/auth/verify` | The proxy's verify endpoint the gateway delegates virtual-key auth to. |
-| `LITELLM_AUTH_CACHE_TTL_SECS` | no | `60` | TTL for the gateway's in-memory verified-key cache. Lower = faster revocation, more proxy calls. |
+| `LITELLM_AUTH_CACHE_TTL_SECS` | no | `60` | TTL for the gateway's verified-key cache (on by default for performance — keeps the verify endpoint from being a per-request bottleneck). Budget/block/rate-limit changes apply within the TTL. Set `0` for strict per-connection verification (zero staleness). |
 | `OPENAI_API_KEY` | yes | — | Upstream OpenAI key. Referenced by config.yaml as `os.environ/OPENAI_API_KEY` for the gateway→OpenAI dial. |
 | `HOST` | no | `127.0.0.1` | **Set to `0.0.0.0` in any container/deploy** or external traffic is refused. |
 | `PORT` | no | `4001` | Listen port. Render and most PaaS inject this automatically. |
