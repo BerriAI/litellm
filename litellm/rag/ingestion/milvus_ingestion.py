@@ -217,11 +217,10 @@ class MilvusRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: bytes | None,
-        filename: str | None,
         chunks: list[str],
         embeddings: list[list[float]] | None,
-        **_: object,  # absorbs content_type and any extra base-class params
+        filename: str | None = None,
+        **_: object,
     ) -> tuple[str | None, str | None]:
         """
         Insert chunks + embeddings into a Milvus collection.

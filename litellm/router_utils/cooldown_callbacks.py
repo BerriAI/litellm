@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -74,12 +75,14 @@ async def router_cooldown_event_callback(
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=litellm_model_name,
-            model_id=model_id,
-            api_base=_api_base,
-            api_provider=llm_provider,
+            enum_values=UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=_api_base,
+                api_provider=llm_provider,
+                model_group=_model_name,
+            ),
             exception_status=str(exception_status),
-            model_group=_model_name,
         )
 
     return
