@@ -8,6 +8,12 @@ import pytest
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.bias_hallucination_estimator import (
     BiasHallucinationEstimatorGuardrail,
+    GuardrailBehaviorConfig,
+    GuardrailConfig,
+)
+from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.risk_scorer import (
+    RiskThresholds,
+    RiskWeights,
 )
 from litellm.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator.data_sources import (
     ContextDocumentDataSource,
@@ -223,8 +229,7 @@ def test_risk_scorer_blocks_when_hallucination_threshold_is_crossed() -> None:
 
 def test_risk_scorer_flags_medium_weighted_risk() -> None:
     risk = RiskScorer(
-        bias_threshold=0.9,
-        hallucination_threshold=0.9,
+        thresholds=RiskThresholds(bias_threshold=0.9, hallucination_threshold=0.9),
     ).compute_risk(
         bias_analysis=BiasAnalysis(
             bias_detected=True,
@@ -249,7 +254,7 @@ def test_risk_scorer_passes_low_risk() -> None:
 
 
 def test_risk_scorer_blocks_on_high_bias_score_alone() -> None:
-    risk = RiskScorer(bias_threshold=0.4).compute_risk(
+    risk = RiskScorer(thresholds=RiskThresholds(bias_threshold=0.4)).compute_risk(
         bias_analysis=BiasAnalysis(
             bias_detected=True, score=0.5, patterns_found=["overconfidence"]
         ),
@@ -280,12 +285,14 @@ def test_risk_scorer_detected_issues_prefix_by_type() -> None:
 
 
 def test_risk_scorer_custom_weights_change_overall_percentage() -> None:
-    bias_only = RiskScorer(bias_weight=1.0, hallucination_weight=0.0).compute_risk(
+    bias_only = RiskScorer(
+        weights=RiskWeights(bias_weight=1.0, hallucination_weight=0.0)
+    ).compute_risk(
         bias_analysis=BiasAnalysis(score=0.5),
         hallucination_analysis=HallucinationAnalysis(score=0.0),
     )
     hallucination_only = RiskScorer(
-        bias_weight=0.0, hallucination_weight=1.0
+        weights=RiskWeights(bias_weight=0.0, hallucination_weight=1.0)
     ).compute_risk(
         bias_analysis=BiasAnalysis(score=0.0),
         hallucination_analysis=HallucinationAnalysis(score=0.5),
@@ -299,7 +306,9 @@ def test_risk_scorer_custom_weights_change_overall_percentage() -> None:
 
 
 def test_risk_scorer_zero_weight_total_returns_zero_percentage() -> None:
-    risk = RiskScorer(bias_weight=0.0, hallucination_weight=0.0).compute_risk(
+    risk = RiskScorer(
+        weights=RiskWeights(bias_weight=0.0, hallucination_weight=0.0)
+    ).compute_risk(
         bias_analysis=BiasAnalysis(score=0.1),
         hallucination_analysis=HallucinationAnalysis(score=0.1),
     )
@@ -342,7 +351,7 @@ async def test_guardrail_blocks_high_risk_response_and_logs_metadata() -> None:
 async def test_guardrail_log_payload_excludes_text_snippets() -> None:
     guardrail = BiasHallucinationEstimatorGuardrail(
         guardrail_name="bias-hallucination",
-        log_only=True,
+        config=GuardrailConfig(behavior=GuardrailBehaviorConfig(log_only=True)),
     )
     request_data: dict[str, Any] = {}
 
@@ -378,7 +387,7 @@ async def test_guardrail_log_only_flags_without_blocking() -> None:
     guardrail = BiasHallucinationEstimatorGuardrail(
         guardrail_name="bias-hallucination",
         event_hook=GuardrailEventHooks.post_call,
-        log_only=True,
+        config=GuardrailConfig(behavior=GuardrailBehaviorConfig(log_only=True)),
     )
     request_data: dict[str, Any] = {}
 
@@ -441,7 +450,9 @@ async def test_guardrail_passes_low_risk_text() -> None:
 async def test_guardrail_respects_custom_violation_message() -> None:
     guardrail = BiasHallucinationEstimatorGuardrail(
         guardrail_name="bias-hallucination",
-        violation_message="Custom block message.",
+        config=GuardrailConfig(
+            behavior=GuardrailBehaviorConfig(violation_message="Custom block message.")
+        ),
     )
 
     with pytest.raises(GuardrailRaisedException) as exc:
@@ -503,9 +514,10 @@ async def test_guardrail_empty_inputs_returns_unchanged() -> None:
 async def test_guardrail_check_request_enabled_detects_bias() -> None:
     guardrail = BiasHallucinationEstimatorGuardrail(
         guardrail_name="bias-hallucination",
-        check_request=True,
-        check_response=False,
         event_hook=GuardrailEventHooks.pre_call,
+        config=GuardrailConfig(
+            behavior=GuardrailBehaviorConfig(check_request=True, check_response=False)
+        ),
     )
 
     with pytest.raises(GuardrailRaisedException):

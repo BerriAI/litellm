@@ -19,6 +19,7 @@ from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callba
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
+    UserAPIKeyLabelValues,
 )
 from litellm.types.router import ModelInfo
 
@@ -76,12 +77,14 @@ def test_increment_deployment_cooled_down_emits_model_group(monkeypatch):
     )
 
     logger.increment_deployment_cooled_down(
-        litellm_model_name="gpt-4o-mini",
-        model_id="model-123",
-        api_base="https://api.openai.com",
-        api_provider="openai",
+        enum_values=UserAPIKeyLabelValues(
+            litellm_model_name="gpt-4o-mini",
+            model_id="model-123",
+            api_base="https://api.openai.com",
+            api_provider="openai",
+            model_group="gpt-group",
+        ),
         exception_status="429",
-        model_group="gpt-group",
     )
 
     labels = logger.litellm_deployment_cooled_down.labels.call_args.kwargs
@@ -99,8 +102,6 @@ def test_set_litellm_deployment_state_emits_model_group(monkeypatch):
     logger.get_labels_for_metric = (
         lambda metric_name: PrometheusMetricLabels.get_labels(metric_name)
     )
-
-    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     logger.set_litellm_deployment_state(
         state=2,
@@ -158,8 +159,6 @@ def test_deployment_metrics_omit_model_group_when_flag_disabled(monkeypatch):
         lambda metric_name: PrometheusMetricLabels.get_labels(metric_name)
     )
 
-    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
-
     logger.set_litellm_deployment_state(
         state=0,
         enum_values=UserAPIKeyLabelValues(
@@ -209,11 +208,15 @@ async def test_router_cooldown_callback_separates_alias_and_underlying_model(
     # api_base resolved from the underlying model, not the alias (P2).
     assert gab.call_args.kwargs["model"] == "gpt-4o-mini"
 
-    for mock in (
-        logger.set_deployment_complete_outage,
-        logger.increment_deployment_cooled_down,
-    ):
-        kwargs = mock.call_args.kwargs
-        assert kwargs["litellm_model_name"] == "gpt-4o-mini"
-        assert kwargs["model_group"] == "my-gpt-group"
-        assert kwargs["model_id"] == "test-model-id"
+    # set_deployment_complete_outage uses flat kwargs
+    outage_kwargs = logger.set_deployment_complete_outage.call_args.kwargs
+    assert outage_kwargs["litellm_model_name"] == "gpt-4o-mini"
+    assert outage_kwargs["model_group"] == "my-gpt-group"
+    assert outage_kwargs["model_id"] == "test-model-id"
+
+    # increment_deployment_cooled_down uses enum_values dataclass
+    cooled_kwargs = logger.increment_deployment_cooled_down.call_args.kwargs
+    ev = cooled_kwargs["enum_values"]
+    assert ev.litellm_model_name == "gpt-4o-mini"
+    assert ev.model_group == "my-gpt-group"
+    assert ev.model_id == "test-model-id"
