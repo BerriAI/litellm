@@ -41,21 +41,39 @@ COLD_WAIT_SECONDS = 80
 def _redis():
     import redis
 
-    return redis.Redis(
-        host=os.getenv("E2E_REDIS_HOST", "localhost"),
-        port=int(os.getenv("E2E_REDIS_PORT", "6380")),
-        password=os.getenv("REDIS_PASSWORD") or None,
-        decode_responses=True,
-        socket_connect_timeout=2,
-    )
+    kwargs = {
+        "host": os.getenv("E2E_REDIS_HOST", "localhost"),
+        "port": int(os.getenv("E2E_REDIS_PORT", "6380")),
+        "password": os.getenv("REDIS_PASSWORD") or None,
+        "decode_responses": True,
+        "socket_connect_timeout": 2,
+        "ssl": os.getenv("E2E_REDIS_SSL", "false").lower() in ("1", "true", "yes"),
+    }
+    # Serverless ElastiCache is cluster-mode + TLS; a standalone client breaks on
+    # MOVED redirects, so use the cluster client when the deploy says so. A local
+    # docker redis stays standalone.
+    if os.getenv("E2E_REDIS_CLUSTER", "false").lower() in ("1", "true", "yes"):
+        from redis.cluster import RedisCluster
+
+        return RedisCluster(**kwargs)
+    return redis.Redis(**kwargs)
 
 
 def _spend_counter(rds, key: str) -> float | None:
     """The shared spend counter for `key`, or None if it is cold. The counter key is
-    ``{cache namespace}:spend:key:{sha256(key)}``; matched by suffix so the configured
-    namespace need not be hard-coded."""
+    ``{cache namespace}:spend:key:{sha256(key)}``. With E2E_REDIS_NAMESPACE set (the
+    cluster-mode deploy, where a keyspace SCAN can't span shards) read it directly;
+    otherwise match by suffix so a local namespace need not be hard-coded."""
     digest = hashlib.sha256(key.encode()).hexdigest()
-    matches = list(rds.scan_iter(match=f"*spend:key:{digest}"))
+    suffix = f"spend:key:{digest}"
+    namespace = os.getenv("E2E_REDIS_NAMESPACE")
+    if namespace:
+        for candidate in (f"{namespace}:{suffix}", suffix):
+            raw = rds.get(candidate)
+            if raw is not None:
+                return float(raw)
+        return None
+    matches = list(rds.scan_iter(match=f"*{suffix}"))
     if not matches:
         return None
     raw = rds.get(matches[0])
