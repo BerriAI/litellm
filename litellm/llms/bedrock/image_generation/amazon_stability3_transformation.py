@@ -8,6 +8,9 @@ from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageRequest,
     AmazonStability3TextToImageResponse,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_request_body,
+)
 from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
@@ -73,7 +76,9 @@ class AmazonStability3Config:
         """
         Transform the request body for the Stability 3 models
         """
-        data = AmazonStability3TextToImageRequest(prompt=text, **optional_params)
+        data = AmazonStability3TextToImageRequest(
+            prompt=text, **strip_internal_params_from_request_body(optional_params)
+        )
         return data
 
     @classmethod

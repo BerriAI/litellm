@@ -14,6 +14,9 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest,
     AmazonNovaCanvasTextToImageResponse,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_request_body,
+)
 from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
@@ -73,7 +76,10 @@ class AmazonNovaCanvasConfig:
         # Following the same pattern as chat completions and embeddings
         unencoded_model_id = optional_params.pop("model_id", None)  # noqa: F841
 
-        image_generation_config = {**image_generation_config, **optional_params}
+        image_generation_config = {
+            **image_generation_config,
+            **strip_internal_params_from_request_body(optional_params),
+        }
         if task_type == "TEXT_IMAGE":
             text_to_image_params: Dict[str, Any] = image_generation_config.pop(
                 "textToImageParams", {}

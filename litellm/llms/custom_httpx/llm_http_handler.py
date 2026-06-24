@@ -27,6 +27,10 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_chat_request_body,
+    strip_internal_params_from_request_body,
+)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -490,10 +494,13 @@ class BaseLLMHTTPHandler:
         data = provider_config.transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=strip_internal_params_from_chat_request_body(
+                optional_params
+            ),
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = strip_internal_params_from_request_body(data)
 
         if extra_body is not None:
             data = {**data, **extra_body}
@@ -938,7 +945,7 @@ class BaseLLMHTTPHandler:
         data = provider_config.transform_embedding_request(
             model=model,
             input=input,
-            optional_params=optional_params,
+            optional_params=strip_internal_params_from_request_body(optional_params),
             headers=headers,
         )
 

@@ -26,6 +26,184 @@ _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 
 
+def test_embedding_strips_internal_params_from_request_body():
+    """Regression: the embedding path must strip LiteLLM-internal optional_params
+    before the request body is built. Several embedding transforms (e.g. VoyageAI)
+    splat optional_params into the wire body, so a leaked internal knob such as
+    cache_control_injection_points would 400 on a strict-schema provider -- the
+    same failure the chat path already prevents on line 450."""
+    from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.types.utils import EmbeddingResponse
+    from litellm.utils import ProviderConfigManager
+
+    handler = BaseLLMHTTPHandler()
+
+    captured: dict = {}
+
+    def _capture_post(*args, **kwargs):
+        captured["data"] = kwargs["data"]
+        return httpx.Response(
+            200,
+            json={
+                "model": "voyage-3",
+                "object": "list",
+                "data": [{"embedding": [0.1], "index": 0, "object": "embedding"}],
+                "usage": {"total_tokens": 1},
+            },
+            request=httpx.Request("POST", "https://api.voyageai.com/v1/embeddings"),
+        )
+
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post = Mock(side_effect=_capture_post)
+
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded["output_dimension"] = 256
+
+    with patch.object(
+        ProviderConfigManager,
+        "get_provider_embedding_config",
+        return_value=VoyageEmbeddingConfig(),
+    ):
+        handler.embedding(
+            model="voyage-3",
+            input=["hello world"],
+            timeout=10.0,
+            custom_llm_provider="voyage",
+            logging_obj=Mock(),
+            api_base=None,
+            optional_params=seeded,
+            litellm_params={},
+            model_response=EmbeddingResponse(),
+            api_key="test-key",
+            client=mock_client,
+        )
+
+    body = captured["data"]
+    for param in LiteLLMInternalParam:
+        assert (
+            param.value not in body
+        ), f"{param.value} leaked into voyage embedding body"
+    assert "output_dimension" in body
+
+
+def test_chat_boundary_preserves_cache_control_injection_points():
+    """Regression: the chat-completion boundary must NOT strip
+    `cache_control_injection_points`. AmazonConverseConfig.transform_request
+    consumes that key to append a `cachePoint` to Bedrock tool_config (used by
+    the `converse_like/` route, which goes through this shared handler), so
+    stripping it here silently disables tool-config prompt caching. Universal
+    LiteLLM-internal knobs (skip_mcp_handler, fake_stream, ...) must still be
+    stripped before the transform splats optional_params into the wire body."""
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.types.utils import ModelResponse
+
+    handler = BaseLLMHTTPHandler()
+
+    captured: dict = {}
+
+    provider_config = Mock()
+    provider_config.should_fake_stream.return_value = False
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://example.invalid/chat"
+    provider_config.sign_request.return_value = ({}, None)
+
+    def _capture_transform_request(*, model, messages, optional_params, **_):
+        captured["optional_params"] = optional_params
+        raise RuntimeError("stop after capture")
+
+    provider_config.transform_request.side_effect = _capture_transform_request
+
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded["cache_control_injection_points"] = [{"location": "tool_config"}]
+    seeded["temperature"] = 0.5
+
+    with pytest.raises(RuntimeError, match="stop after capture"):
+        handler.completion(
+            model="anthropic.claude-3-5-haiku-20241022-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=None,
+            custom_llm_provider="bedrock",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params=seeded,
+            timeout=10.0,
+            litellm_params={},
+            acompletion=False,
+            provider_config=provider_config,
+        )
+
+    forwarded = captured["optional_params"]
+    assert forwarded["cache_control_injection_points"] == [{"location": "tool_config"}]
+    for param in LiteLLMInternalParam:
+        if param is LiteLLMInternalParam.CACHE_CONTROL_INJECTION_POINTS:
+            continue
+        assert (
+            param.value not in forwarded
+        ), f"{param.value} leaked past the chat-completion strip"
+
+
+def test_chat_boundary_strips_internal_params_from_splat_body():
+    """Regression: `cache_control_injection_points` is preserved in `optional_params`
+    so AmazonConverseConfig can consume it, but splat-style transforms (OpenAI,
+    Anthropic, OpenAI-compatible) build the wire body with `**optional_params` and
+    never pop it. The shared handler must therefore strip internal params from the
+    body returned by `transform_request` to prevent extraneous-field 400s on
+    strict-schema providers."""
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.types.utils import ModelResponse
+
+    handler = BaseLLMHTTPHandler()
+
+    captured: dict = {}
+
+    provider_config = Mock()
+    provider_config.should_fake_stream.return_value = False
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://example.invalid/chat"
+
+    def _splat_transform_request(*, model, messages, optional_params, **_):
+        return {"model": model, "messages": messages, **optional_params}
+
+    provider_config.transform_request.side_effect = _splat_transform_request
+
+    def _capture_sign_request(*, request_data, headers, **_):
+        captured["body"] = request_data
+        raise RuntimeError("stop after capture")
+
+    provider_config.sign_request.side_effect = _capture_sign_request
+
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded["cache_control_injection_points"] = [{"location": "tool_config"}]
+    seeded["temperature"] = 0.5
+
+    with pytest.raises(RuntimeError, match="stop after capture"):
+        handler.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=None,
+            custom_llm_provider="openai",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params=seeded,
+            timeout=10.0,
+            litellm_params={},
+            acompletion=False,
+            provider_config=provider_config,
+        )
+
+    body = captured["body"]
+    for param in LiteLLMInternalParam:
+        assert (
+            param.value not in body
+        ), f"{param.value} leaked into the wire body past the splat transform"
+    assert body["temperature"] == 0.5
+
+
 def test_prepare_fake_stream_request():
     # Initialize the BaseLLMHTTPHandler
     handler = BaseLLMHTTPHandler()
