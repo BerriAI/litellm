@@ -264,15 +264,19 @@ impl RealtimePool {
             // concurrent connects so the sub-ms warm handoff becomes the median,
             // not the lucky-hit tail.
             let dials = (0..needed).map(|_| warm_one(&key));
-            for conn in futures_util::future::join_all(dials).await {
-                if let Ok(conn) = conn {
-                    self.warm
-                        .lock()
-                        .unwrap()
-                        .entry(key.clone())
-                        .or_default()
-                        .push(conn);
-                }
+            // `.flatten()` keeps only the successful dials; a key that can't be
+            // warmed just keeps fresh-dialing on the request path.
+            for conn in futures_util::future::join_all(dials)
+                .await
+                .into_iter()
+                .flatten()
+            {
+                self.warm
+                    .lock()
+                    .unwrap()
+                    .entry(key.clone())
+                    .or_default()
+                    .push(conn);
             }
         }
     }
