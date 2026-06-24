@@ -54,10 +54,13 @@ impl UserApiKeyAuth {
     }
 }
 
-/// SHA-256 of the raw key, used as the cache key. Hashing keeps plaintext keys out
-/// of the in-memory cache map.
-pub(crate) fn key_hash(key: &str) -> [u8; 32] {
+/// SHA-256 over `(route, key)`, used as the cache key. Hashing keeps plaintext
+/// keys out of the in-memory cache map; including the route means a key cached for
+/// one route is never served for a different route (route restrictions can differ).
+pub(crate) fn key_hash(key: &str, route: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
+    hasher.update(route.as_bytes());
+    hasher.update([0u8]); // domain separator between route and key
     hasher.update(key.as_bytes());
     hasher.finalize().into()
 }
@@ -94,14 +97,18 @@ impl FromRequestParts<AppState> for UserApiKeyAuth {
             return Ok(Self::admin());
         }
 
+        // Validate against the route the gateway is actually serving, so the
+        // backend can enforce the key's route/model restrictions for THIS route.
+        let route = parts.uri.path();
+
         // Virtual key: serve from cache, else verify via the (swappable) backend
-        // and cache the result keyed by the key's hash.
-        let hash = key_hash(token);
+        // and cache the result keyed by (route, key) hash.
+        let hash = key_hash(token, route);
         if let Some(cached) = state.key_cache.get(&hash) {
             return Ok(cached);
         }
 
-        match state.authenticator.verify(token).await {
+        match state.authenticator.verify(token, route).await {
             Ok(auth) => {
                 state.key_cache.insert(hash, auth.clone());
                 Ok(auth)
@@ -142,7 +149,7 @@ mod tests {
 
     #[axum::async_trait]
     impl KeyAuthenticator for StubAuthenticator {
-        async fn verify(&self, _key: &str) -> Result<UserApiKeyAuth, AuthError> {
+        async fn verify(&self, _key: &str, _route: &str) -> Result<UserApiKeyAuth, AuthError> {
             match &self.result {
                 Ok(auth) => Ok(auth.clone()),
                 Err(AuthError::Unauthorized) => Err(AuthError::Unauthorized),
