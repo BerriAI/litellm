@@ -1,21 +1,18 @@
-# Rust Provider Registry
+# Rust Provider Metadata
 
-`provider_registry.json` is the source of truth for provider identity in `litellm-rust`.
-`crates/core/build.rs` reads it at compile time and generates the typed
-`LlmProvider` enum plus static provider metadata. Runtime code does not parse
-this JSON.
+The repo-root `provider_endpoints_support.json` is the shared source of truth
+for provider identity and docs metadata in `litellm-rust`. `crates/core/build.rs`
+reads it at compile time and generates the typed `LlmProvider` enum plus static
+provider metadata. Runtime code does not parse this JSON.
 
 To add a provider:
 
-- Add a `provider_registry.json` entry with `routing_name` matching Python
-  `LlmProviders.value` in `litellm/types/utils.py`.
-- Set `display_name` to the human-readable provider name for docs/errors.
-- Set `default_api_base` to a stable provider-level default base URL, or `null`
-  when it is unknown, dynamic, or route-specific.
-- Set `api_key_env_var` to the canonical LiteLLM env var, or `null` when there
-  is no single provider-level key.
+- Add a `provider_endpoints_support.json` provider entry using the LiteLLM
+  provider slug, display name, docs URL, and endpoint support flags.
+- Add optional defaults under the top-level `default_creds` map only when there
+  is a stable provider-level base URL or canonical API key environment variable.
 - Put request/response logic under
   `crates/providers/src/<provider>/<route>/transformation.rs`; do not put
-  transforms, signing logic, or secrets in this registry.
+  transforms, signing logic, or secrets in provider metadata.
 - Run `cargo test -p litellm-core --locked`; it verifies the Rust registry stays
-  in parity with Python `LlmProviders`.
+  in parity with `provider_endpoints_support.json`.
