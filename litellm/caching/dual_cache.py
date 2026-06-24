@@ -145,7 +145,7 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
+            verbose_logger.error(f"LiteLLM Cache: Exception async add_cache: {str(e)}")
             raise e
 
     def get_cache(
@@ -375,7 +375,7 @@ class DualCache(BaseCache):
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
             verbose_logger.exception(
-                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+                f"LiteLLM Cache: Exception async add_cache: {str(e)}"
             )
 
     # async_batch_set_cache
@@ -402,7 +402,7 @@ class DualCache(BaseCache):
                 )
         except Exception as e:
             verbose_logger.exception(
-                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+                f"LiteLLM Cache: Exception async add_cache: {str(e)}"
             )
 
     async def async_increment_cache(
