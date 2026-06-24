@@ -426,6 +426,8 @@ def update_valid_token_with_end_user_params(
         valid_token.end_user_model_max_budget = end_user_params[
             "end_user_model_max_budget"
         ]
+    if end_user_params.get("end_user_max_budget") is not None:
+        valid_token.end_user_max_budget = end_user_params["end_user_max_budget"]
     return valid_token
 
 

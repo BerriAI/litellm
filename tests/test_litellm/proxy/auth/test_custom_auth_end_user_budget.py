@@ -228,3 +228,48 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
+
+
+def test_update_valid_token_updates_end_user_max_budget():
+    """
+    Regression for #29142: update_valid_token_with_end_user_params must
+    propagate end_user_max_budget from the DB-derived end_user_params so
+    that a cached token does not retain a stale budget from a previous
+    end-user.
+    """
+    valid_token = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="user_old",
+        end_user_max_budget=50.0,
+    )
+
+    end_user_params = {
+        "end_user_id": "user_new",
+        "end_user_max_budget": 5.0,
+    }
+
+    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
+
+    assert result.end_user_id == "user_new"
+    assert result.end_user_max_budget == 5.0
+
+
+def test_update_valid_token_preserves_end_user_max_budget_when_db_none():
+    """
+    When the DB end_user has no max_budget set, the custom-auth-provided
+    value on the token should not be cleared.
+    """
+    valid_token = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="user_1",
+        end_user_max_budget=100.0,
+    )
+
+    end_user_params = {
+        "end_user_id": "user_1",
+        # No end_user_max_budget from DB
+    }
+
+    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
+
+    assert result.end_user_max_budget == 100.0
