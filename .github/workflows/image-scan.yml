@@ -29,11 +29,21 @@ concurrency:
 
 jobs:
   image-scan:
-    name: image-scan
+    name: image-scan (${{ matrix.dockerfile }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - Dockerfile
+          - docker/Dockerfile.database
+          - docker/Dockerfile.non_root
+          - migrations/Dockerfile
+          - backend/Dockerfile
+          - gateway/Dockerfile
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -47,11 +57,11 @@ jobs:
           tar xzf "$RUNNER_TEMP/grype.tar.gz" -C "$RUNNER_TEMP" grype
           chmod +x "$RUNNER_TEMP/grype"
 
-      # The root Dockerfile is the representative scan target: all image variants
-      # share the same wolfi base and a near-identical apk set, so an OS CVE in a
-      # shared package surfaces here. Matrix-scan the variants if they diverge.
-      - name: Build runtime image
-        run: docker build -f Dockerfile -t litellm-image-scan:${{ github.sha }} .
+      - name: Build image (${{ matrix.dockerfile }})
+        run: |
+          tag="litellm-image-scan-$(echo '${{ matrix.dockerfile }}' | tr '/.' '--'):${{ github.sha }}"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          docker build -f '${{ matrix.dockerfile }}' -t "$tag" .
 
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
@@ -61,7 +71,7 @@ jobs:
       # dependency and no vendor SaaS callout.
       - name: Scan image for fixable HIGH/CRITICAL CVEs
         run: |
-          "$RUNNER_TEMP/grype" litellm-image-scan:${{ github.sha }} \
+          "$RUNNER_TEMP/grype" "$TAG" \
             --only-fixed \
             --fail-on high \
             --output table
