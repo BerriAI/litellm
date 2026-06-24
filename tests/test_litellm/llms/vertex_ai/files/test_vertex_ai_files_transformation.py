@@ -1274,3 +1274,47 @@ class TestVertexBatchCustomIdLabels:
         raw_label = vertex_input[0]["request"]["labels"]["litellm_custom_id_raw"]
         assert raw_label != "MyRequest-1"
         assert _sanitize_gcp_label_value(raw_label) == raw_label
+
+
+class TestConfiguredBucketNameResolution:
+    def test_should_resolve_new_gcs_bucket_name_key(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        assert (
+            config._get_configured_bucket_name({"gcs_bucket_name": "my-new-bucket"})
+            == "my-new-bucket"
+        )
+
+    def test_should_resolve_legacy_bucket_name_key(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        assert (
+            config._get_configured_bucket_name({"bucket_name": "my-legacy-bucket"})
+            == "my-legacy-bucket"
+        )
+
+    def test_should_prefer_new_key_over_legacy(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        assert (
+            config._get_configured_bucket_name(
+                {"gcs_bucket_name": "new", "bucket_name": "legacy"}
+            )
+            == "new"
+        )
+
+    def test_should_fall_back_to_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BUCKET_NAME", "env-bucket")
+        assert config._get_configured_bucket_name({}) == "env-bucket"
+
+    def test_should_raise_when_no_bucket_anywhere(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        with pytest.raises(ValueError, match="GCS bucket_name is required"):
+            config._get_configured_bucket_name({})
+
+    def test_legacy_kwarg_survives_get_litellm_params(self):
+        from litellm.litellm_core_utils.get_litellm_params import (
+            OPTIONAL_KWARGS_KEYS,
+            get_litellm_params,
+        )
+
+        assert "bucket_name" in OPTIONAL_KWARGS_KEYS
+        params = get_litellm_params(bucket_name="my-legacy-bucket")
+        assert params.get("bucket_name") == "my-legacy-bucket"
