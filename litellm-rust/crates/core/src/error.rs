@@ -13,6 +13,8 @@ pub enum CoreError {
     MissingField(&'static str),
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+    #[error("invalid provider: {0}")]
+    InvalidProvider(String),
     #[error("{0}")]
     Auth(String),
     #[error("OCR request failed with status {status}: {body}")]
