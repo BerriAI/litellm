@@ -7,6 +7,15 @@ on:
       - litellm_internal_staging
       - litellm_oss_branch
       - "litellm_**"
+    paths:
+      - "**/*.py"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "litellm/proxy/schema.prisma"
+      - ".github/workflows/test-unit-*.yml"
+      - ".github/workflows/_test-unit-base.yml"
 
 permissions:
   contents: read

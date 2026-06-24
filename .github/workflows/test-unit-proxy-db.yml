@@ -5,6 +5,15 @@ on:
     branches:
       - main
       - litellm_internal_staging
+    paths:
+      - "**/*.py"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "litellm/proxy/schema.prisma"
+      - ".github/workflows/test-unit-*.yml"
+      - ".github/workflows/_test-unit-base.yml"
 
 permissions:
   contents: read
