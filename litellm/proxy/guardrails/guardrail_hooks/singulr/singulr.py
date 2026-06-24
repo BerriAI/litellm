@@ -96,16 +96,22 @@ class SingulrGuardrail(CustomGuardrail):
             )
 
             messages = build_inspection_messages(cast(Dict[str, Any], request_data))
-            last_user_message = next(
+            last_assistant_idx = next(
                 (
-                    m["content"]
-                    for m in reversed(messages)
-                    if str(m.get("role") or "").lower() == "user" and m.get("content")
+                    i
+                    for i in reversed(range(len(messages)))
+                    if str(messages[i].get("role") or "").lower()
+                    in ("assistant", "tool")
                 ),
-                None,
+                -1,
             )
-            if last_user_message is not None:
-                return last_user_message
+            current_turn_texts = [
+                m["content"]
+                for m in messages[last_assistant_idx + 1 :]
+                if str(m.get("role") or "").lower() == "user" and m.get("content")
+            ]
+            if current_turn_texts:
+                return "\n".join(current_turn_texts)
 
         texts = inputs.get("texts", [])
         return "\n".join(texts) if texts else ""
