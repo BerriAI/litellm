@@ -5,6 +5,10 @@ end-to-end here because it mutates shared at-rest data (it delegates to the
 master-key rotation path); that full flow is covered by the unit suite and a
 live proxy run. Here we pin the HTTP-boundary contract: the read-only check is
 admin-reachable, and both routes are admin-gated.
+
+Both routes are admin-only management routes, so a non-admin key is rejected by
+the ``user_api_key_auth`` layer (401) before the endpoint's own admin guard runs
+-- the negative scenarios assert that framework-level rejection.
 """
 
 import pytest
@@ -27,7 +31,7 @@ async def test_migrate_encryption_check_as_admin_is_read_only(proxy_client):
 
 
 async def test_migrate_encryption_check_requires_admin(proxy_client, scratch):
-    """A non-admin key cannot reach the residual scan."""
+    """A non-admin key cannot reach the residual scan (auth layer rejects, 401)."""
     gen = await proxy_client.post(
         "/key/generate",
         headers={"Authorization": f"Bearer {MASTER_KEY}"},
@@ -40,11 +44,15 @@ async def test_migrate_encryption_check_requires_admin(proxy_client, scratch):
         "/credentials/migrate-encryption/check",
         headers={"Authorization": f"Bearer {nonadmin_key}"},
     )
-    assert resp.status_code == 403, resp.text
+    assert resp.status_code == 401, resp.text
 
 
 async def test_migrate_encryption_requires_admin(proxy_client, scratch):
-    """A non-admin key cannot trigger the migration (gate runs before any write)."""
+    """A non-admin key cannot trigger the migration (auth layer rejects, 401).
+
+    Rejection happens before any write: the admin-only route check fires in
+    ``user_api_key_auth``, ahead of the endpoint body.
+    """
     gen = await proxy_client.post(
         "/key/generate",
         headers={"Authorization": f"Bearer {MASTER_KEY}"},
@@ -60,4 +68,4 @@ async def test_migrate_encryption_requires_admin(proxy_client, scratch):
         "/credentials/migrate-encryption",
         headers={"Authorization": f"Bearer {nonadmin_key}"},
     )
-    assert resp.status_code == 403, resp.text
+    assert resp.status_code == 401, resp.text

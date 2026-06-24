@@ -41,9 +41,7 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
     client = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
 
     if check_only:
-        response = client.request(
-            "GET", "/credentials/migrate-encryption/check"
-        )
+        response = client.request("GET", "/credentials/migrate-encryption/check")
     else:
         response = client.request(
             "POST",
@@ -57,8 +55,6 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
     report = response.get("report", {}) if isinstance(response, dict) else {}
     residual = report.get("residual_legacy")
     if residual is not None and residual > 0:
-        rich.print(
-            f"[yellow]Residual legacy values remaining: {residual}[/yellow]"
-        )
+        rich.print(f"[yellow]Residual legacy values remaining: {residual}[/yellow]")
     elif residual == 0:
         rich.print("[green]No legacy values remaining (residual_legacy == 0).[/green]")

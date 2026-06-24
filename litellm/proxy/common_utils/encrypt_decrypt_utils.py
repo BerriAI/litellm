@@ -54,7 +54,16 @@ def _get_encryption_algorithm() -> str:
 
 
 def _derive_key(signing_key: str) -> bytes:
-    """Derive a 32-byte key from the salt/master key (shared by both algorithms)."""
+    """Derive a 32-byte key from the salt/master key (shared by both algorithms).
+
+    Known limitation: this is a single-pass, unsalted ``SHA-256`` of the key, not
+    a dedicated KDF (HKDF/PBKDF2). It is the *same* derivation the legacy nacl
+    path already uses, so the AES path introduces no new weakness and stays
+    interoperable with existing key sourcing; AES-256-GCM's per-value 12-byte
+    random nonce gives the unique (key, nonce) pairs GCM requires. Moving both
+    algorithms to HKDF-SHA256 would be more defensible in an audit but is a
+    separate, coordinated change (it must re-derive or re-encrypt existing data).
+    """
     import hashlib
 
     return hashlib.sha256(signing_key.encode()).digest()

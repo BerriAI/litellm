@@ -32,7 +32,7 @@ config rows, and the SSO config table.
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal
+from typing import Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -61,7 +61,7 @@ class LocationReport:
     # Used by --check (read-only classification):
     legacy: int = 0  # nacl ciphertext still awaiting migration
 
-    def as_dict(self) -> Dict[str, int]:
+    def as_dict(self) -> dict[str, int]:
         return {
             "scanned": self.scanned,
             "migrated": self.migrated,
@@ -76,7 +76,7 @@ class LocationReport:
 class MigrationReport:
     """Aggregate report across all locations."""
 
-    locations: List[LocationReport] = field(default_factory=list)
+    locations: list[LocationReport] = field(default_factory=list)
 
     def add(self, report: LocationReport) -> None:
         self.locations.append(report)
@@ -90,7 +90,7 @@ class MigrationReport:
     def total_undecryptable(self) -> int:
         return sum(loc.undecryptable for loc in self.locations)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, object]:
         return {
             "residual_legacy": self.residual_legacy,
             "total_undecryptable": self.total_undecryptable,
@@ -103,12 +103,12 @@ class MigrationReport:
 # ---------------------------------------------------------------------------
 
 
-def is_migrated(value: Any) -> bool:
+def is_migrated(value: object) -> bool:
     """True if ``value`` is already an AES-256-GCM (``v2:gcm:``) ciphertext."""
     return isinstance(value, str) and value.startswith(_V2_GCM_PREFIX)
 
 
-def classify_value(value: Any, key: str = "scan") -> ValueClass:
+def classify_value(value: object, key: str = "scan") -> ValueClass:
     """Classify a stored value for the residual scanner.
 
     * ``not-a-string`` — not a string (numbers/bools/None left as-is on disk).
@@ -135,7 +135,7 @@ def classify_value(value: Any, key: str = "scan") -> ValueClass:
     return "legacy"
 
 
-def reencrypt_value(value: Any, key: str = "migrate") -> Any:
+def reencrypt_value(value: object, key: str = "migrate") -> object:
     """Re-encrypt a single stored string into the configured (AES) format.
 
     Returns the value unchanged if it is not a string, is already ``v2:``, or
@@ -158,8 +158,8 @@ def reencrypt_value(value: Any, key: str = "migrate") -> Any:
 
 
 def reencrypt_selective_dict(
-    data: Dict[str, Any], sensitive_keys: List[str]
-) -> Dict[str, Any]:
+    data: dict[str, object], sensitive_keys: list[str]
+) -> dict[str, object]:
     """Return a copy of ``data`` with only ``sensitive_keys`` re-encrypted.
 
     Non-sensitive fields (e.g. ``base_url``, ``connection_id``) are left as-is.
@@ -199,9 +199,9 @@ def _assert_aes_gate_enabled() -> None:
 
 
 async def _migrate_config_settings_row(
-    prisma_client: Any,
+    prisma_client: object,
     param_name: str,
-    sensitive_fields: List[str],
+    sensitive_fields: list[str],
     dry_run: bool,
 ) -> LocationReport:
     """Migrate a single ``LiteLLM_Config`` row whose ``param_value`` is a JSON
@@ -248,7 +248,7 @@ async def _migrate_config_settings_row(
     return report
 
 
-async def _migrate_sso_config(prisma_client: Any, dry_run: bool) -> LocationReport:
+async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationReport:
     """Migrate the ``LiteLLM_SSOConfig`` row. All non-null fields are encrypted
     (via the same ``_encrypt_env_variables`` path used on save), so we re-encrypt
     every present string field.
@@ -295,7 +295,7 @@ async def _migrate_sso_config(prisma_client: Any, dry_run: bool) -> LocationRepo
 
 
 async def _migrate_callback_vars_table(
-    prisma_client: Any,
+    prisma_client: object,
     table_name: Literal["team", "verification_token"],
     dry_run: bool,
 ) -> LocationReport:
@@ -325,7 +325,7 @@ async def _migrate_callback_vars_table(
         if not isinstance(metadata, dict) or "logging" not in metadata:
             continue
 
-        # Count sensitive callback-var values that are not yet v2.
+        total = _count_callback_values(metadata)
         pre_v2 = _count_callback_v2(metadata)
         try:
             decrypted = decrypt_callback_vars(metadata)
@@ -341,10 +341,19 @@ async def _migrate_callback_vars_table(
             continue
 
         post_v2 = _count_callback_v2(re_encrypted)
-        report.scanned += post_v2
+        # scanned counts every callback-var value examined (one per field),
+        # matching the other walkers -- not just the post-migration v2 count.
+        report.scanned += total
         report.already_v2 += pre_v2
         newly = max(0, post_v2 - pre_v2)
-        report.migrated += newly
+        # In a dry run (the --check path) the values that *would* migrate are
+        # exactly the residual legacy ciphertext, so attribute them to `legacy`
+        # for the attestation; on a real run they are migrated this pass.
+        if dry_run:
+            report.legacy += newly
+        else:
+            report.migrated += newly
+        report.plaintext += max(0, total - pre_v2 - newly)
         if newly and not dry_run:
             await table.update(
                 where={pk: getattr(row, pk)},
@@ -356,7 +365,7 @@ async def _migrate_callback_vars_table(
     return report
 
 
-def _count_callback_v2(metadata: Dict[str, Any]) -> int:
+def _count_callback_v2(metadata: dict[str, object]) -> int:
     """Count callback-var values carrying the ``v2:gcm:`` marker (allowing the
     ``litellm_enc::`` callback prefix in front of it)."""
     from litellm.proxy.common_utils.callback_utils import (
@@ -381,6 +390,145 @@ def _count_callback_v2(metadata: Dict[str, Any]) -> int:
     return count
 
 
+def _count_callback_values(metadata: dict[str, object]) -> int:
+    """Count every callback-var string value across all ``logging`` entries.
+
+    This is the ``scanned`` denominator for the callback-vars walker: one per
+    field examined, regardless of whether it is plaintext, legacy, or v2.
+    """
+    count = 0
+    for entry in metadata.get("logging", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        cvs = entry.get("callback_vars")
+        if not isinstance(cvs, dict):
+            continue
+        for v in cvs.values():
+            if isinstance(v, str):
+                count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Read-only scanner for the rotation-covered tables.
+#
+# ``_rotate_master_key`` re-encrypts these tables but returns no counts, so on
+# its own it can neither attest residual legacy nor report how many rows it
+# migrated. This scanner reads (never writes) the same encrypted columns the
+# rotation path touches and classifies every value, giving both the attestation
+# coverage and the pre/post counts the rotation path can't supply itself.
+# ---------------------------------------------------------------------------
+
+# (location, prisma db attribute, JSON columns to walk, scalar string columns).
+_COVERED_TABLE_SPECS = [
+    ("model_table", "litellm_proxymodeltable", ("litellm_params",), ()),
+    ("credentials", "litellm_credentialstable", ("credential_values",), ()),
+    ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars"), ()),
+    ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
+    ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
+]
+
+
+def _iter_encrypted_strings(obj: object):
+    """Yield every string leaf in a nested dict/list/scalar structure."""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_encrypted_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_encrypted_strings(v)
+
+
+def _classify_into_report(report: LocationReport, value: str) -> None:
+    """Classify one stored string and bump the matching read-only counter.
+
+    Only genuine nacl ciphertext lands in ``legacy``; non-secret strings (model
+    names, base URLs, …) do not decrypt and fall through to ``plaintext``, so
+    over-scanning a column is harmless to the residual count.
+    """
+    report.scanned += 1
+    cls = classify_value(value, key="scan")
+    if cls == "migrated":
+        report.already_v2 += 1
+    elif cls == "legacy":
+        report.legacy += 1
+    else:  # plaintext / not-a-string
+        report.plaintext += 1
+
+
+async def _scan_one_table(
+    prisma_client: object,
+    location: str,
+    db_attr: str,
+    json_columns: tuple,
+    scalar_columns: tuple,
+) -> LocationReport:
+    report = LocationReport(location=location)
+    table = getattr(prisma_client.db, db_attr, None)
+    if table is None:
+        return report
+    try:
+        rows = await table.find_many()
+    except Exception as e:  # pragma: no cover - table absent / not migrated
+        verbose_proxy_logger.debug("scan: %s unavailable: %s", location, str(e))
+        return report
+    for row in rows or []:
+        for col in json_columns:
+            raw = getattr(row, col, None)
+            if raw is None:
+                continue
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (ValueError, TypeError):
+                    pass
+            for s in _iter_encrypted_strings(raw):
+                _classify_into_report(report, s)
+        for col in scalar_columns:
+            v = getattr(row, col, None)
+            if isinstance(v, str):
+                _classify_into_report(report, v)
+    return report
+
+
+async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
+    """Scan the ``environment_variables`` config row (``param_value`` dict)."""
+    report = LocationReport(location="config_environment_variables")
+    try:
+        record = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        verbose_proxy_logger.debug("scan: config env vars unavailable: %s", str(e))
+        return report
+    if record is None or record.param_value is None:
+        return report
+    value = record.param_value
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            value = {}
+    for s in _iter_encrypted_strings(value):
+        _classify_into_report(report, s)
+    return report
+
+
+async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
+    """Read-only classification of every rotation-covered table. No writes."""
+    reports: list[LocationReport] = []
+    for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
+        reports.append(
+            await _scan_one_table(
+                prisma_client, location, db_attr, json_cols, scalar_cols
+            )
+        )
+    reports.append(await _scan_config_env_vars(prisma_client))
+    return reports
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -391,17 +539,23 @@ _CLOUDZERO_SENSITIVE = ["api_key"]
 
 
 async def _migrate_covered_tables(
-    prisma_client: Any, user_api_key_dict: Any
-) -> LocationReport:
+    prisma_client: object, user_api_key_dict: object
+) -> list[LocationReport]:
     """Re-encrypt the tables already covered by ``_rotate_master_key`` (model
     table, credentials, MCP credential/env tables, config environment_variables)
     by running that orchestrator in *same-key* mode. With the AES gate on, the
     re-encrypt writes land in ``v2:`` format.
+
+    ``_rotate_master_key`` returns no counts, so we bracket it with read-only
+    scans: the pre-scan's legacy total minus the post-scan's gives the number
+    actually migrated per location, and the post-scan supplies the residual /
+    already-v2 / scanned figures. Returns one report per covered location.
     """
-    report = LocationReport(location="rotation_covered_tables")
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _rotate_master_key,
     )
+
+    pre = {r.location: r for r in await _scan_covered_tables(prisma_client)}
 
     current_key = _get_salt_key()
     await _rotate_master_key(
@@ -410,12 +564,20 @@ async def _migrate_covered_tables(
         current_master_key=current_key,
         new_master_key=current_key,  # same key, algorithm-only switch
     )
-    return report
+
+    post = await _scan_covered_tables(prisma_client)
+    for post_report in post:
+        pre_report = pre.get(post_report.location)
+        pre_legacy = pre_report.legacy if pre_report else 0
+        # Everything that was legacy before and is no longer legacy now was
+        # converted this run.
+        post_report.migrated = max(0, pre_legacy - post_report.legacy)
+    return post
 
 
 async def migrate_encryption(
-    prisma_client: Any,
-    user_api_key_dict: Any,
+    prisma_client: object,
+    user_api_key_dict: object,
     dry_run: bool = False,
 ) -> MigrationReport:
     """Run the full at-rest re-encryption migration.
@@ -423,23 +585,29 @@ async def migrate_encryption(
     Requires ``general_settings.encryption_algorithm == 'aes-256-gcm'`` so writes
     are produced in the AES format. Idempotent and resumable: re-running skips
     already-migrated values and finishes any partial run.
+
+    A ``dry_run`` performs no writes: the covered tables are scanned read-only
+    (so their residual legacy still counts toward the attestation) and the
+    net-new walkers run in dry-run mode.
     """
     _assert_aes_gate_enabled()
 
     report = MigrationReport()
 
-    # Tables that already have a rotation path (items 1, 2, 5-10).
-    if not dry_run:
-        report.add(await _migrate_covered_tables(prisma_client, user_api_key_dict))
+    # Tables that already have a rotation path (items 1, 2, 5-10). On a real run
+    # delegate to the rotation path (with bracketing scans for counts); on a dry
+    # run only classify them read-only.
+    if dry_run:
+        for covered in await _scan_covered_tables(prisma_client):
+            report.add(covered)
+    else:
+        for covered in await _migrate_covered_tables(prisma_client, user_api_key_dict):
+            report.add(covered)
 
     # Net-new walkers (items 3, 4, 11, 12, 13).
+    report.add(await _migrate_callback_vars_table(prisma_client, "team", dry_run))
     report.add(
-        await _migrate_callback_vars_table(prisma_client, "team", dry_run)
-    )
-    report.add(
-        await _migrate_callback_vars_table(
-            prisma_client, "verification_token", dry_run
-        )
+        await _migrate_callback_vars_table(prisma_client, "verification_token", dry_run)
     )
     report.add(
         await _migrate_config_settings_row(
@@ -456,18 +624,22 @@ async def migrate_encryption(
     return report
 
 
-async def check_encryption(prisma_client: Any) -> MigrationReport:
-    """Read-only residual scan across the net-new walker locations.
+async def check_encryption(prisma_client: object) -> MigrationReport:
+    """Read-only residual scan across **every** at-rest location. No writes.
 
-    Reports how many values are still ``legacy`` (un-migrated). ``residual_legacy
-    == 0`` across a full scan is the compliance attestation. This pass performs
-    no writes.
-
-    Note: the rotation-covered tables (model/credentials/MCP/config env vars) are
-    scanned by the migration itself in dry-run mode via their own helpers; this
-    scanner covers the locations this module owns directly.
+    Covers both the rotation-managed tables (model / credentials / MCP credential
+    and env-var tables / config ``environment_variables``) and the net-new walker
+    locations (team and verification-token ``callback_vars``, vantage / cloudzero
+    config rows, SSO config). Reports how many values are still ``legacy``;
+    ``residual_legacy == 0`` across this full scan is the compliance attestation.
     """
     report = MigrationReport()
+
+    # Rotation-covered tables (read-only classification).
+    for covered in await _scan_covered_tables(prisma_client):
+        report.add(covered)
+
+    # Net-new walker locations, in dry-run (read-only) mode.
     report.add(await _migrate_callback_vars_table(prisma_client, "team", dry_run=True))
     report.add(
         await _migrate_callback_vars_table(

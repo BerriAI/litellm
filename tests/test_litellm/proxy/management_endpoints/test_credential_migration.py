@@ -39,6 +39,16 @@ def _enable_aes(monkeypatch):
     )
 
 
+def _empty_covered_tables(client):
+    """Wire every rotation-covered table on `client` to return no rows.
+
+    Lets a `check_encryption` / scanner test isolate the location under test
+    without the other covered tables raising on an unconfigured mock.
+    """
+    for _, db_attr, _, _ in cm._COVERED_TABLE_SPECS:
+        getattr(client.db, db_attr).find_many = AsyncMock(return_value=[])
+
+
 # --------------------------- pure engine ---------------------------
 
 
@@ -212,6 +222,7 @@ async def test_check_reports_residual_legacy(salt_key, monkeypatch):
     client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
     client.db.litellm_config.update = AsyncMock()
+    _empty_covered_tables(client)
 
     def _find_unique(where):
         if where.get("param_name") == "vantage_settings":
@@ -234,6 +245,7 @@ async def test_check_reports_zero_after_migration(salt_key, monkeypatch):
     client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
     client.db.litellm_config.update = AsyncMock()
+    _empty_covered_tables(client)
 
     def _find_unique(where):
         if where.get("param_name") == "vantage_settings":
@@ -271,9 +283,123 @@ async def test_callback_vars_walker_migrates_team_metadata(salt_key, monkeypatch
     report = await cm._migrate_callback_vars_table(client, "team", dry_run=False)
 
     assert report.migrated == 1
+    assert report.scanned == 1  # one field examined, not "post-v2" count
     client.db.litellm_teamtable.update.assert_awaited_once()
     written = json.loads(
         client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
     )
     inner = written["logging"][0]["callback_vars"]["gcs_path_service_account"]
     assert "v2:gcm:" in inner
+
+
+@pytest.mark.asyncio
+async def test_callback_vars_walker_dry_run_reports_legacy(salt_key, monkeypatch):
+    """In --check (dry-run) mode, a legacy callback var counts as residual legacy."""
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    legacy_meta = encrypt_callback_vars(
+        {"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]}
+    )
+    _enable_aes(monkeypatch)
+
+    team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
+    client = MagicMock()
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    client.db.litellm_teamtable.update = AsyncMock()
+
+    report = await cm._migrate_callback_vars_table(client, "team", dry_run=True)
+
+    assert report.scanned == 1
+    assert report.legacy == 1  # would-migrate -> residual legacy in attestation
+    assert report.migrated == 0
+    client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+# --------------------------- covered-tables scanner ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatch):
+    """The read-only scanner classifies the model and credentials tables."""
+    legacy = _legacy_ct("model-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    v2 = encrypt_value_helper("cred-secret")
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(litellm_params={"api_key": legacy, "model": "gpt-4"})
+        ]
+    )
+    client.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(credential_values={"api_key": v2})]
+    )
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+
+    assert by_loc["model_table"].legacy == 1
+    assert by_loc["model_table"].plaintext == 1  # "gpt-4" model name, not ciphertext
+    assert by_loc["credentials"].already_v2 == 1
+    assert by_loc["credentials"].legacy == 0
+
+
+@pytest.mark.asyncio
+async def test_check_counts_covered_table_residual(salt_key, monkeypatch):
+    """check_encryption now scans the rotation-covered tables (model table here),
+    so a legacy value there counts toward residual_legacy (the P1 attestation gap).
+    """
+    legacy = _legacy_ct("model-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.update = AsyncMock()
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(litellm_params={"api_key": legacy})]
+    )
+
+    report = await cm.check_encryption(client)
+
+    assert report.residual_legacy == 1
+    assert report.as_dict()["locations"]["model_table"]["legacy"] == 1
+    client.db.litellm_config.update.assert_not_awaited()  # read-only
+
+
+@pytest.mark.asyncio
+async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch):
+    """_migrate_covered_tables derives real per-table counts from pre/post scans,
+    instead of the always-zero report Greptile flagged (P1).
+    """
+    legacy = _legacy_ct("model-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    v2 = encrypt_value_helper("model-secret")
+
+    row = SimpleNamespace(litellm_params={"api_key": legacy})
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    async def fake_rotate(**kwargs):
+        # Stand in for _rotate_master_key: re-encrypt the model api_key in place.
+        row.litellm_params["api_key"] = v2
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._rotate_master_key",
+        fake_rotate,
+    )
+
+    by_loc = {
+        r.location: r for r in await cm._migrate_covered_tables(client, MagicMock())
+    }
+
+    assert by_loc["model_table"].migrated == 1  # was legacy pre, v2 post
+    assert by_loc["model_table"].legacy == 0  # residual zero after rotation
+    assert by_loc["model_table"].already_v2 == 1
