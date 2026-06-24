@@ -8,6 +8,14 @@
 //! A handler opts in by adding [`RequireMasterKey`] to its arguments; auth then
 //! runs during extraction, before the handler body. Routes never re-implement it.
 
+pub mod cache;
+pub mod client;
+pub mod user_api_key;
+
+pub use cache::KeyCache;
+pub use client::{AuthError, KeyAuthenticator};
+pub use user_api_key::UserApiKeyAuth;
+
 use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
