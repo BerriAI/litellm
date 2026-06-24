@@ -33,6 +33,12 @@ impl Router {
         }
     }
 
+    /// All deployments in the `model_list`. Read-only; used by the host to
+    /// enumerate upstreams (e.g. to pre-warm a connection pool per deployment).
+    pub fn deployments(&self) -> &[Deployment] {
+        &self.model_list
+    }
+
     /// Whether any deployment is registered under `model`.
     pub fn has_deployment(&self, model: &str) -> bool {
         self.model_list
