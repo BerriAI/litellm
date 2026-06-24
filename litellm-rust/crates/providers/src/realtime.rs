@@ -59,6 +59,7 @@ pub async fn realtime<In, Out>(
     api_key: Option<&str>,
     api_base: Option<&str>,
     idle_timeout: Option<Duration>,
+    mut observe: impl FnMut(&RealtimeEvent) + Send,
     mut client_in: In,
     mut client_out: Out,
 ) -> CoreResult<()>
@@ -99,6 +100,7 @@ where
             // client -> upstream
             client_event = client_in.next() => {
                 let Some(event) = client_event else { break }; // client disconnected
+                observe(&event);
                 for outbound in config.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
@@ -115,6 +117,7 @@ where
                     Message::Text(text) => {
                         let event: RealtimeEvent = serde_json::from_str(&text)
                             .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                        observe(&event);
                         for outbound in config.transform_realtime_response(&event, model)?.events {
                             client_out
                                 .send(outbound)
@@ -174,6 +177,7 @@ mod tests {
                 Some(&key_owned),
                 None,
                 None,
+                |_| {},
                 client_in,
                 client_out,
             )

@@ -15,6 +15,7 @@ pub async fn run<In, Out>(
     router: &Router,
     model: &str,
     idle_timeout: Option<Duration>,
+    observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
 ) -> CoreResult<()>
@@ -38,6 +39,7 @@ where
         params.api_key.as_deref(),
         params.api_base.as_deref(),
         idle_timeout,
+        observe,
         client_in,
         client_out,
     )

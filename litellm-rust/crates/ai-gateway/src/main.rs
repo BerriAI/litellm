@@ -6,8 +6,10 @@
 
 mod auth;
 mod gil;
+mod integrations;
 #[cfg(feature = "python-config")]
 mod python;
+mod realtime;
 mod routes;
 mod state;
 
@@ -15,6 +17,8 @@ use std::sync::Arc;
 
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
+use crate::integrations::custom_logger::CustomLogger;
+use crate::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 use crate::state::AppState;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
@@ -37,9 +41,16 @@ async fn main() {
         );
     }
 
+    // Spawn the realtime-logging worker (drains a channel → POSTs batches to the
+    // Python proxy's /v1/callbacks/logs). Built here so the spawn lands on the
+    // tokio runtime. `from_env` reads LITELLM_PROXY_BASE_URL + LITELLM_MASTER_KEY.
+    let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
+    let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
+
     let state = AppState {
         router: Arc::new(build_router()),
         master_key,
+        loggers: Arc::new(loggers),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
