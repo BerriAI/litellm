@@ -6017,7 +6017,7 @@ class ProxyConfig:
         """
         try:
             new_models = await ModelRepository(prisma_client).table.find_many(
-                order=[{"created_at": "asc"}, {"model_id": "asc"}]
+                order=MODEL_LIST_ORDER
             )
             return new_models
         except Exception as e:
@@ -10946,7 +10946,7 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.model_repository import MODEL_LIST_ORDER, ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
     ConfigOverridesRepository,
@@ -11786,6 +11786,7 @@ async def _fetch_db_models_for_search(
         db_models_raw = await ModelRepository(prisma_client).table.find_many(
             where=db_where_condition,
             take=take_limit,
+            order=MODEL_LIST_ORDER,
         )
 
     # Scope BYOK rows to the caller's allowed teams so non-admin callers

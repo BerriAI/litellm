@@ -3,7 +3,7 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Final, List, Optional, Type
 
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.repositories.base_repository import BaseRepository
@@ -11,6 +11,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+
+MODEL_LIST_ORDER: Final[List[Dict[str, str]]] = [
+    {"created_at": "asc"},
+    {"model_id": "asc"},
+]
 
 
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
@@ -83,7 +88,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     async def find_all(self) -> List[LiteLLM_ProxyModelTable]:
         """Find all models."""
-        records = await self.table.find_many()
+        records = await self.table.find_many(order=MODEL_LIST_ORDER)
         return self._to_model_list(records)
 
     async def find_unblocked(self) -> List[LiteLLM_ProxyModelTable]:

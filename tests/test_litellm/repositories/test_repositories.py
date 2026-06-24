@@ -122,6 +122,28 @@ class MockTable:
         return MockRecord(self._records[key_value])
 
 
+class _OrderAwareModelTable:
+    """Model table mock that honors the `order` argument and returns rows in
+    scrambled insertion order when none is given, so an ordering assertion
+    fails if the caller stops requesting an order."""
+
+    def __init__(self, rows: List[Dict[str, Any]]):
+        self._rows = list(rows)
+
+    async def find_many(
+        self,
+        order: Optional[List[Dict[str, str]]] = None,
+        where: Optional[Dict[str, Any]] = None,
+        skip: Optional[int] = None,
+        take: Optional[int] = None,
+    ) -> List[MockRecord]:
+        rows = list(self._rows)
+        for spec in reversed(order or []):
+            ((field, direction),) = spec.items()
+            rows.sort(key=lambda r: r[field], reverse=direction == "desc")
+        return [MockRecord(r) for r in rows]
+
+
 class MockPrismaClient:
     """Mock Prisma client for testing."""
 
@@ -388,6 +410,44 @@ class TestModelRepository:
         }
         models = await repo.find_all()
         assert len(models) == 2
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.repositories.model_repository.decrypt_value_helper",
+        side_effect=lambda v, **kw: v,
+    )
+    async def test_find_all_orders_by_created_at_then_model_id(
+        self, mock_decrypt, repo
+    ):
+        early = datetime(2026, 1, 1)
+        late = datetime(2026, 6, 1)
+        scrambled = [
+            {
+                "model_id": "z",
+                "model_name": "n",
+                "litellm_params": "{}",
+                "created_at": late,
+            },
+            {
+                "model_id": "b",
+                "model_name": "n",
+                "litellm_params": "{}",
+                "created_at": early,
+            },
+            {
+                "model_id": "a",
+                "model_name": "n",
+                "litellm_params": "{}",
+                "created_at": early,
+            },
+        ]
+        repo._prisma_client.db.litellm_proxymodeltable = _OrderAwareModelTable(
+            scrambled
+        )
+
+        models = await repo.find_all()
+
+        assert [m.model_id for m in models] == ["a", "b", "z"]
 
     @pytest.mark.asyncio
     @patch(

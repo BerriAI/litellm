@@ -8462,19 +8462,23 @@ class _FakeModelTable:
     def __init__(self, rows):
         self._rows = list(rows)
 
-    async def find_many(self, *args, order=None, where=None, **kwargs):
+    async def count(self, where=None):
+        return len(self._rows)
+
+    async def find_many(self, *args, order=None, where=None, take=None, **kwargs):
         if not order:
-            return list(self._rows)
-
-        def sort_key(row):
-            return tuple(getattr(row, list(o)[0]) for o in order)
-
-        directions = [list(o.values())[0] for o in order]
-        if any(d not in ("asc", "desc") for d in directions):
-            raise ValueError(f"unexpected sort direction in {order}")
-        if any(d == "desc" for d in directions):
-            raise AssertionError("model list is expected ascending, not descending")
-        return sorted(self._rows, key=sort_key)
+            rows = list(self._rows)
+        else:
+            directions = [list(o.values())[0] for o in order]
+            if any(d not in ("asc", "desc") for d in directions):
+                raise ValueError(f"unexpected sort direction in {order}")
+            if any(d == "desc" for d in directions):
+                raise AssertionError("model list is expected ascending, not descending")
+            rows = sorted(
+                self._rows,
+                key=lambda row: tuple(getattr(row, list(o)[0]) for o in order),
+            )
+        return rows[:take] if take is not None else rows
 
 
 class TestGetModelsFromDbDeterministicOrder:
@@ -8507,3 +8511,45 @@ class TestGetModelsFromDbDeterministicOrder:
         result = await ProxyConfig()._get_models_from_db(prisma_client=prisma_client)
 
         assert [r.model_id for r in result] == ["a-oldest", "b-oldest", "z-newest"]
+
+    @pytest.mark.asyncio
+    async def test_search_page_is_stable_under_take_limit(self):
+        """The paginated search fetch applies `take` (LIMIT); without an ORDER BY
+        which rows land on the page is itself non-deterministic. Ordering must be
+        pushed to the DB so the same slice comes back on every refresh."""
+        from litellm.proxy.proxy_server import _fetch_db_models_for_search
+
+        def _row(model_id, created_at):
+            r = MagicMock()
+            r.model_id = model_id
+            r.created_at = created_at
+            r.model_info = {}
+            return r
+
+        early = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        mid = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        late = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        scrambled = [_row("z", late), _row("m", mid), _row("a", early)]
+
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_proxymodeltable = _FakeModelTable(scrambled)
+
+        proxy_config = MagicMock()
+        proxy_config.decrypt_model_list_from_db = lambda models: [
+            {"model_id": models[0].model_id}
+        ]
+
+        result, total = await _fetch_db_models_for_search(
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+            search_lower="gpt",
+            db_model_ids_in_router=set(),
+            router_models_count=0,
+            page=1,
+            size=2,
+            sort_by=None,
+            is_byok_outside_caller_teams=lambda info: False,
+        )
+
+        assert total == 3
+        assert [m["model_id"] for m in result] == ["a", "m"]
