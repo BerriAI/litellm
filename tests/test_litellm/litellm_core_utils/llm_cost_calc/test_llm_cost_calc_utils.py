@@ -384,6 +384,44 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+def test_generic_cost_per_token_honors_non_standard_above_threshold():
+    """Regression for #30344: get_model_info must keep arbitrary
+    input/output_cost_per_token_above_<N>_tokens thresholds, not only the hard-coded
+    128k/200k/272k/512k set, so a custom tier boundary is applied past its limit."""
+    model = "litellm-test-non-standard-tier"
+    custom_llm_provider = "openai"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "input_cost_per_token_above_500k_tokens": 9e-6,
+                "output_cost_per_token_above_500k_tokens": 18e-6,
+            }
+        }
+    )
+
+    try:
+        prompt_tokens = 600000
+        completion_tokens = 1000
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 10) == round(9e-6 * prompt_tokens, 10)
+        assert round(completion_cost, 10) == round(18e-6 * completion_tokens, 10)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 def test_generic_cost_per_token_gpt55():
     """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
     model = "gpt-5.5"
