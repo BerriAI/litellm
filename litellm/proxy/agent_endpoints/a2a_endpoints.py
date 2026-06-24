@@ -84,7 +84,7 @@ def _served_version(
     configured = (agent.agent_card_params or {}).get("protocolVersion")
     if configured in ("0.3", "1.0"):
         return configured
-    if original_method in ("SendMessage", "SendStreamingMessage"):
+    if original_method in _PASCAL_TO_WIRE:
         return "1.0"
     return "1.0" if request.headers.get("a2a-version", "").startswith("1.") else "0.3"
 
