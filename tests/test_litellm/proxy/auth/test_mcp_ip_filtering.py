@@ -117,6 +117,24 @@ class TestMCPClientIPExtraction:
         assert result == "10.0.0.9"
         assert IPAddressUtils.is_internal_ip(result) is True
 
+    def test_unknown_direct_peer_spoofing_xff_stays_external(self):
+        # When the ASGI transport does not expose request.client (Unix-socket
+        # transports, some test clients) the direct peer is unknown. With XFF on
+        # and no mcp_trusted_proxy_ranges, a forged internal X-Forwarded-For must
+        # not be trusted. The result must be a non-None external value: returning
+        # None would mean "no filtering" downstream and leak internal access.
+        request = MagicMock(spec=Request)
+        request.client = None
+        request.headers = {"x-forwarded-for": "10.0.0.9"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True},
+        )
+
+        assert result is not None
+        assert IPAddressUtils.is_internal_ip(result) is False
+
     def test_honours_xff_from_trusted_proxy(self):
         request = MagicMock(spec=Request)
         request.client = MagicMock()
@@ -209,6 +227,30 @@ class TestMCPServerIPFiltering:
 
         result = manager.filter_server_ids_by_ip(["priv"], client_ip=client_ip)
         assert result == ["priv"]
+
+    @patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"use_x_forwarded_for": True},
+    )
+    @patch("litellm.public_mcp_servers", [])
+    def test_unknown_peer_spoofing_xff_cannot_reach_internal_only_server(self):
+        # Security regression: if the transport doesn't expose request.client, a
+        # forged internal X-Forwarded-For must not unlock internal-only servers.
+        # get_mcp_client_ip classifies external and the filter drops the private
+        # server. A None result (the fail-open bug) would leave it accessible.
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([priv])
+
+        request = MagicMock(spec=Request)
+        request.client = None
+        request.headers = {"x-forwarded-for": "10.0.0.9"}
+        client_ip = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True},
+        )
+
+        result = manager.filter_server_ids_by_ip(["priv"], client_ip=client_ip)
+        assert result == []
 
 
 class TestFilterServerIdsByIpWithInfo:

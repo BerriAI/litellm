@@ -174,9 +174,13 @@ class IPAddressUtils:
         """
         Extract client IP from a FastAPI request for MCP access control.
 
-        Security: Only trusts X-Forwarded-For if:
-        1. use_x_forwarded_for is enabled in settings
-        2. The direct connection is from a trusted proxy (if mcp_trusted_proxy_ranges configured)
+        Security: X-Forwarded-For is trusted only when use_x_forwarded_for is
+        enabled and the direct connection is a legitimate proxy, established by
+        either the direct peer falling inside mcp_trusted_proxy_ranges, or, when
+        no ranges are configured, the direct peer being a private address (a
+        reverse proxy in front of the gateway). A public, out-of-range, or
+        unknown direct peer is classified by its own address so a forged header
+        cannot grant internal access.
 
         Args:
             request: FastAPI request object
@@ -204,26 +208,26 @@ class IPAddressUtils:
                 request, general_settings=general_settings
             ):
                 direct_ip = request.client.host if request.client else None
-                # The X-Forwarded-For header is not trustworthy when either the
-                # operator configured mcp_trusted_proxy_ranges and this direct
-                # peer is not one of them, or no ranges are configured and the
-                # peer is a public address (an untrusted caller connecting to us
-                # directly and spoofing XFF). Classify by the direct connection.
-                untrusted_peer = bool(
-                    general_settings.get("mcp_trusted_proxy_ranges")
-                ) or (
+                # X-Forwarded-For is only trustworthy when the direct peer is a
+                # private reverse proxy and the operator has not pinned
+                # mcp_trusted_proxy_ranges (a peer inside those ranges would have
+                # been accepted above). For a public, out-of-range, or unknown
+                # peer, classify by the direct connection so a forged header
+                # cannot reach available_on_public_internet=false servers. An
+                # unknown peer (request.client is None) fails closed to the
+                # external "" sentinel rather than leaking internal access via a
+                # None "no filtering" result. The private-proxy carve-out is what
+                # stops internal-only servers 404ing behind a load balancer
+                # (LIT-3964); set mcp_trusted_proxy_ranges to validate the proxy
+                # explicitly instead of relying on it.
+                peer_is_private_proxy = (
                     direct_ip is not None
-                    and not IPAddressUtils.is_internal_ip(direct_ip)
+                    and not general_settings.get("mcp_trusted_proxy_ranges")
+                    and IPAddressUtils.is_internal_ip(direct_ip)
                 )
-                if untrusted_peer:
+                if not peer_is_private_proxy:
                     verbose_proxy_logger.warning(
                         "Untrusted X-Forwarded-For from %s, ignoring", direct_ip
                     )
-                    return direct_ip
-                # No trusted ranges configured and an internal (or unknown)
-                # direct peer: a private reverse proxy in front of the gateway,
-                # so honour X-Forwarded-For (parsed below). Set
-                # mcp_trusted_proxy_ranges to validate the proxy explicitly.
-                # Failing closed here made every internal-only MCP server return
-                # 404 behind a load balancer (LIT-3964).
+                    return direct_ip or ""
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
