@@ -10,7 +10,9 @@ class _SupportsGet(Protocol):
     def get(self, key: str, default: object = None) -> object: ...
 
 
-CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = "aws-external-anthropic"
+CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
+    "aws-external-anthropic"
+)
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
 
 # Auth/routing params consumed by validate_environment / sign_request that
@@ -55,7 +57,9 @@ def filter_claude_platform_request_body(
     Filters a copy so callers' ``sign_request`` still sees ``aws_region_name``.
     """
     unsupported = (
-        unsupported_override if unsupported_override is not None else CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS
+        unsupported_override
+        if unsupported_override is not None
+        else CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS
     )
     dropped_unsupported = [k for k in params if k in unsupported]
     if dropped_unsupported:
@@ -69,7 +73,9 @@ def filter_claude_platform_request_body(
     return {
         k: v
         for k, v in params.items()
-        if k not in CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS and k not in unsupported and not k.startswith("aws_")
+        if k not in CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS
+        and k not in unsupported
+        and not k.startswith("aws_")
     }
 
 
@@ -108,10 +114,14 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
             or litellm_params.get("anthropic-workspace-id")
         )
         if workspace_id is None:
-            workspace_id = optional_params.get("anthropic_workspace_id") or litellm_params.get("anthropic_workspace_id")
+            workspace_id = optional_params.get(
+                "anthropic_workspace_id"
+            ) or litellm_params.get("anthropic_workspace_id")
         if workspace_id is not None:
             return str(workspace_id)
-        return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str("ANTHROPIC_WORKSPACE_ID")
+        return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str(
+            "ANTHROPIC_WORKSPACE_ID"
+        )
 
     def _get_required_aws_region_name(self, optional_params: dict) -> str:
         aws_region_name = (
@@ -149,7 +159,9 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         )
         if api_base is None:
             aws_region_name = self._get_required_aws_region_name(optional_params)
-            api_base = f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
+            api_base = (
+                f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
+            )
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base.rstrip('/')}/v1/messages"
         return api_base

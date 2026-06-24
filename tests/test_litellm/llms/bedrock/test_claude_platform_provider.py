@@ -505,6 +505,35 @@ def test_claude_platform_unsupported_override_ignores_invalid_type():
     assert request_body["max_tokens"] == 10
 
 
+def test_claude_platform_messages_unsupported_override_allows_context_management():
+    """
+    Messages-path: operators can pass claude_platform_unsupported_params=[]
+    in litellm_params to allow context_management through.
+    """
+    import litellm
+    from litellm.types.utils import LlmProviders
+
+    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="claude_platform/claude-sonnet-4-6",
+        provider=LlmProviders.BEDROCK,
+    )
+    assert config is not None
+
+    request_body = config.transform_anthropic_messages_request(
+        model="claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        anthropic_messages_optional_request_params={
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+            "max_tokens": 10,
+        },
+        litellm_params={"claude_platform_unsupported_params": []},
+        headers={},
+    )
+
+    assert "context_management" in request_body
+    assert request_body["max_tokens"] == 10
+
+
 def test_chat_completion_claude_platform_sigv4_body_has_no_auth_params():
     """
     End-to-end (mocked transport): a config-driven SigV4 call with
