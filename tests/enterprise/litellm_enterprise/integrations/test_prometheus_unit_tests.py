@@ -29,6 +29,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 from litellm.types.router import ModelInfo
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
@@ -226,21 +227,17 @@ class CustomPrometheusLogger(PrometheusLogger):
 
     def increment_deployment_cooled_down(
         self,
-        litellm_model_name: str,
-        model_id: str,
-        api_base: str,
-        api_provider: str,
+        enum_values: "UserAPIKeyLabelValues",
         exception_status: str,
-        model_group: Optional[str] = None,
     ):
         self.deployment_cooled_downs.append(
             [
-                litellm_model_name,
-                model_id,
-                api_base,
-                api_provider,
+                enum_values.litellm_model_name,
+                enum_values.model_id,
+                enum_values.api_base,
+                enum_values.api_provider,
                 exception_status,
-                model_group,
+                enum_values.model_group,
             ]
         )
 
