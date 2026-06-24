@@ -1,51 +1,65 @@
-use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
-use litellm_core::error::CoreError;
+use axum::response::Response;
+use futures_util::{SinkExt, StreamExt};
 use litellm_core::realtime::types::RealtimeEvent;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
 
-/// Request body for the minimal realtime invoke endpoint.
 #[derive(Debug, Deserialize)]
-pub struct RealtimeRequest {
-    /// Public model alias to route on (e.g. `gpt-realtime`).
+pub struct RealtimeQuery {
     pub model: String,
-    /// Client events to send upstream, each a typed realtime event.
-    pub input: Vec<RealtimeEvent>,
 }
 
-/// Response body: the backend events collected for this turn.
-#[derive(Debug, Serialize)]
-pub struct RealtimeResponse {
-    pub events: Vec<RealtimeEvent>,
-}
-
-/// `POST /v1/realtime` — authenticate, select a deployment via the router, and
-/// invoke the realtime route end to end, returning the collected backend events.
-pub async fn invoke(
+/// `GET /v1/realtime` (WebSocket). Authenticate BEFORE the upgrade so a bad key
+/// is a clean 401 (not a WS close), then splice the client socket to the provider.
+pub async fn handler(
+    ws: WebSocketUpgrade,
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<RealtimeRequest>,
-) -> Result<Json<RealtimeResponse>, (StatusCode, String)> {
+    Query(query): Query<RealtimeQuery>,
+) -> Result<Response, (StatusCode, String)> {
     authorize(&state, &headers)?;
+    if query.model.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "missing 'model' query param".to_string(),
+        ));
+    }
+    let router = state.router.clone();
+    let model = query.model;
+    Ok(ws.on_upgrade(move |socket| bridge(socket, router, model)))
+}
 
-    let events = crate::dispatch::realtime(&state.router, &request.model, request.input, None)
-        .await
-        .map_err(|err| {
-            // `Routing` means the model has no deployment — a client-side error
-            // (bad model name / misconfig). Everything else is an upstream or
-            // transport failure.
-            let status = match &err {
-                CoreError::Routing(_) => StatusCode::NOT_FOUND,
-                _ => StatusCode::BAD_GATEWAY,
-            };
-            (status, err.to_string())
-        })?;
-    Ok(Json(RealtimeResponse { events }))
+/// Adapt the axum socket to typed events and run the splice.
+async fn bridge(
+    socket: WebSocket,
+    router: std::sync::Arc<litellm_core::router::Router>,
+    model: String,
+) {
+    let (ws_sink, ws_stream) = socket.split();
+
+    // client text frames -> typed events (non-text / parse failures are skipped)
+    let client_in = ws_stream.filter_map(|message| async move {
+        match message {
+            Ok(Message::Text(text)) => serde_json::from_str::<RealtimeEvent>(&text).ok(),
+            _ => None,
+        }
+    });
+
+    // typed events -> client text frames
+    let client_out = ws_sink.with(|event: RealtimeEvent| async move {
+        Ok::<Message, axum::Error>(Message::Text(
+            serde_json::to_string(&event).unwrap_or_default(),
+        ))
+    });
+
+    futures_util::pin_mut!(client_in, client_out);
+    let _ = crate::dispatch::realtime(&router, &model, None, client_in, client_out).await;
 }
 
 /// Require a bearer token matching the configured gateway key. Fails closed when
