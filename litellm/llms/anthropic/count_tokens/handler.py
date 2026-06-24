@@ -68,11 +68,9 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             verbose_logger.debug(f"Transformed request: {request_body}")
 
-            # Construct clean endpoint URL handling custom proxy destinations
+            # Construct clean endpoint URL handling custom proxy destinations without redundant blocks
             if api_base:
                 if api_base.endswith("/messages/count_tokens"):
-                    endpoint_url = api_base
-                elif api_base.endswith("/v1/messages/count_tokens"):
                     endpoint_url = api_base
                 elif api_base.endswith("/v1/messages"):
                     endpoint_url = f"{api_base.rstrip('/')}/count_tokens"

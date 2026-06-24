@@ -155,7 +155,7 @@ def cmd_check(counts: Mapping[str, int]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--update", action="store_true")
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
     counts = count_basedpyright(sys.stdin.read())
     cmd_update(counts) if args.update else cmd_check(counts)
 
