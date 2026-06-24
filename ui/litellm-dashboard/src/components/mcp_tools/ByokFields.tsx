@@ -9,6 +9,7 @@ export const BYOK_AUTH_FORMAT_HINT: Record<string, string> = {
   [AUTH_TYPE.TOKEN]: "Authorization: token {key}",
   [AUTH_TYPE.API_KEY]: "x-api-key: {key}",
   [AUTH_TYPE.BASIC]: "Authorization: Basic {key}",
+  [AUTH_TYPE.AUTHORIZATION]: "Authorization: {key}",
 };
 
 interface ByokFieldsProps {

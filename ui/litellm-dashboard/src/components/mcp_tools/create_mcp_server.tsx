@@ -46,7 +46,13 @@ interface CreateMCPServerProps {
   onBackToDiscovery?: () => void;
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
+  AUTH_TYPE.API_KEY,
+  AUTH_TYPE.BEARER_TOKEN,
+  AUTH_TYPE.TOKEN,
+  AUTH_TYPE.BASIC,
+  AUTH_TYPE.AUTHORIZATION,
+];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
@@ -770,6 +776,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="bearer_token">Bearer Token</Select.Option>
                             <Select.Option value="token">Token</Select.Option>
                             <Select.Option value="basic">Basic Auth</Select.Option>
+                            <Select.Option value="authorization">Authorization Header</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                           </Select>

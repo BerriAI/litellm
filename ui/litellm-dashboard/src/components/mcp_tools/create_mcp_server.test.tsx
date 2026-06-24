@@ -798,7 +798,7 @@ describe("CreateMCPServer BYOK toggle", () => {
   }
 
   it("shows the BYOK toggle for each static-credential auth type", async () => {
-    for (const authLabel of ["API Key", "Bearer Token", "Token", "Basic Auth"]) {
+    for (const authLabel of ["API Key", "Bearer Token", "Token", "Basic Auth", "Authorization Header"]) {
       await selectHttpTransport();
       await selectAntOption("Authentication", authLabel);
       await waitFor(() => {

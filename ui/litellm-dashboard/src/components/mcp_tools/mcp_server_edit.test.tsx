@@ -994,6 +994,22 @@ describe("MCPServerEdit (BYOK)", () => {
     expect(screen.queryByText("Authentication Value")).not.toBeInTheDocument();
   });
 
+  it("renders the BYOK toggle for a server using the authorization auth type", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...byokServer, auth_type: "authorization" }}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => expect(getByokSwitch()).toBeTruthy());
+    expect(getByokSwitch()).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByText("Authentication Value")).not.toBeInTheDocument();
+  });
+
   it("persists is_byok=true when saving an existing BYOK server", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue(byokServer);
 

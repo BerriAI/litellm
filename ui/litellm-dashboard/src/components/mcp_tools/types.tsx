@@ -38,6 +38,7 @@ export const AUTH_TYPE = {
   BEARER_TOKEN: "bearer_token",
   TOKEN: "token",
   BASIC: "basic",
+  AUTHORIZATION: "authorization",
   OAUTH2: "oauth2",
   AWS_SIGV4: "aws_sigv4",
 };
