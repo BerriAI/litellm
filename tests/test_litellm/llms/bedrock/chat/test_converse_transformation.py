@@ -5428,3 +5428,157 @@ async def test_grounding_source_and_query_rendered_as_text():
     user_content = result[0]["content"]
     assert {"text": "Tokyo is the capital of Japan."} in user_content
     assert {"text": "What is the capital of Japan?"} in user_content
+
+
+def _orphaned_tool_history_messages():
+    return [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Paris"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc",
+            "content": "Sunny, 25C",
+        },
+        {"role": "user", "content": "Summarize our conversation so far."},
+    ]
+
+
+def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
+    """No tools= but history has tool blocks: assistant tool_calls and the tool
+    result must be rewritten to text, with the structured tool fields gone and
+    tool_call_id preserved, so Bedrock accepts the request without a toolConfig
+    (#24158, #27138)."""
+    messages = _orphaned_tool_history_messages()
+
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}
+    )
+
+    serialized = json.dumps(result)
+    assert "tool_calls" not in serialized
+    assert not any(m.get("role") in ("tool", "function") for m in result)
+    assert "get_weather" in serialized
+    # The arguments string contains quotes; after json.dumps the literal
+    # '{"city": "Paris"}' is escaped, so assert on quote-free tokens that survive.
+    assert "city" in serialized and "Paris" in serialized
+    assert "Sunny, 25C" in serialized
+    assert "call_abc" in serialized  # tool_call_id correlation preserved
+
+
+@pytest.mark.parametrize("tools_value", [[], None])
+def test_neutralize_orphaned_tool_blocks_rewrites_when_tools_empty(tools_value):
+    """tools=[] and tools=None are 'no usable tools'; the gate must be on
+    truthiness, not key presence, or these slip through and still emit
+    structured tool blocks with no toolConfig."""
+    messages = _orphaned_tool_history_messages()
+
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={"tools": tools_value}
+    )
+
+    serialized = json.dumps(result)
+    assert "tool_calls" not in serialized
+    assert "get_weather" in serialized
+
+
+def test_neutralize_orphaned_tool_blocks_rewrites_tool_result_only_history():
+    """A role:"tool"-only history (no assistant tool_calls) must also be
+    neutralized; has_tool_call_blocks misses this, but the factory still emits a
+    lone toolResult with no toolConfig."""
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
+    ]
+
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}
+    )
+
+    assert not any(m.get("role") in ("tool", "function") for m in result)
+    serialized = json.dumps(result)
+    assert "lookup result" in serialized
+    assert "call_xyz" in serialized
+
+
+def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
+    """Non-text tool-result payloads (image/file) collapse to an explicit
+    marker, never an empty string (Bedrock rejects empty text blocks) and never
+    a silent drop."""
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "type": "function",
+                 "function": {"name": "render", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+        },
+    ]
+
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}
+    )
+
+    rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
+    text = rewritten["content"]
+    assert text.strip()  # never empty
+    assert "non-text tool result omitted" in text
+
+
+def test_neutralize_orphaned_tool_blocks_noop_when_tools_present():
+    """When a non-empty tools= is provided, tool blocks are legitimate and must
+    be left untouched (returns the same object, no rewriting)."""
+    messages = _orphaned_tool_history_messages()
+
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages,
+        optional_params={"tools": [{"type": "function", "function": {"name": "x"}}]},
+    )
+
+    assert result is messages
+
+
+def test_neutralize_orphaned_tool_blocks_noop_when_no_tool_history():
+    """Plain conversation with no tool blocks is returned unchanged."""
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={}
+    )
+
+    assert result is messages
+
+
+def test_neutralize_orphaned_tool_blocks_logs_warning(caplog):
+    """Neutralization must surface at WARNING level so a developer who forgot
+    tools= sees it instead of a silent degrade."""
+    messages = _orphaned_tool_history_messages()
+
+    with caplog.at_level("WARNING"):
+        AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+            messages, optional_params={}
+        )
+
+    assert any(
+        "neutralizing orphaned tool blocks" in record.getMessage()
+        for record in caplog.records
+    )
