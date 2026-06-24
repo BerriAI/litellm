@@ -41,6 +41,63 @@ def _usage_only_chunk() -> MagicMock:
     return chunk
 
 
+def _keepalive_chunk() -> MagicMock:
+    # Content-less heartbeat: empty choices, no usage, no finish reason
+    chunk = MagicMock()
+    chunk.choices = []
+    chunk.usage = None
+    chunk._hidden_params = {}
+    return chunk
+
+
+def _event_types(events: List[object]) -> List[str]:
+    return [event["type"] for event in events if isinstance(event, dict)]
+
+
+def test_sync_keepalive_chunk_does_not_emit_premature_message_delta():
+    # A keepalive between content and the real finish must not inject an early
+    # message_delta (which would close the message before it actually ends).
+    chunks = [
+        _content_chunk("hi"),
+        _keepalive_chunk(),
+        _content_chunk("", finish_reason="stop"),
+        _usage_only_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    types = _event_types(list(wrapper))
+    assert types.count("message_delta") == 1
+    assert types.index("message_delta") > types.index("content_block_delta")
+
+
+@pytest.mark.asyncio
+async def test_async_keepalive_chunk_does_not_emit_premature_message_delta():
+    class _AsyncStream:
+        def __init__(self, items):
+            self._it = iter(items)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    chunks = [
+        _content_chunk("hi"),
+        _keepalive_chunk(),
+        _content_chunk("", finish_reason="stop"),
+        _usage_only_chunk(),
+    ]
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(chunks), model="claude-x"
+    )
+    types = _event_types([event async for event in wrapper])
+    assert types.count("message_delta") == 1
+    assert types.index("message_delta") > types.index("content_block_delta")
+
+
 def test_sync_stream_survives_empty_choices_usage_chunk():
     chunks = [
         _content_chunk("hi"),
