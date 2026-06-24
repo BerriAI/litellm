@@ -7,9 +7,9 @@ no precedence cascade. It is wildcard-free with an `assert_never` tail, so addin
 an arm fails the type gate (basedpyright `reportMatchNotExhaustive`); a bypassed gate fails loudly
 at runtime instead of returning `None`.
 
-This skeleton ships every arm as a `not_implemented` stub. Each mode's real body, with its
-injected seam, lands in its own follow-up PR; until then the arm returns a typed error rather
-than silently producing no credential. Pure v2: no imports from v1.
+`none` and `api_key` (shared-key source) are live; the remaining arms are `not_implemented`
+stubs that each land in a follow-up PR with their injected seam. The self-contained arms read
+straight from the config and need no collaborator. Pure v2: no imports from v1.
 """
 
 from __future__ import annotations
@@ -17,8 +17,13 @@ from __future__ import annotations
 import httpx
 from typing_extensions import assert_never
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+    NoOpAuth,
+    StaticHeaderAuth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
+    Ok,
     Result,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
@@ -26,11 +31,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
     AuthSpecKind,
     AwsSigV4Config,
+    Byok,
     ClientCredentialsConfig,
     CredError,
     NoneConfig,
     PassthroughConfig,
     ServerSpec,
+    SharedKey,
     Subject,
     TokenExchangeConfig,
 )
@@ -40,7 +47,7 @@ class UpstreamCredentialProvider:
     """Produces the one `httpx.Auth` for a `(subject, upstream)` pair, per declared mode.
 
     Collaborators (the per-mode credential stores and token fetchers) are injected as each arm
-    is built; the skeleton needs none, since every arm is a stub.
+    is built; the live `none` and `api_key`-shared arms read from the config and need none.
     """
 
     async def resolve_credentials(
@@ -48,9 +55,9 @@ class UpstreamCredentialProvider:
     ) -> Result[httpx.Auth, CredError]:
         match server.config:
             case NoneConfig():
-                return _not_implemented(AuthSpecKind.none)
-            case ApiKeyConfig():
-                return _not_implemented(AuthSpecKind.api_key)
+                return Ok(NoOpAuth())
+            case ApiKeyConfig() as config:
+                return self._api_key(config)
             case PassthroughConfig():
                 return _not_implemented(AuthSpecKind.passthrough)
             case ClientCredentialsConfig():
@@ -62,6 +69,22 @@ class UpstreamCredentialProvider:
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
+
+    def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
+        match config.key_source:
+            case SharedKey() as source:
+                header_name, header_value = config.header(
+                    source.value.get_secret_value()
+                )
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
+            case Byok():
+                # Per-user key pulled from the credential store; lands with that seam.
+                return Error(
+                    CredError.of_not_implemented(
+                        "api_key BYOK source not implemented yet"
+                    )
+                )
+        assert_never(config.key_source)
 
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:

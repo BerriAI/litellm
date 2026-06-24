@@ -15,8 +15,11 @@ required-features = ["server"]
 
 [dependencies]
 litellm-core.workspace = true
+# reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
+# Python proxy callbacks API.
 reqwest.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+# `sync` powers the bounded mpsc channel the realtime logger drains.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true

@@ -204,6 +204,7 @@ mod tests {
         AppState {
             router: Arc::new(Router::new(vec![])),
             master_key: master_key.map(Arc::from),
+            loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
             authenticator,
             key_cache: Arc::new(KeyCache::new()),

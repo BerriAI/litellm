@@ -18,6 +18,8 @@ use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
+use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
+use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 #[cfg(feature = "python-config")]
 use litellm_ai_gateway::python;
 
@@ -43,6 +45,12 @@ async fn main() {
             "warning: LITELLM_MASTER_KEY is not set; /v1/realtime will reject all requests (fail closed)"
         );
     }
+
+    // Spawn the realtime-logging worker (drains a channel → POSTs batches to the
+    // Python proxy's /v1/callbacks/logs). Built here so the spawn lands on the
+    // tokio runtime. `from_env` reads LITELLM_PROXY_BASE_URL + LITELLM_MASTER_KEY.
+    let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
+    let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
 
     let router = Arc::new(build_router());
 
@@ -85,6 +93,7 @@ async fn main() {
     let state = AppState {
         router,
         master_key,
+        loggers: Arc::new(loggers),
         realtime_pool,
         authenticator,
         key_cache,
