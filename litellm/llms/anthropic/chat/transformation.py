@@ -229,6 +229,11 @@ DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
     "Sonnet 4.6+, and Mythos Preview."
 )
 
+DROP_UNSUPPORTED_SPEED_WARNING = (
+    "Dropping unsupported `speed` for model=%s "
+    "(drop_params=True). Fast mode is only supported on select Opus models."
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -373,6 +378,36 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicConfig._supports_effort_level(model, level)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
         )
+
+    @staticmethod
+    def _model_supports_speed_param(model: str) -> bool:
+        """Whether the model accepts Anthropic's ``speed`` parameter (fast mode).
+
+        Fast mode is Anthropic API-only (not Bedrock, Vertex, or Azure). Gated by
+        ``supports_speed`` on the exact routed model-map entry.
+        """
+        return (
+            AnthropicModelInfo._get_exact_model_capability(model, "supports_speed")
+            is True
+        )
+
+    @staticmethod
+    def _maybe_drop_speed_param(
+        model: str,
+        optional_params: dict,
+        drop_params: bool,
+    ) -> None:
+        if "speed" not in optional_params:
+            return
+        if AnthropicConfig._model_supports_speed_param(model):
+            return
+        if not (litellm.drop_params or drop_params):
+            return
+        litellm.verbose_logger.warning(
+            DROP_UNSUPPORTED_SPEED_WARNING,
+            model,
+        )
+        optional_params.pop("speed", None)
 
     @staticmethod
     def _raise_invalid_reasoning_effort(
@@ -1569,8 +1604,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_context_management
                         )
             elif param == "speed" and isinstance(value, str):
-                # Pass through Anthropic-specific speed parameter for fast mode
-                optional_params["speed"] = value
+                if AnthropicConfig._model_supports_speed_param(model):
+                    optional_params["speed"] = value
+                elif not (litellm.drop_params or drop_params):
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            f"{model} does not support speed={value!r}. "
+                            "To drop unsupported params, set "
+                            "`litellm.drop_params = True`."
+                        ),
+                        status_code=400,
+                    )
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
@@ -1874,6 +1918,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        AnthropicConfig._maybe_drop_speed_param(
+            model=model,
+            optional_params=optional_params,
+            drop_params=litellm.drop_params
+            or litellm_params.get("drop_params") is True,
+        )
 
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params

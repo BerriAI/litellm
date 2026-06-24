@@ -507,7 +507,9 @@ def anthropic_messages_handler(
     local_vars.update(kwargs)
     anthropic_messages_optional_request_params = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars
+            params=local_vars,
+            model=model,
+            drop_params=litellm_params.get("drop_params") is True,
         )
     )
     if is_reasoning_auto_summary_enabled():
