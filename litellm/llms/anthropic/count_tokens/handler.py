@@ -62,6 +62,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             request_body = self.transform_request_to_count_tokens(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )
