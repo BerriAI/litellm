@@ -3493,6 +3493,8 @@ if MCP_AVAILABLE:
         excludes a passthrough server is not pushed into an OAuth flow for
         a server it will be 403'd on immediately after authentication.
         """
+        _req_path = scope.get("_original_path") or scope.get("path", "") or ""
+        is_single_server_scoped = len(_get_mcp_servers_in_path(_req_path) or []) == 1
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(
                 server_name, client_ip=client_ip
@@ -3560,6 +3562,41 @@ if MCP_AVAILABLE:
                     status_code=401,
                     detail="Unauthorized",
                     headers={"www-authenticate": www_authenticate},
+                )
+
+            # BYOK: on a single-server-scoped route, when the caller supplied no
+            # key inline and has none stored, fail fast with 401 + challenge so
+            # OAuth-capable MCP clients run the key-entry flow instead of seeing
+            # a silently empty tool list. Gated to single-server routes so one
+            # credential-less BYOK server cannot abort a multi-server aggregated
+            # listing, which keeps degrading per-server.
+            if (
+                server
+                and server.is_byok
+                and is_single_server_scoped
+                and not _client_has_passthrough_authorization(
+                    server, oauth2_headers, mcp_server_auth_headers
+                )
+                and await _get_byok_credential(server, user_api_key_auth) is None
+            ):
+                base_url = get_request_base_url(StarletteRequest(scope))
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": server.server_id,
+                        "server_name": server.server_name or server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={
+                        "www-authenticate": (
+                            "Bearer resource_metadata="
+                            f'"{base_url}/.well-known/oauth-protected-resource"'
+                        )
+                    },
                 )
 
     def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
