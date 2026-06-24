@@ -28,3 +28,28 @@ pub struct Detection {
     #[serde(default)]
     pub action: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardrailOutcome {
+    pub verdict: Verdict,
+    #[serde(default)]
+    pub provider_response: serde_json::Value,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardrailStatus {
+    Success,
+    GuardrailIntervened,
+    GuardrailFailedToRespond,
+}
+
+impl GuardrailOutcome {
+    pub fn status(&self) -> GuardrailStatus {
+        match &self.verdict {
+            Verdict::Pass | Verdict::Mask { .. } => GuardrailStatus::Success,
+            Verdict::Block { .. } => GuardrailStatus::GuardrailIntervened,
+        }
+    }
+}

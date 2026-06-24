@@ -5,12 +5,75 @@
 //! with the GIL released (via the bridge's [`crate::gil`] chokepoint), keeping
 //! the proxy event loop responsive while Rust does the regex work.
 
-use litellm_core::guardrails::{LiteralTerm, LocalPiiConfig, LocalPiiEngine, RegexTerm, Scanner};
+use litellm_ai_gateway::io::guardrails::{run_guardrail, Unsupported};
+use litellm_core::guardrails::{
+    GuardrailInput, GuardrailStatus, InputType, LiteralTerm, LocalPiiConfig, LocalPiiEngine,
+    RegexTerm, RequestContext, Scanner, Verdict,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::gil;
+
+pyo3::create_exception!(
+    litellm_python_bridge,
+    GuardrailUnsupported,
+    pyo3::exceptions::PyException,
+    "Raised when the Rust engine cannot handle a guardrail config; the caller \
+     should fall back to the Python implementation."
+);
+
+#[derive(Deserialize)]
+struct ApplyRequest {
+    guardrail_type: String,
+    params: serde_json::Value,
+    input: GuardrailInput,
+    input_type: InputType,
+    #[serde(default)]
+    context: RequestContext,
+}
+
+#[derive(Serialize)]
+struct ApplyResponse {
+    verdict: Verdict,
+    guardrail_status: GuardrailStatus,
+    provider_response: serde_json::Value,
+    duration_ms: u64,
+}
+
+/// Build the provider config, run it, and return the verdict as JSON, all in one
+/// call with the GIL released. Raises [`GuardrailUnsupported`] when the engine
+/// cannot handle this config so the caller can fall back to Python.
+#[pyfunction]
+fn apply_guardrail(py: Python<'_>, request_json: String) -> PyResult<String> {
+    let req: ApplyRequest = serde_json::from_str(&request_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid guardrail request JSON: {e}")))?;
+
+    let outcome = gil::release_gil(py, move || {
+        run_guardrail(
+            &req.guardrail_type,
+            &req.params,
+            &req.input,
+            req.input_type,
+            &req.context,
+        )
+    });
+
+    match outcome {
+        Ok(outcome) => {
+            let response = ApplyResponse {
+                guardrail_status: outcome.status(),
+                verdict: outcome.verdict,
+                provider_response: outcome.provider_response,
+                duration_ms: outcome.duration_ms,
+            };
+            serde_json::to_string(&response)
+                .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize verdict: {e}")))
+        }
+        Err(Unsupported(reason)) => Err(GuardrailUnsupported::new_err(reason)),
+    }
+}
 
 #[derive(Deserialize)]
 struct ScannerConfig {
@@ -94,5 +157,10 @@ impl PiiEngine {
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ContentScanner>()?;
     module.add_class::<PiiEngine>()?;
+    module.add_function(wrap_pyfunction!(apply_guardrail, module)?)?;
+    module.add(
+        "GuardrailUnsupported",
+        module.py().get_type::<GuardrailUnsupported>(),
+    )?;
     Ok(())
 }

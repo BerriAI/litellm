@@ -19,18 +19,20 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+url = "2"
 axum = { workspace = true, features = ["ws"], optional = true }
-serde = { workspace = true, optional = true }
 subtle = { workspace = true, optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [features]
 default = []
-server = ["dep:axum", "dep:subtle", "dep:serde"]
+server = ["dep:axum", "dep:subtle"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
 python-config = ["dep:pyo3"]
 
 [dev-dependencies]
 futures-channel = "0.3"
+wiremock = "0.6"
