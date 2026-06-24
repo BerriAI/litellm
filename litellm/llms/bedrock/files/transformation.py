@@ -15,11 +15,14 @@ from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
+    BEDROCK_MANAGED_S3_PREFIXES,
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
     sanitize_cloud_object_component,
+    should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
+    validate_managed_cloud_file_id,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -929,9 +932,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
     def _resolve_s3_region(self, litellm_params: dict) -> str:
         trusted = self._get_trusted_credentials(litellm_params)
-        trusted_region = trusted.get("s3_region_name")
-        if isinstance(trusted_region, str) and trusted_region:
-            return trusted_region
+        for key in ("s3_region_name", "aws_region_name"):
+            trusted_region = trusted.get(key)
+            if isinstance(trusted_region, str) and trusted_region:
+                return trusted_region
         return self._get_aws_region_name(optional_params=litellm_params, model="")
 
     def transform_retrieve_file_request(
@@ -982,15 +986,82 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> List[OpenAIFileObject]:
         raise NotImplementedError("BedrockFilesConfig does not support file listing")
 
+    def _validate_against_configured_buckets(
+        self, s3_uri: str, litellm_params: dict
+    ) -> tuple[str, str]:
+        configured_buckets = self._get_configured_s3_buckets(litellm_params)
+        allow_legacy = should_allow_legacy_cloud_file_ids(litellm_params)
+        for index, configured_bucket in enumerate(configured_buckets):
+            is_last_bucket = index == len(configured_buckets) - 1
+            try:
+                return validate_managed_cloud_file_id(
+                    file_id=s3_uri,
+                    scheme="s3://",
+                    configured_bucket_name=configured_bucket,
+                    allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+                    allow_legacy_cloud_file_ids=allow_legacy,
+                )
+            except ValueError:
+                if is_last_bucket:
+                    raise
+        raise ValueError("file_id must reference a LiteLLM-managed storage object")
+
+    def _generate_presigned_s3_get_url(
+        self, bucket_name: str, object_key: str, litellm_params: dict
+    ) -> str:
+        try:
+            import boto3
+            from botocore.config import Config
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        region = self._resolve_s3_region(litellm_params)
+        credentials = self.get_credentials(
+            aws_access_key_id=litellm_params.get("aws_access_key_id"),
+            aws_secret_access_key=litellm_params.get("aws_secret_access_key"),
+            aws_session_token=litellm_params.get("aws_session_token"),
+            aws_region_name=region,
+            aws_session_name=litellm_params.get("aws_session_name"),
+            aws_profile_name=litellm_params.get("aws_profile_name"),
+            aws_role_name=litellm_params.get("aws_role_name"),
+            aws_web_identity_token=litellm_params.get("aws_web_identity_token"),
+            aws_sts_endpoint=litellm_params.get("aws_sts_endpoint"),
+            aws_external_id=litellm_params.get("aws_external_id"),
+        )
+
+        s3_client = boto3.client(
+            "s3",
+            aws_access_key_id=credentials.access_key,
+            aws_secret_access_key=credentials.secret_key,
+            aws_session_token=credentials.token,
+            region_name=region,
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+            verify=self._get_ssl_verify(),
+        )
+
+        return s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket_name, "Key": object_key},
+            ExpiresIn=300,
+        )
+
     def transform_file_content_request(
         self,
         file_content_request,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "BedrockFilesConfig does not support file content retrieval"
+        file_id = file_content_request.get("file_id") or ""
+        s3_uri = self._extract_s3_uri_from_file_id(file_id)
+        bucket_name, object_key = self._validate_against_configured_buckets(
+            s3_uri=s3_uri, litellm_params=litellm_params
         )
+        url = self._generate_presigned_s3_get_url(
+            bucket_name=bucket_name,
+            object_key=object_key,
+            litellm_params=litellm_params,
+        )
+        return url, {}
 
     def transform_file_content_response(
         self,
@@ -998,9 +1069,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError(
-            "BedrockFilesConfig does not support file content retrieval"
-        )
+        return HttpxBinaryResponseContent(response=raw_response)
 
 
 class BedrockJsonlFilesTransformation:

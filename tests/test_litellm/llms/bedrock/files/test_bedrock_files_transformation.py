@@ -7,14 +7,17 @@ import json
 import os
 from types import MappingProxyType
 from unittest.mock import patch
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
+import httpx
 import pytest
+from botocore.credentials import Credentials
 
 from litellm.llms.bedrock.files.transformation import (
     BedrockFilesConfig,
     BedrockJsonlFilesTransformation,
 )
+from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.utils import SpecialEnums
 
 
@@ -1266,3 +1269,159 @@ class TestBedrockFilesConfigResolution:
         assert self.config._resolve_s3_region(
             {"aws_region_name": "ap-southeast-2"}
         ) == ("ap-southeast-2")
+
+
+class TestBedrockFilesContentRetrieval:
+    def setup_method(self):
+        self.config = BedrockFilesConfig()
+        self.fake_creds = Credentials(
+            access_key="AKIAIOSFODNN7EXAMPLE",
+            secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            token=None,
+        )
+
+    def _request(self, file_id, litellm_params, capture=None):
+        def spy(**kwargs):
+            if capture is not None:
+                capture.update(kwargs)
+            return self.fake_creds
+
+        with patch.object(self.config, "get_credentials", side_effect=spy):
+            return self.config.transform_file_content_request(
+                file_content_request={"file_id": file_id},
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+
+    def test_returns_presigned_get_url_for_input_bucket(self):
+        url, params = self._request(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
+        )
+        assert params == {}
+        parts = urlsplit(url)
+        query = parse_qs(parts.query)
+        assert parts.path == "/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        assert query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+        assert "X-Amz-Signature" in query
+
+    def test_region_from_trusted_snapshot_wins(self):
+        url, _ = self._request(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            {
+                "aws_region_name": "us-east-1",
+                **_trusted(
+                    s3_bucket_name="in-bucket",
+                    s3_region_name="eu-central-1",
+                    aws_region_name="us-east-1",
+                ),
+            },
+        )
+        credential = parse_qs(urlsplit(url).query)["X-Amz-Credential"][0]
+        assert "/eu-central-1/s3/aws4_request" in credential
+        assert urlsplit(url).netloc == "s3.eu-central-1.amazonaws.com"
+
+    def test_china_partition_uses_correct_endpoint_suffix(self):
+        url, _ = self._request(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(s3_bucket_name="in-bucket", aws_region_name="cn-north-1"),
+        )
+        assert urlsplit(url).netloc == "s3.cn-north-1.amazonaws.com.cn"
+        assert "X-Amz-Signature" in parse_qs(urlsplit(url).query)
+
+    def test_uses_sigv4_not_deprecated_sigv2(self):
+        url, _ = self._request(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
+        )
+        query = parse_qs(urlsplit(url).query)
+        assert query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+        assert "Signature" not in query and "AWSAccessKeyId" not in query
+
+    def test_output_bucket_distinct_from_input_validates(self):
+        url, _ = self._request(
+            "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(
+                s3_bucket_name="in-bucket",
+                s3_output_bucket_name="out-bucket",
+                aws_region_name="us-west-2",
+            ),
+        )
+        assert (
+            urlsplit(url).path == "/out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_batch_output_at_root_validates_with_prefixed_input_bucket(self):
+        # input bucket is prefix-scoped; batch output lands at bucket root
+        url, _ = self._request(
+            "s3://shared/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(
+                s3_bucket_name="shared/team-a",
+                s3_output_bucket_name="shared",
+                aws_region_name="us-west-2",
+            ),
+        )
+        assert urlsplit(url).path == "/shared/litellm-batch-outputs/job/in.jsonl.out"
+
+    def test_unified_file_id_is_decoded_and_presigned(self):
+        file_id = _encode_unified_file_id(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+        url, _ = self._request(
+            file_id, _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2")
+        )
+        assert urlsplit(url).path == "/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        assert "X-Amz-Signature" in parse_qs(urlsplit(url).query)
+
+    def test_rejects_bucket_outside_configured_set(self):
+        with pytest.raises(ValueError):
+            self._request(
+                "s3://other-bucket/litellm-batch-outputs/job/in.jsonl.out",
+                _trusted(
+                    s3_bucket_name="in-bucket",
+                    s3_output_bucket_name="out-bucket",
+                    aws_region_name="us-west-2",
+                ),
+            )
+
+    def test_rejects_unmanaged_prefix_in_configured_bucket(self):
+        with pytest.raises(ValueError):
+            self._request(
+                "s3://in-bucket/private/secret.jsonl",
+                _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
+            )
+
+    def test_ignores_plain_request_bucket(self):
+        with pytest.raises(ValueError, match="S3 bucket_name is required"):
+            self._request(
+                "s3://attacker-bucket/litellm-batch-outputs/job/in.jsonl.out",
+                {"s3_bucket_name": "attacker-bucket", "aws_region_name": "us-west-2"},
+            )
+
+    def test_forwards_aws_external_id_to_get_credentials(self):
+        capture: dict = {}
+        self._request(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            {
+                "aws_external_id": "ext-123",
+                **_trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
+            },
+            capture=capture,
+        )
+        assert capture.get("aws_external_id") == "ext-123"
+
+    def test_response_returns_raw_bytes_unchanged(self):
+        body = b'{"recordId":"req-1","modelOutput":{"foo":"bar"}}\n'
+        raw_response = httpx.Response(
+            status_code=200,
+            content=body,
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request(
+                "GET", "https://s3.us-west-2.amazonaws.com/in-bucket/x"
+            ),
+        )
+        result = self.config.transform_file_content_response(
+            raw_response=raw_response, logging_obj=None, litellm_params={}
+        )
+        assert isinstance(result, HttpxBinaryResponseContent)
+        assert result.content == body
