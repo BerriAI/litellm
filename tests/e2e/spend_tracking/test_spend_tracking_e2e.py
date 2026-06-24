@@ -15,11 +15,14 @@ Assertions target invariants, not literals: a regression in the spend pipeline
 fails the test; a pricing or token-count drift does not.
 """
 
+import time
 from collections.abc import Callable
 
 import pytest
 
+from e2e_http import Success
 from lifecycle import ResourceManager
+from models import SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -288,3 +291,38 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         "/spend/calculate returned 0 for gemini-2.5-flash; "
         "cost map may be missing this model"
     )
+
+
+def test_spend_logs_endpoint_returns_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """The /spend/logs read endpoint returns a 200 carrying the key's spend, never a
+    5xx. Regression for intermittent 500s (DB query / serialization errors under load)
+    on this endpoint: every poll asserts a success response, not just a truthy row
+    list, so a 500 fails loudly instead of being swallowed as 'no rows yet'; the
+    call's nonzero spend must surface before the deadline."""
+    unwrap(
+        client.chat(
+            scoped_key, "gemini-2.5-flash", f"spend logs {unique_marker()}", max_tokens=16
+        )
+    )
+
+    gateway = client.gateway
+    deadline = time.monotonic() + gateway.poll_timeout
+    while True:
+        result = gateway.transport.get(
+            "/spend/logs",
+            headers=gateway.transport.master,
+            params=SpendLogsParams(api_key=scoped_key),
+            response_type=SpendLogs,
+        )
+        assert isinstance(result, Success), f"/spend/logs did not return 200 OK: {result}"
+        rows = result.data.root
+        if sum((r.spend or 0) for r in rows) > 0:
+            return
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"/spend/logs never surfaced the key's spend before the deadline; "
+                f"saw {_summarize(rows)}"
+            )
+        time.sleep(gateway.poll_interval)
