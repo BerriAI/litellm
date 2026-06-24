@@ -80,6 +80,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
         MCPServer,
+        _get_byok_credential,
         _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
@@ -180,34 +181,20 @@ if MCP_AVAILABLE:
         server,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Optional[str]:
-        """
-        For BYOK servers, return the user's stored per-user key as the raw
-        credential string so the REST tools-list path injects it the same way
-        the MCP protocol tool-call path does in ``execute_mcp_tool``. The
-        auth_type formatting (Bearer / x-api-key / ...) is applied downstream by
-        the MCP client. Returns None for non-BYOK servers or when no credential
-        is stored.
-        """
-        if not getattr(server, "is_byok", False):
-            return None
-        user_id = getattr(user_api_key_dict, "user_id", None)
-        server_id = getattr(server, "server_id", None)
-        if not user_id or not server_id:
-            return None
+        """Resolve the caller's stored per-user BYOK key via the shared cached
+        ``_get_byok_credential`` so all three BYOK paths (REST tools-list,
+        protocol tools-list, tool-call) use one resolver. Swallows lookup errors
+        so a credential failure degrades to listing without the key instead of
+        aborting the request. Returns None for non-BYOK servers or when no
+        credential is stored."""
         try:
-            from litellm.proxy._experimental.mcp_server.db import get_user_credential
-            from litellm.proxy.utils import get_prisma_client_or_throw
-
-            prisma_client = get_prisma_client_or_throw(
-                "Database not connected. Connect a database to use BYOK MCP tools."
-            )
-            return await get_user_credential(prisma_client, user_id, server_id)
+            return await _get_byok_credential(server, user_api_key_dict)
         except Exception as e:
             verbose_logger.warning(
-                f"_get_user_byok_auth_header: failed to retrieve credential for "
-                f"user={user_id} server={server_id}: {e}"
+                f"_get_user_byok_auth_header: BYOK credential lookup failed for "
+                f"server={getattr(server, 'server_id', None)}: {e}"
             )
-        return None
+            return None
 
     async def _prefetch_user_oauth_creds(
         user_api_key_dict: UserAPIKeyAuth,

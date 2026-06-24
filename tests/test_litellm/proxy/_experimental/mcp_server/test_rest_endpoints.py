@@ -444,6 +444,17 @@ class TestTestToolsList:
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
 
+    @pytest.fixture(autouse=True)
+    def _clear_byok_cache(self):
+        """The REST BYOK helper now delegates to the shared, cached
+        ``_get_byok_credential``; clear that cache around each test so a stored
+        entry from one test cannot leak into another."""
+        from litellm.proxy._experimental.mcp_server.server import _byok_cred_cache
+
+        _byok_cred_cache.clear()
+        yield
+        _byok_cred_cache.clear()
+
     async def test_rejects_disallowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
@@ -622,6 +633,9 @@ class TestListToolsRestAPI:
         )
         monkeypatch.setattr(
             mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", object(), raising=False
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
@@ -867,6 +881,9 @@ class TestListToolsRestAPI:
         monkeypatch.setattr(
             mcp_db, "get_user_credential", fake_get_user_credential, raising=False
         )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", object(), raising=False
+        )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
         result = await rest_endpoints.list_tool_rest_api(
@@ -951,6 +968,9 @@ class TestListToolsRestAPI:
         )
         monkeypatch.setattr(
             mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", object(), raising=False
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
