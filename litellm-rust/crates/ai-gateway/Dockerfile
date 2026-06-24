@@ -75,6 +75,10 @@ COPY litellm-rust/crates/ai-gateway/config.yaml /app/config.yaml
 ENV HOST=0.0.0.0 \
     LITELLM_CONFIG_PATH=/app/config.yaml
 
+# Documents the gateway's default listen port (DEFAULT_PORT in main.rs). PaaS like
+# Render inject their own $PORT, which the binary honors — this is informational.
+EXPOSE 4001
+
 # Drop to a non-root user. The realtime hot path needs no root privileges, so
 # running unprivileged limits blast radius if the process is ever compromised.
 # The binary in /usr/local/bin is world-executable (COPY default mode 755); we
