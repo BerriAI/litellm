@@ -275,14 +275,12 @@ def test_derive_overall_score_none_when_no_data():
     assert _derive_overall_score({"verdicts": [{"reasoning": "no score"}]}) is None
 
 
-def test_derive_overall_score_skips_non_dict_verdict_and_bad_weight():
-    # Non-dict entries are skipped; verdicts whose weight is non-numeric fall
-    # back to a simple mean of the parsed scores instead of crashing.
+def test_derive_overall_score_bad_weight_falls_back_to_simple_mean():
+    # A non-numeric weight is not a fail-open vector: the score still counts, the
+    # weighted path is just disabled in favour of a simple mean of all scores.
     result = _derive_overall_score(
         {
             "verdicts": [
-                "not-a-dict",  # skipped
-                {"score": "abc", "weight": 50},  # non-numeric score -> skipped
                 {"score": 40, "weight": "heavy"},  # bad weight -> ignored weight
                 {"score": 60, "weight": "x"},  # bad weight -> ignored weight
             ]
@@ -324,12 +322,14 @@ def test_derive_overall_score_non_finite_top_level_falls_back_to_verdicts():
     assert result == pytest.approx(10.0)
 
 
-def test_derive_overall_score_skips_non_finite_verdict_score():
-    # A NaN verdict score is skipped, not averaged in as 100.
+def test_derive_overall_score_indeterminate_on_non_finite_verdict_score():
+    # A NaN verdict score makes the evaluation indeterminate: it must NOT be
+    # silently skipped and the remaining verdicts averaged, because the dropped
+    # verdict could be the failing one. Indeterminate -> None -> caller decides.
     result = _derive_overall_score(
         {"verdicts": [{"score": "nan", "weight": 60}, {"score": 0, "weight": 40}]}
     )
-    assert result == pytest.approx(0.0)
+    assert result is None
 
 
 def test_derive_overall_score_clamps_inflated_verdict_score():
@@ -343,6 +343,30 @@ def test_derive_overall_score_none_for_non_dict():
     assert _derive_overall_score([]) is None
     assert _derive_overall_score("not a dict") is None
     assert _derive_overall_score(123) is None
+
+
+def test_derive_overall_score_indeterminate_on_unscored_failing_verdict():
+    # The judge marks a criterion as failed but omits its numeric score. The
+    # failing verdict must NOT be dropped while the passing one is averaged into
+    # a 100 -> the whole evaluation is indeterminate (None).
+    result = _derive_overall_score(
+        {
+            "verdicts": [
+                {"criterion_name": "Accuracy", "score": 100, "weight": 60},
+                {"criterion_name": "Safety", "passed": False, "weight": 40},  # no score
+            ]
+        }
+    )
+    assert result is None
+
+
+def test_derive_overall_score_indeterminate_on_malformed_verdict():
+    # A non-dict entry or an unparsable score among otherwise-valid verdicts also
+    # makes the derivation indeterminate rather than averaging the rest.
+    assert _derive_overall_score({"verdicts": [{"score": 90}, "junk"]}) is None
+    assert (
+        _derive_overall_score({"verdicts": [{"score": 90}, {"score": "abc"}]}) is None
+    )
 
 
 @pytest.mark.asyncio
@@ -376,6 +400,28 @@ async def test_inflated_verdict_scores_still_block(mock_completion):
     )
     guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block")
     inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_unscored_failing_verdict_fail_closed_blocks(mock_completion):
+    # End-to-end: judge fails a criterion but omits its score. The passing
+    # verdict alone must not slip through -> indeterminate -> fail_closed blocks.
+    payload = {
+        "verdicts": [
+            {"criterion_name": "Accuracy", "score": 100, "weight": 60},
+            {"criterion_name": "Safety", "passed": False, "weight": 40},  # no score
+        ]
+    }
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(payload)))]
+    )
+    guardrail = _make_guardrail(fail_closed=True, on_failure="block")
+    inputs = {"texts": ["partially unsafe response"]}
     request_data: dict = {"messages": [], "metadata": {}}
     with pytest.raises(HTTPException) as exc_info:
         await guardrail.apply_guardrail(inputs, request_data, "response")

@@ -93,6 +93,16 @@ def _derive_overall_score(judge_result: Dict[str, Any]) -> Optional[float]:
     judge which returns only verdicts cannot silently pass. All scores are
     validated as finite and clamped to ``[0, 100]`` before use, so injected
     ``NaN``/``Infinity`` or out-of-range values cannot inflate the result.
+
+    When deriving from verdicts, *every* verdict must yield a usable finite
+    score. A verdict that cannot be scored -- not a dict, or a missing,
+    unparsable, or non-finite ``score`` -- makes the whole evaluation
+    indeterminate and returns ``None``. Silently dropping such a verdict would
+    let an attacker who can influence the judge output omit the score on a
+    failing criterion and inflate the average into a pass. Weights stay optional:
+    a missing/zero/non-numeric weight only disables the weighted path (the score
+    still counts via a simple mean), so it is not a fail-open vector.
+
     Returns ``None`` when no usable score can be determined (including a non-dict
     judge result), leaving the fail-open/closed decision to the caller.
     """
@@ -118,17 +128,21 @@ def _derive_overall_score(judge_result: Dict[str, Any]) -> Optional[float]:
     scores: List[float] = []
     all_weighted = True
     for verdict in verdicts:
+        # Every verdict must contribute a usable finite score. A verdict we
+        # cannot score is treated as indeterminate (return None) rather than
+        # skipped: silently dropping it would let an attacker omit the score on a
+        # failing criterion and inflate the remaining scores into a pass.
         if not isinstance(verdict, dict):
-            continue
+            return None
         raw_score = verdict.get("score")
         if raw_score is None:
-            continue
+            return None
         try:
             score = float(raw_score)
         except (TypeError, ValueError):
-            continue
+            return None
         if not math.isfinite(score):
-            continue
+            return None
         score = max(0.0, min(100.0, score))  # clamp per verdict before averaging
         scores.append(score)
         try:
