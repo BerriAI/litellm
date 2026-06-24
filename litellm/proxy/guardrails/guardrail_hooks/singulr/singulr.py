@@ -4,6 +4,7 @@ Singulr guardrail integration for LiteLLM.
 Calls the Singulr Guard API to scan messages.
 """
 
+import json
 import os
 import httpx
 from typing import (
@@ -110,8 +111,13 @@ class SingulrGuardrail(CustomGuardrail):
                 for m in messages[last_assistant_idx + 1 :]
                 if str(m.get("role") or "").lower() == "user" and m.get("content")
             ]
-            if current_turn_texts:
-                return "\n".join(current_turn_texts)
+
+            raw_tools = request_data.get("tools")
+            tool_text = json.dumps(raw_tools) if raw_tools else ""
+
+            parts = tuple(p for p in (tool_text, "\n".join(current_turn_texts)) if p)
+            if parts:
+                return "\n".join(parts)
 
         texts = inputs.get("texts", [])
         return "\n".join(texts) if texts else ""
