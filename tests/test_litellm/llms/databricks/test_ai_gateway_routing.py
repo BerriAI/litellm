@@ -359,8 +359,28 @@ class TestIsGatewayAbsentError:
         e.message = message  # type: ignore[attr-defined]
         return e
 
-    def test_404_is_absent(self):
-        assert is_gateway_absent_error(self._exc(status=404)) is True
+    def test_bare_404_is_not_absent(self):
+        # A bare 404 conflates "no gateway" with "no such model" -> must NOT demote
+        # the whole host. Only 501 / ENDPOINT_NOT_FOUND are conclusive.
+        assert is_gateway_absent_error(self._exc(status=404, message="not found")) is False
+
+    def test_404_with_endpoint_not_found_marker_is_absent(self):
+        # Real absent gateway path returns 404 ENDPOINT_NOT_FOUND (per live matrix).
+        assert (
+            is_gateway_absent_error(
+                self._exc(status=404, message="ENDPOINT_NOT_FOUND: no path")
+            )
+            is True
+        )
+
+    def test_model_level_404_is_not_absent(self):
+        # A genuinely-missing model returns 404 RESOURCE_DOES_NOT_EXIST -> not host absence.
+        assert (
+            is_gateway_absent_error(
+                self._exc(status=404, message="RESOURCE_DOES_NOT_EXIST: no model")
+            )
+            is False
+        )
 
     def test_501_is_absent(self):
         assert is_gateway_absent_error(self._exc(status=501)) is True

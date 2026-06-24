@@ -310,9 +310,12 @@ _GATEWAY_CACHE_LOCK = threading.Lock()
 # Cache lifetime. Gateway enablement changes rarely; an hour re-checks enablement
 # within a session lifetime while keeping at most one reactive fallback per host/hour.
 GATEWAY_CACHE_TTL_SECONDS = 3600.0
-# HTTP statuses that indicate the gateway surface is NOT served by this workspace.
-GATEWAY_ABSENT_STATUSES = (404, 501)
-# Error-body markers (lowercased) that indicate the gateway path is not served.
+# HTTP status that unambiguously means the workspace does not implement the gateway
+# path. (A bare 404 is intentionally NOT here: it conflates "no gateway" with "no
+# such model" — see :func:`is_gateway_absent_error`.)
+GATEWAY_ABSENT_STATUSES = (501,)
+# Error-body markers (lowercased) that indicate the gateway path itself is not served
+# (vs. a model-level RESOURCE_DOES_NOT_EXIST).
 GATEWAY_ABSENT_MARKERS = ("endpoint_not_found",)
 
 
@@ -357,12 +360,23 @@ def gateway_known_absent(host: str) -> bool:
 
 def is_gateway_absent_error(exc: Exception) -> bool:
     """True if ``exc`` from a real gateway request indicates the workspace does not
-    serve the AI Gateway path (a host-level signal), so the caller should mark the
+    serve the AI Gateway *path* (a host-level signal), so the caller should mark the
     host absent and retry serving-endpoints.
 
-    Keyed on ``404``/``501`` or an ``endpoint_not_found`` body marker. A false
-    positive (e.g. a model-level 404) is self-limiting: it only routes the host to
-    the proven serving-endpoints surface for the cache TTL, which still works.
+    Keyed on the **unambiguous** signals only — HTTP ``501`` or an
+    ``endpoint_not_found`` body marker. A bare ``404`` is deliberately NOT treated as
+    host-absence: it conflates "no gateway here" with "no such model", and demoting
+    the whole host on a model-level 404 would route every model to serving-endpoints
+    for the cache TTL.
+
+    Grounded in live verification against a Databricks workspace:
+      - absent gateway path  -> ``404 ENDPOINT_NOT_FOUND`` ("Invalid path")
+      - missing model        -> ``404 NOT_FOUND`` / ``RESOURCE_DOES_NOT_EXIST``
+    so the marker reliably catches a missing gateway while excluding a model-level
+    404 (which must not demote the whole host). If a deployment ever returned a bare
+    404 for an absent gateway, the per-request reactive fallback would still route
+    the call to serving-endpoints (it just wouldn't cache the host) — graceful, not
+    breaking.
     """
     status = getattr(exc, "status_code", None)
     try:
