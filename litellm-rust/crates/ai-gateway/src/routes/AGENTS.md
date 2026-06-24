@@ -6,32 +6,33 @@ Every route follows the **same shape** so the layout is predictable. The rule:
 > `routes/mod.rs::app` merges them all and applies state once. Adding a route is:
 > create the module, then add one `.merge(<name>::router())` line.
 
-## Two templates
-
-### Simple route → a single file (`health.rs`, `gil.rs`)
+## Default: one file
+A route is a single file containing `router()` + its handler(s) (handlers stay
+private). This is the norm — don't split until it hurts.
 ```
-pub fn router() -> Router<AppState> { Router::new().route(PATH, get(handler)) }
-async fn handler(...) -> impl IntoResponse { ... }   // handlers stay private
+pub fn router() -> Router<AppState> { Router::new().route(PATH, get(handle)) }
+async fn handle(...) -> impl IntoResponse { ... }
 ```
-Use this when the route is just a handler or two with no real logic.
+`health.rs` and `gil.rs` are examples.
 
-### Non-trivial route → a folder (`realtime/`)
+## Split out `service` when there's real logic
+When a route has business logic worth testing without axum, put it in a sibling
+`service` (a file, or a folder if the route grows). The route file stays the
+**axum surface** (router + handler + any socket/SSE adapter); `service` is plain
+Rust with **no axum types**. `realtime/` is the example:
 ```
 realtime/
-  mod.rs        # pub fn router(): mounts the path(s). nothing else.
-  handler.rs    # the axum entry point — THIN: auth, validate input, hand off.
-  service.rs    # the business logic (no axum types).
-  transport.rs  # adapters between axum and the service (e.g. WS <-> typed events).
+  mod.rs       # axum surface: router() + handler + the WS<->events adapter
+  service.rs   # pure logic: select deployment + call provider (no axum) — testable
 ```
-Layer responsibilities, never mixed:
-- **handler** — extract + `auth::authorize` + validate; return clean HTTP errors
-  (401/400/404) *before* any upgrade/streaming; then delegate. No logic.
-- **service** — what the route actually does. Plain Rust, framework-agnostic, so
-  it's testable without axum.
-- **transport** — only when the wire format needs adapting (sockets, SSE, etc.).
-  Keeps axum types out of `service`.
+Split `service` further (or add `transport`, `repo`, …) only once a single file
+genuinely gets hard to read.
 
 ## Invariants
-- Auth is **not** re-implemented per route — call `crate::auth::authorize`.
-- Handlers contain no business logic; `service` contains no axum types.
+- **Auth is an extractor, not a manual call.** A handler requires auth by adding
+  `crate::auth::RequireMasterKey` to its arguments; it runs during extraction.
+  Never re-implement the check per route.
+- **Handlers contain no business logic; `service` contains no axum types.**
 - A route owns its paths in its own `router()`; `mod.rs` only merges.
+- Cross-cutting concerns (logging, CORS, timeouts) → Tower layers in `mod.rs`,
+  not duplicated in handlers.
