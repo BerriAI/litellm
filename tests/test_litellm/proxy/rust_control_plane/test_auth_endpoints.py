@@ -8,6 +8,7 @@ from litellm.proxy.rust_control_plane.auth_endpoints import (
     DATA_PLANE_KEY_ENV_VAR,
     DATA_PLANE_KEY_HEADER,
     VerifyKeyRequest,
+    _synthetic_request,
     require_data_plane_key,
     router,
     verify_key,
@@ -83,6 +84,19 @@ def test_router_mounts_auth_verify_under_rust_control_plane():
         getattr(route, "path", None) == "/v1/rust_control_plane/authentication"
         for route in router.routes
     )
+
+
+@pytest.mark.asyncio
+async def test_synthetic_request_skips_budget_reservation():
+    request = _synthetic_request(
+        route="/v1/realtime",
+        authorization_header="Bearer sk-test-key",
+        model="gpt-realtime",
+    )
+
+    assert request.url.path == "/v1/realtime"
+    assert request.state.skip_budget_reservation is True
+    assert (await request.json()) == {"model": "gpt-realtime"}
 
 
 @pytest.mark.asyncio

@@ -103,6 +103,7 @@ async def test_should_clear_stale_budget_reservation_when_budget_checks_skip():
 
     await _reserve_budget_after_common_checks(
         user_api_key_auth_obj=user_api_key_auth_obj,
+        request=None,
         request_data={"model": "free-model"},
         route="/v1/chat/completions",
         llm_router=None,
@@ -130,6 +131,7 @@ async def test_disable_budget_reservation_skips_reservation():
     ) as mock_reserve:
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
+            request=None,
             request_data={"model": "gpt-4o"},
             route="/v1/chat/completions",
             llm_router=None,
@@ -140,6 +142,34 @@ async def test_disable_budget_reservation_skips_reservation():
             proxy_logging_obj=MagicMock(),
             skip_budget_checks=False,
             general_settings={"disable_budget_reservation": True},
+        )
+
+    mock_reserve.assert_not_called()
+    assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_skip_budget_reservation_skips_only_reservation():
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+    request = SimpleNamespace(state=SimpleNamespace(skip_budget_reservation=True))
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value={"reserved_cost": 0.5, "entries": []}),
+    ) as mock_reserve:
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request=request,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings={},
         )
 
     mock_reserve.assert_not_called()
@@ -161,6 +191,7 @@ async def test_budget_reservation_runs_when_not_disabled():
     ) as mock_reserve:
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
+            request=None,
             request_data={"model": "gpt-4o"},
             route="/v1/chat/completions",
             llm_router=None,

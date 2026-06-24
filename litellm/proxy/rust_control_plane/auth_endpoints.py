@@ -96,7 +96,12 @@ def _synthetic_request(
         "client": ("127.0.0.1", 0),
         "server": ("127.0.0.1", 4000),
     }
-    return Request(scope, receive)
+    request = Request(scope, receive)
+    # This endpoint verifies admission only. The realtime gateway records actual
+    # session spend through callback logs, so a pre-call optimistic reservation
+    # here would have no matching request lifecycle to reconcile.
+    request.state.skip_budget_reservation = True
+    return request
 
 
 router = APIRouter(prefix="/v1/rust_control_plane", tags=["rust control plane"])
