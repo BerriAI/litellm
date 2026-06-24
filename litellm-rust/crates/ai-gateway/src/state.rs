@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::io::realtime_pool::RealtimePool;
 use litellm_core::router::Router;
-use litellm_providers::realtime_pool::RealtimePool;
 
 use crate::integrations::custom_logger::CustomLogger;
 

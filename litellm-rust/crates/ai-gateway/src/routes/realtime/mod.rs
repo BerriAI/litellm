@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::io::realtime_pool::RealtimePool;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -19,7 +20,6 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
-use litellm_providers::realtime_pool::RealtimePool;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
