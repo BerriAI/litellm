@@ -105,7 +105,7 @@ class CheckBatchCost:
         - if not, return False
         - if so, return True
         """
-        verbose_proxy_logger.info("CheckBatchCost: Start==================")
+        verbose_proxy_logger.warning("CheckBatchCost: Start==================")
 
         from litellm.batches.batch_utils import (
             _get_file_content_as_dictionary,
@@ -118,6 +118,7 @@ class CheckBatchCost:
             _is_base64_encoded_unified_file_id,
             get_batch_id_from_unified_batch_id,
             get_model_id_from_unified_batch_id,
+            decode_data_from_unified_file_id,
         )
 
         try:
@@ -177,13 +178,13 @@ class CheckBatchCost:
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
-            verbose_proxy_logger.info("Processing job with unified_object_id: %s", unified_object_id)
+            verbose_proxy_logger.warning("Processing job with unified_object_id: %s", unified_object_id)
             decoded_unified_object_id = _is_base64_encoded_unified_file_id(
                 unified_object_id
             )
             verbose_proxy_logger.debug(f"CheckBatchCost: Decoded unified_object_id: {decoded_unified_object_id!r}")
             if not decoded_unified_object_id:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} because it is not a valid unified object id"
                 )
                 if prom_logger:
@@ -197,14 +198,14 @@ class CheckBatchCost:
             verbose_proxy_logger.debug(f"CheckBatchCost: Extracted model_id={model_id!r}, batch_id={batch_id!r} from unified_object_id")
 
             if model_id is None:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} because it is not a valid model id"
                 )
                 if prom_logger:
                     prom_logger.record_check_batch_cost_error("invalid_model_id")
                 continue
 
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.warning(
                 f"Querying model ID: {model_id} for cost and usage of batch ID: {batch_id}"
             )
 
@@ -218,7 +219,7 @@ class CheckBatchCost:
                     },
                 )
             except Exception as e:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
                 )
                 if prom_logger:
@@ -230,7 +231,13 @@ class CheckBatchCost:
                 response.status == "completed"
                 and response.output_file_id is not None
             ):
-                verbose_proxy_logger.info(
+                tags=(decode_data_from_unified_file_id(unified_object_id, "tags") or "").split(",")
+                if "batch" not in tags:
+                    tags.append("batch")
+                api_alias=decode_data_from_unified_file_id(unified_object_id, "api_alias")
+                apihash=decode_data_from_unified_file_id(unified_object_id, "apihash")
+                print(f"file: {unified_object_id}, tags={tags}, api_alias={api_alias}, apihash={apihash}")
+                verbose_proxy_logger.warning(
                     f"Batch ID: {batch_id} is complete, tracking cost and usage"
                 )
 
@@ -271,7 +278,7 @@ class CheckBatchCost:
                     **credentials,
                 )
                 verbose_proxy_logger.debug(f"CheckBatchCost: afile_content returned type={type(_file_content).__name__}")
-
+                
                 # Access content - handle both direct attribute and method call
                 if hasattr(_file_content, 'content'):
                     content_bytes = _file_content.content  # type: ignore[union-attr]
@@ -302,7 +309,7 @@ class CheckBatchCost:
                 deployment_info = self.llm_router.get_deployment(model_id=model_id)
                 verbose_proxy_logger.debug(f"CheckBatchCost: get_deployment(model_id={model_id!r}) returned: {deployment_info is not None}")
                 if deployment_info is None:
-                    verbose_proxy_logger.info(
+                    verbose_proxy_logger.warning(
                         f"Skipping job {unified_object_id} because it is not a valid deployment info"
                     )
                     if prom_logger:
@@ -325,6 +332,8 @@ class CheckBatchCost:
                 if managed_files_hook is not None:
                     from litellm.proxy._types import UserAPIKeyAuth
                     _minimal_auth = UserAPIKeyAuth(
+                        key_alias=api_alias,
+                        api_key=apihash,
                         user_id=job.created_by or "default-user-id",
                         team_id=getattr(job, "team_id", None),
                     )
@@ -345,7 +354,7 @@ class CheckBatchCost:
                                     user_api_key_dict=_minimal_auth,
                                 )
                                 setattr(response, _file_attr, _unified_file_id)
-                                verbose_proxy_logger.info(
+                                verbose_proxy_logger.warning(
                                     f"CheckBatchCost: converted {_file_attr} "
                                     f"{_raw_file_id!r} -> managed ID for batch {batch_id}"
                                 )
@@ -378,11 +387,11 @@ class CheckBatchCost:
                     start_time=datetime.now(),
                     litellm_call_id=str(uuid.uuid4()),
                     function_id=str(uuid.uuid4()),
-                    kwargs={"custom_llm_provider": llm_provider},
                 )
 
                 creator_user_id = job.created_by
                 user_info = await self._get_user_info(batch_id, job.created_by)
+                
 
                 logging_obj.update_environment_variables(
                     litellm_params={
@@ -390,22 +399,33 @@ class CheckBatchCost:
                         "proxy_server_request": {
                             "headers": {
                                 "user-agent": CHECK_BATCH_COST_USER_AGENT,
+                                "x-litellm-tags": ",".join(tags),
                             }
                         },
                         "metadata": {
                             "user_api_key_user_id": creator_user_id,
                             **user_info,
+                            # "custom_llm_provider": llm_provider,                            
+                            # "llm_provider": llm_provider,
+                            "user_api_key_alias": api_alias,
+                            "user_api_key":apihash,
+                            "tags":tags,
+                            "request_tags": tags,
+
                         },
                     },
                     optional_params={},
+                    # litellm_provider=llm_provider,
+                    request_tags=tags,
+                    tags=tags,
+                    custom_llm_provider=llm_provider,
                 )
-
-                await logging_obj.async_success_handler(
+                if apihash:
+                    await logging_obj.async_success_handler(
                     result=response,
                     batch_cost=batch_cost,
                     batch_usage=batch_usage,
                     batch_models=[model_name],
-                    custom_llm_provider=llm_provider,
                 )
 
                 # Record batch duration (completed_at - created_at)

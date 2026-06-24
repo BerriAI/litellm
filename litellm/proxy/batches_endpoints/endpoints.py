@@ -88,7 +88,6 @@ async def create_batch(
         proxy_logging_obj,
         version,
     )
-
     data: Dict = {}
     try:
         data = await _read_request_body(request=request)
@@ -187,17 +186,26 @@ async def create_batch(
                     file_id=original_batch_id,
                     model=model_from_file_id,
                     id_type="batch",
+                    api_alias=user_api_key_dict.key_alias,
+                    apihash=user_api_key_dict.api_key,
+                    tags=request.headers.get("x-litellm-tags") or "ali"
                 )
                 response.id = encoded_batch_id
 
                 if hasattr(response, "output_file_id") and response.output_file_id:
                     response.output_file_id = encode_file_id_with_model(
-                        file_id=response.output_file_id, model=model_from_file_id
+                        file_id=response.output_file_id, model=model_from_file_id, 
+                        api_alias=user_api_key_dict.key_alias,
+                        apihash=user_api_key_dict.api_key,
+                        tags=request.headers.get("x-litellm-tags")
                     )
 
                 if hasattr(response, "error_file_id") and response.error_file_id:
                     response.error_file_id = encode_file_id_with_model(
-                        file_id=response.error_file_id, model=model_from_file_id
+                        file_id=response.error_file_id, model=model_from_file_id, 
+                        api_alias=user_api_key_dict.key_alias,
+                        apihash=user_api_key_dict.api_key,
+                        tags=request.headers.get("x-litellm-tags")
                     )
 
                 verbose_proxy_logger.debug(
@@ -276,7 +284,10 @@ async def create_batch(
                     **_create_batch_data,  # type: ignore
                 )
 
-                encode_batch_response_ids(response, model=model_param)
+                encode_batch_response_ids(response, model=model_param,                       
+                        api_alias=user_api_key_dict.key_alias,
+                        apihash=user_api_key_dict.api_key,
+                        tags=request.headers.get("x-litellm-tags"))
 
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:

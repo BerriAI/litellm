@@ -114,9 +114,28 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
         batch_id = file_id.split("litellm:", 1)[1]
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
+def decode_data_from_unified_file_id(unified_file_id: str,key) -> str:
+    """
+    Extract data from unified file ID.
+
+    Example:
+    unified_file_id = "litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini,gemini-2.0-flash"
+    key = "unified_id"
+    returns: "c4843482-b176-4901-8292-7523fd0f2c6e"
+    """
+    try:
+        # Ensure unified_file_id is a string and not a mock object
+        if not isinstance(unified_file_id, str):
+            return ""
+        match = re.search(rf"{key}:([^;]+)", unified_file_id)
+        if match:
+            return match.group(1).strip()
+        return ""
+    except Exception:
+        return ""
 
 def encode_file_id_with_model(
-    file_id: str, model: str, id_type: Literal["file", "batch"] = "file"
+    file_id: str, model: str, id_type: Literal["file", "batch"] = "file", **metadata
 ) -> str:
     """
     Encode a file/batch ID with model routing information.
@@ -145,6 +164,10 @@ def encode_file_id_with_model(
         -> "batch_bGl0ZWxsbTozODE0ODg5NDIzNzQ5Nzc1MzYwO21vZGVsLGdlbWluaS0yLjUtcHJv"
     """
     encoded_str = f"litellm:{file_id};model,{model}"
+    if metadata:
+        # Append metadata key-value pairs to the encoded string
+        for key, value in metadata.items():
+            encoded_str += f";{key}:{value}"
     encoded_bytes = base64.urlsafe_b64encode(encoded_str.encode())
     encoded_b64 = encoded_bytes.decode().rstrip("=")
 
@@ -161,12 +184,12 @@ def encode_file_id_with_model(
     return f"{prefix}{encoded_b64}"
 
 
-def encode_batch_response_ids(response, model: str) -> None:
+def encode_batch_response_ids(response, model: str,**kwargs) -> None:
     """Encode all IDs in a batch response with model routing info (in-place)."""
     if not response or not hasattr(response, "id") or not response.id:
         return
     response.id = encode_file_id_with_model(
-        file_id=response.id, model=model, id_type="batch"
+        file_id=response.id, model=model, id_type="batch", **kwargs
     )
     for attr in ("output_file_id", "error_file_id", "input_file_id"):
         if hasattr(response, attr) and getattr(response, attr):
