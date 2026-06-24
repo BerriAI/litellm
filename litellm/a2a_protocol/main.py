@@ -38,7 +38,6 @@ try:
     from a2a.client import Client, ClientConfig, create_client
     from a2a.compat.v0_3 import conversions as _a2a_conversions
     from a2a.compat.v0_3.types import (
-        MessageSendParams,
         SendMessageRequest,
         SendMessageResponse,
         SendMessageSuccessResponse,
@@ -272,11 +271,13 @@ async def _execute_a2a_stream_with_retry(
 ) -> AsyncIterator["SendStreamingMessageResponse"]:
     """Stream an A2A message with retry logic for localhost URL errors."""
     response_started = False
+    stream_succeeded = False
     for _ in range(2):  # max 2 attempts: original + 1 retry
         try:
             async for chunk in _stream_messages(a2a_client, request):
                 response_started = True
                 yield chunk
+            stream_succeeded = True
             return
         except A2ALocalhostURLError as e:
             if response_started:
@@ -303,6 +304,10 @@ async def _execute_a2a_stream_with_retry(
                 card_url = get_agent_card_url(agent_card) if agent_card else None
                 continue
             raise
+    if not stream_succeeded:
+        raise RuntimeError(
+            "A2A send_message_streaming failed: no response received after retry attempts."
+        )
 
 
 @client

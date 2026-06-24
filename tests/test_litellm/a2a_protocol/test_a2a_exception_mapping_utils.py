@@ -76,3 +76,43 @@ async def test_localhost_retry_raises_when_no_stashed_client():
             )
 
     mock_create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stream_with_retry_raises_after_localhost_retries_exhausted():
+    """Exhausted localhost retries must not return a silent empty stream."""
+    from litellm.a2a_protocol.main import _execute_a2a_stream_with_retry
+
+    localhost_err = _localhost_error()
+    mock_request = MagicMock()
+    mock_request.id = "req-1"
+    mock_a2a_client = MagicMock()
+
+    async def _always_fail_stream(a2a_client, request):
+        raise localhost_err
+        yield  # pragma: no cover - makes this an async generator
+
+    with (
+        patch(
+            "litellm.a2a_protocol.main._stream_messages",
+            new=_always_fail_stream,
+        ),
+        patch(
+            "litellm.a2a_protocol.main.handle_a2a_localhost_retry",
+            new=AsyncMock(return_value=mock_a2a_client),
+        ),
+    ):
+        stream = _execute_a2a_stream_with_retry(
+            a2a_client=mock_a2a_client,
+            request=mock_request,
+            agent_card=MagicMock(),
+            card_url="http://localhost:10001/",
+            api_base="https://agent.example",
+            agent_name="test-agent",
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="no response received after retry attempts",
+        ):
+            async for _chunk in stream:
+                pytest.fail("expected retry exhaustion to raise before yielding")
