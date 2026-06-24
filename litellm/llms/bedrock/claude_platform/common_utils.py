@@ -14,7 +14,7 @@ CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
 # must not be forwarded in the Messages API request body (together with any
 # key prefixed "aws_") — the API rejects unknown fields with
 # "Extra inputs are not permitted".
-CLAUDE_PLATFORM_NON_REQUEST_PARAMS = {
+CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS = {
     "workspace_id",
     "anthropic_workspace_id",
     "anthropic-workspace-id",
@@ -25,12 +25,15 @@ CLAUDE_PLATFORM_NON_REQUEST_PARAMS = {
 # endpoint, which rejects them with "Extra inputs are not permitted". Unlike
 # the auth params above these carry user intent, so dropping them is logged at
 # WARNING — the request succeeds but the requested feature is not applied.
-CLAUDE_PLATFORM_UNSUPPORTED_REQUEST_PARAMS = {
+CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS = {
     "context_management",
 }
 
 
-def filter_claude_platform_request_body(params: dict) -> dict:
+def filter_claude_platform_request_body(
+    params: dict,
+    unsupported_override: Optional[frozenset[str]] = None,
+) -> dict:
     """Return a copy of ``params`` with fields the Claude Platform on AWS
     endpoint rejects removed.
 
@@ -41,15 +44,23 @@ def filter_claude_platform_request_body(params: dict) -> dict:
     WARNING, since those reflect user intent that will not be applied on this
     route.
 
+    ``unsupported_override``, when provided, replaces the default
+    CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS set. Pass an empty frozenset
+    to disable unsupported-param filtering entirely (e.g. when the AWS
+    endpoint adds support before a litellm release).
+
     Filters a copy so callers' ``sign_request`` still sees ``aws_region_name``.
     """
-    dropped_unsupported = [
-        k for k in params if k in CLAUDE_PLATFORM_UNSUPPORTED_REQUEST_PARAMS
-    ]
+    unsupported = (
+        unsupported_override
+        if unsupported_override is not None
+        else CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS
+    )
+    dropped_unsupported = [k for k in params if k in unsupported]
     if dropped_unsupported:
         verbose_logger.warning(
             "bedrock/claude_platform: dropping unsupported Messages API "
-            "param(s) %s from the request body — the Claude Platform on AWS "
+            "param(s) %s from the request body - the Claude Platform on AWS "
             "(aws-external-anthropic) endpoint does not support them and "
             "rejects unknown fields. The request will proceed without them.",
             dropped_unsupported,
@@ -57,10 +68,27 @@ def filter_claude_platform_request_body(params: dict) -> dict:
     return {
         k: v
         for k, v in params.items()
-        if k not in CLAUDE_PLATFORM_NON_REQUEST_PARAMS
-        and k not in CLAUDE_PLATFORM_UNSUPPORTED_REQUEST_PARAMS
+        if k not in CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS
+        and k not in unsupported
         and not k.startswith("aws_")
     }
+
+
+def _resolve_unsupported_override(
+    litellm_params: dict,
+) -> Optional[frozenset[str]]:
+    """Read ``claude_platform_unsupported_params`` from litellm_params.
+
+    Returns None (use default set) when the key is absent. Returns a
+    frozenset when present, allowing operators to override or clear the
+    unsupported-param list via proxy config without a code change.
+    """
+    raw = litellm_params.get("claude_platform_unsupported_params")
+    if raw is None:
+        return None
+    if isinstance(raw, (list, set, frozenset, tuple)):
+        return frozenset(raw)
+    return None
 
 
 def strip_claude_platform_route(model: str) -> str:
