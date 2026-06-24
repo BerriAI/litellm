@@ -1709,3 +1709,67 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
     assert "CorporateDB" in text
     assert "CORP_USERNAME" in text
     assert "fill_env_vars=srv-99" in text
+
+
+@pytest.mark.asyncio
+async def test_build_mcp_server_from_table_resolves_os_environ_static_headers(
+    monkeypatch,
+):
+    """A DB-loaded ``os.environ/NAME`` static header must build into the runtime
+    server carrying the resolved environment value, not the literal reference, so
+    upstream requests send the real secret."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    monkeypatch.setenv("MCP_STATIC_HEADER_TOKEN", "resolved-secret")
+
+    table = LiteLLM_MCPServerTable(
+        server_id="srv-os-environ",
+        alias="echo",
+        url="https://upstream.example.com/mcp",
+        transport="http",
+        auth_type="none",
+        static_headers={
+            "X-Token": "os.environ/MCP_STATIC_HEADER_TOKEN",
+            "X-Static": "plain-value",
+        },
+    )
+
+    server = await MCPServerManager().build_mcp_server_from_table(table)
+
+    assert server.static_headers == {
+        "X-Token": "resolved-secret",
+        "X-Static": "plain-value",
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_mcp_server_from_table_keeps_literal_when_env_missing(
+    monkeypatch, caplog
+):
+    """When the referenced env var is unset, the literal ``os.environ/NAME`` is
+    preserved and a warning is logged, so the misconfiguration stays visible
+    instead of silently collapsing to an empty header."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    monkeypatch.delenv("MCP_MISSING_HEADER_TOKEN", raising=False)
+
+    table = LiteLLM_MCPServerTable(
+        server_id="srv-os-environ-missing",
+        alias="echo",
+        url="https://upstream.example.com/mcp",
+        transport="http",
+        auth_type="none",
+        static_headers={"X-Token": "os.environ/MCP_MISSING_HEADER_TOKEN"},
+    )
+
+    with caplog.at_level("WARNING"):
+        server = await MCPServerManager().build_mcp_server_from_table(table)
+
+    assert server.static_headers == {"X-Token": "os.environ/MCP_MISSING_HEADER_TOKEN"}
+    assert "MCP_MISSING_HEADER_TOKEN" in caplog.text

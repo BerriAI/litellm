@@ -331,6 +331,23 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _resolve_static_header_env_ref(key: str, value: str) -> str:
+    """Resolve an ``os.environ/NAME`` static header to its environment value.
+
+    Non-references pass through untouched; an unset env var keeps the literal so
+    the misconfiguration stays visible instead of being silently dropped.
+    """
+    if not value.startswith("os.environ/"):
+        return value
+    secret = get_secret_str(value)
+    if secret is not None:
+        return secret
+    verbose_logger.warning(
+        f"MCP static_header {key!r}: env var {value!r} not set; keeping literal value"
+    )
+    return value
+
+
 def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
     """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
 
@@ -1065,20 +1082,10 @@ class MCPServerManager:
             getattr(mcp_server, "static_headers", None)
         )
         if static_headers_dict:
-            resolved: dict[str, str] = {}
-            for k, v in static_headers_dict.items():
-                if isinstance(v, str) and v.startswith("os.environ/"):
-                    secret = get_secret_str(v)
-                    if secret is None:
-                        verbose_logger.warning(
-                            f"MCP static_header {k!r}: env var {v!r} not set; keeping literal value"
-                        )
-                        resolved[k] = v
-                    else:
-                        resolved[k] = secret
-                else:
-                    resolved[k] = v
-            static_headers_dict = resolved
+            static_headers_dict = {
+                key: _resolve_static_header_env_ref(key, value)
+                for key, value in static_headers_dict.items()
+            }
         env_vars_list = self._resolve_env_vars_list(
             mcp_server,
             env_vars_are_encrypted=(
