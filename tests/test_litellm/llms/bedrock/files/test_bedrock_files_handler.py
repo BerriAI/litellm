@@ -42,14 +42,17 @@ class TestBedrockFilesConfigS3Validation:
         assert key == "litellm-bedrock-files-model-id-abc.jsonl"
 
     def test_should_parse_managed_batch_output_uri(self):
-        bucket, key = _parse("s3://safe-bucket/litellm-batch-outputs/job/", "safe-bucket")
+        bucket, key = _parse(
+            "s3://safe-bucket/litellm-batch-outputs/job/", "safe-bucket"
+        )
         assert bucket == "safe-bucket"
         assert key == "litellm-batch-outputs/job/"
 
     def test_should_reject_arbitrary_bucket(self):
         with pytest.raises(ValueError, match="configured storage bucket"):
             _parse(
-                "s3://other-bucket/litellm-bedrock-files-model-id-abc.jsonl", "safe-bucket"
+                "s3://other-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+                "safe-bucket",
             )
 
     def test_should_reject_unmanaged_same_bucket_key(self):
@@ -84,11 +87,15 @@ class TestBedrockFilesConfigS3Validation:
 
     def test_should_reject_dot_segment_key(self):
         with pytest.raises(ValueError, match="invalid path segment"):
-            _parse("s3://safe-bucket/litellm-bedrock-files/../secret.jsonl", "safe-bucket")
+            _parse(
+                "s3://safe-bucket/litellm-bedrock-files/../secret.jsonl", "safe-bucket"
+            )
 
     def test_should_reject_empty_middle_path_segment(self):
         with pytest.raises(ValueError, match="invalid path segment"):
-            _parse("s3://safe-bucket/litellm-bedrock-files//secret.jsonl", "safe-bucket")
+            _parse(
+                "s3://safe-bucket/litellm-bedrock-files//secret.jsonl", "safe-bucket"
+            )
 
     def test_should_extract_unified_managed_s3_uri(self):
         file_id = _encode_unified_file_id(
