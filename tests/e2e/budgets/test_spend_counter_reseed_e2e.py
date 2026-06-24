@@ -65,14 +65,18 @@ def _redis() -> "redis.Redis[str]":
 
 def _spend_counter(rds: "redis.Redis[str]", key: str) -> float | None:
     """The shared spend counter for `key`, or None if it is cold. The counter key is
-    ``{cache namespace}:spend:key:{sha256(key)}``. With E2E_REDIS_NAMESPACE set (the
-    cluster-mode deploy, where a keyspace SCAN can't span shards) read it directly;
-    otherwise match by suffix so a local namespace need not be hard-coded."""
+    the optional cache namespace plus ``spend:key:{sha256(key)}``. A cluster client
+    can't run a keyspace SCAN that spans shards, so on E2E_REDIS_CLUSTER (or when a
+    namespace is given) read the key directly - the namespaced key, then the bare
+    suffix. Otherwise match by suffix so a local namespace need not be hard-coded."""
     digest = hashlib.sha256(key.encode()).hexdigest()
     suffix = f"spend:key:{digest}"
     namespace = os.getenv("E2E_REDIS_NAMESPACE")
-    if namespace:
-        for candidate in (f"{namespace}:{suffix}", suffix):
+    cluster = os.getenv("E2E_REDIS_CLUSTER", "false").lower() in ("1", "true", "yes")
+    if cluster or namespace:
+        candidates = [f"{namespace}:{suffix}"] if namespace else []
+        candidates.append(suffix)
+        for candidate in candidates:
             raw = rds.get(candidate)
             if raw is not None:
                 return float(raw)
