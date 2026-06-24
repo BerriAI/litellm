@@ -251,6 +251,8 @@ class VectorStoreDataSource(DataSource):
         provider: str,
         source_config: DataSourceConfig | None = None,
         client_config: VectorStoreClientConfig | None = None,
+        client: object | None = None,
+        embedding_model: object | None = None,
         **config: str,
     ) -> None:
         _sc = source_config or DataSourceConfig()
@@ -263,14 +265,22 @@ class VectorStoreDataSource(DataSource):
         self.config = config
         _client_config = client_config or VectorStoreClientConfig()
         self.client: object | None = (
-            _client_config.client
-            if _client_config.client is not None
-            else self._initialize_client(provider, config)
+            client
+            if client is not None
+            else (
+                _client_config.client
+                if _client_config.client is not None
+                else self._initialize_client(provider, config)
+            )
         )
         self.embedding_model: object | None = (
-            _client_config.embedding_model
-            if _client_config.embedding_model is not None
-            else self._load_embedding_model()
+            embedding_model
+            if embedding_model is not None
+            else (
+                _client_config.embedding_model
+                if _client_config.embedding_model is not None
+                else self._load_embedding_model()
+            )
         )
 
     @staticmethod
@@ -414,11 +424,12 @@ class FactCheckDataSource(DataSource):
         provider: str = "snopes",
         source_config: DataSourceConfig | None = None,
         api_key: str | None = None,
+        name: str | None = None,
         **config: str,
     ) -> None:
         _sc = source_config or DataSourceConfig()
         super().__init__(
-            name=_sc.name or f"factcheck_{provider}",
+            name=name or _sc.name or f"factcheck_{provider}",
             enabled=_sc.enabled,
             priority=_sc.priority,
         )
