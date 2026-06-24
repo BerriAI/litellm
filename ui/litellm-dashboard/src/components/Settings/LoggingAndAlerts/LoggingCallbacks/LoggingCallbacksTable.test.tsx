@@ -99,7 +99,7 @@ describe("LoggingCallbacksTable", () => {
     OPENMETER_API_KEY: null,
   };
 
-  it("summarizes a global destination's access as Global with no mode badge", () => {
+  it("renders a global destination's scope as a Global tag with no mode badge", () => {
     const { getByText, queryByText } = render(
       <LoggingCallbacksTable
         callbacks={[
@@ -108,6 +108,7 @@ describe("LoggingCallbacksTable", () => {
             variables: NO_VARS,
             credentialName: "langfuse-eu",
             access: { global: true },
+            resolvedScope: { global: true, teams: [], orgs: [] },
           },
         ]}
         availableCallbacks={{}}
@@ -118,7 +119,7 @@ describe("LoggingCallbacksTable", () => {
     expect(queryByText("Success")).not.toBeInTheDocument();
   });
 
-  it("summarizes team/org counts for a scoped destination", () => {
+  it("renders a scoped destination's resolved teams and orgs as labeled tags", () => {
     const { getByText } = render(
       <LoggingCallbacksTable
         callbacks={[
@@ -127,12 +128,15 @@ describe("LoggingCallbacksTable", () => {
             variables: NO_VARS,
             credentialName: "arize-eu",
             access: { teams: ["t1", "t2"], orgs: ["o1"] },
+            resolvedScope: { global: false, teams: ["t1", "t2"], orgs: ["o1"] },
           },
         ]}
         availableCallbacks={{}}
       />,
     );
-    expect(getByText("2 teams · 1 org")).toBeInTheDocument();
+    expect(getByText("team: t1")).toBeInTheDocument();
+    expect(getByText("team: t2")).toBeInTheDocument();
+    expect(getByText("org: o1")).toBeInTheDocument();
   });
 
   it("a destination row fires onEditAccess and onDelete, never onTest", () => {
