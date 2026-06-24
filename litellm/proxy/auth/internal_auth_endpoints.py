@@ -55,6 +55,36 @@ def require_data_plane_key(request: Request) -> None:
 
 class VerifyKeyRequest(BaseModel):
     api_key: str
+    # The actual route the gateway is serving this key on (e.g. "/v1/realtime").
+    # REQUIRED and not defaulted: the gateway always sends its own request path,
+    # so validation runs route/model restrictions against the real route — never a
+    # hardcoded guess, and never this internal endpoint's path (which a normal
+    # virtual key isn't allowed to call).
+    route: str
+
+
+def _synthetic_request(route: str, api_key: str) -> Request:
+    """
+    Build a minimal ASGI request standing in for the client's real call, so
+    ``user_api_key_auth`` evaluates the key against the intended data-plane
+    ``route`` (and an empty body) instead of this internal endpoint's path.
+    """
+
+    async def receive() -> Dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": route,
+        "raw_path": route.encode(),
+        "headers": [(b"authorization", f"Bearer {api_key}".encode())],
+        "query_string": b"",
+        "scheme": "http",
+        "client": ("127.0.0.1", 0),
+        "server": ("127.0.0.1", 4000),
+    }
+    return Request(scope, receive)
 
 
 router = APIRouter()
@@ -64,7 +94,7 @@ router = APIRouter()
     "/internal/v1/auth/verify",
     dependencies=[Depends(require_data_plane_key)],
 )
-async def verify_key(body: VerifyKeyRequest, request: Request) -> Dict[str, Any]:
+async def verify_key(body: VerifyKeyRequest) -> Dict[str, Any]:
     """
     Verify a virtual key on behalf of the Rust ai-gateway (data plane).
 
@@ -82,8 +112,15 @@ async def verify_key(body: VerifyKeyRequest, request: Request) -> Dict[str, Any]
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
+    # user_api_key_auth expects the value exactly as the Authorization header
+    # arrives — i.e. WITH the "Bearer " prefix (it strips it itself). The gateway
+    # sends the bare key, so normalize: add the prefix unless already present.
+    bearer_key = (
+        body.api_key if body.api_key.startswith("Bearer ") else f"Bearer {body.api_key}"
+    )
+    synthetic_request = _synthetic_request(route=body.route, api_key=bearer_key)
     try:
-        auth = await user_api_key_auth(request=request, api_key=body.api_key)
+        auth = await user_api_key_auth(request=synthetic_request, api_key=bearer_key)
     except (ProxyException, HTTPException):
         # Expected auth failures (invalid / expired / over-budget / blocked) → 401
         # with a minimal body so internals aren't leaked. Unexpected errors (e.g. a
