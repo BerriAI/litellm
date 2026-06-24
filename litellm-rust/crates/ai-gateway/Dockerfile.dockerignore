@@ -43,3 +43,9 @@ log.txt
 **/.git/
 .git/
 **/.DS_Store
+# Local secret material — never bake a dev's .env or private keys into the image.
+# Secrets are injected as env vars at deploy time, not copied from the context.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
