@@ -1024,6 +1024,84 @@ async def test_get_tools_from_mcp_servers_injects_byok_credential():
 
 
 @pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_byok_lookup_error_does_not_abort_listing():
+    """A DB error during the BYOK credential lookup must degrade to listing
+    without the key, not propagate out of the gather and abort the whole list."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="byok_user")
+    set_auth_context(user_api_key_auth)
+
+    byok_server = MagicMock()
+    byok_server.name = "byok_server"
+    byok_server.alias = "byok"
+    byok_server.allowed_tools = None
+    byok_server.disallowed_tools = None
+    byok_server.server_id = "byok_server"
+    byok_server.server_name = "byok_server"
+    byok_server.auth_type = "authorization"
+    byok_server.extra_headers = None
+    byok_server.is_byok = True
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["byok_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: byok_server
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
+
+    captured = {}
+
+    async def mock_get_tools_from_server(
+        server,
+        mcp_auth_header=None,
+        extra_headers=None,
+        add_prefix=True,
+        raw_headers=None,
+        **kwargs,
+    ):
+        captured["mcp_auth_header"] = mcp_auth_header
+        tool = MagicMock()
+        tool.name = "byok_tool"
+        tool.description = "BYOK tool"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with (
+        patch.object(
+            mcp_server_module,
+            "_get_byok_credential",
+            AsyncMock(side_effect=Exception("transient DB error")),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        # Must not raise even though the credential lookup blew up.
+        result = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=["byok_server"],
+        )
+
+    # The listing still completed; the server was listed without the BYOK key.
+    assert len(result) == 1
+    assert result[0].name == "byok_tool"
+    assert captured["mcp_auth_header"] is None
+
+
+@pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     """Test that _get_tools_from_mcp_servers handles all servers failing gracefully"""
     try:

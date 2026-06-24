@@ -1771,9 +1771,18 @@ if MCP_AVAILABLE:
                 # does. Without this a BYOK server lists with the shared token,
                 # which is None, so the upstream rejects the listing.
                 if server.is_byok and not server_auth_header:
-                    server_auth_header = await _get_byok_credential(
-                        server, user_api_key_auth
-                    )
+                    # Don't let a credential-lookup error abort the whole
+                    # multi-server listing; degrade to listing without the key,
+                    # matching the REST path's behavior.
+                    try:
+                        server_auth_header = await _get_byok_credential(
+                            server, user_api_key_auth
+                        )
+                    except Exception as e:
+                        verbose_logger.warning(
+                            f"BYOK credential lookup failed for {server.server_id}; "
+                            f"listing without it: {e}"
+                        )
 
                 # Prefer server-stored per-user OAuth when configured, so a stale
                 # Authorization header from the MCP client cannot override Redis/DB
