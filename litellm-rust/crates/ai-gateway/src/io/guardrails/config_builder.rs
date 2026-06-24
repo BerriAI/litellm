@@ -44,6 +44,18 @@ fn parse_params<T: for<'de> Deserialize<'de>>(params: &Value) -> Result<T, Unsup
         .map_err(|e| unsupported(format!("could not parse guardrail params: {e}")))
 }
 
+/// Treat an explicit JSON `null` like an absent field. The proxy serializes
+/// guardrail params from a Pydantic `model_dump()`, which emits `null` for every
+/// unset field; plain `#[serde(default)]` only covers *missing* keys, so a
+/// non-Option collection or bool would otherwise fail to deserialize from `null`.
+fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 pub fn build_config(guardrail_type: &str, params: &Value) -> Result<ProviderConfig, Unsupported> {
     match guardrail_type {
         "generic_guardrail_api" => Ok(ProviderConfig::GenericGuardrailApi(generic(params)?)),
@@ -72,7 +84,7 @@ struct GenericParams {
     api_key: Option<String>,
     #[serde(default)]
     headers: Option<HashMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     additional_provider_specific_params: Map<String, Value>,
     #[serde(default)]
     unreachable_fallback: Option<UnreachableFallback>,
@@ -265,13 +277,21 @@ struct AzureTextModerationParams {
     api_version: Option<String>,
     #[serde(default)]
     severity_threshold: Option<u8>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     severity_threshold_by_category: HashMap<String, u8>,
     #[serde(default)]
     categories: Option<Vec<String>>,
-    #[serde(default, rename = "blocklistNames")]
+    #[serde(
+        default,
+        rename = "blocklistNames",
+        deserialize_with = "null_to_default"
+    )]
     blocklist_names: Vec<String>,
-    #[serde(default, rename = "haltOnBlocklistHit")]
+    #[serde(
+        default,
+        rename = "haltOnBlocklistHit",
+        deserialize_with = "null_to_default"
+    )]
     halt_on_blocklist_hit: bool,
     #[serde(default, rename = "outputType")]
     output_type: Option<String>,
@@ -304,13 +324,13 @@ struct PresidioParams {
     presidio_analyzer_api_base: Option<String>,
     #[serde(default)]
     presidio_anonymizer_api_base: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pii_entities_config: HashMap<String, PiiAction>,
     #[serde(default)]
     presidio_language: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     presidio_score_thresholds: HashMap<String, f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     presidio_entities_deny_list: Vec<String>,
     #[serde(default)]
     presidio_ad_hoc_recognizers: Option<String>,
@@ -386,5 +406,39 @@ mod tests {
     #[test]
     fn unknown_type_is_unsupported() {
         assert!(build_config("definitely_not_a_guardrail", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn null_collection_fields_are_treated_as_absent() {
+        // The proxy's Pydantic model_dump() emits null for every unset field.
+        // Non-Option collections/bools must tolerate null, not fail to parse.
+        let presidio = serde_json::json!({
+            "presidio_analyzer_api_base": "http://localhost:5002",
+            "presidio_anonymizer_api_base": "http://localhost:5001",
+            "pii_entities_config": null,
+            "presidio_score_thresholds": null,
+            "presidio_entities_deny_list": null,
+            "presidio_language": null,
+            "output_parse_pii": null,
+            "mock_redacted_text": null,
+            "presidio_ad_hoc_recognizers": null,
+        });
+        assert!(build_config("presidio", &presidio).is_ok());
+
+        let azure = serde_json::json!({
+            "api_base": "https://contoso.cognitiveservices.azure.com",
+            "severity_threshold_by_category": null,
+            "blocklistNames": null,
+            "haltOnBlocklistHit": null,
+            "categories": null,
+        });
+        assert!(build_config("azure/text_moderations", &azure).is_ok());
+
+        let generic = serde_json::json!({
+            "api_base": "http://localhost:8080",
+            "additional_provider_specific_params": null,
+            "headers": null,
+        });
+        assert!(build_config("generic_guardrail_api", &generic).is_ok());
     }
 }
