@@ -1877,6 +1877,9 @@ class PrometheusLogger(CustomLogger):
         user_api_key_org_id = standard_logging_payload["metadata"].get(
             "user_api_key_org_id"
         )
+        user_api_key_org_alias = standard_logging_payload["metadata"].get(
+            "user_api_key_org_alias"
+        )
 
         try:
             enum_values = UserAPIKeyLabelValues(
@@ -1886,6 +1889,8 @@ class PrometheusLogger(CustomLogger):
                 model=model,
                 team=user_api_team,
                 team_alias=user_api_team_alias,
+                org_id=user_api_key_org_id,
+                org_alias=user_api_key_org_alias,
                 user=user_id,
                 model_id=standard_logging_payload.get("model_id", ""),
                 custom_metadata_labels=get_custom_labels_from_metadata(

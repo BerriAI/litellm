@@ -927,3 +927,117 @@ def test_custom_latency_buckets():
                 REGISTRY.unregister(collector)
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: org labels in async_log_failure_event
+# ---------------------------------------------------------------------------
+
+
+def _make_failure_standard_logging_payload(
+    org_id: str = "org-abc",
+    org_alias: str = "my-org",
+) -> dict:
+    return {
+        "model_id": "model-123",
+        "model_group": "gpt-4o-mini",
+        "api_base": "https://api.openai.com",
+        "custom_llm_provider": "openai",
+        "metadata": {
+            "user_api_key_hash": "test-hash",
+            "user_api_key_alias": "test-alias",
+            "user_api_key_team_id": "test-team",
+            "user_api_key_team_alias": "test-team-alias",
+            "user_api_key_user_id": "test-user",
+            "user_api_key_user_email": "test@example.com",
+            "user_api_key_org_id": org_id,
+            "user_api_key_org_alias": org_alias,
+            "requester_metadata": None,
+            "user_api_key_auth_metadata": None,
+            "spend_logs_metadata": None,
+        },
+        "request_tags": [],
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_emits_org_labels(prometheus_logger):
+    """
+    async_log_failure_event must emit org_id and org_alias labels on
+    litellm_llm_api_failed_requests_metric so that org context is
+    available in Prometheus failure metrics (LIT-2825).
+    """
+    prometheus_logger.litellm_llm_api_failed_requests_metric = MagicMock()
+
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_end_user_id": "end-user-1",
+            }
+        },
+        "standard_logging_object": _make_failure_standard_logging_payload(
+            org_id="org-xyz",
+            org_alias="acme-corp",
+        ),
+    }
+
+    with patch(
+        "litellm.integrations.prometheus.PrometheusLogger._set_org_budget_metrics_after_api_request",
+        AsyncMock(),
+    ):
+        await prometheus_logger.async_log_failure_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    labels_call = prometheus_logger.litellm_llm_api_failed_requests_metric.labels
+    labels_call.assert_called_once()
+    actual_labels = labels_call.call_args.kwargs
+    assert (
+        actual_labels.get("org_id") == "org-xyz"
+    ), f"Expected org_id='org-xyz', got {actual_labels.get('org_id')!r}"
+    assert (
+        actual_labels.get("org_alias") == "acme-corp"
+    ), f"Expected org_alias='acme-corp', got {actual_labels.get('org_alias')!r}"
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_org_labels_none_when_no_org(prometheus_logger):
+    """
+    When there is no org context (org_id=None, org_alias absent), the org labels
+    on litellm_llm_api_failed_requests_metric must be None/empty — not raise.
+    """
+    prometheus_logger.litellm_llm_api_failed_requests_metric = MagicMock()
+
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": _make_failure_standard_logging_payload(
+            org_id=None,
+            org_alias=None,
+        ),
+    }
+
+    with patch(
+        "litellm.integrations.prometheus.PrometheusLogger._set_org_budget_metrics_after_api_request",
+        AsyncMock(),
+    ):
+        await prometheus_logger.async_log_failure_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    labels_call = prometheus_logger.litellm_llm_api_failed_requests_metric.labels
+    labels_call.assert_called_once()
+    actual_labels = labels_call.call_args.kwargs
+    # org labels must be present as keys (empty string after label factory normalization)
+    assert "org_id" in actual_labels
+    assert "org_alias" in actual_labels

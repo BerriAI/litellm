@@ -685,6 +685,7 @@ class PrometheusMetricLabels:
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",
+            "litellm_llm_api_failed_requests_metric",
         }
     )
     # Managed batch metrics
