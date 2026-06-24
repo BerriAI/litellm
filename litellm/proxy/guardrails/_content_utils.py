@@ -35,6 +35,17 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
+# Content-part ``type`` values that carry inspectable text. Chat Completions
+# (and Anthropic) use ``"text"``; the Responses API uses ``"input_text"`` for
+# prompt input and ``"output_text"`` for prior model output replayed in
+# conversation state. All three keep the fragment under the ``"text"`` key, so
+# recognising the Responses variants here is enough to extract and rewrite them
+# — otherwise ``{"type": "input_text", ...}`` parts slip past masking entirely.
+TEXT_CONTENT_PART_TYPES: FrozenSet[str] = frozenset(
+    {"text", "input_text", "output_text"}
+)
+
+
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped."""
@@ -51,7 +62,7 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 continue
             if not isinstance(part, dict):
                 continue
-            if part.get("type") == "text":
+            if part.get("type") in TEXT_CONTENT_PART_TYPES:
                 text = part.get("text")
                 if isinstance(text, str) and text:
                     yield text
@@ -117,7 +128,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                     new_parts.append(visit(part))
                 elif (
                     isinstance(part, dict)
-                    and part.get("type") == "text"
+                    and part.get("type") in TEXT_CONTENT_PART_TYPES
                     and isinstance(part.get("text"), str)
                     and part["text"]
                 ):
@@ -156,7 +167,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                 input_value[idx] = visit(item)
             elif (
                 isinstance(item, dict)
-                and item.get("type") == "text"
+                and item.get("type") in TEXT_CONTENT_PART_TYPES
                 and isinstance(item.get("text"), str)
                 and item["text"]
             ):

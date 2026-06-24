@@ -529,6 +529,44 @@ async def test_responses_api_input_role_messages_are_masked(
 
 
 @pytest.mark.asyncio
+async def test_responses_api_input_text_content_parts_are_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Responses API `input` carries prompt text as `input_text` content parts;
+    these must be masked too (issue #30728 / veria-ai review). The earlier
+    refactor only recognised Chat-Completions `text` parts, so `input_text`
+    slipped through unmasked while non-text parts stay untouched."""
+    test_data = {
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "card 4111-1111-1111-1111"},
+                    {"type": "input_image", "image_url": "https://x/y.png"},
+                ],
+            }
+        ],
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    content = result["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "card [CREDIT_CARD]"}
+    # Non-text part must be left untouched.
+    assert content[1] == {"type": "input_image", "image_url": "https://x/y.png"}
+    assert "4111-1111-1111-1111" not in str(result["input"])
+
+
+@pytest.mark.asyncio
 async def test_both_messages_and_input_are_masked(
     presidio_guardrail, mock_user_api_key, mock_cache
 ):

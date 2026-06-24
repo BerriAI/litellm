@@ -66,6 +66,30 @@ def test_iter_message_text_responses_api_list_input_content_parts():
     assert list(iter_message_text(data)) == ["alpha", "beta"]
 
 
+def test_iter_message_text_responses_api_input_text_parts():
+    """veria-ai: Responses API carries prompt text as ``input_text`` parts (and
+    replays model output as ``output_text``); both must be inspected, not just
+    the Chat-Completions ``text`` type."""
+    data = {
+        "input": [
+            {"type": "input_text", "text": "ssn 078-05-1120"},
+            {"type": "input_image", "image_url": "..."},
+            {"type": "output_text", "text": "echoed 078-05-1120"},
+        ]
+    }
+    assert list(iter_message_text(data)) == ["ssn 078-05-1120", "echoed 078-05-1120"]
+
+
+def test_iter_message_text_responses_api_input_text_in_role_messages():
+    data = {
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "alpha"}]},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "beta"}]},
+        ]
+    }
+    assert list(iter_message_text(data)) == ["alpha", "beta"]
+
+
 def test_iter_message_text_responses_api_list_input_mixed_dicts_and_strings():
     """Greptile P2: mixed-list ``input`` with content-part dicts AND bare
     strings must yield every text fragment — read helpers used to truncate
@@ -158,6 +182,43 @@ def test_walk_user_text_redacts_responses_api_list_input():
     assert visited == 1
     assert data["input"][0] == {"type": "text", "text": "[redacted]AKIAEXAMPLE[/]"}
     assert data["input"][1] == {"type": "image_url", "image_url": {"url": "..."}}
+
+
+def test_walk_user_text_redacts_input_text_parts():
+    """veria-ai: ``input_text`` content parts (top-level Responses input list)
+    must be rewritten in place, not skipped, so the PII is actually masked."""
+    data = {
+        "input": [
+            {"type": "input_text", "text": "AKIAEXAMPLE"},
+            {"type": "input_image", "image_url": "..."},
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 1
+    assert data["input"][0] == {"type": "input_text", "text": "[REDACTED]"}
+    assert data["input"][1] == {"type": "input_image", "image_url": "..."}
+
+
+def test_walk_user_text_redacts_input_text_and_output_text_in_role_messages():
+    data = {
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "AKIAEXAMPLE"}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "saw AKIAEXAMPLE"}],
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    assert data["input"][0]["content"][0] == {
+        "type": "input_text",
+        "text": "[REDACTED]",
+    }
+    assert data["input"][1]["content"][0] == {
+        "type": "output_text",
+        "text": "saw [REDACTED]",
+    }
 
 
 def test_walk_user_text_redacts_mixed_list_input():
