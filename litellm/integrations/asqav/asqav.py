@@ -206,12 +206,15 @@ def _extract_loggable(
     }
 
 
-def _cloud_sign_payload(record: dict[str, Any]) -> dict[str, Any]:
+def _cloud_sign_payload(
+    record: dict[str, Any], pre_receipt_hash: str
+) -> dict[str, Any]:
     """Build the digests-only body for the agent sign endpoint.
 
     Binds the messages digest as the hashed payload and carries the response
-    digest plus call metadata alongside.  Raw prompt/response text is never
-    included; only digests the local record already holds.
+    digest plus call metadata alongside.  record_hash is the pre-receipt
+    canonical hash of the record content, so the signature commits to the
+    exact record fields.  Raw prompt/response text is never included.
     """
     messages_digest = record.get("messages_digest")
     metadata: dict[str, Any] = {
@@ -220,7 +223,7 @@ def _cloud_sign_payload(record: dict[str, Any]) -> dict[str, Any]:
         "model": record.get("model"),
         "status": record.get("status"),
         "response_content_digest": record.get("response_content_digest"),
-        "record_hash": record.get("record_hash"),
+        "record_hash": pre_receipt_hash,
         "seq": record.get("seq"),
     }
     body: dict[str, Any] = {
@@ -377,13 +380,22 @@ class AsqavLogger(CustomLogger):
                     **loggable,
                 }
 
+                # Pre-receipt hash over the record content (no cloud receipt).
+                # The cloud signs this so the signature binds to the exact
+                # canonical fields. Computed under the lock, no network here.
+                pre_receipt_hash = _sha256_hex(_canonical_bytes(hashable))
+
                 # Opt-in cloud signing binds into the chain: the returned
                 # receipt is part of the hashed record, so verify_chain still
                 # passes and the signature cannot be swapped after the fact.
-                cloud = self._maybe_cloud_sign({**hashable, "seq": seq})
+                cloud = self._maybe_cloud_sign(hashable, pre_receipt_hash)
                 if cloud is not None:
                     hashable["asqav_cloud"] = cloud
 
+                # Final hash additionally commits asqav_cloud, so it legitimately
+                # differs from pre_receipt_hash. An auditor re-derives the
+                # pre-receipt hash by canonicalizing the record minus record_hash
+                # and asqav_cloud.
                 record_hash = _sha256_hex(_canonical_bytes(hashable))
 
                 if not self._write_record({**hashable, "record_hash": record_hash}):
@@ -435,9 +447,12 @@ class AsqavLogger(CustomLogger):
     # Optional cloud signing
     # ------------------------------------------------------------------
 
-    def _maybe_cloud_sign(self, record: dict[str, Any]) -> dict[str, Any] | None:
+    def _maybe_cloud_sign(
+        self, record: dict[str, Any], pre_receipt_hash: str
+    ) -> dict[str, Any] | None:
         """POST the record's digests to the asqav sign endpoint, fail-soft.
 
+        pre_receipt_hash is the canonical content hash the signature binds to.
         Returns the receipt fields to bind into the local record, or None when
         cloud signing is off or any step fails.  A missing key, network error,
         non-2xx, or timeout never raises and never blocks the local write.
@@ -454,7 +469,7 @@ class AsqavLogger(CustomLogger):
             )
             resp = client.post(
                 url,
-                json=_cloud_sign_payload(record),
+                json=_cloud_sign_payload(record, pre_receipt_hash),
                 headers={"X-API-Key": self._cloud_api_key},
                 timeout=_CLOUD_SIGN_TIMEOUT,
             )

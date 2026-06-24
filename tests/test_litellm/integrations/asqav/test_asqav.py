@@ -754,12 +754,14 @@ def test_cloud_sign_payload_carries_digests_not_content() -> None:
         "status": "success",
         "seq": 0,
     }
-    body = _cloud_sign_payload(record)
+    body = _cloud_sign_payload(record, "c" * 64)
     raw = json.dumps(body)
     assert body["action_type"] == "litellm:completion"
     assert body["hash"] == "sha256:" + "a" * 64
     assert body["hash_algo"] == "sha256"
     assert body["metadata"]["response_content_digest"] == "b" * 64
+    # The signed metadata carries the real pre-receipt content hash.
+    assert body["metadata"]["record_hash"] == "c" * 64
     # No raw prompt/response text ever leaves; only digests.
     assert "hello" not in raw
     assert "world" not in raw
@@ -810,6 +812,84 @@ def test_cloud_sign_records_signature_when_key_set(
     # The bound receipt does not break the local hash chain.
     ok, msg = logger.verify_chain(path)
     assert ok is True, msg
+
+
+def _posted_record_hash(call: dict) -> str:
+    return call["json"]["metadata"]["record_hash"]
+
+
+def test_cloud_sign_posts_real_pre_receipt_hash(
+    tmp_path, _cloud_env, _patch_httpx
+) -> None:
+    """The signed payload's record_hash is a real 64-hex content hash equal to
+    sha256(canonical(record content)), not None.
+
+    Regression for the P2 ordering bug: _maybe_cloud_sign ran before record_hash
+    was computed, so record.get("record_hash") was always None and the field was
+    silently dropped from the signed body. The signature then bound to nothing.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    resp = _FakeResponse(201, {"signature_id": "sig-1", "mode": "hash"})
+    client = _patch_httpx(_FakeHttpxClient(response=resp))
+
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    logger.log_success_event(
+        kwargs=_make_kwargs(content="bind me"),
+        response_obj=_make_response(content="bound"),
+        start_time=start,
+        end_time=end,
+    )
+
+    assert len(client.calls) == 1
+    posted = _posted_record_hash(client.calls[0])
+    assert posted is not None, "record_hash must not be None in the signed body"
+    assert isinstance(posted, str) and len(posted) == 64
+    int(posted, 16)  # must be valid hex
+
+    # Re-derive the pre-receipt hash from the stored record: canonicalize the
+    # content minus record_hash and asqav_cloud. It must equal the signed hash.
+    record = _read_records(path)[0]
+    content = {
+        k: v for k, v in record.items() if k not in ("record_hash", "asqav_cloud")
+    }
+    assert posted == _sha256_hex(_canonical_bytes(content))
+
+
+def test_cloud_signature_binds_to_content_changes(
+    tmp_path, _cloud_env, _patch_httpx
+) -> None:
+    """The signed hash binds to the canonical record content: flipping any
+    content field yields a different signed hash.
+
+    Without binding, an attacker could alter fields outside the signed payload,
+    recompute the local chain, and keep the cloud receipt looking valid. We
+    prove binding by re-deriving the signed hash from the stored content and
+    showing a one-field tamper changes it.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    resp = _FakeResponse(201, {"signature_id": "sig-1", "mode": "hash"})
+    client = _patch_httpx(_FakeHttpxClient(response=resp))
+
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    logger.log_success_event(
+        kwargs=_make_kwargs(model="gpt-4o", content="same"),
+        response_obj=_make_response(content="resp"),
+        start_time=start,
+        end_time=end,
+    )
+
+    signed_hash = _posted_record_hash(client.calls[0])
+    record = _read_records(path)[0]
+    content = {
+        k: v for k, v in record.items() if k not in ("record_hash", "asqav_cloud")
+    }
+    # The signed hash matches the untouched content.
+    assert signed_hash == _sha256_hex(_canonical_bytes(content))
+    # Tampering one content field changes the hash the signature committed to.
+    tampered = {**content, "model": "attacker-model"}
+    assert _sha256_hex(_canonical_bytes(tampered)) != signed_hash
 
 
 def test_cloud_sign_fail_soft_on_raise(tmp_path, _cloud_env, _patch_httpx) -> None:
