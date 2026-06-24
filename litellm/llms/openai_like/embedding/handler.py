@@ -13,6 +13,9 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_model_response_object,
+)
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
@@ -72,7 +75,22 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 additional_args={"complete_input_dict": data},
                 original_response=response_json,
             )
-            return EmbeddingResponse(**response_json)
+            if not isinstance(response_json, dict):
+                raise OpenAILikeError(
+                    status_code=500,
+                    message=(
+                        "Embedding response is not a mapping. "
+                        "If you are using an OpenAI-compatible server, "
+                        "make sure the api_base includes the API prefix (e.g. /v1). "
+                        f"Received type: {type(response_json).__name__}. "
+                        f"Response: {str(response_json)[:500]}"
+                    ),
+                )
+            return convert_to_model_response_object(
+                response_object=response_json,
+                model_response_object=model_response,
+                response_type="embedding",
+            )
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -153,4 +171,19 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             original_response=response_json,
         )
 
-        return litellm.EmbeddingResponse(**response_json)
+        if not isinstance(response_json, dict):
+            raise OpenAILikeError(
+                status_code=500,
+                message=(
+                    "Embedding response is not a mapping. "
+                    "If you are using an OpenAI-compatible server, "
+                    "make sure the api_base includes the API prefix (e.g. /v1). "
+                    f"Received type: {type(response_json).__name__}. "
+                    f"Response: {str(response_json)[:500]}"
+                ),
+            )
+        return convert_to_model_response_object(
+            response_object=response_json,
+            model_response_object=model_response or EmbeddingResponse(),
+            response_type="embedding",
+        )

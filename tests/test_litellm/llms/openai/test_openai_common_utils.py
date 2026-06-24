@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -175,3 +175,18 @@ def test_get_openai_client_cache_key(client_type):
     )
     assert isinstance(key, str)
     assert "api_key=sk-test" in key
+
+
+def test_normalize_embedding_response_raises_for_list():
+    from litellm.llms.openai.common_utils import OpenAIError
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    handler = OpenAIChatCompletion()
+
+    with pytest.raises(OpenAIError) as exc_info:
+        handler._normalize_embedding_response(
+            response=[{"embedding": [0.1, 0.2]}],
+            request_data={"model": "test-model"},
+        )
+    assert "not a mapping" in str(exc_info.value.message)
+    assert "api_base includes the API prefix" in str(exc_info.value.message)

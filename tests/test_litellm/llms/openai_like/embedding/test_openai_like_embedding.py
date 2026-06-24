@@ -3,10 +3,11 @@ Test cases for OpenAI-like embedding handler
 """
 
 import json
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from litellm.llms.openai_like.common_utils import OpenAILikeError
 from litellm.llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from litellm.types.utils import EmbeddingResponse
 
@@ -346,3 +347,147 @@ class TestOpenAILikeEmbeddingHandler:
         assert sent_data["model"] == "test-model"
         assert sent_data["input"] == ["test input"]
         assert "encoding_format" not in sent_data
+
+    def test_embedding_response_list_raises_type_error(self):
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = MagicMock()
+        mock_response = Mock()
+        mock_response.json.return_value = [
+            {"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}
+        ]
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+
+        with patch.object(
+            handler,
+            "_validate_environment",
+            return_value=("http://test.com/v1/embeddings", {}),
+        ):
+            with pytest.raises(OpenAILikeError) as exc_info:
+                handler.embedding(
+                    model="test-model",
+                    input=["test input"],
+                    timeout=60.0,
+                    logging_obj=mock_logging,
+                    api_key="test-key",
+                    api_base="http://test.com/v1",
+                    optional_params={},
+                    client=mock_client,
+                )
+            assert "not a mapping" in str(exc_info.value.message)
+            assert "api_base includes the API prefix" in str(exc_info.value.message)
+
+    def test_embedding_response_dict_uses_convert_to_model_response_object(self):
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = MagicMock()
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+
+        with patch.object(
+            handler,
+            "_validate_environment",
+            return_value=("http://test.com/v1/embeddings", {}),
+        ):
+            response = handler.embedding(
+                model="test-model",
+                input=["test input"],
+                timeout=60.0,
+                logging_obj=mock_logging,
+                api_key="test-key",
+                api_base="http://test.com/v1",
+                optional_params={},
+                client=mock_client,
+            )
+
+        assert response.model == "test-model"
+        assert response.object == "list"
+        assert len(response.data) == 1
+        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+    @pytest.mark.asyncio
+    async def test_async_embedding_response_list_raises_type_error(self):
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = AsyncMock()
+        mock_response = Mock()
+        mock_response.json.return_value = [
+            {"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}
+        ]
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+        model_response = EmbeddingResponse()
+
+        with patch(
+            "litellm.llms.openai_like.embedding.handler.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            with pytest.raises(OpenAILikeError) as exc_info:
+                await handler.aembedding(
+                    input=["test input"],
+                    data={"model": "test-model", "input": ["test input"]},
+                    model_response=model_response,
+                    timeout=60.0,
+                    logging_obj=mock_logging,
+                    api_key="test-key",
+                    api_base="http://test.com/v1/embeddings",
+                    headers={},
+                    client=None,
+                )
+        assert "not a mapping" in str(exc_info.value.message)
+        assert "api_base includes the API prefix" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_async_embedding_response_dict_uses_convert_to_model_response_object(
+        self,
+    ):
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = AsyncMock()
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+        model_response = EmbeddingResponse()
+
+        with patch(
+            "litellm.llms.openai_like.embedding.handler.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            response = await handler.aembedding(
+                input=["test input"],
+                data={"model": "test-model", "input": ["test input"]},
+                model_response=model_response,
+                timeout=60.0,
+                logging_obj=mock_logging,
+                api_key="test-key",
+                api_base="http://test.com/v1/embeddings",
+                headers={},
+                client=None,
+            )
+
+        assert response.model == "test-model"
+        assert response.object == "list"
+        assert len(response.data) == 1
+        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
