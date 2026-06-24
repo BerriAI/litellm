@@ -191,6 +191,7 @@ impl RealtimePool {
             let weak = Arc::downgrade(&pool);
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(REPLENISH_TICK);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     tick.tick().await;
                     // Stop once the gateway has dropped its handle.
