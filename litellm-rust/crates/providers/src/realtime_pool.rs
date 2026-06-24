@@ -53,11 +53,21 @@ const REPLENISH_TICK: Duration = Duration::from_millis(250);
 /// Identifies an upstream connection: the tuple that fully determines the dial.
 /// `api_key` is included so a warm socket is only ever reused for the same key
 /// (no cross-tenant reuse).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct UpstreamKey {
     pub model: String,
     pub api_key: String,
     pub api_base: Option<String>,
+}
+
+impl std::fmt::Debug for UpstreamKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpstreamKey")
+            .field("model", &self.model)
+            .field("api_key", &"[REDACTED]")
+            .field("api_base", &self.api_base)
+            .finish()
+    }
 }
 
 /// A warm upstream: split halves + the buffered `session.created` + when it was
