@@ -5,47 +5,37 @@ Date: 23/06/26
 """
 
 from typing import Optional
-
 from pydantic import Field
-
 from .base import GuardrailConfigModel
 
 
 class SingulrGuardrailConfigModel(GuardrailConfigModel):
     api_key: Optional[str] = Field(
         default=None,
-        description=(
-            "API key for Singulr authentication. "
-            "If not provided, the SINGULR_API_KEY "
-            "environment variable is used."
-        ),
+        description="API key used to authenticate requests to the Singulr Guardrails API.",
     )
+
     api_base: Optional[str] = Field(
         default=None,
-        description=(
-            "Singulr Guardrails API base URL. "
-            "Falls back to SINGULR_API_BASE env var."
-        ),
+        description="Base URL for the Singulr Guardrails API.",
     )
+
     enforcement_entity_id: Optional[str] = Field(
         default=None,
-        description=(
-            "The enforcement entity ID (e.g., Application ID or Agent ID) "
-            "to send in the X-Singulr-Enforcement-Entity-Id header."
-        ),
+        description="Identifier of the Singulr enforcement entity used for guardrail evaluation.",
     )
+
     guardrail_id: Optional[str] = Field(
         default=None,
-        description=(
-            "The SDK guardrail ID to send in the X-Singulr-Guardrail-Id header."
-        ),
+        description="Identifier of the Singulr guardrail configuration to apply.",
     )
+
     block_on_error: Optional[bool] = Field(
         default=None,
         description=(
-            "Whether to block the request when the "
-            "Singulr API is unreachable or returns an error. "
-            "Defaults to true (fail-closed)."
+            "Whether to block requests when the Singulr Guardrails API is unavailable "
+            "or returns an error. If enabled, requests fail closed. "
+            "If disabled, requests continue without guardrail enforcement (fail open)."
         ),
     )
 

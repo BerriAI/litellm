@@ -1,20 +1,19 @@
 """
 Singulr guardrail integration for LiteLLM.
 
-Calls the Singulr SDK Guard API to scan messages.
+Calls the Singulr Guard API to scan messages.
 """
 
 import os
+import httpx
 from typing import (
-    TYPE_CHECKING,
     Any,
     Dict,
-    List,
     Literal,
     Optional,
     Type,
+    cast,
 )
-
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
@@ -27,15 +26,12 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import (
-        Logging as LiteLLMLoggingObj,
-    )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
-import httpx
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.base import (
+    GuardrailConfigModel,
+)
 
 _DEFAULT_API_BASE = "http://localhost:8000"
 _GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
@@ -88,60 +84,67 @@ class SingulrGuardrail(CustomGuardrail):
 
         return SingulrGuardrailConfigModel
 
-    @log_guardrail_information
-    async def apply_guardrail(
+    def _extract_prompt(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> GenericGuardrailAPIInputs:
+    ) -> str:
+        if input_type == "request":
+            from litellm.proxy.guardrails._content_utils import (
+                build_inspection_messages,
+            )
+
+            messages = build_inspection_messages(cast(Dict[str, Any], request_data))
+            last_user_message = next(
+                (
+                    m["content"]
+                    for m in reversed(messages)
+                    if str(m.get("role") or "").lower() == "user" and m.get("content")
+                ),
+                None,
+            )
+            if last_user_message is not None:
+                return last_user_message
+
         texts = inputs.get("texts", [])
-        structured_messages = inputs.get("structured_messages", [])
+        return "\n".join(texts) if texts else ""
 
-        if structured_messages:
-            prompt = self._extract_prompt_from_messages(list(structured_messages))
-        elif texts:
-            prompt = "\n".join(texts)
-        else:
-            return inputs
-
-        if not prompt:
-            return inputs
-
-        payload: Dict[str, Any] = {
-            "prompt": prompt,
-        }
-
-        endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
-
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        if self.enforcement_entity_id:
-            headers["X-Singulr-Enforcement-Entity-Id"] = self.enforcement_entity_id
-
-        if self.guardrail_id:
-            headers["X-Singulr-Guardrail-Id"] = self.guardrail_id
-
-        verbose_proxy_logger.debug(
-            "Singulr: %s",
-            endpoint,
+    def _build_headers(self) -> Dict[str, str]:
+        return dict(
+            (header, value)
+            for header, value in (
+                ("Content-Type", "application/json"),
+                ("Authorization", f"Bearer {self.api_key}" if self.api_key else ""),
+                (
+                    "X-Singulr-Enforcement-Entity-Id",
+                    self.enforcement_entity_id or "",
+                ),
+                ("X-Singulr-Guardrail-Id", self.guardrail_id or ""),
+            )
+            if value
         )
+
+    async def _call_api(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """Returns the parsed response dict on success.
+
+        Returns None (instead of raising) when the API fails and
+        block_on_error=False, so the caller can fall through gracefully.
+        """
+        endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
+        verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
         try:
             response = await self.async_handler.post(
                 url=endpoint,
-                headers=headers,
-                json=payload,
-                timeout=10.0,
+                headers=self._build_headers(),
+                json={"prompt": prompt},
+                timeout=30,
             )
             response.raise_for_status()
-            result = response.json()
+            result: Dict[str, Any] = response.json()
+            verbose_proxy_logger.debug("Singulr: result=%s", result)
+            return result
 
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.error(
@@ -149,7 +152,6 @@ class SingulrGuardrail(CustomGuardrail):
                 exc.response.status_code,
                 str(exc),
             )
-
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
@@ -158,22 +160,46 @@ class SingulrGuardrail(CustomGuardrail):
                         f"{exc.response.status_code}: {exc.response.text}"
                     ),
                 ) from exc
+            return None
 
-            return inputs
-
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+        except httpx.TransportError as exc:
             verbose_proxy_logger.error("Singulr API unreachable: %s", str(exc))
-
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=f"Singulr API unreachable (block_on_error=True): {exc}",
                 ) from exc
+            return None
 
+        except ValueError as exc:
+            verbose_proxy_logger.error(
+                "Singulr API returned non-JSON response: %s", str(exc)
+            )
+            if self.block_on_error:
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=f"Singulr API returned non-JSON response: {exc}",
+                ) from exc
+            return None
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        prompt = self._extract_prompt(inputs, request_data, input_type)
+        verbose_proxy_logger.debug("Singulr: prompt=%s", prompt)
+        if not prompt:
+            return inputs
+
+        result = await self._call_api(prompt)
+        if result is None:
             return inputs
 
         should_block = result.get("should_block", False)
-
         verbose_proxy_logger.debug(
             "Singulr: should_block=%s blocking_due_to=%s",
             should_block,
@@ -181,26 +207,9 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
         if should_block:
-            blocking_due_to = result.get("blocking_due_to", "unknown")
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"Blocked by Singulr: {blocking_due_to}",
+                message=f"Blocked by Singulr: {result.get('blocking_due_to', 'unknown')}",
             )
 
         return inputs
-
-    @staticmethod
-    def _extract_prompt_from_messages(messages: list) -> str:
-        """Extract text content from messages to build a single prompt."""
-        texts: List[str] = []
-        for message in messages:
-            content = message.get("content")
-            if isinstance(content, str):
-                texts.append(content)
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        text = item.get("text")
-                        if text:
-                            texts.append(text)
-        return "\n".join(texts)
