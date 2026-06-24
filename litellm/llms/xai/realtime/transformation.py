@@ -16,7 +16,7 @@ construction time (see ``handler.py``) so all normalization is isolated here
 and ``RealTimeStreaming`` stays provider-agnostic.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 class XAIRealtimeNormalizer:
@@ -58,7 +58,7 @@ class XAIRealtimeNormalizer:
         # Cache content-part objects keyed by (response_id, item_id, content_index)
         # so that ``response.content_part.done`` events missing ``part`` can be
         # back-filled from earlier ``content_part.added`` / delta-done events.
-        self._content_part_by_key: Dict[Tuple, Dict[str, Any]] = {}
+        self._content_part_by_key: dict[tuple, dict[str, Any]] = {}
 
     # ---------------------------------------------------------------------------
     # Public interface consumed by RealTimeStreaming
@@ -116,7 +116,7 @@ class XAIRealtimeNormalizer:
     # ---------------------------------------------------------------------------
 
     @staticmethod
-    def _content_part_key(event: dict) -> Tuple:
+    def _content_part_key(event: dict) -> tuple:
         return (
             event.get("response_id"),
             event.get("item_id"),
@@ -145,7 +145,7 @@ class XAIRealtimeNormalizer:
             }
         self._content_part_by_key[key] = updated
 
-    def _resolve_content_part(self, event: dict) -> Dict[str, Any]:
+    def _resolve_content_part(self, event: dict) -> dict[str, Any]:
         part = event.get("part")
         if isinstance(part, dict):
             return part
@@ -221,7 +221,7 @@ class XAIRealtimeNormalizer:
         needs_content = event_type in self._EVENTS_NEEDING_CONTENT_INDEX
         if not needs_output and not needs_content:
             return event
-        patch: Dict[str, Any] = {}
+        patch: dict[str, Any] = {}
         if needs_output and "output_index" not in event:
             patch["output_index"] = 0
         if needs_content and "content_index" not in event:
@@ -235,8 +235,8 @@ class XAIRealtimeNormalizer:
     # ---------------------------------------------------------------------------
 
     @staticmethod
-    def _default_ga_usage() -> Dict[str, Any]:
-        default_details: Dict[str, Any] = {
+    def _default_ga_usage() -> dict[str, Any]:
+        default_details: dict[str, Any] = {
             "cached_tokens": 0,
             "text_tokens": 0,
             "audio_tokens": 0,
@@ -252,7 +252,7 @@ class XAIRealtimeNormalizer:
     @staticmethod
     def _normalize_usage(
         usage: Any, *, empty_as_null: bool
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Coerce a usage object into the full OpenAI GA shape.
 
         ``empty_as_null=True`` for ``response.created`` (usage optional).
@@ -262,12 +262,12 @@ class XAIRealtimeNormalizer:
             return None
         if not usage:
             return None if empty_as_null else XAIRealtimeNormalizer._default_ga_usage()
-        default_details: Dict[str, Any] = {
+        default_details: dict[str, Any] = {
             "cached_tokens": 0,
             "text_tokens": 0,
             "audio_tokens": 0,
         }
-        normalized: Dict[str, Any] = {
+        normalized: dict[str, Any] = {
             "total_tokens": usage.get("total_tokens", 0),
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),

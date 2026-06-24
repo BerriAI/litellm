@@ -115,7 +115,7 @@ class RealTimeStreaming:
         # merges it with the cached first setup and we send the merged result as
         # the actual initial setup to Gemini.
         self._gemini_setup_deferred: bool = False
-        self._gemini_pre_setup_buffer: List[str] = []
+        self._gemini_pre_setup_buffer: list[str] = []
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
@@ -382,7 +382,7 @@ class RealTimeStreaming:
                         msg_obj.get("setup", {}).get("tools")
                         or msg_obj.get("setup", {}).get("systemInstruction")
                     )
-                    if not setup_has_tools:
+                    if not setup_has_tools and litellm.gemini_live_defer_setup:
                         # Setup without tools: cache it so the transformer can
                         # merge the next session.update on top (tools + system
                         # instruction), but don't forward to Gemini yet. Gemini

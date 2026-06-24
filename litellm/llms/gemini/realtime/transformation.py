@@ -417,7 +417,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
 
     @staticmethod
-    def _coerce_response_modalities(model: str, modalities: List[Any]) -> List[str]:
+    def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
         """Map unsupported TEXT responseModalities to AUDIO for audio-only Live models."""
         normalized = [
             modality.upper() if isinstance(modality, str) else str(modality).upper()
@@ -560,7 +560,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 merged_realtime_input_config,
             )
         finalized_follow_up = self._finalize_gemini_live_setup(
-            model, cast(Dict[str, Any], follow_up_setup)
+            model, cast(dict[str, Any], follow_up_setup)
         )
         # Skip if the follow-up setup is identical to the one already sent.
         # The final session.update from Pipecat's _create_response (after history
@@ -620,7 +620,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "This may cause Gemini to reject the response."
             )
 
-        function_response: Dict[str, Any] = {"response": output_dict}
+        function_response: dict[str, Any] = {"response": output_dict}
         if self._include_function_response_id() and call_id:
             function_response["id"] = call_id
         if function_name:
