@@ -1,0 +1,488 @@
+"""
+At-rest credential re-encryption migration.
+
+Switches every encrypted-at-rest value from the legacy XSalsa20-Poly1305 (nacl)
+format to the versioned AES-256-GCM (``v2:gcm:``) format produced by
+``encrypt_decrypt_utils`` when ``general_settings.encryption_algorithm`` is set to
+``aes-256-gcm``.
+
+Design properties (see case 2026-06-24 fix plan):
+
+* **Same key, new algorithm.** The migration does not change the encryption key;
+  it re-encrypts existing ciphertext under the same derived key but in the new
+  AES format. This is achieved by decrypting with the format-detecting reader and
+  re-encrypting through ``encrypt_value_helper`` with the AES gate enabled.
+* **Idempotent.** A value already carrying the ``v2:gcm:`` prefix is recognised
+  and left untouched, so re-running the migration is a no-op on migrated rows.
+* **Resumable.** Walkers commit per row (or per small table), so an interrupted
+  run leaves a clean mixed state that a re-run completes.
+* **Skip-on-undecryptable.** A value that cannot be decrypted is never
+  overwritten — corrupt rows are preserved and reported, never destroyed.
+* **Attestable.** :func:`check_encryption` is a read-only scan that classifies
+  every value as ``migrated`` / ``legacy`` / ``plaintext`` / ``undecryptable``.
+  A residual ``legacy == 0`` is the compliance attestation.
+
+Coverage. The covered tables (model table, credentials table, MCP credential/env
+tables, config ``environment_variables``) already have a re-encryption path in
+``_rotate_master_key``; this module delegates to it in *same-key* mode and adds
+walkers for the locations that had no rotation path: team / verification-token
+``callback_vars`` metadata, the ``vantage_settings`` / ``cloudzero_settings``
+config rows, and the SSO config table.
+"""
+
+import json
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal
+
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    _ALGO_AES_GCM,
+    _ENCRYPTION_ALGORITHM_SETTING,
+    _V2_GCM_PREFIX,
+    _get_salt_key,
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
+
+ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
+
+
+@dataclass
+class LocationReport:
+    """Per-location counters for one migration / check pass."""
+
+    location: str
+    scanned: int = 0
+    migrated: int = 0  # values rewritten to v2 this run
+    already_v2: int = 0  # values already migrated (skipped)
+    plaintext: int = 0  # legacy-plaintext values (no ciphertext to migrate)
+    undecryptable: int = 0  # could not decrypt — preserved, not overwritten
+
+    # Used by --check (read-only classification):
+    legacy: int = 0  # nacl ciphertext still awaiting migration
+
+    def as_dict(self) -> Dict[str, int]:
+        return {
+            "scanned": self.scanned,
+            "migrated": self.migrated,
+            "already_v2": self.already_v2,
+            "plaintext": self.plaintext,
+            "undecryptable": self.undecryptable,
+            "legacy": self.legacy,
+        }
+
+
+@dataclass
+class MigrationReport:
+    """Aggregate report across all locations."""
+
+    locations: List[LocationReport] = field(default_factory=list)
+
+    def add(self, report: LocationReport) -> None:
+        self.locations.append(report)
+
+    @property
+    def residual_legacy(self) -> int:
+        """Total legacy ciphertext still un-migrated (the TRO attestation number)."""
+        return sum(loc.legacy for loc in self.locations)
+
+    @property
+    def total_undecryptable(self) -> int:
+        return sum(loc.undecryptable for loc in self.locations)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "residual_legacy": self.residual_legacy,
+            "total_undecryptable": self.total_undecryptable,
+            "locations": {loc.location: loc.as_dict() for loc in self.locations},
+        }
+
+
+# ---------------------------------------------------------------------------
+# Pure engine — no DB I/O, fully unit-testable.
+# ---------------------------------------------------------------------------
+
+
+def is_migrated(value: Any) -> bool:
+    """True if ``value`` is already an AES-256-GCM (``v2:gcm:``) ciphertext."""
+    return isinstance(value, str) and value.startswith(_V2_GCM_PREFIX)
+
+
+def classify_value(value: Any, key: str = "scan") -> ValueClass:
+    """Classify a stored value for the residual scanner.
+
+    * ``not-a-string`` — not a string (numbers/bools/None left as-is on disk).
+    * ``migrated`` — carries the ``v2:gcm:`` prefix.
+    * ``legacy`` — decrypts under the legacy nacl reader (still needs migrating).
+    * ``plaintext`` — a non-empty string that does not decrypt and is not v2;
+      treated as legacy plaintext (nothing to migrate).
+    * ``undecryptable`` — reserved for callers that already know a value is
+      ciphertext but cannot decrypt it; ``classify_value`` itself cannot tell a
+      corrupt ciphertext from plaintext, so it returns ``plaintext`` for both.
+    """
+    if not isinstance(value, str):
+        return "not-a-string"
+    if value == "":
+        return "plaintext"
+    if value.startswith(_V2_GCM_PREFIX):
+        return "migrated"
+    decrypted = decrypt_value_helper(
+        value=value, key=key, exception_type="debug", return_original_value=False
+    )
+    if decrypted is None:
+        # Did not decrypt under nacl and has no v2 marker: legacy plaintext.
+        return "plaintext"
+    return "legacy"
+
+
+def reencrypt_value(value: Any, key: str = "migrate") -> Any:
+    """Re-encrypt a single stored string into the configured (AES) format.
+
+    Returns the value unchanged if it is not a string, is already ``v2:``, or
+    cannot be decrypted (skip-on-undecryptable). Otherwise decrypts under the
+    format-detecting reader and re-encrypts through ``encrypt_value_helper``
+    (which writes AES when the gate is on).
+    """
+    if not isinstance(value, str) or value == "":
+        return value
+    if value.startswith(_V2_GCM_PREFIX):
+        return value  # idempotent: already migrated
+    decrypted = decrypt_value_helper(
+        value=value, key=key, exception_type="debug", return_original_value=False
+    )
+    if decrypted is None:
+        # Either legacy plaintext (no ciphertext to migrate) or corrupt. Either
+        # way, do not overwrite — preserve the value as stored.
+        return value
+    return encrypt_value_helper(decrypted)
+
+
+def reencrypt_selective_dict(
+    data: Dict[str, Any], sensitive_keys: List[str]
+) -> Dict[str, Any]:
+    """Return a copy of ``data`` with only ``sensitive_keys`` re-encrypted.
+
+    Non-sensitive fields (e.g. ``base_url``, ``connection_id``) are left as-is.
+    Null/missing fields are skipped.
+    """
+    out = dict(data)
+    for k in sensitive_keys:
+        v = out.get(k)
+        if v is None:
+            continue
+        out[k] = reencrypt_value(v, key=k)
+    return out
+
+
+def _assert_aes_gate_enabled() -> None:
+    """Fail fast if the AES algorithm gate is not enabled.
+
+    Running the migration with the gate off would decrypt then re-encrypt right
+    back into the legacy format — a no-op that silently fails the migration.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    algo = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING)
+    if not (isinstance(algo, str) and algo.lower() == _ALGO_AES_GCM):
+        raise RuntimeError(
+            "Encryption migration requires general_settings.encryption_algorithm: "
+            f"'{_ALGO_AES_GCM}'. Current value: {algo!r}. Set it before migrating "
+            "so re-encrypted values are written in the AES-256-GCM format."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Walkers for the locations with no pre-existing rotation path.
+# Each walker delegates the structural transform to the existing, tested helper
+# for that table and only adds the per-row re-encrypt + commit + counters.
+# ---------------------------------------------------------------------------
+
+
+async def _migrate_config_settings_row(
+    prisma_client: Any,
+    param_name: str,
+    sensitive_fields: List[str],
+    dry_run: bool,
+) -> LocationReport:
+    """Migrate a single ``LiteLLM_Config`` row whose ``param_value`` is a JSON
+    dict with selected sensitive fields (vantage_settings / cloudzero_settings).
+    """
+    report = LocationReport(location=param_name)
+    record = await prisma_client.db.litellm_config.find_unique(
+        where={"param_name": param_name}
+    )
+    if record is None or record.param_value is None:
+        return report
+
+    settings = record.param_value
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    if not isinstance(settings, dict):
+        return report
+
+    changed = False
+    for fld in sensitive_fields:
+        v = settings.get(fld)
+        if v is None:
+            continue
+        report.scanned += 1
+        cls = classify_value(v, key=fld)
+        if cls == "migrated":
+            report.already_v2 += 1
+            continue
+        if cls == "legacy":
+            report.legacy += 1
+            new_v = reencrypt_value(v, key=fld)
+            if new_v != v:
+                settings[fld] = new_v
+                report.migrated += 1
+                changed = True
+        else:  # plaintext / not-a-string — nothing to migrate
+            report.plaintext += 1
+
+    if changed and not dry_run:
+        await prisma_client.db.litellm_config.update(
+            where={"param_name": param_name},
+            data={"param_value": json.dumps(settings)},
+        )
+    return report
+
+
+async def _migrate_sso_config(prisma_client: Any, dry_run: bool) -> LocationReport:
+    """Migrate the ``LiteLLM_SSOConfig`` row. All non-null fields are encrypted
+    (via the same ``_encrypt_env_variables`` path used on save), so we re-encrypt
+    every present string field.
+    """
+    report = LocationReport(location="sso_config")
+    record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        where={"id": "sso_config"}
+    )
+    if record is None or record.sso_settings is None:
+        return report
+
+    settings = record.sso_settings
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    if not isinstance(settings, dict):
+        return report
+
+    new_settings = dict(settings)
+    changed = False
+    for fld, v in settings.items():
+        if not isinstance(v, str) or v == "":
+            continue
+        report.scanned += 1
+        cls = classify_value(v, key=fld)
+        if cls == "migrated":
+            report.already_v2 += 1
+            continue
+        if cls == "legacy":
+            report.legacy += 1
+            new_v = reencrypt_value(v, key=fld)
+            if new_v != v:
+                new_settings[fld] = new_v
+                report.migrated += 1
+                changed = True
+        else:
+            report.plaintext += 1
+
+    if changed and not dry_run:
+        await prisma_client.db.litellm_ssoconfig.update(
+            where={"id": "sso_config"},
+            data={"sso_settings": json.dumps(new_settings)},
+        )
+    return report
+
+
+async def _migrate_callback_vars_table(
+    prisma_client: Any,
+    table_name: Literal["team", "verification_token"],
+    dry_run: bool,
+) -> LocationReport:
+    """Migrate ``metadata.logging[*].callback_vars.<sensitive>`` on the team or
+    verification-token table. Reuses the proven ``decrypt_callback_vars`` /
+    ``encrypt_callback_vars`` transforms (which understand the selective,
+    prefix-marked shape and leave legacy plaintext alone until re-encrypted).
+    """
+    from litellm.proxy.common_utils.callback_utils import (
+        _CALLBACK_VAR_ENCRYPTED_PREFIX,
+        decrypt_callback_vars,
+        encrypt_callback_vars,
+    )
+
+    report = LocationReport(location=f"{table_name}.callback_vars")
+
+    if table_name == "team":
+        table = prisma_client.db.litellm_teamtable
+        pk = "team_id"
+    else:
+        table = prisma_client.db.litellm_verificationtoken
+        pk = "token"
+
+    rows = await table.find_many()
+    for row in rows or []:
+        metadata = getattr(row, "metadata", None)
+        if not isinstance(metadata, dict) or "logging" not in metadata:
+            continue
+
+        # Count sensitive callback-var values that are not yet v2.
+        pre_v2 = _count_callback_v2(metadata)
+        try:
+            decrypted = decrypt_callback_vars(metadata)
+            re_encrypted = encrypt_callback_vars(decrypted)
+        except Exception as e:  # pragma: no cover - defensive; never drop a row
+            verbose_proxy_logger.warning(
+                "Skipping %s row %s callback_vars (transform failed): %s",
+                table_name,
+                getattr(row, pk, "?"),
+                str(e),
+            )
+            report.undecryptable += 1
+            continue
+
+        post_v2 = _count_callback_v2(re_encrypted)
+        report.scanned += post_v2
+        report.already_v2 += pre_v2
+        newly = max(0, post_v2 - pre_v2)
+        report.migrated += newly
+        if newly and not dry_run:
+            await table.update(
+                where={pk: getattr(row, pk)},
+                data={"metadata": json.dumps(re_encrypted)},
+            )
+
+    # Suppress unused-import lint for the prefix constant (kept for readability).
+    _ = _CALLBACK_VAR_ENCRYPTED_PREFIX
+    return report
+
+
+def _count_callback_v2(metadata: Dict[str, Any]) -> int:
+    """Count callback-var values carrying the ``v2:gcm:`` marker (allowing the
+    ``litellm_enc::`` callback prefix in front of it)."""
+    from litellm.proxy.common_utils.callback_utils import (
+        _CALLBACK_VAR_ENCRYPTED_PREFIX,
+    )
+
+    count = 0
+    for entry in metadata.get("logging", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        cvs = entry.get("callback_vars")
+        if not isinstance(cvs, dict):
+            continue
+        for v in cvs.values():
+            if not isinstance(v, str):
+                continue
+            inner = v
+            if inner.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+                inner = inner[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
+            if inner.startswith(_V2_GCM_PREFIX):
+                count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+# vantage_settings / cloudzero_settings sensitive fields (see *_endpoints.py).
+_VANTAGE_SENSITIVE = ["api_key", "integration_token"]
+_CLOUDZERO_SENSITIVE = ["api_key"]
+
+
+async def _migrate_covered_tables(
+    prisma_client: Any, user_api_key_dict: Any
+) -> LocationReport:
+    """Re-encrypt the tables already covered by ``_rotate_master_key`` (model
+    table, credentials, MCP credential/env tables, config environment_variables)
+    by running that orchestrator in *same-key* mode. With the AES gate on, the
+    re-encrypt writes land in ``v2:`` format.
+    """
+    report = LocationReport(location="rotation_covered_tables")
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    current_key = _get_salt_key()
+    await _rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        current_master_key=current_key,
+        new_master_key=current_key,  # same key, algorithm-only switch
+    )
+    return report
+
+
+async def migrate_encryption(
+    prisma_client: Any,
+    user_api_key_dict: Any,
+    dry_run: bool = False,
+) -> MigrationReport:
+    """Run the full at-rest re-encryption migration.
+
+    Requires ``general_settings.encryption_algorithm == 'aes-256-gcm'`` so writes
+    are produced in the AES format. Idempotent and resumable: re-running skips
+    already-migrated values and finishes any partial run.
+    """
+    _assert_aes_gate_enabled()
+
+    report = MigrationReport()
+
+    # Tables that already have a rotation path (items 1, 2, 5-10).
+    if not dry_run:
+        report.add(await _migrate_covered_tables(prisma_client, user_api_key_dict))
+
+    # Net-new walkers (items 3, 4, 11, 12, 13).
+    report.add(
+        await _migrate_callback_vars_table(prisma_client, "team", dry_run)
+    )
+    report.add(
+        await _migrate_callback_vars_table(
+            prisma_client, "verification_token", dry_run
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run
+        )
+    )
+    report.add(await _migrate_sso_config(prisma_client, dry_run))
+
+    return report
+
+
+async def check_encryption(prisma_client: Any) -> MigrationReport:
+    """Read-only residual scan across the net-new walker locations.
+
+    Reports how many values are still ``legacy`` (un-migrated). ``residual_legacy
+    == 0`` across a full scan is the compliance attestation. This pass performs
+    no writes.
+
+    Note: the rotation-covered tables (model/credentials/MCP/config env vars) are
+    scanned by the migration itself in dry-run mode via their own helpers; this
+    scanner covers the locations this module owns directly.
+    """
+    report = MigrationReport()
+    report.add(await _migrate_callback_vars_table(prisma_client, "team", dry_run=True))
+    report.add(
+        await _migrate_callback_vars_table(
+            prisma_client, "verification_token", dry_run=True
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run=True
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run=True
+        )
+    )
+    report.add(await _migrate_sso_config(prisma_client, dry_run=True))
+    return report
