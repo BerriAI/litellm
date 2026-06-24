@@ -146,6 +146,22 @@ def test_supports_function_calling_unknown_github_alias_returns_false():
     )
 
 
+def test_supports_native_streaming_unknown_model_returns_true():
+    """Regression test for https://github.com/BerriAI/litellm/issues/21090
+
+    Custom/unknown models not in model_prices_and_context_window.json must return True
+    so that /v1/responses does not activate fake streaming, which silently drops
+    function_call_arguments.delta events.
+    """
+    assert (
+        litellm.utils.supports_native_streaming(
+            model="my-custom-vllm-model-not-in-registry",
+            custom_llm_provider=None,
+        )
+        is True
+    )
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
