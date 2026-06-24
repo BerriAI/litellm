@@ -558,18 +558,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 BidiGenerateContentRealtimeInputConfig,
                 merged_realtime_input_config,
             )
+        finalized_follow_up = self._finalize_gemini_live_setup(
+            model, cast(Dict[str, Any], follow_up_setup)
+        )
+        # Skip if the follow-up setup is identical to the one already sent.
+        # The final session.update from Pipecat's _create_response (after history
+        # items) matches the pre-history session.update we intentionally sent
+        # before content; sending a duplicate at that point would risk a 1007.
+        if finalized_follow_up == original_setup:
+            verbose_logger.debug(
+                "Gemini Realtime: Skipping duplicate follow-up session.update (no changes)"
+            )
+            return []
         verbose_logger.debug(
             "Gemini Realtime: Forwarding session.update as follow-up setup"
         )
-        return [
-            json.dumps(
-                {
-                    "setup": self._finalize_gemini_live_setup(
-                        model, cast(Dict[str, Any], follow_up_setup)
-                    )
-                }
-            )
-        ]
+        return [json.dumps({"setup": finalized_follow_up})]
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:
         """
