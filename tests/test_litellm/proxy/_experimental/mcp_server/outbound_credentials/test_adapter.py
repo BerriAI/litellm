@@ -154,3 +154,26 @@ def test_raise_public_maps_each_error_to_its_status(error, status):
     with pytest.raises(HTTPException) as exc_info:
         raise_public(error)
     assert exc_info.value.status_code == status
+
+
+def test_raise_public_emits_unauthorized_challenge():
+    body = {"error": "byok_auth_required", "server_id": "s1"}
+    error = CredError.of_unauthorized(
+        "needs key", www_authenticate='Bearer resource_metadata="/x"', body=body
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        raise_public(error)
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert exc.detail == body
+    assert exc.headers is not None
+    assert exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/x"'
+
+
+def test_raise_public_plain_unauthorized_has_no_challenge():
+    with pytest.raises(HTTPException) as exc_info:
+        raise_public(CredError.of_unauthorized("nope"))
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert exc.detail == "unauthorized: nope"
+    assert exc.headers is None

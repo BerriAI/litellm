@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import base64
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Mapping, Optional
 
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -60,6 +60,19 @@ class AuthSpecKind(str, Enum):
     aws_sigv4 = "aws_sigv4"  # AWS SigV4 per-request signing (e.g. Bedrock AgentCore)
 
 
+class Unauthorized(BaseModel):
+    """A 401 plus the optional challenge a client needs to recover.
+
+    ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
+    challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    detail: str
+    www_authenticate: Optional[str] = None
+    body: Optional[Mapping[str, str]] = None
+
+
 @tagged_union(frozen=True)
 class CredError:
     """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx.Auth`.
@@ -77,7 +90,7 @@ class CredError:
         "not_implemented",
     ] = tag()
 
-    unauthorized: str = (
+    unauthorized: Unauthorized = (
         case()
     )  # no usable credential for this (subject, server) -> 401 challenge
     misconfigured: str = (
@@ -97,8 +110,17 @@ class CredError:
     )  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
 
     @staticmethod
-    def of_unauthorized(detail: str) -> CredError:
-        return CredError(unauthorized=detail)
+    def of_unauthorized(
+        detail: str,
+        *,
+        www_authenticate: Optional[str] = None,
+        body: Optional[Mapping[str, str]] = None,
+    ) -> CredError:
+        return CredError(
+            unauthorized=Unauthorized(
+                detail=detail, www_authenticate=www_authenticate, body=body
+            )
+        )
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:
@@ -126,7 +148,7 @@ class CredError:
         # only while that stays true (a `case _` would defeat reportMatchNotExhaustive).
         match self.tag:
             case "unauthorized":
-                return f"unauthorized: {self.unauthorized}"
+                return f"unauthorized: {self.unauthorized.detail}"
             case "misconfigured":
                 return f"misconfigured: {self.misconfigured}"
             case "upstream_unavailable":
