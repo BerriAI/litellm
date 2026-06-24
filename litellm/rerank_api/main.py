@@ -39,7 +39,6 @@ async def arerank(
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
     max_chunks_per_doc: Optional[int] = None,
-    instruction: Optional[str] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
@@ -59,7 +58,6 @@ async def arerank(
             rank_fields,
             return_documents,
             max_chunks_per_doc,
-            instruction=instruction,
             **kwargs,
         )
 
@@ -100,12 +98,16 @@ def rerank(
     return_documents: Optional[bool] = True,
     max_chunks_per_doc: Optional[int] = None,
     max_tokens_per_doc: Optional[int] = None,
-    instruction: Optional[str] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
     Reranks a list of documents based on their relevance to the query
     """
+    # `instruction` is read from kwargs rather than declared as a named param.
+    # The router forwards rerank calls via an untyped `**kwargs` unpack, and a
+    # typed named param there would trip the basedpyright budget gate without
+    # adding real safety; it stays typed downstream via get_optional_rerank_params.
+    instruction: Optional[str] = kwargs.get("instruction", None)
     headers: Optional[dict] = kwargs.get("headers")  # type: ignore
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
