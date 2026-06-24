@@ -1,9 +1,11 @@
 import importlib
+import asyncio
 import json
 import logging
 import os
 import sys
 from datetime import datetime
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,8 +29,16 @@ from mcp.types import Tool as MCPTool
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
+    _deserialize_json_list,
+    _normalize_mcp_server_cost_info,
 )
-from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
+from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
+    MCPApprovalStatus,
+    MCPEnvVar,
+    MCPEnvVarScope,
+    MCPTransport,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
@@ -248,6 +258,69 @@ class TestMCPServerManager:
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_coerces_cost_string_to_float(self):
+        """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
+        manager = MCPServerManager()
+        config = {
+            "google_maps": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "mcp_info": {
+                    "mcp_server_cost_info": {
+                        "default_cost_per_query": "7e-05",
+                        "tool_name_to_cost_per_query": {"geocode": "1e-3"},
+                    }
+                },
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        cost_info = server.mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 7e-05
+        assert isinstance(cost_info["default_cost_per_query"], float)
+        assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
+        assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
+
+    def test_normalize_mcp_server_cost_info_preserves_float_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": 0.01,
+                "tool_name_to_cost_per_query": {"search": 0.05},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 0.01
+        assert cost_info["tool_name_to_cost_per_query"] == {"search": 0.05}
+
+    def test_normalize_mcp_server_cost_info_drops_non_numeric_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": "not-a-number",
+                "tool_name_to_cost_per_query": {"search": "free", "geocode": "2e-4"},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert "default_cost_per_query" not in cost_info
+        assert cost_info["tool_name_to_cost_per_query"] == {"geocode": 2e-4}
+
+    def test_normalize_mcp_server_cost_info_leaves_missing_cost_info_alone(self):
+        mcp_info = {"server_name": "maps"}
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        assert "mcp_server_cost_info" not in mcp_info
+
     def test_warns_when_custom_separator_invalid(self, monkeypatch, caplog):
         """Invalid MCP_TOOL_PREFIX_SEPARATOR values should log a warning."""
 
@@ -315,8 +388,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
+            **kwargs,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -369,8 +441,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
+            **kwargs,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -407,8 +478,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -449,7 +519,7 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env
+            server, mcp_auth_header, extra_headers, stdio_env, **kwargs
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -471,6 +541,182 @@ class TestMCPServerManager:
 
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
+        self,
+    ):
+        """OAuth pass-through must not forward the caller's Authorization to upstream
+        when LiteLLM admission consumed the bearer as its API key — otherwise the
+        LiteLLM key the caller used for admission would leak upstream."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization", "x-request-id"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "authorization": "Bearer sk-litellm-key",
+                "x-request-id": "req-123",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        assert captured_extra_headers == {"x-request-id": "req-123"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(
+        self,
+    ):
+        """OAuth pass-through forwards Authorization upstream when x-litellm-api-key
+        provides admission — in that case Authorization carries the upstream OAuth
+        bearer, not the LiteLLM key."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call-admission",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-litellm-key",
+                "authorization": "Bearer upstream-oauth-bearer",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        assert captured_extra_headers == {
+            "Authorization": "Bearer upstream-oauth-bearer"
+        }
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_forwards_authorization_for_anonymous_admission(
+        self,
+    ):
+        """OAuth pass-through cold-start return (RFC 9728): the caller's only
+        credential is the upstream bearer in Authorization, and LiteLLM admission
+        is anonymous (no api_key on user_api_key_auth). Authorization must be
+        forwarded so the delegated flow can complete."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call-anon",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer upstream-oauth-bearer"},
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key=None),
+        )
+
+        assert captured_extra_headers == {
+            "Authorization": "Bearer upstream-oauth-bearer"
+        }
 
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):
@@ -719,7 +965,8 @@ class TestMCPServerManager:
             return_value=mock_client,
         ):
             servers, scopes = await manager._fetch_oauth_metadata_from_resource(
-                "https://protected.example.com/.well-known/oauth"
+                "https://protected.example.com/.well-known/oauth",
+                "https://protected.example.com/mcp",
             )
 
         assert servers == [
@@ -727,6 +974,144 @@ class TestMCPServerManager:
             "https://auth2.example.com",
         ]
         assert scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_probes_well_known_when_server_does_not_challenge(
+        self,
+    ):
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        mock_metadata = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+            registration_url=None,
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(
+                manager,
+                "_attempt_well_known_discovery",
+                AsyncMock(
+                    return_value=(
+                        ["https://login.microsoftonline.com/test-tenant-id/v2.0"],
+                        ["api://some-scope/.default"],
+                    )
+                ),
+            ) as mock_well_known,
+            patch.object(
+                manager,
+                "_fetch_authorization_server_metadata",
+                AsyncMock(return_value=mock_metadata),
+            ) as mock_fetch_auth,
+        ):
+            result = await manager._descovery_metadata("http://localhost:8001/mcp")
+
+        mock_well_known.assert_awaited_once_with("http://localhost:8001/mcp")
+        mock_fetch_auth.assert_awaited_once_with(
+            ["https://login.microsoftonline.com/test-tenant-id/v2.0"],
+            "http://localhost:8001/mcp",
+        )
+        assert result is mock_metadata
+        assert result.scopes == ["api://some-scope/.default"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_supports_azure_issuer_path(
+        self,
+    ):
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        def build_response(url: str, **kwargs):
+            mock_response = MagicMock()
+            if url == f"{issuer}/.well-known/openid-configuration":
+                mock_response.json.return_value = {
+                    "authorization_endpoint": "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize",
+                    "token_endpoint": "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token",
+                    "scopes_supported": ["api://some-scope/.default"],
+                }
+                mock_response.raise_for_status = MagicMock()
+            else:
+                request = httpx.Request("GET", url)
+                response_obj = httpx.Response(status_code=404, request=request)
+                mock_response.raise_for_status = MagicMock(
+                    side_effect=httpx.HTTPStatusError(
+                        "not found", request=request, response=response_obj
+                    )
+                )
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=build_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            # The Azure issuer is cross-origin against the server_url — use
+            # the issuer itself as server_url so the test exercises the
+            # well-known fetch logic without needing real DNS.
+            result = await manager._fetch_single_authorization_server_metadata(
+                issuer, issuer
+            )
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        )
+        assert result.scopes == ["api://some-scope/.default"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_derives_azure_metadata(
+        self,
+    ):
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        request = httpx.Request("GET", issuer)
+        response_obj = httpx.Response(status_code=404, request=request)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "not found", request=request, response=response_obj
+            )
+        )
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                issuer, issuer
+            )
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        )
 
     @pytest.mark.asyncio
     async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
@@ -780,7 +1165,7 @@ class TestMCPServerManager:
         ):
             result = await manager._descovery_metadata(server_url)
 
-        mock_fetch_auth.assert_awaited_once_with(["https://example.com"])
+        mock_fetch_auth.assert_awaited_once_with(["https://example.com"], server_url)
         assert result is mock_metadata
         assert result.scopes == ["read"]
 
@@ -858,8 +1243,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -1657,6 +2041,258 @@ class TestMCPServerManager:
         assert len(tools_unprefixed) == 1
         assert tools_unprefixed[0].name == "send_email"
 
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_jwt_skipped_when_mcp_auth_header_set(self):
+        """When a per-user mcp_auth_header is resolved, JWT injection must be skipped.
+
+        MCPClient._get_auth_headers() applies extra_headers AFTER writing
+        Authorization from auth_value, so an injected JWT would clobber the
+        user's per-server OAuth token. Regression test for that interaction.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="zapier",
+            name="zapier",
+            transport=MCPTransport.http,
+        )
+
+        manager._create_mcp_client = AsyncMock(return_value=object())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with (
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.inject_mcp_jwt_headers_for_upstream",
+                new=AsyncMock(return_value={"Authorization": "Bearer signed-jwt"}),
+            ) as mock_inject,
+        ):
+            # Case A: mcp_auth_header present -> JWT must NOT be injected
+            await manager._get_tools_from_server(
+                server,
+                mcp_auth_header="oauth-user-token",
+                user_api_key_auth=user_auth,
+            )
+            mock_inject.assert_not_called()
+
+            # Case B: no mcp_auth_header -> JWT injection runs as before
+            await manager._get_tools_from_server(
+                server,
+                user_api_key_auth=user_auth,
+            )
+            mock_inject.assert_awaited_once()
+
+    def test_resolve_mcp_server_for_tool_call_via_prefixed_name(self):
+        """Resolution succeeds when the prefixed tool name is in the mapping."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="jira",
+            name="jira",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"jira": server}
+        manager.tool_name_to_mcp_server_name_mapping["jira-search_issues"] = "jira"
+        manager.tool_name_to_mcp_server_name_mapping["search_issues"] = "jira"
+
+        resolved = manager._resolve_mcp_server_for_tool_call("jira", "search_issues")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_via_alias(self):
+        """Resolution falls back to alias/server_name match in the registry."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_zap"] = "zapier"
+
+        resolved = manager._resolve_mcp_server_for_tool_call(
+            "zapier-alias", "create_zap"
+        )
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_empty_mapping(self):
+        """Server-name match alone must not let unknown tools through when the
+        mapping has no entries for that server (e.g. listing has not completed
+        or the server is OAuth2 and the user has not yet listed tools).
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+
+        with pytest.raises(ValueError, match="Tool create_zap not found"):
+            manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
+
+    def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
+        """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="linear",
+            name="linear",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"linear": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_issue"] = "linear"
+
+        # server_name is empty so the fallback unprefixed lookup runs and matches.
+        resolved = manager._resolve_mcp_server_for_tool_call("", "create_issue")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_raises_when_not_found(self):
+        """ValueError is raised when no resolution path finds the tool."""
+        manager = MCPServerManager()
+        with pytest.raises(ValueError, match="Tool .* not found"):
+            manager._resolve_mcp_server_for_tool_call("nonexistent", "ghost_tool")
+
+    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_known_server(self):
+        """Server-name match alone must not let unknown tools slip through.
+
+        If the registry has tools for this server but neither the prefixed nor
+        unprefixed tool name is in the mapping, raise rather than returning the
+        server (would otherwise allow tool enumeration via name spoofing).
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="github",
+            name="github",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"github": server}
+        # Mapping has *some* tools for github but not "missing_tool".
+        manager.tool_name_to_mcp_server_name_mapping["github-list_repos"] = "github"
+        manager.tool_name_to_mcp_server_name_mapping["list_repos"] = "github"
+
+        with pytest.raises(ValueError, match="Tool missing_tool not found"):
+            manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_skipped_when_not_user_oauth(self):
+        """Returns input headers unchanged when server does not need user OAuth."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="plain",
+            name="plain",
+            transport=MCPTransport.http,
+        )
+        # needs_user_oauth_token defaults to False.
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="bob")
+
+        result = await manager._resolve_oauth2_headers_for_tool_call(
+            server, oauth2_headers=None, user_api_key_auth=user_auth
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_returns_client_supplied_token(self):
+        """Returns the client's oauth2_headers as-is when already set."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        assert server.needs_user_oauth_token is True
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+        supplied = {"Authorization": "Bearer client-supplied"}
+
+        result = await manager._resolve_oauth2_headers_for_tool_call(
+            server, oauth2_headers=supplied, user_api_key_auth=user_auth
+        )
+        assert result is supplied
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_looks_up_stored_token(self):
+        """Falls back to stored per-user OAuth headers when no token is supplied."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+        stored = {"Authorization": "Bearer stored-user-token"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value=stored),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+
+        assert result == stored
+        mock_lookup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_swallows_lookup_exception(self):
+        """Returns supplied headers (None) when the stored-token lookup raises."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ):
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_no_user_id(self):
+        """Skip lookup entirely when user_api_key_auth has no user_id."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        # user_id is None -> lookup must not happen
+        user_auth = UserAPIKeyAuth(api_key="sk-test")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer x"}),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+        assert result is None
+        mock_lookup.assert_not_called()
+
     def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
         """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
         manager = MCPServerManager()
@@ -2312,6 +2948,86 @@ class TestMCPServerManager:
             assert "test_server_1" in result
             assert "test_server_2" in result
 
+    @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_blocks_allow_all_keys(self):
+        """A key scoped to no-mcp-servers gets zero servers even when allow_all_keys
+        servers exist, and the inner resolver is never consulted."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with patch.object(
+            manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+        ), patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=["leaked-server"],
+        ) as mock_inner:
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
+        """Anonymous delegated auth listing should only include oauth2 servers."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        manager = MCPServerManager()
+        oauth_delegate_server = MCPServer(
+            server_id="oauth-delegate",
+            name="oauth_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        api_key_delegate_server = MCPServer(
+            server_id="api-key-delegate",
+            name="api_key_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            delegate_auth_to_upstream=True,
+        )
+        oauth_non_delegate_server = MCPServer(
+            server_id="oauth-non-delegate",
+            name="oauth_non_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=False,
+        )
+        manager.registry = {
+            oauth_delegate_server.server_id: oauth_delegate_server,
+            api_key_delegate_server.server_id: api_key_delegate_server,
+            oauth_non_delegate_server.server_id: oauth_non_delegate_server,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert set(result) == {"oauth-delegate"}
+
     def test_get_mcp_server_from_tool_name_uses_server_name_not_name(self):
         """
         Test that _get_mcp_server_from_tool_name uses server.server_name instead of server.name
@@ -2442,6 +3158,258 @@ class TestMCPServerTimestamps:
 
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
+
+    def test_deserialize_json_list_normalizes_pydantic_models(self):
+        """Prisma hydrates the ``env_vars`` JSON column into ``MCPEnvVar`` models;
+        ``_deserialize_json_list`` must hand back plain dicts so ``MCPServer``
+        (typed ``List[Dict[str, Any]]``) validates."""
+        env_vars = [
+            MCPEnvVar(
+                name="GITHUB_TOKEN", scope=MCPEnvVarScope.user, description="PAT"
+            ),
+            MCPEnvVar(name="REGION", value="us-east-1", scope=MCPEnvVarScope.global_),
+        ]
+        result = _deserialize_json_list(env_vars)
+        assert result is not None
+        assert all(isinstance(item, dict) for item in result)
+        assert result[0]["name"] == "GITHUB_TOKEN"
+        assert result[0]["scope"] == "user"
+        assert result[1]["value"] == "us-east-1"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_with_model_env_vars(self):
+        """Regression: a DB row whose ``env_vars`` is a list of ``MCPEnvVar``
+        models (as Prisma returns) must build into an ``MCPServer`` instead of
+        raising a Pydantic ``dict_type`` validation error that silently drops
+        the server from the registry."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="env-var-server-1",
+            server_name="github_peruser",
+            url="https://api.githubcopilot.com/mcp/",
+            transport=MCPTransport.http,
+            static_headers={"Authorization": "Bearer ${GITHUB_TOKEN}"},
+            env_vars=[
+                MCPEnvVar(
+                    name="GITHUB_TOKEN",
+                    scope=MCPEnvVarScope.user,
+                    description="Your personal GitHub PAT",
+                )
+            ],
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.env_vars == [
+            {
+                "name": "GITHUB_TOKEN",
+                "value": "",
+                "scope": "user",
+                "description": "Your personal GitHub PAT",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_round_trip_source_url_preserved(self):
+        """source_url survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable.
+
+        Regression test: the list endpoint (GET /v1/mcp/server) builds its
+        response from the registry via this round-trip, so a dropped field
+        here surfaces as a null source_url in the list response even though
+        the value is stored in the DB.
+        """
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="src-url-server",
+            server_name="src_url_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            source_url="https://github.com/org/mcp-server",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        assert mcp_server.source_url == "https://github.com/org/mcp-server"
+
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+        assert rebuilt_table.source_url == "https://github.com/org/mcp-server"
+
+    @pytest.mark.asyncio
+    async def test_round_trip_timeout_preserved(self):
+        """timeout survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="timeout-server",
+            server_name="timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=120.0,
+        )
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        assert mcp_server.timeout == 120.0
+
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+        assert rebuilt_table.timeout == 120.0
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_uses_server_timeout(self):
+        """_create_mcp_client must pass server.timeout to MCPClient when set."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="timeout-client-server",
+            name="timeout_client_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=180.0,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == 180.0
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_falls_back_to_global_timeout(self):
+        """_create_mcp_client must fall back to MCP_CLIENT_TIMEOUT when server.timeout is None."""
+        from litellm.constants import MCP_CLIENT_TIMEOUT
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="default-timeout-server",
+            name="default_timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == MCP_CLIENT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_zero_timeout_not_treated_as_falsy(self):
+        """server.timeout=0.0 must be passed through, not fall back to MCP_CLIENT_TIMEOUT."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="zero-timeout-server",
+            name="zero_timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=0.0,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == 0.0
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_preserves_timeout(self):
+        """timeout from proxy config is loaded into MCPServer."""
+        manager = MCPServerManager()
+        config = {
+            "my_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "timeout": 90.0,
+            }
+        }
+        await manager.load_servers_from_config(config)
+        servers = list(manager.config_mcp_servers.values())
+        assert len(servers) == 1
+        assert servers[0].timeout == 90.0
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_timeout_returns_504(self):
+        """When the MCP client call is cancelled (timeout), _call_regular_mcp_tool raises HTTPException 504."""
+        from unittest.mock import AsyncMock, patch
+
+        manager = MCPServerManager()
+
+        async def _slow_call(*args, **kwargs):
+            await asyncio.sleep(999)
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = _slow_call
+
+        server = MCPServer(
+            server_id="timeout-tool-server",
+            name="timeout_tool_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=0.01,
+        )
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            with pytest.raises(HTTPException) as exc_info:
+                await manager._call_regular_mcp_tool(
+                    mcp_server=server,
+                    original_tool_name="some_tool",
+                    arguments={},
+                    tasks=[],
+                    mcp_auth_header=None,
+                    mcp_server_auth_headers=None,
+                    oauth2_headers=None,
+                    raw_headers=None,
+                    proxy_logging_obj=None,
+                )
+
+        assert exc_info.value.status_code == 504
+        assert exc_info.value.detail["error"] == "timeout"
+        assert "0.01s" in exc_info.value.detail["message"]
+
+
+class TestInternalDelegatePkceWarningLog:
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_logs_on_internal_delegate_interactive(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-1",
+            server_name="warn_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" in combined
+        assert "delegate_auth_to_upstream=true" in combined
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_no_internal_delegate_log_when_public(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-2",
+            server_name="warn_server_pub",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=True,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
+
+    def test_warn_skipped_for_client_credentials(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _warn_internal_delegate_pkce_if_applicable,
+        )
+
+        server = MCPServer(
+            server_id="m2m-1",
+            name="x",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        _warn_internal_delegate_pkce_if_applicable(server, source="test")
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
 
 
 class TestHasClientCredentialsOAuth2Flow:
@@ -2815,6 +3783,789 @@ class TestMCPServerManagerExpandToolPermissions:
             {"uuid-a": ["read_file"], "alias-a": ["write_file"]}
         )
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
+
+
+class TestOAuthDiscoverySSRFGuard:
+    """SSRF guard for the OAuth metadata discovery follow-up fetches.
+
+    The vulnerability: a malicious MCP server returns a ``WWW-Authenticate``
+    header pointing at an attacker-chosen ``resource_metadata`` URL, then a
+    PRM JSON whose ``authorization_servers[0]`` points at internal/loopback
+    addresses, coercing the proxy into making blind GETs to cloud-metadata
+    services, internal admin panels, or loopback debug endpoints.
+    """
+
+    @staticmethod
+    def _patch_resolves(monkeypatch, mapping):
+        """Patch ``socket.getaddrinfo`` for a deterministic SSRF-guard test.
+
+        ``mapping`` is ``{hostname: [ip-string, ...]}``; unknown hosts raise
+        ``gaierror`` (treated as "unresolvable" -> blocked by async_safe_get).
+        """
+        import socket as _socket
+
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            if host not in mapping:
+                raise _socket.gaierror(f"unknown host {host}")
+            family = _socket.AF_INET
+            return [
+                (family, _socket.SOCK_STREAM, 0, "", (ip, port)) for ip in mapping[host]
+            ]
+
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.url_utils.socket.getaddrinfo",
+            fake_getaddrinfo,
+        )
+
+    def test_same_authority_url_is_direct_fetch_eligible(self):
+        # Same scheme + host + port skips DNS entirely — the well-known
+        # endpoint construction in _attempt_well_known_discovery always
+        # produces same-authority URLs against the admin's server_url.
+        assert MCPServerManager._is_same_authority_metadata_url(
+            "https://example.com/.well-known/oauth-protected-resource",
+            "https://example.com/mcp",
+        )
+
+    def test_same_host_different_port_uses_safe_fetch_path(self):
+        assert not MCPServerManager._is_same_authority_metadata_url(
+            "https://example.com:9999/.well-known/oauth-protected-resource",
+            "https://example.com/mcp",
+        )
+
+    @pytest.mark.parametrize(
+        "ip",
+        [
+            "127.0.0.1",  # loopback
+            "10.0.0.5",  # RFC1918
+            "172.16.0.1",  # RFC1918
+            "192.168.1.1",  # RFC1918
+            "169.254.169.254",  # AWS / Azure / GCP IMDS
+            "100.100.100.200",  # Alibaba Cloud metadata
+            "0.0.0.0",  # unspecified
+            "::1",  # IPv6 loopback
+            "fe80::1",  # IPv6 link-local
+            "fc00::1",  # IPv6 ULA
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_cross_origin_blocked_when_resolves_to_unsafe_ip(
+        self, monkeypatch, ip
+    ):
+        self._patch_resolves(monkeypatch, {"attacker.example.com": [ip]})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "https://attacker.example.com",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert result is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cross_origin_allowed_when_resolves_to_public_ip(self, monkeypatch):
+        self._patch_resolves(
+            monkeypatch, {"login.microsoftonline.com": ["20.190.151.7"]}
+        )
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.is_redirect = False
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://login.microsoftonline.com/tenant/v2.0"],
+            "scopes_supported": ["mcp.read"],
+        }
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://login.microsoftonline.com/tenant/v2.0/.well-known/openid-configuration",
+                "https://atlassian-mcp.example.com/mcp",
+            )
+
+        assert servers == ["https://login.microsoftonline.com/tenant/v2.0"]
+        assert scopes == ["mcp.read"]
+        mock_client.get.assert_awaited_once()
+        assert mock_client.get.await_args.kwargs["follow_redirects"] is False
+        assert (
+            mock_client.get.await_args.kwargs["headers"]["Host"]
+            == "login.microsoftonline.com"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_origin_blocked_when_unresolvable(self, monkeypatch):
+        self._patch_resolves(monkeypatch, {})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://nope.example.invalid/.well-known/oauth-authorization-server",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_http_scheme_is_not_safe(self):
+        manager = MCPServerManager()
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "file:///etc/passwd",
+                "https://example.com/mcp",
+            )
+            result = await manager._fetch_single_authorization_server_metadata(
+                "gopher://example.com/",
+                "https://example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        assert result is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dual_resolution_blocked_if_any_ip_unsafe(self, monkeypatch):
+        # If the attacker controls a DNS record returning multiple A records,
+        # one of which is private, async_safe_get rejects before any network call.
+        self._patch_resolves(
+            monkeypatch, {"dual-stack.example.com": ["8.8.8.8", "127.0.0.1"]}
+        )
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://dual-stack.example.com/.well-known/oauth-authorization-server",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_refuses_unsafe_url(self, monkeypatch):
+        # End-to-end: a malicious WWW-Authenticate redirecting to a loopback
+        # resource_metadata URL must not produce a network call.
+        self._patch_resolves(monkeypatch, {"attacker.example.com": ["127.0.0.1"]})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://attacker.example.com/meta",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_getaddrinfo_result_blocks_url(self, monkeypatch):
+        # POSIX doesn't strictly forbid an empty success-list from getaddrinfo.
+        # async_safe_get must fail closed rather than making a network call.
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.url_utils.socket.getaddrinfo",
+            lambda *a, **k: [],
+        )
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://no-records.example.com/.well-known/oauth-authorization-server",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cross_origin_redirect_is_revalidated(self, monkeypatch):
+        self._patch_resolves(
+            monkeypatch,
+            {
+                "provider.example.com": ["8.8.8.8"],
+                "127.0.0.1": ["127.0.0.1"],
+            },
+        )
+        manager = MCPServerManager()
+
+        redirect_response = MagicMock()
+        redirect_response.is_redirect = True
+        redirect_response.headers = {"location": "http://127.0.0.1/admin"}
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=redirect_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "https://provider.example.com",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert result is None
+        assert mock_client.get.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_same_authority_fetch_does_not_follow_redirects(self):
+        # Same-authority URLs may be internal admin-configured MCP servers, so
+        # they are fetched directly. Redirects are still disabled because a
+        # Location target would not inherit the same-authority guarantee.
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://auth.example.com"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def fake_get(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth",
+                "https://protected.example.com/mcp",
+            )
+        assert captured_kwargs.get("follow_redirects") is False
+
+    @pytest.mark.asyncio
+    async def test_same_authority_auth_server_fetch_does_not_follow_redirects(self):
+        # Same redirect-bypass concern for the authorization-server fetch path.
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://provider.example.com/authorize",
+            "token_endpoint": "https://provider.example.com/token",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def fake_get(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            await manager._fetch_single_authorization_server_metadata(
+                "https://provider.example.com",
+                "https://provider.example.com",
+            )
+        assert captured_kwargs.get("follow_redirects") is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_authorization_server_refuses_unsafe_issuer(self, monkeypatch):
+        # Mirrors the GHSA-mrfv repro: PRM lists a loopback issuer URL.
+        self._patch_resolves(monkeypatch, {"attacker.example.com": ["127.0.0.1"]})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "http://attacker.example.com:19999",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert result is None
+        mock_client.get.assert_not_called()
+
+
+class TestApprovalStatusGate:
+    """
+    Regression tests for GHSA-gm4g-h72v-jhc3.
+
+    The runtime registry must only contain servers an admin has approved.
+    A non-admin can submit a pending stdio MCP server with an attacker-chosen
+    command/args; before this gate, an admin opening the per-row endpoint
+    triggered ``add_server`` + ``health_check_server``, which spawned the
+    attacker's process under the proxy. The data-layer gate in
+    ``add_server`` / ``update_server`` blocks pending and rejected rows
+    from entering the registry regardless of which caller passes them in.
+    """
+
+    def _make_server(self, server_id: str, approval_status):
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias=f"server_{server_id}",
+            description="test",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["-c", "print('attacker payload')"],
+            env={},
+            approval_status=approval_status,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    @pytest.mark.parametrize(
+        "approval_status,expect_in_registry",
+        [
+            (MCPApprovalStatus.pending_review, False),
+            (MCPApprovalStatus.rejected, False),
+            (MCPApprovalStatus.active, True),
+            # Legacy rows: NULL predates the approval workflow; "approved" is
+            # a legacy alias for "active" still present in older deployments.
+            # Both must continue to load to match the DB-level filter in
+            # reload_servers_from_database().
+            (None, True),
+            ("approved", True),
+        ],
+    )
+    async def test_add_server_respects_approval_status(
+        self, approval_status, expect_in_registry
+    ):
+        manager = MCPServerManager()
+        server_id = f"sid-{approval_status}"
+        await manager.add_server(self._make_server(server_id, approval_status))
+        assert (server_id in manager.registry) is expect_in_registry
+
+    async def test_update_server_evicts_when_transitioned_away_from_active(self):
+        # An admin updates a previously-active server to rejected (or pending).
+        # The stale registry entry must be evicted so subsequent tool calls
+        # and health probes can't reach it.
+        manager = MCPServerManager()
+        await manager.add_server(
+            self._make_server("evict-me", MCPApprovalStatus.active)
+        )
+        assert "evict-me" in manager.registry
+
+        await manager.update_server(
+            self._make_server("evict-me", MCPApprovalStatus.rejected)
+        )
+        assert "evict-me" not in manager.registry
+
+    async def test_update_server_eviction_clears_openapi_routing_artifacts(
+        self, tmp_path
+    ):
+        """Rejecting a server must remove its OpenAPI tools and name mappings."""
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        manager = MCPServerManager()
+        await manager.add_server(
+            self._make_server("evict-openapi", MCPApprovalStatus.active)
+        )
+        assert "evict-openapi" in manager.registry
+
+        server = manager.registry["evict-openapi"]
+        server.spec_path = str(tmp_path / "unused.yaml")
+        prefix = get_server_prefix(server)
+        prefixed = add_server_prefix_to_name("demo_tool", prefix)
+
+        async def _noop_handler(**kwargs):
+            return None
+
+        global_mcp_tool_registry.register_tool(
+            name=prefixed,
+            description="demo",
+            input_schema={"type": "object"},
+            handler=_noop_handler,
+        )
+        manager.tool_name_to_mcp_server_name_mapping["demo_tool"] = prefix
+        manager.tool_name_to_mcp_server_name_mapping[prefixed] = prefix
+
+        await manager.update_server(
+            self._make_server("evict-openapi", MCPApprovalStatus.rejected)
+        )
+
+        assert "evict-openapi" not in manager.registry
+        assert prefixed not in global_mcp_tool_registry.tools
+        assert "demo_tool" not in manager.tool_name_to_mcp_server_name_mapping
+        assert prefixed not in manager.tool_name_to_mcp_server_name_mapping
+
+    async def test_update_server_noop_for_unregistered_pending(self):
+        # update_server called with a pending row that was never registered
+        # should silently return without adding it. Locks in the early-return
+        # so a future refactor can't accidentally route the pending row to
+        # build_mcp_server_from_table.
+        manager = MCPServerManager()
+        await manager.update_server(
+            self._make_server("never-seen", MCPApprovalStatus.pending_review)
+        )
+        assert "never-seen" not in manager.registry
+
+
+class TestRegistryTableConversionPreservesEnvVars:
+    """The registry ``MCPServer`` -> ``LiteLLM_MCPServerTable`` conversions back
+    the GET /v1/mcp/server list and health responses, which populate the admin
+    edit form. When they dropped ``env_vars`` the form loaded an empty list and
+    saving any edit silently wiped the stored vars, so ``${VAR}`` static headers
+    were forwarded upstream un-interpolated.
+    """
+
+    @staticmethod
+    def _server_with_env_vars() -> MCPServer:
+        return MCPServer(
+            server_id="env-vars-server",
+            name="env_vars_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            static_headers={"X-Db-Url": "${DB_PROTOCOL}://${CORP_USER}@${DB_HOST}"},
+            env_vars=[
+                {
+                    "name": "DB_PROTOCOL",
+                    "value": "postgresql",
+                    "scope": "global",
+                    "description": None,
+                },
+                {
+                    "name": "CORP_USER",
+                    "value": "",
+                    "scope": "user",
+                    "description": "Your DB username",
+                },
+            ],
+        )
+
+    @staticmethod
+    def _assert_env_vars_round_tripped(table: LiteLLM_MCPServerTable) -> None:
+        assert table.env_vars is not None
+        by_name = {entry.name: entry for entry in table.env_vars}
+        assert set(by_name) == {"DB_PROTOCOL", "CORP_USER"}
+        assert by_name["DB_PROTOCOL"].scope == MCPEnvVarScope.global_
+        assert by_name["DB_PROTOCOL"].value == "postgresql"
+        assert by_name["CORP_USER"].scope == MCPEnvVarScope.user
+        assert by_name["CORP_USER"].description == "Your DB username"
+
+    def test_build_mcp_server_table_preserves_env_vars(self):
+        manager = MCPServerManager()
+        table = manager._build_mcp_server_table(self._server_with_env_vars())
+        self._assert_env_vars_round_tripped(table)
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_preserves_env_vars(self):
+        # OAuth2 without client credentials needs a per-user token, so the
+        # health check is skipped (no network) and we exercise the table
+        # construction path directly.
+        manager = MCPServerManager()
+        server = self._server_with_env_vars()
+        assert server.requires_per_user_auth is True
+        manager.registry[server.server_id] = server
+        table = await manager.health_check_server(server.server_id)
+        self._assert_env_vars_round_tripped(table)
+
+
+class TestHealthCheckInterpolatesGlobalEnvVars:
+    """The upstream probes (health check and the initialize-instructions
+    prefetch) must substitute global ``${NAME}`` env vars into static headers
+    before opening the connection. Forwarding the raw placeholder makes any
+    server whose auth header is backed by a global env var fail authentication
+    and flip to 'unhealthy', even though real tool calls (which do interpolate)
+    keep working.
+    """
+
+    @staticmethod
+    def _server() -> MCPServer:
+        return MCPServer(
+            server_id="global-env-server",
+            name="global_env_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            static_headers={"Authorization": "Bearer ${API_TOKEN}"},
+            env_vars=[
+                {
+                    "name": "API_TOKEN",
+                    "value": "secret-token",
+                    "scope": "global",
+                    "description": None,
+                }
+            ],
+        )
+
+    @staticmethod
+    def _capture_headers(manager: MCPServerManager) -> Dict[str, Any]:
+        captured: Dict[str, Any] = {}
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+
+        async def _create(server, mcp_auth_header, extra_headers, stdio_env):
+            captured["extra_headers"] = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=_create)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_health_check_interpolates_global_env_vars(self):
+        manager = MCPServerManager()
+        server = self._server()
+        assert server.requires_per_user_auth is False
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        manager._remember_upstream_initialize_instructions = MagicMock()
+        captured = self._capture_headers(manager)
+
+        result = await manager.health_check_server(server.server_id)
+
+        assert captured["extra_headers"] == {"Authorization": "Bearer secret-token"}
+        assert result.status == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_initialize_instructions_prefetch_interpolates_global_env_vars(self):
+        manager = MCPServerManager()
+        server = self._server()
+        captured = self._capture_headers(manager)
+        manager._remember_upstream_initialize_instructions = MagicMock()
+
+        await manager._ensure_upstream_initialize_instructions_cached(server)
+
+        assert captured["extra_headers"] == {"Authorization": "Bearer secret-token"}
+
+
+class TestUserEnvVarsCacheEviction:
+    """At capacity the per-user env var cache must shed a single oldest entry
+    rather than wiping every entry, so a steady stream of distinct callers does
+    not periodically stampede the DB by invalidating every still-valid value.
+    """
+
+    @staticmethod
+    def _patch_cache(monkeypatch, max_size):
+        from litellm.proxy._experimental.mcp_server import mcp_server_manager as m
+
+        cache: Dict[Any, Any] = {}
+        monkeypatch.setattr(m, "_user_env_vars_cache", cache)
+        monkeypatch.setattr(m, "_USER_ENV_VARS_CACHE_MAX_SIZE", max_size)
+        return m, cache
+
+    def test_eviction_drops_single_oldest_entry_not_whole_cache(self, monkeypatch):
+        m, cache = self._patch_cache(monkeypatch, max_size=3)
+
+        for i in range(3):
+            m._write_user_env_vars_cache(f"user{i}", "srv", {"V": str(i)})
+        assert set(cache) == {("user0", "srv"), ("user1", "srv"), ("user2", "srv")}
+
+        m._write_user_env_vars_cache("user3", "srv", {"V": "3"})
+
+        assert len(cache) == 3
+        assert ("user0", "srv") not in cache
+        assert ("user3", "srv") in cache
+        assert cache[("user1", "srv")][0] == {"V": "1"}
+
+    def test_refreshing_existing_key_does_not_evict(self, monkeypatch):
+        m, cache = self._patch_cache(monkeypatch, max_size=2)
+
+        m._write_user_env_vars_cache("a", "srv", {"V": "1"})
+        m._write_user_env_vars_cache("b", "srv", {"V": "2"})
+        m._write_user_env_vars_cache("a", "srv", {"V": "1-new"})
+
+        assert set(cache) == {("a", "srv"), ("b", "srv")}
+        assert cache[("a", "srv")][0] == {"V": "1-new"}
+        # The just-refreshed key must now sit at the tail so the next insert
+        # evicts the genuinely older entry instead.
+        m._write_user_env_vars_cache("c", "srv", {"V": "3"})
+        assert ("b", "srv") not in cache
+        assert ("a", "srv") in cache
+
+
+class TestGetPublicMCPServers:
+    """
+    /public/mcp_hub strict-whitelist semantics — mirrors /public/model_hub
+    and /public/agent_hub. Regression test for the PR #20607 OR-with-default
+    behavior that made `litellm.public_mcp_servers` ignored by the hub.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_servers", None)
+    def test_returns_empty_when_whitelist_is_none(self):
+        """No /make_public call yet → hub returns nothing, regardless of
+        per-server flags."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+    @patch("litellm.public_mcp_servers", [])
+    def test_returns_empty_when_whitelist_is_empty(self):
+        """Explicit empty whitelist → hub returns nothing."""
+        manager = self._make_manager(
+            [self._make_server("a", available_on_public_internet=True)]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+    @patch("litellm.public_mcp_servers", ["a"])
+    def test_returns_only_whitelisted_when_flag_defaults_to_true(self):
+        """
+        Regression: prior to the fix, every server with
+        available_on_public_internet=True (the default) leaked into the hub
+        regardless of the whitelist. Whitelist must be authoritative.
+        """
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_servers", ["a"])
+    def test_does_not_leak_servers_via_internal_flag(self):
+        """
+        available_on_public_internet is an IP-gating flag, not a hub flag.
+        A server with the flag True that is not in the whitelist must not
+        appear in the hub.
+        """
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=False),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_servers", ["does-not-exist"])
+    def test_stale_whitelist_id_returns_empty(self):
+        """Whitelist references an unknown server_id → no spurious results."""
+        manager = self._make_manager(
+            [self._make_server("a", available_on_public_internet=True)]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+
+class TestGetPublicMCPServersLegacyMode:
+    """
+    Legacy migration knob: litellm.public_mcp_hub_strict_whitelist=False
+    preserves the pre-fix OR-with-default semantics for one release so
+    operators that relied on the old behavior have a window to call
+    /v1/mcp/make_public before /public/mcp_hub goes empty.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", None)
+    def test_legacy_returns_default_flag_servers_when_whitelist_is_none(self):
+        """Legacy mode + no whitelist → every server with the default
+        available_on_public_internet=True appears (old behavior)."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", ["b"])
+    def test_legacy_unions_whitelist_and_default_flag(self):
+        """Legacy mode unions the whitelist with any
+        available_on_public_internet=True server."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert sorted(s.server_id for s in result) == ["a", "b"]
 
 
 if __name__ == "__main__":

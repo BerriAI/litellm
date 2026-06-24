@@ -50,7 +50,10 @@ def configure_gc_thresholds():
 configure_gc_thresholds()
 
 
-@router.get("/debug/asyncio-tasks")
+@router.get(
+    "/debug/asyncio-tasks",
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_active_tasks_stats():
     """
     Returns:
@@ -89,12 +92,12 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     try:
         import objgraph  # type: ignore
 
-        print("growth of objects")  # noqa
+        print("growth of objects")  # noqa: T201
         objgraph.show_growth()
-        print("\n\nMost common types")  # noqa
+        print("\n\nMost common types")  # noqa: T201
         objgraph.show_most_common_types()
         roots = objgraph.get_leaking_objects()
-        print("\n\nLeaking objects")  # noqa
+        print("\n\nLeaking objects")  # noqa: T201
         objgraph.show_most_common_types(objects=roots)
     except ImportError:
         raise ImportError(
@@ -103,7 +106,11 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
 
     tracemalloc.start(10)
 
-    @router.get("/memory-usage", include_in_schema=False)
+    @router.get(
+        "/memory-usage",
+        dependencies=[Depends(user_api_key_auth)],
+        include_in_schema=False,
+    )
     async def memory_usage():
         # Take a snapshot of the current memory usage
         snapshot = tracemalloc.take_snapshot()
@@ -711,7 +718,11 @@ async def configure_gc_thresholds_endpoint(
     }
 
 
-@router.get("/otel-spans", include_in_schema=False)
+@router.get(
+    "/otel-spans",
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
 async def get_otel_spans():
     from litellm.proxy.proxy_server import open_telemetry_logger
 
@@ -728,7 +739,7 @@ async def get_otel_spans():
     else:
         recorded_spans = []
 
-    print("Spans: ", recorded_spans)  # noqa
+    print("Spans: ", recorded_spans)  # noqa: T201
 
     most_recent_parent = None
     most_recent_start_time = 1000000

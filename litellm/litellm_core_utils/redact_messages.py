@@ -17,6 +17,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.llms.vertex_ai.common_utils import (
+    redact_vertex_ai_metadata_from_litellm_params,
+    redact_vertex_ai_metadata_from_logged_object,
+)
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -60,6 +64,9 @@ def _redact_choice_content(choice):
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
+        if hasattr(output_item, "text"):
+            output_item.text = "redacted-by-litellm"
+
         if hasattr(output_item, "content") and isinstance(output_item.content, list):
             for content_part in output_item.content:
                 if hasattr(content_part, "text"):
@@ -73,6 +80,28 @@ def _redact_responses_api_output(output_items):
                 for summary_item in output_item.summary:
                     if hasattr(summary_item, "text"):
                         summary_item.text = "redacted-by-litellm"
+
+
+def _redact_responses_api_output_dict(output_items, redacted_str: str):
+    """Helper to redact ResponsesAPIResponse output items in dict form."""
+    for output_item in output_items:
+        if not isinstance(output_item, dict):
+            continue
+
+        if "text" in output_item:
+            output_item["text"] = redacted_str
+
+        if isinstance(output_item.get("content"), list):
+            for content_item in output_item["content"]:
+                if isinstance(content_item, dict) and "text" in content_item:
+                    content_item["text"] = redacted_str
+
+        if output_item.get("type") == "reasoning" and isinstance(
+            output_item.get("summary"), list
+        ):
+            for summary_item in output_item["summary"]:
+                if isinstance(summary_item, dict) and "text" in summary_item:
+                    summary_item["text"] = redacted_str
 
 
 def _redact_standard_logging_object(model_call_details: dict):
@@ -93,33 +122,41 @@ def _redact_standard_logging_object(model_call_details: dict):
         if isinstance(response, dict) and "output" in response:
             # ResponsesAPIResponse format - redact content in output items
             if isinstance(response.get("output"), list):
-                for output_item in response["output"]:
-                    if isinstance(output_item, dict) and "content" in output_item:
-                        if isinstance(output_item["content"], list):
-                            for content_item in output_item["content"]:
-                                if (
-                                    isinstance(content_item, dict)
-                                    and "text" in content_item
-                                ):
-                                    content_item["text"] = redacted_str
+                _redact_responses_api_output_dict(response["output"], redacted_str)
+            redact_vertex_ai_metadata_from_logged_object(response)
         elif isinstance(response, dict) and "choices" in response:
             # ModelResponse dict format - redact content in choices
             if isinstance(response.get("choices"), list):
-                for choice in response["choices"]:
-                    if isinstance(choice, dict):
-                        if "message" in choice and isinstance(choice["message"], dict):
-                            choice["message"]["content"] = redacted_str
-                            if "audio" in choice["message"]:
-                                choice["message"]["audio"] = None
-                        elif "delta" in choice and isinstance(choice["delta"], dict):
-                            choice["delta"]["content"] = redacted_str
-                            if "audio" in choice["delta"]:
-                                choice["delta"]["audio"] = None
+                _redact_model_response_dict_choices(response["choices"], redacted_str)
+            redact_vertex_ai_metadata_from_logged_object(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
         else:
             # For other formats (empty dict, None, etc.), use simple text format
             standard_logging_object["response"] = {"text": redacted_str}
+
+
+def _redact_model_response_dict_choices(choices, redacted_str: str):
+    for choice in choices:
+        if isinstance(choice, dict):
+            if "message" in choice and isinstance(choice["message"], dict):
+                choice["message"]["content"] = redacted_str
+                if "reasoning_content" in choice["message"]:
+                    choice["message"]["reasoning_content"] = redacted_str
+                if "thinking_blocks" in choice["message"]:
+                    choice["message"]["thinking_blocks"] = None
+                if "audio" in choice["message"]:
+                    choice["message"]["audio"] = None
+            elif "delta" in choice and isinstance(choice["delta"], dict):
+                choice["delta"]["content"] = redacted_str
+                if "reasoning_content" in choice["delta"]:
+                    choice["delta"]["reasoning_content"] = redacted_str
+                if "thinking_blocks" in choice["delta"]:
+                    choice["delta"]["thinking_blocks"] = None
+                if "audio" in choice["delta"]:
+                    choice["delta"]["audio"] = None
+        else:
+            _redact_choice_content(choice)
 
 
 def perform_redaction(model_call_details: dict, result):
@@ -132,6 +169,8 @@ def perform_redaction(model_call_details: dict, result):
     ]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
+    _redact_standard_logging_object(model_call_details)
+    redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
     if (
@@ -142,6 +181,7 @@ def perform_redaction(model_call_details: dict, result):
         if hasattr(_streaming_response, "choices"):
             for choice in _streaming_response.choices:
                 _redact_choice_content(choice)
+            redact_vertex_ai_metadata_from_logged_object(_streaming_response)
         elif hasattr(_streaming_response, "output"):
             _redact_responses_api_output(_streaming_response.output)
             # Redact reasoning field in ResponsesAPIResponse
@@ -168,33 +208,19 @@ def perform_redaction(model_call_details: dict, result):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
+            redact_vertex_ai_metadata_from_logged_object(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
-                for choice in _result["choices"]:
-                    if isinstance(choice, dict):
-                        if "message" in choice and isinstance(choice["message"], dict):
-                            choice["message"]["content"] = "redacted-by-litellm"
-                            if "reasoning_content" in choice["message"]:
-                                choice["message"][
-                                    "reasoning_content"
-                                ] = "redacted-by-litellm"
-                            if "thinking_blocks" in choice["message"]:
-                                choice["message"]["thinking_blocks"] = None
-                            if "audio" in choice["message"]:
-                                choice["message"]["audio"] = None
-                        elif "delta" in choice and isinstance(choice["delta"], dict):
-                            choice["delta"]["content"] = "redacted-by-litellm"
-                            if "reasoning_content" in choice["delta"]:
-                                choice["delta"][
-                                    "reasoning_content"
-                                ] = "redacted-by-litellm"
-                            if "thinking_blocks" in choice["delta"]:
-                                choice["delta"]["thinking_blocks"] = None
-                            if "audio" in choice["delta"]:
-                                choice["delta"]["audio"] = None
-                    else:
-                        _redact_choice_content(choice)
+                _redact_model_response_dict_choices(
+                    _result["choices"], "redacted-by-litellm"
+                )
+            redact_vertex_ai_metadata_from_logged_object(_result)
+        elif isinstance(_result, dict) and "output" in _result:
+            if isinstance(_result.get("output"), list):
+                _redact_responses_api_output_dict(
+                    _result["output"], "redacted-by-litellm"
+                )
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)

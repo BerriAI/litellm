@@ -41,27 +41,55 @@ from litellm.types.interactions import (
 from litellm.types.router import GenericLiteLLMParams
 
 
-class InteractionsHTTPHandler:
+class _BaseHTTPHandler:
+    """
+    Shared HTTP infrastructure for LiteLLM handler classes.
+
+    Provides common client resolution and error-mapping helpers so that
+    handler subclasses (InteractionsHTTPHandler, AgentsHTTPHandler, …) do
+    not duplicate this boilerplate.
+    """
+
+    def _handle_error(self, e: Exception, provider_config: Any) -> Exception:
+        if isinstance(e, httpx.HTTPStatusError):
+            return provider_config.get_error_class(
+                error_message=e.response.text,
+                status_code=e.response.status_code,
+                headers=dict(e.response.headers),
+            )
+        return e
+
+    def _sync_client(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        client: Optional[HTTPHandler],
+    ) -> HTTPHandler:
+        return client or _get_httpx_client(
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+        )
+
+    def _async_client(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        client: Optional[AsyncHTTPHandler],
+    ) -> AsyncHTTPHandler:
+        # GenericLiteLLMParams.get uses getattr; an unset field is None, not the default.
+        custom_llm_provider = litellm_params.get("custom_llm_provider") or "gemini"
+        return client or get_async_httpx_client(
+            llm_provider=litellm.LlmProviders(custom_llm_provider),
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+        )
+
+
+class InteractionsHTTPHandler(_BaseHTTPHandler):
     """
     HTTP handler for Interactions API requests.
     """
 
-    def _handle_error(
-        self,
-        e: Exception,
-        provider_config: BaseInteractionsAPIConfig,
-    ) -> Exception:
-        """Handle errors from HTTP requests."""
-        if isinstance(e, httpx.HTTPStatusError):
-            error_message = e.response.text
-            status_code = e.response.status_code
-            headers = dict(e.response.headers)
-            return provider_config.get_error_class(
-                error_message=error_message,
-                status_code=status_code,
-                headers=headers,
-            )
-        return e
+    # _handle_error is inherited from _BaseHTTPHandler (accepts Any provider_config).
+    # AgentsHTTPHandler also extends this class and passes BaseAgentsAPIConfig, which
+    # is structurally compatible but a different type — keeping the override here with
+    # BaseInteractionsAPIConfig would cause type errors in the subclass.
 
     # =========================================================
     # CREATE INTERACTION

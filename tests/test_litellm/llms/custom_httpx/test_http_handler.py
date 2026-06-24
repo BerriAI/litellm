@@ -1,8 +1,10 @@
+import asyncio
 import io
 import os
 import pathlib
 import ssl
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -18,9 +20,109 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
 )
+
+
+@pytest.mark.asyncio
+async def test_async_post_streaming_status_error_should_not_wait_forever_for_body(
+    monkeypatch,
+):
+    """
+    Vertex Anthropic streamRawPredict can return a pre-stream 4xx where the
+    streamed error body never terminates. The handler must still surface the
+    status promptly instead of blocking the downstream client.
+    """
+
+    class HangingErrorStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.Event().wait()
+            if False:
+                yield b""
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=HangingErrorStream(),
+        )
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler._STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    litellm_handler = AsyncHTTPHandler()
+    await litellm_handler.client.aclose()
+    litellm_handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler)
+    )
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            await asyncio.wait_for(
+                litellm_handler.post(
+                    "https://vertex.example/streamRawPredict",
+                    stream=True,
+                ),
+                timeout=0.2,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response.status_code == 400
+    finally:
+        await litellm_handler.close()
+
+
+def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
+    monkeypatch,
+):
+    """
+    Keep the sync streaming error path aligned with the async path so a
+    non-terminating streamed error body cannot block a worker thread forever.
+    """
+
+    class HangingSyncErrorStream(httpx.SyncByteStream):
+        def __init__(self):
+            self.closed_event = threading.Event()
+
+        def __iter__(self):
+            self.closed_event.wait()
+            if False:
+                yield b""
+
+        def close(self):
+            self.closed_event.set()
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=HangingSyncErrorStream(),
+        )
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler._STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    litellm_handler = HTTPHandler()
+    litellm_handler.client.close()
+    litellm_handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            litellm_handler.post(
+                "https://vertex.example/streamRawPredict",
+                stream=True,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response.status_code == 400
+    finally:
+        litellm_handler.close()
 
 
 @pytest.mark.asyncio
@@ -696,3 +798,109 @@ def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler()
         assert handler.client.timeout == t
     finally:
         handler.close()
+
+
+def test_sync_get_forwards_per_request_timeout():
+    """HTTPHandler.get(timeout=...) must apply the timeout to that request,
+    overriding the client default rather than silently ignoring it."""
+    captured = {}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_get_forwards_per_request_timeout():
+    captured = {}
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        await handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        await handler.close()
+
+
+class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
+    """Cached default httpx clients must fall back to an explicit litellm.request_timeout.
+
+    Regression for LIT-2369: get_async_httpx_client / _get_httpx_client hardcoded a
+    600s default and never consulted litellm.request_timeout, so provider calls with
+    no per-model timeout (e.g. Bedrock) hung for 600s.
+    """
+
+    @pytest.fixture
+    def restore_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        try:
+            yield
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_default_when_request_timeout_unset(self, restore_request_timeout):
+        from litellm.llms.custom_httpx.http_handler import (
+            _DEFAULT_TIMEOUT,
+            _default_cached_client_timeout,
+        )
+
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        assert _default_cached_client_timeout() is _DEFAULT_TIMEOUT
+
+    def test_uses_explicit_request_timeout(self, restore_request_timeout):
+        from litellm.llms.custom_httpx.http_handler import (
+            _default_cached_client_timeout,
+        )
+
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        resolved = _default_cached_client_timeout()
+        assert resolved.read == 300.0
+        assert resolved.connect == 5.0
+
+    def test_cached_async_client_built_with_explicit_request_timeout(
+        self, restore_request_timeout
+    ):
+        from litellm.caching.llm_caching_handler import LLMClientCache
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
+
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        litellm.in_memory_llm_clients_cache = LLMClientCache()
+        client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
+        assert client.timeout.read == 300.0

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
@@ -20,8 +21,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-MANTLE_ENDPOINT_TEMPLATE = "https://bedrock-mantle.{region}.api.aws/v1/messages"
 
 
 class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
@@ -44,7 +43,37 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         stream: Optional[bool] = None,
     ) -> str:
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
-        return MANTLE_ENDPOINT_TEMPLATE.format(region=region)
+        return build_mantle_messages_url(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=optional_params.get(
+                "aws_bedrock_runtime_endpoint"
+            ),
+            region=region,
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        headers = super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        project_id = litellm_params.get("aws_bedrock_project_id")
+        if project_id:
+            headers["anthropic-workspace"] = project_id
+        return headers
 
     def transform_request(
         self,

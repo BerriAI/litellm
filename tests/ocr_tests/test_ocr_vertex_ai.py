@@ -62,6 +62,14 @@ class TestVertexAIMistralOCR(BaseOCRTest):
     sending to the API, since Vertex AI OCR endpoint doesn't have internet access.
     """
 
+    def setup_method(self):
+        if os.environ.get("LITELLM_RUN_LIVE_VERTEX_MISTRAL_OCR_TESTS") != "1":
+            pytest.skip("Live Vertex AI Mistral OCR E2E tests are opt-in")
+        if os.environ.get("CASSETTE_REDIS_URL"):
+            pytest.skip(
+                "Live Vertex AI Mistral OCR E2E tests cannot run under VCR replay"
+            )
+
     def get_base_ocr_call_args(self) -> dict:
         """
         Return the base OCR call args for Vertex AI Mistral OCR.

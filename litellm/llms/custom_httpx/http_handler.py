@@ -1,5 +1,8 @@
 import asyncio
+import concurrent.futures
+import inspect
 import os
+import socket
 import ssl
 import sys
 import time
@@ -29,12 +32,19 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
+    AIOHTTP_SO_KEEPALIVE,
+    AIOHTTP_TCP_KEEPCNT,
+    AIOHTTP_TCP_KEEPIDLE,
+    AIOHTTP_TCP_KEEPINTVL,
     AIOHTTP_TTL_DNS_CACHE,
     COMPLETION_HTTP_FALLBACK_SECONDS,
     DEFAULT_SSL_CIPHERS,
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -52,6 +62,57 @@ try:
     from litellm._version import version
 except Exception:
     version = "0.0.0"
+
+
+# aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
+# versions don't — detect once and skip the keep-alive wiring there.
+# https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
+_AIOHTTP_SUPPORTS_SOCKET_FACTORY = (
+    "socket_factory" in inspect.signature(TCPConnector.__init__).parameters
+)
+
+
+def _build_aiohttp_keepalive_socket_factory() -> (
+    Optional[Callable[[Tuple[Any, ...]], socket.socket]]
+):
+    """
+    Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
+
+    Why: by default, aiohttp creates sockets without SO_KEEPALIVE, so the kernel
+    sends nothing during a long idle TCP connection. NAT/LB hops (e.g. AWS NAT
+    Gateway, 350s idle timeout) reap the flow well before slow provider
+    responses (OpenAI/Azure: up to 600s) arrive. Enabling SO_KEEPALIVE makes
+    the kernel emit TCP probes that reset the NAT idle timer.
+
+    Returns None when AIOHTTP_SO_KEEPALIVE is disabled or aiohttp is too old.
+    """
+    if not AIOHTTP_SO_KEEPALIVE or not _AIOHTTP_SUPPORTS_SOCKET_FACTORY:
+        return None
+
+    def factory(addr_info: Tuple[Any, ...]) -> socket.socket:
+        family, type_, proto = addr_info[0], addr_info[1], addr_info[2]
+        sock = socket.socket(family=family, type=type_, proto=proto)
+        sock.setblocking(False)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux: TCP_KEEPIDLE is idle-before-first-probe.
+        # macOS/Darwin: TCP_KEEPALIVE is the equivalent.
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, AIOHTTP_TCP_KEEPIDLE
+            )
+        elif hasattr(socket, "TCP_KEEPALIVE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, AIOHTTP_TCP_KEEPIDLE
+            )
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, AIOHTTP_TCP_KEEPINTVL
+            )
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, AIOHTTP_TCP_KEEPCNT)
+        return sock
+
+    return factory
 
 
 def get_default_headers() -> dict:
@@ -75,6 +136,23 @@ headers = get_default_headers()
 _DEFAULT_TIMEOUT = httpx.Timeout(
     timeout=COMPLETION_HTTP_FALLBACK_SECONDS,
     connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+)
+
+
+def _default_cached_client_timeout() -> httpx.Timeout:
+    """Timeout for cached default httpx clients; honors an explicit litellm.request_timeout."""
+    configured = get_configured_request_timeout()
+    if configured is None:
+        return _DEFAULT_TIMEOUT
+    return httpx.Timeout(
+        timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+    )
+
+
+_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS = 5.0
+_STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=50,
+    thread_name_prefix="litellm-streaming-error-body-read",
 )
 
 
@@ -329,17 +407,30 @@ def _safe_get_response_text(response: httpx.Response) -> str:
         return ""
 
 
-async def _safe_aread_response(response: httpx.Response) -> bytes:
+async def _safe_aread_response(
+    response: httpx.Response, timeout: Optional[float] = None
+) -> bytes:
     """Safely read async response body, falling back to empty bytes on errors."""
     try:
+        if timeout is not None:
+            return await asyncio.wait_for(response.aread(), timeout=timeout)
         return await response.aread()
     except Exception:
         return b""
 
 
-def _safe_read_response(response: httpx.Response) -> bytes:
+def _safe_read_response(
+    response: httpx.Response, timeout: Optional[float] = None
+) -> bytes:
     """Safely read sync response body, falling back to empty bytes on errors."""
     try:
+        if timeout is not None:
+            future = _STREAMING_ERROR_BODY_READ_EXECUTOR.submit(response.read)
+            try:
+                return future.result(timeout=timeout)
+            except Exception:
+                response.close()
+                return b""
         return response.read()
     except Exception:
         return b""
@@ -348,8 +439,19 @@ def _safe_read_response(response: httpx.Response) -> bytes:
 def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
     if stream:
-        _body = mask_sensitive_info(_safe_read_response(e.response))
-        raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+        try:
+            _body = mask_sensitive_info(
+                _safe_read_response(
+                    e.response,
+                    timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS,
+                )
+            )
+            raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+        finally:
+            try:
+                e.response.close()
+            except Exception:
+                pass
     _text = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
@@ -357,8 +459,19 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
-        _body = mask_sensitive_info(await _safe_aread_response(e.response))
-        raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+        try:
+            _body = mask_sensitive_info(
+                await _safe_aread_response(
+                    e.response,
+                    timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS,
+                )
+            )
+            raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+        finally:
+            try:
+                await e.response.aclose()
+            except Exception:
+                pass
     _text = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
@@ -387,11 +500,16 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             if k.lower() not in ("content-encoding", "content-length")
         }
 
+        try:
+            request_content = original_error.request.content
+        except httpx.RequestNotRead:
+            request_content = b""
+
         masked_request = httpx.Request(
             method=original_error.request.method,
             url=masked_url,
             headers=original_error.request.headers,
-            content=original_error.request.content,
+            content=request_content,
         )
 
         super().__init__(
@@ -486,6 +604,7 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -496,7 +615,11 @@ class AsyncHTTPHandler:
         params.update(HTTPHandler.extract_query_params(url))
 
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            url,
+            params=params,
+            headers=headers,  # type: ignore
+            follow_redirects=_follow_redirects,  # type: ignore
+            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
 
@@ -935,6 +1058,11 @@ class AsyncHTTPHandler:
             transport_connector_kwargs["limit_per_host"] = (
                 AIOHTTP_CONNECTOR_LIMIT_PER_HOST
             )
+        # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
+        # accept socket_factory — version detection lives inside the builder.
+        socket_factory = _build_aiohttp_keepalive_socket_factory()
+        if socket_factory is not None:
+            transport_connector_kwargs["socket_factory"] = socket_factory
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
@@ -1007,6 +1135,7 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -1020,6 +1149,7 @@ class HTTPHandler:
             params=params,
             headers=headers,
             follow_redirects=_follow_redirects,
+            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
 
         return response
@@ -1264,7 +1394,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=_DEFAULT_TIMEOUT,
+            timeout=_default_cached_client_timeout(),
             shared_session=shared_session,
         )
 
@@ -1313,7 +1443,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=_DEFAULT_TIMEOUT)
+        _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
 
     cache.set_cache(
         key=_cache_key_name,

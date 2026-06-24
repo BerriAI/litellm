@@ -480,21 +480,32 @@ class XecGuardGuardrail(CustomGuardrail):
             choices = response.get("choices")
         if not choices:
             return None
-        first = choices[0]
-        if hasattr(first, "message"):
-            message = first.message
-        elif isinstance(first, dict):
-            message = first.get("message")
+        text_parts: List[str] = []
+        for choice in choices:
+            content = XecGuardGuardrail._extract_choice_content(choice)
+            text = XecGuardGuardrail._content_to_text(content)
+            if text:
+                text_parts.append(text)
+        return "\n".join(text_parts) or None
+
+    @staticmethod
+    def _extract_choice_content(choice: Any) -> Any:
+        if hasattr(choice, "message"):
+            message = choice.message
+        elif isinstance(choice, dict):
+            message = choice.get("message")
         else:
             return None
         if message is None:
             return None
         if hasattr(message, "content"):
-            content = message.content
-        elif isinstance(message, dict):
-            content = message.get("content")
-        else:
-            return None
+            return message.content
+        if isinstance(message, dict):
+            return message.get("content")
+        return None
+
+    @staticmethod
+    def _content_to_text(content: Any) -> Optional[str]:
         if isinstance(content, str) and content:
             return content
         if isinstance(content, list):

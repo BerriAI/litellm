@@ -59,7 +59,7 @@ async def test_generic_api_callback():
 
     # Make the completion call
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="hi",
         user="test_user",
@@ -109,11 +109,11 @@ async def test_generic_api_callback():
 
     # Basic assertions for standard logging payload
     assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
-    assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+    assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
     assert (
         payload_item["model_parameters"]["user"] == "test_user"
     ), "User should be test_user"
-    assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+    assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
     assert payload_item["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ], "Messages should be the same"
@@ -147,7 +147,7 @@ async def test_generic_api_callback_multiple_logs():
     # Make the completion call
     for _ in range(10):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response="hi",
             user="test_user",
@@ -197,11 +197,11 @@ async def test_generic_api_callback_multiple_logs():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
         assert (
             payload_item["model_parameters"]["user"] == "test_user"
         ), "User should be test_user"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
         assert payload_item["messages"] == [
             {"role": "user", "content": "Hello, world!"}
         ], "Messages should be the same"
@@ -239,7 +239,7 @@ async def test_generic_api_callback_ndjson_format():
     # Make multiple completion calls to generate multiple logs
     for i in range(3):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Hello, world! {i}"}],
             mock_response="hi",
             user="test_user",
@@ -279,7 +279,7 @@ async def test_generic_api_callback_ndjson_format():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
         assert (
             payload_item["model_parameters"]["user"] == "test_user"
         ), "User should be test_user"
@@ -314,7 +314,7 @@ async def test_generic_api_callback_single_format():
     # Make 3 completion calls
     for i in range(3):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Hello, world! {i}"}],
             mock_response="hi",
             user="test_user",
@@ -345,7 +345,7 @@ async def test_generic_api_callback_single_format():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -377,7 +377,7 @@ async def test_generic_api_callback_json_array_format_explicit():
     # Make multiple completion calls
     for i in range(5):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Hello, world! {i}"}],
             mock_response="hi",
             user="test_user",
@@ -404,7 +404,7 @@ async def test_generic_api_callback_json_array_format_explicit():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -434,7 +434,7 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     # Make completion calls
     for i in range(2):
         await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Test {i}"}],
             mock_response="response",
             user="test_user",

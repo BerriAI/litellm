@@ -240,6 +240,54 @@ async def test_update_daily_spend_sorting():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_drains_all_batches_over_batch_size():
+    """
+    Regression for #30281: >BATCH_SIZE (100) unique entities in one flush must all
+    be written and the in-memory dict fully drained within a single call. Pre-fix,
+    only the first 100 sorted items were upserted then the method returned, silently
+    dropping the remaining entities.
+    """
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailyuserspend = mock_table
+
+    num_entities = 250
+    daily_spend_transactions = {
+        f"test_key_{i}": {
+            "user_id": f"user{i:04d}",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+        for i in range(num_entities)
+    }
+
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_table.upsert.call_count == num_entities
+    assert mock_prisma_client.db.batch_.call_count == 3
+    assert daily_spend_transactions == {}
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_tag_with_request_id():
     """
     Test that request_id is included in update_data when updating tag transactions.
@@ -1133,8 +1181,10 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.failure_handler = AsyncMock()
 
-    # Mock the logger to capture exception calls
-    with patch.object(verbose_proxy_logger, "exception") as mock_exception_logger:
+    # Capture the ERROR-level log emitted by the spend_log_error helper.
+    # We assert against the formatted message instead of patching a specific
+    # logger method so the test stays valid as the helper evolves.
+    with patch.object(verbose_proxy_logger, "error") as mock_error_logger:
         # Call the method and expect it to raise the exception
         with pytest.raises(Exception, match="Unique constraint violation"):
             await DBSpendUpdateWriter._update_daily_spend(
@@ -1148,17 +1198,20 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
                 unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
             )
 
-        # Verify that exception was logged with detailed information
-        assert mock_exception_logger.called
-        call_args = mock_exception_logger.call_args[0][0]
-        assert "Daily user spend batch upsert failed" in call_args
-        assert "Table: litellm_dailyuserspend" in call_args
+        # Verify that the error was logged with detailed information.
+        # spend_log_error formats the message via ``%`` interpolation, so
+        # render the call args before asserting on substrings.
+        assert mock_error_logger.called
+        call = mock_error_logger.call_args
+        formatted = call.args[0] % call.args[1:]
+        assert "Daily user spend batch upsert failed" in formatted
+        assert "Table: litellm_dailyuserspend" in formatted
         assert (
             "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
-            in call_args
+            in formatted
         )
-        assert "Batch size: 1" in call_args
-        assert "Unique constraint violation" in call_args
+        assert "Batch size: 1" in formatted
+        assert "Unique constraint violation" in formatted
 
 
 @pytest.mark.asyncio
@@ -1508,3 +1561,146 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "bucket_name,input_dict,table_attr,method_name,where_key,expected_order",
+    [
+        pytest.param(
+            "user_list_transactions",
+            {"user_c": 0.1, "user_a": 0.2, "user_b": 0.3},
+            "litellm_usertable",
+            "update_many",
+            "user_id",
+            ["user_a", "user_b", "user_c"],
+            id="user",
+        ),
+        pytest.param(
+            "key_list_transactions",
+            {"tok_c": 0.1, "tok_a": 0.2, "tok_b": 0.3},
+            "litellm_verificationtoken",
+            "update_many",
+            "token",
+            ["tok_a", "tok_b", "tok_c"],
+            id="key",
+        ),
+        pytest.param(
+            "team_list_transactions",
+            {"team_c": 0.1, "team_a": 0.2, "team_b": 0.3},
+            "litellm_teamtable",
+            "update_many",
+            "team_id",
+            ["team_a", "team_b", "team_c"],
+            id="team",
+        ),
+        pytest.param(
+            "team_member_list_transactions",
+            {
+                "team_id::team_c::user_id::user_x": 0.1,
+                "team_id::team_a::user_id::user_x": 0.2,
+                "team_id::team_b::user_id::user_x": 0.3,
+            },
+            "litellm_teammembership",
+            "update_many",
+            "team_id",
+            ["team_a", "team_b", "team_c"],
+            id="team_member",
+        ),
+        pytest.param(
+            "org_list_transactions",
+            {"org_c": 0.1, "org_a": 0.2, "org_b": 0.3},
+            "litellm_organizationtable",
+            "update_many",
+            "organization_id",
+            ["org_a", "org_b", "org_c"],
+            id="org",
+        ),
+        pytest.param(
+            "end_user_list_transactions",
+            {"eu_c": 0.1, "eu_a": 0.2, "eu_b": 0.3},
+            "litellm_endusertable",
+            "upsert",
+            "user_id",
+            ["eu_a", "eu_b", "eu_c"],
+            id="end_user",
+        ),
+        pytest.param(
+            "tag_list_transactions",
+            {"prod": 0.1, "customer-x": 0.2, "test": 0.3},
+            "litellm_tagtable",
+            "update_many",
+            "tag_name",
+            ["customer-x", "prod", "test"],
+            id="tag",
+        ),
+        pytest.param(
+            "agent_list_transactions",
+            {"agent_c": 0.1, "agent_a": 0.2, "agent_b": 0.3},
+            "litellm_agentstable",
+            "update_many",
+            "agent_id",
+            ["agent_a", "agent_b", "agent_c"],
+            id="agent",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_commit_spend_updates_iterates_in_sorted_order(
+    bucket_name, input_dict, table_attr, method_name, where_key, expected_order
+):
+    """
+    Every spend-bucket code path in _commit_spend_updates_to_db must iterate
+    in sorted order so concurrent pods acquire row locks in the same order
+    and avoid PostgreSQL deadlocks. Covers the 5 direct loops (user/key/team/
+    team_member/org), the end_user path in ProxyUpdateSpend.update_end_user_spend,
+    and the shared _update_entity_spend_in_db helper (tag, agent).
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    captured_where_values = []
+
+    def capture(*, where, data):
+        captured_where_values.append(where[where_key])
+
+    mock_batcher = MagicMock()
+    table_mock = MagicMock()
+    setattr(table_mock, method_name, MagicMock(side_effect=capture))
+    setattr(mock_batcher, table_attr, table_mock)
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details = {}
+
+    buckets = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    buckets[bucket_name] = input_dict
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=3,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=buckets,
+    )
+
+    assert captured_where_values == expected_order

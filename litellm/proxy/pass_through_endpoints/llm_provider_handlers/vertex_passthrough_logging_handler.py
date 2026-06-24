@@ -645,7 +645,7 @@ class VertexPassthroughLoggingHandler:
         return kwargs
 
     @staticmethod
-    def batch_prediction_jobs_handler(  # noqa: PLR0915
+    def batch_prediction_jobs_handler(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -849,10 +849,16 @@ class VertexPassthroughLoggingHandler:
                 # Create a mock user API key dict for the managed object storage
                 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
+                _request_metadata = (kwargs.get("litellm_params", {}) or {}).get(
+                    "metadata", {}
+                ) or {}
+
                 user_api_key_dict = UserAPIKeyAuth(
-                    user_id=kwargs.get("user_id", "default-user"),
+                    user_id=_request_metadata.get(
+                        "user_api_key_user_id", "default-user"
+                    ),
                     api_key="",
-                    team_id=None,
+                    team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=None,
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
                     user_email=None,

@@ -14,10 +14,22 @@ memory in long-lived deployments.
 
 import asyncio
 from collections import OrderedDict
+from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.table_repositories import (
+    SpendLogsRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -35,6 +47,10 @@ class SpendCounterReseed:
         spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+
+    End-user and tag spend counters intentionally do not reseed here. Their
+    auth paths already load the corresponding objects via get_end_user_object()
+    and get_tag_objects_batch(); callers pass those values as fallback_spend.
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -69,37 +85,42 @@ class SpendCounterReseed:
         """
         if prisma_client is None:
             return None
-        # Per-window counters share prefixes with primary counters but
-        # don't correspond to a DB row.
-        if ":window:" in counter_key:
+        # Per-window key/team counters share prefixes with primary counters
+        # but don't correspond to a DB row. Do not reject arbitrary entity IDs
+        # or tag names that merely contain ":window:".
+        if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
             return None
         try:
             if counter_key.startswith("spend:key:"):
                 token = counter_key[len("spend:key:") :]
-                row = await prisma_client.db.litellm_verificationtoken.find_unique(
-                    where={"token": token}
-                )
+                row = await VerificationTokenRepository(
+                    prisma_client
+                ).table.find_unique(where={"token": token})
             elif counter_key.startswith("spend:team_member:"):
                 suffix = counter_key[len("spend:team_member:") :]
                 if ":" not in suffix:
                     return None
                 user_id, team_id = suffix.rsplit(":", 1)
-                row = await prisma_client.db.litellm_teammembership.find_unique(
+                row = await TeamMembershipRepository(prisma_client).table.find_unique(
                     where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
                 )
             elif counter_key.startswith("spend:team:"):
                 team_id = counter_key[len("spend:team:") :]
-                row = await prisma_client.db.litellm_teamtable.find_unique(
+                row = await TeamRepository(prisma_client).table.find_unique(
                     where={"team_id": team_id}
                 )
             elif counter_key.startswith("spend:user:"):
                 user_id = counter_key[len("spend:user:") :]
-                row = await prisma_client.db.litellm_usertable.find_unique(
+                row = await UserRepository(prisma_client).table.find_unique(
                     where={"user_id": user_id}
                 )
+            elif counter_key.startswith("spend:end_user:"):
+                return None
+            elif counter_key.startswith("spend:tag:"):
+                return None
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
-                row = await prisma_client.db.litellm_organizationtable.find_unique(
+                row = await OrganizationRepository(prisma_client).table.find_unique(
                     where={"organization_id": org_id}
                 )
             else:
@@ -114,10 +135,26 @@ class SpendCounterReseed:
         return float(getattr(row, "spend", 0.0) or 0.0)
 
     @staticmethod
+    def _is_key_or_team_window_counter(counter_key: str) -> bool:
+        for prefix in ("spend:key:", "spend:team:"):
+            if not counter_key.startswith(prefix):
+                continue
+            _, separator, duration = counter_key.rpartition(":window:")
+            if not separator or not duration:
+                return False
+            try:
+                duration_in_seconds(duration)
+            except Exception:
+                return False
+            return True
+        return False
+
+    @staticmethod
     async def coalesced(
         prisma_client: Optional["PrismaClient"],
         spend_counter_cache: "DualCache",
         counter_key: str,
+        require_cache_warm: bool = False,
     ) -> Optional[float]:
         """
         Reseed a cold spend counter from the DB and warm the cache,
@@ -129,7 +166,9 @@ class SpendCounterReseed:
         """
         lock = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            # Re-check after acquiring the lock - another waiter may have warmed it.
+            # Re-check after acquiring the lock. Skip in-memory on a clean
+            # Redis miss - in-memory is per-pod-stale.
+            redis_clean_miss = False
             if spend_counter_cache.redis_cache is not None:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(
@@ -137,23 +176,182 @@ class SpendCounterReseed:
                     )
                     if val is not None:
                         return float(val)
+                    redis_clean_miss = True
                 except Exception:
                     pass
-            val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-            if val is not None:
-                return float(val)
+            if not redis_clean_miss:
+                val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                if val is not None:
+                    return float(val)
 
             db_spend = await SpendCounterReseed.from_db(prisma_client, counter_key)
             if db_spend is None:
                 return None
             # Warm even when 0 so subsequent reads hit cache, not DB.
+            #
+            # Seed via SET NX (cross-pod safe): only one pod initializes the
+            # Redis key with db_spend; concurrent seeders read the winner's
+            # value. INCRBYFLOAT-of-db_spend from N pods would multiply the
+            # counter (N x db_spend) and trigger spurious budget alerts.
+            current_value: float = float(db_spend)
             try:
-                await spend_counter_cache.async_increment_cache(
-                    key=counter_key, value=db_spend
-                )
+                if spend_counter_cache.redis_cache is not None:
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=db_spend,
+                        nx=True,
+                    )
+                    if seeded:
+                        current_value = float(db_spend)
+                    else:
+                        cached = await spend_counter_cache.redis_cache.async_get_cache(
+                            key=counter_key
+                        )
+                        current_value = (
+                            float(cached) if cached is not None else float(db_spend)
+                        )
+                    spend_counter_cache.in_memory_cache.set_cache(
+                        key=counter_key,
+                        value=current_value,
+                    )
+                else:
+                    await spend_counter_cache.async_increment_cache(
+                        key=counter_key, value=db_spend, refresh_ttl=True
+                    )
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
                     counter_key,
                 )
-            return db_spend
+                if require_cache_warm:
+                    raise
+            return current_value
+
+    @staticmethod
+    async def window_from_spend_logs(
+        prisma_client: Optional["PrismaClient"],
+        entity_type: str,
+        entity_id: str,
+        window_start: datetime,
+    ) -> Optional[float]:
+        if prisma_client is None:
+            return None
+
+        if entity_type == "Key":
+            group_field = "api_key"
+            where = {
+                "api_key": entity_id,
+                "startTime": {"gte": window_start},
+            }
+        elif entity_type == "Team":
+            group_field = "team_id"
+            where = {
+                "team_id": entity_id,
+                "startTime": {"gte": window_start},
+            }
+        else:
+            return None
+
+        try:
+            response = await SpendLogsRepository(prisma_client).table.group_by(
+                by=[group_field],
+                where=where,  # type: ignore[arg-type]
+                sum={"spend": True},
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "SpendCounterReseed.window_from_spend_logs: failed for %s=%s",
+                entity_type,
+                entity_id,
+            )
+            return None
+
+        if not response:
+            return 0.0
+        first_row = response[0]
+        sum_row = (
+            first_row.get("_sum")
+            if isinstance(first_row, dict)
+            else getattr(first_row, "_sum", None)
+        )
+        spend = (
+            sum_row.get("spend")
+            if isinstance(sum_row, dict)
+            else getattr(sum_row, "spend", None)
+        )
+        return float(spend or 0.0)
+
+    @staticmethod
+    async def coalesced_window(
+        prisma_client: Optional["PrismaClient"],
+        spend_counter_cache: "DualCache",
+        counter_key: str,
+        entity_type: str,
+        entity_id: str,
+        window_start: datetime,
+    ) -> Optional[float]:
+        lock = await SpendCounterReseed._get_lock(counter_key)
+        async with lock:
+            redis_clean_miss = False
+            if spend_counter_cache.redis_cache is not None:
+                try:
+                    val = await spend_counter_cache.redis_cache.async_get_cache(
+                        key=counter_key
+                    )
+                    if val is not None:
+                        return float(val)
+                    redis_clean_miss = True
+                except Exception:
+                    pass
+            if not redis_clean_miss:
+                val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                if val is not None:
+                    return float(val)
+
+            window_spend = await SpendCounterReseed.window_from_spend_logs(
+                prisma_client=prisma_client,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                window_start=window_start,
+            )
+            if window_spend is None:
+                return None
+            try:
+                if spend_counter_cache.redis_cache is not None:
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=window_spend,
+                        nx=True,
+                    )
+                    if seeded:
+                        current_value = window_spend
+                    else:
+                        current_cached_value = (
+                            await spend_counter_cache.redis_cache.async_get_cache(
+                                key=counter_key
+                            )
+                        )
+                        if current_cached_value is None:
+                            current_value = (
+                                await spend_counter_cache.redis_cache.async_increment(
+                                    key=counter_key,
+                                    value=window_spend,
+                                )
+                            )
+                        else:
+                            current_value = float(current_cached_value)
+                    spend_counter_cache.in_memory_cache.set_cache(
+                        key=counter_key,
+                        value=current_value,
+                    )
+                else:
+                    await spend_counter_cache.async_increment_cache(
+                        key=counter_key, value=window_spend
+                    )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.coalesced_window: failed to warm counter %s",
+                    counter_key,
+                )
+                raise
+            return window_spend

@@ -738,15 +738,32 @@ def test_delete_access_group_patches_cached_team_and_key(
             return_value=None
         )
 
-    # Build cached key object (returned from user_api_key_cache)
-    if key_cache_group_ids is not None:
-        cached_key = UserAPIKeyAuth(
-            token="hashed-key-1",
-            access_group_ids=list(key_cache_group_ids),
+    # user_api_key_cache is queried both for teams (fallback after dual_cache) and
+    # hashed keys — return the right stub per ``key``. A single AsyncMock(return_value=key)
+    # would wrongly serve the key blob for ``team_id:team-1`` and trigger team patching.
+    # Use a synchronous side_effect (not async def): AsyncMock awaits coroutine side_effects
+    # inconsistently across Python/unittest versions; sync returns are awaited as immediate results.
+    def user_cache_get_side_effect(*args, **kwargs):
+        cache_key = (
+            kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
         )
-        mock_cache.async_get_cache = AsyncMock(return_value=cached_key)
-    else:
-        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        if cache_key == "team_id:team-1":
+            if team_cache_group_ids is None:
+                return None
+            return LiteLLM_TeamTableCachedObj(
+                team_id="team-1",
+                access_group_ids=list(team_cache_group_ids),
+            )
+        if cache_key == "hashed-key-1":
+            if key_cache_group_ids is None:
+                return None
+            return UserAPIKeyAuth(
+                token="hashed-key-1",
+                access_group_ids=list(key_cache_group_ids),
+            )
+        return None
+
+    mock_cache.async_get_cache = AsyncMock(side_effect=user_cache_get_side_effect)
 
     resp = client.delete("/v1/access_group/ag-to-delete")
     assert resp.status_code == 204
@@ -803,7 +820,7 @@ def test_delete_access_group_patches_cached_team_and_key(
 
 
 def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
-    """Delete correctly patches a key cached as a raw dict (not UserAPIKeyAuth)."""
+    """Delete patches key cache — mock returns UserAPIKeyAuth (what UserApiKeyCache emits after deserialize)."""
     client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
         client_and_mocks
     )
@@ -826,12 +843,24 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
         return_value=None
     )
 
-    # Key cached as a plain dict (as can happen with Redis serialization)
+    # Serialized shape from Redis dict; UserApiKeyCache.async_get_cache(model_type=...) yields a model — simulate that.
+    cached_key_payload = {
+        "token": "hashed-key-dict",
+        "access_group_ids": ["ag-to-delete", "ag-other"],
+    }
+
+    def user_cache_get_dict_when_key_matches(*args, **kwargs):
+        cache_key = (
+            kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
+        )
+        if cache_key == "team_id:team-1":
+            return None
+        if cache_key == "hashed-key-dict":
+            return UserAPIKeyAuth.model_validate(cached_key_payload)
+        return None
+
     mock_cache.async_get_cache = AsyncMock(
-        return_value={
-            "token": "hashed-key-dict",
-            "access_group_ids": ["ag-to-delete", "ag-other"],
-        }
+        side_effect=user_cache_get_dict_when_key_matches
     )
 
     resp = client.delete("/v1/access_group/ag-to-delete")

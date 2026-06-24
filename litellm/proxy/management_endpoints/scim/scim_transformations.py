@@ -6,6 +6,7 @@ from litellm.proxy._types import (
     Member,
     NewUserResponse,
 )
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 
@@ -29,7 +30,7 @@ class ScimTransformations:
         # Get user's teams/groups
         groups = []
         for team_id in user.teams or []:
-            team = await prisma_client.db.litellm_teamtable.find_unique(
+            team = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": team_id}
             )
             if team:
@@ -45,8 +46,20 @@ class ScimTransformations:
         if user.user_email and "@" in user.user_email:
             emails.append(SCIMUserEmail(value=user.user_email, primary=True))
 
+        metadata = user.metadata or {}
+        scim_active = metadata.get("scim_active")
+        active = True if scim_active is None else bool(scim_active)
+
+        schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
+        enterprise_user = None
+        if metadata.get(SCIM_ENTERPRISE_METADATA_KEY):
+            enterprise_user = SCIMEnterpriseUser.model_validate(
+                metadata[SCIM_ENTERPRISE_METADATA_KEY]
+            )
+            schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
+
         return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            schemas=schemas,
             id=user.user_id,
             userName=ScimTransformations._get_scim_user_name(user),
             displayName=ScimTransformations._get_scim_user_name(user),
@@ -56,7 +69,8 @@ class ScimTransformations:
             ),
             emails=emails,
             groups=groups,
-            active=True,
+            active=active,
+            enterprise_user=enterprise_user,
             meta={
                 "resourceType": "User",
                 "created": user_created_at,

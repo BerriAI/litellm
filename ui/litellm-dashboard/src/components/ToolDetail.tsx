@@ -40,8 +40,7 @@ function getDefaultLogsDateRange(): { start: string; end: string } {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 90);
-  const fmt = (d: Date) =>
-    d.toISOString().slice(0, 19).replace("T", " ");
+  const fmt = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
   return { start: fmt(start), end: fmt(end) };
 }
 
@@ -56,7 +55,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
   const logsDateRange = useMemo(() => getDefaultLogsDateRange(), []);
 
-  const { data: detail, isLoading: detailLoading, error: detailError } = useQuery({
+  const {
+    data: detail,
+    isLoading: detailLoading,
+    error: detailError,
+  } = useQuery({
     queryKey: [TOOL_DETAIL_QUERY_KEY, toolName],
     queryFn: () => fetchToolDetail(accessToken!, toolName),
     enabled: !!accessToken && !!toolName,
@@ -147,7 +150,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         setInputPolicySaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail]
+    [accessToken, toolName, invalidateDetail],
   );
 
   const handleOutputPolicyChange = useCallback(
@@ -163,7 +166,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         setOutputPolicySaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail]
+    [accessToken, toolName, invalidateDetail],
   );
 
   const handleAddOverride = useCallback(async () => {
@@ -173,11 +176,16 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     if (!isTeam && !blockKey?.token) return;
     setOverrideSaving(true);
     try {
-      await updateToolPolicy(accessToken, toolName, { input_policy: "blocked" }, {
-        team_id: isTeam ? blockTeamId : undefined,
-        key_hash: !isTeam ? blockKey!.token : undefined,
-        key_alias: !isTeam ? blockKey!.key_alias : undefined,
-      });
+      await updateToolPolicy(
+        accessToken,
+        toolName,
+        { input_policy: "blocked" },
+        {
+          team_id: isTeam ? blockTeamId : undefined,
+          key_hash: !isTeam ? blockKey!.token : undefined,
+          key_alias: !isTeam ? blockKey!.key_alias : undefined,
+        },
+      );
       invalidateDetail();
       setBlockTeamId(null);
       setBlockKey(null);
@@ -204,7 +212,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         setOverrideSaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail]
+    [accessToken, toolName, invalidateDetail],
   );
 
   if (detailLoading && !detail) {
@@ -232,22 +240,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
   const { tool, overrides } = detail;
 
-  const inputDesc = policyOptions?.input_policies?.find(
-    (p) => p.value === tool.input_policy
-  )?.description;
-  const outputDesc = policyOptions?.output_policies?.find(
-    (p) => p.value === tool.output_policy
-  )?.description;
+  const inputDesc = policyOptions?.input_policies?.find((p) => p.value === tool.input_policy)?.description;
+  const outputDesc = policyOptions?.output_policies?.find((p) => p.value === tool.output_policy)?.description;
 
   return (
     <div>
       <div className="mb-6">
-        <Button
-          type="link"
-          icon={<ArrowLeftOutlined />}
-          onClick={onBack}
-          className="pl-0 mb-4"
-        >
+        <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
           Back to Tool Policies
         </Button>
 
@@ -267,7 +266,9 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
               {tool.user_agent && (
                 <div className="flex items-center gap-1.5">
                   <dt className="font-medium text-gray-500 whitespace-nowrap">User Agent:</dt>
-                  <dd className="font-mono truncate max-w-[40ch]" title={tool.user_agent}>{tool.user_agent}</dd>
+                  <dd className="font-mono truncate max-w-[40ch]" title={tool.user_agent}>
+                    {tool.user_agent}
+                  </dd>
                 </div>
               )}
               {tool.created_at && (
@@ -330,10 +331,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
             <h2 className="text-sm font-semibold text-gray-700 mb-3">Blocked for team or key</h2>
             <ul className="border rounded-md divide-y divide-gray-100 bg-red-50/30">
               {overrides.map((ov) => (
-                <li
-                  key={ov.override_id}
-                  className="flex items-center justify-between px-3 py-2.5 text-sm"
-                >
+                <li key={ov.override_id} className="flex items-center justify-between px-3 py-2.5 text-sm">
                   <span className="text-gray-700">
                     {ov.team_id ? `Team: ${ov.team_id}` : ""}
                     {ov.team_id && ov.key_hash ? " · " : ""}
@@ -386,10 +384,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                 {blockScope === "team" ? "Team" : "Key"}
               </span>
               {blockScope === "team" ? (
-                <TeamDropdown
-                  value={blockTeamId ?? undefined}
-                  onChange={(id) => setBlockTeamId(id || null)}
-                />
+                <TeamDropdown value={blockTeamId ?? undefined} onChange={(id) => setBlockTeamId(id || null)} />
               ) : (
                 <Select
                   placeholder="Select key"

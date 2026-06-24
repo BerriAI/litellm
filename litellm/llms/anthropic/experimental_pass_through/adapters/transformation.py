@@ -6,6 +6,7 @@ from typing import (
     Any,
     AsyncIterator,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -75,6 +76,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.llms.anthropic.experimental_pass_through.context_management import (
+    PolyfillResult,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
@@ -87,14 +91,17 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
+    AppliedEdit,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     ContentThinkingBlockDelta,
     ContentThinkingSignatureBlockDelta,
+    ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
     UsageDelta,
+    UsageIteration,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -195,6 +202,7 @@ class AnthropicAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        polyfill_result: Optional[PolyfillResult] = None,
     ) -> Optional[AnthropicMessagesResponse]:
         """
         Translate OpenAI response to Anthropic format.
@@ -204,10 +212,12 @@ class AnthropicAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
+            polyfill_result: PolyfillResult from context_management polyfill.
         """
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response,
             tool_name_mapping=tool_name_mapping,
+            polyfill_result=polyfill_result,
         )
 
     def translate_completion_output_params_streaming(
@@ -215,7 +225,9 @@ class AnthropicAdapter:
         completion_stream: Any,
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
-    ) -> Union[AsyncIterator[bytes], None]:
+        polyfill_result: Optional[PolyfillResult] = None,
+        is_async: bool = True,
+    ) -> Union[AsyncIterator[bytes], Iterator[bytes], None]:
         """
         Translate OpenAI streaming response to Anthropic format.
 
@@ -223,14 +235,35 @@ class AnthropicAdapter:
             completion_stream: The OpenAI streaming response
             model: The model name
             tool_name_mapping: Optional mapping of truncated tool names to original names.
+            polyfill_result: PolyfillResult from context_management polyfill.
+            is_async: When ``True`` (default, for back-compat with existing
+                async callers) returns an ``AsyncIterator[bytes]``. When
+                ``False`` returns a sync ``Iterator[bytes]`` so sync callers
+                (e.g. ``litellm.anthropic.messages.create(stream=True)`` via
+                the sync handler) don't get back an async iterator they
+                can't iterate without an event loop.
         """
+        applied_edits = (
+            polyfill_result.applied_edits_for_response() if polyfill_result else None
+        )
+        compaction_block = (
+            polyfill_result.compaction_block if polyfill_result is not None else None
+        )
+        iterations_usage = (
+            polyfill_result.iterations_usage if polyfill_result is not None else None
+        )
         anthropic_wrapper = AnthropicStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             tool_name_mapping=tool_name_mapping,
+            applied_edits=applied_edits,
+            compaction_block=compaction_block,
+            iterations_usage=iterations_usage,
         )
-        # Return the SSE-wrapped version for proper event formatting
-        return anthropic_wrapper.async_anthropic_sse_wrapper()
+        # Return the SSE-wrapped version for proper event formatting.
+        if is_async:
+            return anthropic_wrapper.async_anthropic_sse_wrapper()
+        return anthropic_wrapper.anthropic_sse_wrapper()
 
 
 class LiteLLMAnthropicMessagesAdapter:
@@ -299,7 +332,14 @@ class LiteLLMAnthropicMessagesAdapter:
             if isinstance(source, dict)
             else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.is_anthropic_claude_model(model):
+        if (
+            cache_control
+            and model
+            and (
+                self.is_anthropic_claude_model(model)
+                or self.is_bedrock_arn_model(model)
+            )
+        ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -343,7 +383,7 @@ class LiteLLMAnthropicMessagesAdapter:
             isinstance(tool_type, str) and tool_type.startswith("web_search")
         ) or tool_name == "web_search"
 
-    def translate_anthropic_messages_to_openai(  # noqa: PLR0915
+    def translate_anthropic_messages_to_openai(
         self,
         messages: List[
             Union[
@@ -667,7 +707,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -718,6 +758,20 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         model_lower = model.lower()
         return "anthropic" in model_lower or "claude" in model_lower
+
+    @staticmethod
+    def is_bedrock_arn_model(model: str) -> bool:
+        """
+        Check if the model string is a Bedrock ARN, such as an Application
+        Inference Profile (e.g. arn:aws:bedrock:us-east-1:123:application-inference-profile/id).
+
+        These ARNs contain neither "anthropic" nor "claude", so is_anthropic_claude_model
+        cannot identify them even though, on the /v1/messages endpoint, they point at Claude.
+        Match ":bedrock:" in the ARN service field so another service's ARN that merely names
+        bedrock in a resource (arn:aws:sagemaker:.../my-bedrock-endpoint) is not matched.
+        """
+        model_lower = model.lower()
+        return "arn:" in model_lower and ":bedrock:" in model_lower
 
     @staticmethod
     def translate_thinking_for_model(
@@ -805,7 +859,17 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         new_tools: List[ChatCompletionToolParam] = []
         tool_name_mapping: Dict[str, str] = {}
-        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+        # "type" is the Anthropic tool type (e.g. "custom"); it must not be
+        # merged into the OpenAI function `parameters` schema below, or it
+        # overwrites the real parameters.type ("object") and the provider
+        # rejects the request. See #30557.
+        mapped_tool_params = [
+            "name",
+            "input_schema",
+            "description",
+            "cache_control",
+            "type",
+        ]
 
         for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
@@ -1084,10 +1148,23 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
-        """Translate output_format to response_format when applicable."""
-        if "output_format" not in anthropic_message_request:
-            return
-        output_format = anthropic_message_request["output_format"]
+        """Translate Anthropic structured-output config to OpenAI ``response_format``.
+
+        Accepts either the legacy top-level ``output_format`` field OR the
+        newer ``output_config.format`` (sub-key on ``output_config``) so that
+        both shapes flow through to non-Anthropic backends as
+        ``response_format``. Without the ``output_config.format`` branch,
+        callers using the new Anthropic Structured Outputs API would have
+        their schema silently dropped on the adapter path — only the legacy
+        top-level ``output_format`` was being mapped.
+
+        ``output_format`` takes precedence when both are provided.
+        """
+        output_format: Any = anthropic_message_request.get("output_format")
+        if not output_format:
+            output_config = anthropic_message_request.get("output_config")
+            if isinstance(output_config, dict):
+                output_format = output_config.get("format")
         if not output_format:
             return
         response_format = self.translate_anthropic_output_format_to_openai(
@@ -1286,9 +1363,18 @@ class LiteLLMAnthropicMessagesAdapter:
                         else truncated_name
                     )
 
+                    # Strip Gemini thought-signature suffix from id (mirrors streaming
+                    # path below); base64 chars (+ / =) violate Anthropic's
+                    # `^[a-zA-Z0-9_-]+$` tool_use.id pattern when replayed.
+                    raw_id = tool_call.id or ""
+                    base_id = (
+                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+                        else raw_id
+                    )
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=tool_call.id,
+                        id=base_id,
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
@@ -1320,6 +1406,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        polyfill_result: Optional[PolyfillResult] = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate OpenAI response to Anthropic format.
@@ -1329,12 +1416,17 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
+            polyfill_result: PolyfillResult from context_management polyfill.
         """
         ## translate content block
         anthropic_content = self._translate_openai_content_to_anthropic(
             choices=response.choices,  # type: ignore
             tool_name_mapping=tool_name_mapping,
         )
+
+        if polyfill_result is not None and polyfill_result.compaction_block is not None:
+            anthropic_content.insert(0, polyfill_result.compaction_block)  # type: ignore[arg-type]
+
         ## extract finish reason
         anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
             openai_finish_reason=response.choices[0].finish_reason  # type: ignore
@@ -1363,6 +1455,14 @@ class LiteLLMAnthropicMessagesAdapter:
         if cached_tokens > 0:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
+        if polyfill_result is not None and polyfill_result.iterations_usage is not None:
+            message_iteration: UsageIteration = {
+                "type": "message",
+                "input_tokens": uncached_input_tokens,
+                "output_tokens": usage.completion_tokens or 0,
+            }
+            anthropic_usage["iterations"] = list(polyfill_result.iterations_usage) + [message_iteration]  # type: ignore[typeddict-unknown-key]
+
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
             type="message",
@@ -1373,6 +1473,14 @@ class LiteLLMAnthropicMessagesAdapter:
             content=anthropic_content,  # type: ignore
             stop_reason=anthropic_finish_reason,
         )
+
+        applied_edits = (
+            polyfill_result.applied_edits_for_response() if polyfill_result else None
+        )
+        if applied_edits:
+            translated_obj["context_management"] = ContextManagementResponse(
+                applied_edits=list(applied_edits)
+            )
 
         return translated_obj
 
@@ -1433,6 +1541,17 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+            # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
+            # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
+            # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
+            # branch above is skipped entirely; open a ``thinking`` block here so the
+            # matching ``thinking_delta`` stream is not emitted into a text block.
+            elif isinstance(choice, StreamingChoices) and getattr(
+                choice.delta, "reasoning_content", None
+            ):
+                return "thinking", ChatCompletionThinkingBlock(
+                    type="thinking", thinking="", signature=""
+                )
 
         return "text", TextBlock(type="text", text="")
 
@@ -1454,7 +1573,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
-            if choice.delta.tool_calls is not None:
+            if choice.delta.tool_calls:
                 partial_json = ""
                 for tool in choice.delta.tool_calls:
                     if (
@@ -1506,7 +1625,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
     def translate_streaming_openai_response_to_anthropic(
-        self, response: ModelResponse, current_content_block_index: int
+        self,
+        response: ModelResponse,
+        current_content_block_index: int,
+        applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -1556,9 +1678,14 @@ class LiteLLMAnthropicMessagesAdapter:
                     usage_delta["cache_read_input_tokens"] = cached_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
-            return MessageBlockDelta(
+            message_block = MessageBlockDelta(
                 type="message_delta", delta=delta, usage=usage_delta  # type: ignore
             )
+            if applied_edits:
+                message_block["context_management"] = ContextManagementResponse(
+                    applied_edits=list(applied_edits)
+                )
+            return message_block
         (
             type_of_content,
             content_block_delta,

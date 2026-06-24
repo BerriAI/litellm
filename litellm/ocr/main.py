@@ -10,8 +10,7 @@ import os
 import re
 from functools import partial
 from io import IOBase
-from pathlib import Path
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Callable, Coroutine, Dict, Optional, Union, cast
 
 import httpx
 
@@ -21,12 +20,89 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.ocr.rust_bridge import RustOcr, load_rust_ocr, rust_ocr_enabled
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 ####### ENVIRONMENT VARIABLES ###################
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _timeout_to_seconds(
+    timeout: Optional[Union[float, httpx.Timeout]],
+) -> Optional[float]:
+    """Convert the Python OCR timeout to a single seconds value for the Rust bridge.
+
+    The Rust HTTP client takes one duration; ``httpx.Timeout`` carries separate
+    connect/read/write/pool values, so pick the read deadline as the closest
+    analog to a total-request timeout.
+    """
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return float(timeout)
+
+
+def _run_rust_ocr(
+    rust_ocr: RustOcr,
+    logging_obj: LiteLLMLoggingObj,
+    provider_config: BaseOCRConfig,
+    resolve_api_key: Callable[[str], Optional[str]],
+    model: str,
+    document: dict[str, object],
+    api_key: Optional[str],
+    api_base: Optional[str],
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+    timeout_seconds: Optional[float],
+) -> OCRResponse:
+    """Run the Mistral OCR call through the Rust bridge and wrap the result.
+
+    Resolves the key the same way the Python path does so secret-manager backends
+    (AWS/Azure/GCP/Vault) work; the Rust bridge's own fallback only reads the
+    process environment. The request that Rust actually sends (resolved URL and
+    headers) is mirrored into pre_call so logs match the wire. Dependencies are
+    injected so this stays unit-testable without patching module globals.
+    """
+    resolved_api_key = api_key or resolve_api_key("MISTRAL_API_KEY")
+    resolved_headers = provider_config.validate_environment(
+        headers={},
+        model=model,
+        api_key=resolved_api_key,
+        api_base=api_base,
+        litellm_params=litellm_params,
+    )
+    resolved_complete_url = provider_config.get_complete_url(
+        api_base=api_base,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+    )
+    logging_obj.pre_call(
+        input="OCR document processing",
+        api_key=resolved_api_key,
+        additional_args={
+            "complete_input_dict": {
+                "model": model,
+                "document": document,
+                **optional_params,
+            },
+            "api_base": resolved_complete_url,
+            "headers": resolved_headers,
+        },
+    )
+    return OCRResponse.model_validate(
+        rust_ocr(
+            model=model,
+            document=document,
+            api_key=resolved_api_key,
+            api_base=api_base,
+            optional_params=optional_params,
+            timeout_seconds=timeout_seconds,
+        )
+    )
 
 
 @client
@@ -221,7 +297,7 @@ def ocr(
     """
     local_vars = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aocr", False) is True
 
@@ -262,7 +338,6 @@ def ocr(
         if dynamic_api_base:
             api_base = dynamic_api_base
 
-        # Get provider config
         ocr_provider_config: Optional[BaseOCRConfig] = (
             ProviderConfigManager.get_provider_ocr_config(
                 model=model,
@@ -279,17 +354,14 @@ def ocr(
             f"OCR call - model: {model}, provider: {custom_llm_provider}"
         )
 
-        # Get litellm params using GenericLiteLLMParams (same as responses API)
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        # Extract OCR-specific parameters from kwargs
         supported_params = ocr_provider_config.get_supported_ocr_params(model=model)
         non_default_params = {}
         for param in supported_params:
             if param in kwargs:
                 non_default_params[param] = kwargs.pop(param)
 
-        # Map parameters to provider-specific format
         optional_params = ocr_provider_config.map_ocr_params(
             non_default_params=non_default_params,
             optional_params={},
@@ -298,7 +370,8 @@ def ocr(
 
         verbose_logger.debug(f"OCR optional_params after mapping: {optional_params}")
 
-        # Pre Call logging
+        effective_timeout = timeout or request_timeout
+
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
@@ -310,12 +383,35 @@ def ocr(
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Call the handler - pass document dict directly
+        # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
+        if custom_llm_provider == "mistral" and rust_ocr_enabled():
+            rust_ocr = load_rust_ocr()
+            if rust_ocr is None:
+                verbose_logger.debug(
+                    "Rust OCR bridge unavailable; falling back to Python path"
+                )
+            else:
+                from litellm.secret_managers.main import get_secret_str
+
+                return _run_rust_ocr(
+                    rust_ocr=rust_ocr,
+                    logging_obj=litellm_logging_obj,
+                    provider_config=ocr_provider_config,
+                    resolve_api_key=get_secret_str,
+                    model=model,
+                    document=document,
+                    api_key=api_key,
+                    api_base=api_base,
+                    optional_params=optional_params,
+                    litellm_params=dict(litellm_params),
+                    timeout_seconds=_timeout_to_seconds(effective_timeout),
+                )
+
         response = base_llm_http_handler.ocr(
             model=model,
-            document=document,  # Pass the entire document dict
+            document=document,
             optional_params=optional_params,
-            timeout=timeout or request_timeout,
+            timeout=effective_timeout,
             logging_obj=litellm_logging_obj,
             api_key=api_key,
             api_base=api_base,
@@ -376,10 +472,12 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     with an inline base64 data URI.
 
     Accepts document dicts like:
-        {"type": "file", "file": "/path/to/document.pdf"}        # file path string
         {"type": "file", "file": Path("/path/to/doc.pdf")}       # pathlib.Path
         {"type": "file", "file": <binary file-like object>}      # file-like object (BinaryIO)
         {"type": "file", "file": b"raw bytes"}                   # raw bytes
+
+    Bare ``str`` paths are not accepted — pass a ``pathlib.Path`` or
+    ``open(path, "rb")`` instead. See the str check below for the rationale.
 
     Returns:
         {"type": "document_url", "document_url": "data:<mime>;base64,<data>"}
@@ -389,14 +487,28 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     if file_input is None:
         raise ValueError(
             "document with type='file' must include a 'file' field containing "
-            "a file path (str), pathlib.Path, file-like object, or bytes"
+            "a pathlib.Path, file-like object, or bytes"
         )
 
     file_bytes: bytes
     mime_type: str = "application/octet-stream"
     file_name: Optional[str] = None
 
-    if isinstance(file_input, (str, Path)):
+    if isinstance(file_input, str):
+        # Bare strings are rejected here. The OCR ``document`` accepts a
+        # ``{"type": "file", "file": <value>}`` shape, and when this helper
+        # runs in a proxy request handler ``<value>`` is attacker-controlled.
+        # Opening it as a path is an arbitrary local file read on the proxy
+        # host, which is then base64-encoded and forwarded to the OCR
+        # provider — an exfiltration primitive.
+        raise ValueError(
+            "OCR file input does not accept bare str values. Pass bytes, "
+            "a pathlib.Path, or a file-like object. To OCR a local file "
+            "from a path, call open(path, 'rb') yourself."
+        )
+    if isinstance(file_input, os.PathLike):
+        # os.PathLike (pathlib.Path and custom __fspath__ classes) is a
+        # Python-level type that HTTP form values can't fabricate.
         file_path = str(file_input)
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -417,7 +529,7 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
     else:
         raise ValueError(
             f"Unsupported file input type: {type(file_input)}. "
-            "Expected str (file path), pathlib.Path, bytes, or a file-like object."
+            "Expected pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:

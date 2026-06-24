@@ -5,6 +5,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import _can_object_call_model, can_key_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -17,9 +18,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     prepare_data_with_credentials,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.types.utils import LlmProviders
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -189,10 +192,154 @@ def _replace_file_id_in_response(response, original_file_id: str):
     return response
 
 
+async def _authorize_model_routing_hint(
+    *,
+    model: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+) -> None:
+    if user_api_key_dict is None:
+        return
+
+    key_models = getattr(user_api_key_dict, "models", None)
+    if not (isinstance(key_models, list) and "all-team-models" in key_models):
+        await can_key_call_model(
+            model=model,
+            llm_model_list=None,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
+    team_models = getattr(user_api_key_dict, "team_models", None)
+    if isinstance(team_models, list) and len(team_models) > 0:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=team_models,
+            team_model_aliases=user_api_key_dict.team_model_aliases,
+            team_id=user_api_key_dict.team_id,
+            object_type="team",
+        )
+
+
+async def _update_request_data_with_model_routing_hint(
+    data: Dict,
+    request: Request,
+    llm_router: Optional["Router"] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+) -> Dict:
+    if data.get("api_key") is not None or data.get("api_base") is not None:
+        return data
+
+    user_controlled_model_hint = request.query_params.get(
+        "model"
+    ) or request.headers.get("x-litellm-model")
+    model_hint = data.get("model") or user_controlled_model_hint
+    should_authorize_model_hint = (
+        isinstance(model_hint, str) and model_hint == user_controlled_model_hint
+    )
+
+    should_route = False
+    credentials = None
+    if isinstance(model_hint, str) and "*" in model_hint:
+        if llm_router is not None:
+            if should_authorize_model_hint:
+                await _authorize_model_routing_hint(
+                    model=model_hint,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            credentials = llm_router.get_deployment_credentials_with_provider(
+                model_id=model_hint
+            )
+            should_route = credentials is not None
+    else:
+        if isinstance(model_hint, str) and should_authorize_model_hint:
+            await _authorize_model_routing_hint(
+                model=model_hint,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+        (
+            should_route,
+            _model_used,
+            _original_file_id,
+            credentials,
+        ) = handle_model_based_routing(
+            file_id="",
+            request=request,
+            llm_router=llm_router,
+            data=data,
+            check_file_id_encoding=False,
+        )
+
+    if should_route and credentials is not None:
+        prepare_data_with_credentials(
+            data=data,
+            credentials=credentials,
+        )
+        return data
+
+    if llm_router is None or user_api_key_dict is None:
+        return data
+
+    team_models = getattr(user_api_key_dict, "team_models", None) or []
+    if not isinstance(team_models, list):
+        return data
+
+    model_names_to_check = []
+    for model_name in team_models:
+        if not isinstance(model_name, str) or model_name in {
+            "all-team-models",
+            "all-proxy-models",
+            "no-default-models",
+        }:
+            continue
+        model_names_to_check.append(model_name)
+
+    openai_credentials = None
+    for model_name in model_names_to_check:
+        credentials = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_name
+        )
+        if credentials is None:
+            continue
+
+        provider = credentials.get("custom_llm_provider")
+        model = credentials.get("model")
+        if provider is None and isinstance(model, str) and "/" in model:
+            provider = model.split("/", 1)[0]
+        if provider != LlmProviders.OPENAI.value:
+            continue
+
+        await _authorize_model_routing_hint(
+            model=model_name,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if openai_credentials is not None:
+            return data
+        openai_credentials = credentials
+
+    if openai_credentials is not None:
+        prepare_data_with_credentials(data=data, credentials=openai_credentials)
+    elif len(model_names_to_check) == 1:
+        await _authorize_model_routing_hint(
+            model=model_names_to_check[0],
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+        data["model"] = model_names_to_check[0]
+
+    return data
+
+
 def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
     llm_router: Optional["Router"] = None,
+    managed_vector_store: Optional[LiteLLM_ManagedVectorStore] = None,
+    should_lookup_registry: bool = True,
 ) -> Dict:
     """
     Update request data with model routing information from managed vector store.
@@ -262,23 +409,27 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
         return data
 
-    # Legacy path: Check vector store registry for non-managed vector stores
-    if litellm.vector_store_registry is not None:
+    # Legacy path: Check vector store registry for non-managed vector stores.
+    vector_store_to_run = managed_vector_store
+    if (
+        vector_store_to_run is None
+        and should_lookup_registry
+        and litellm.vector_store_registry is not None
+    ):
         vector_store_to_run = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
             vector_store_id=vector_store_id
         )
-        if vector_store_to_run is not None:
-            if "custom_llm_provider" in vector_store_to_run:
-                data["custom_llm_provider"] = vector_store_to_run.get(
-                    "custom_llm_provider"
-                )
-            if "litellm_credential_name" in vector_store_to_run:
-                data["litellm_credential_name"] = vector_store_to_run.get(
-                    "litellm_credential_name"
-                )
-            if "litellm_params" in vector_store_to_run:
-                litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
-                data.update(litellm_params)
+
+    if vector_store_to_run is not None:
+        if "custom_llm_provider" in vector_store_to_run:
+            data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
+        if "litellm_credential_name" in vector_store_to_run:
+            data["litellm_credential_name"] = vector_store_to_run.get(
+                "litellm_credential_name"
+            )
+        if "litellm_params" in vector_store_to_run:
+            litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
+            data.update(litellm_params)
 
     return data
 
@@ -363,8 +514,11 @@ async def vector_store_file_create(
     )
 
     data = await _read_request_body(request=request)
-    if "vector_store_id" not in data:
-        data["vector_store_id"] = vector_store_id
+    data["vector_store_id"] = vector_store_id
+    managed_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs if present in request body
     original_managed_file_id = None
@@ -375,7 +529,11 @@ async def vector_store_file_create(
 
     # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, llm_router=llm_router
+        data=data,
+        vector_store_id=vector_store_id,
+        llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
+        should_lookup_registry=False,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -459,9 +617,25 @@ async def vector_store_file_list(
     query_params = dict(request.query_params)
     data: Dict[str, Optional[str]] = {"vector_store_id": vector_store_id}
     data.update(query_params)
+    data["vector_store_id"] = vector_store_id
+    managed_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, llm_router=llm_router
+        data=data,
+        vector_store_id=vector_store_id,
+        llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
+        should_lookup_registry=False,
+    )
+
+    data = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -541,6 +715,10 @@ async def vector_store_file_retrieve(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
+    managed_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -549,7 +727,11 @@ async def vector_store_file_retrieve(
 
     # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, llm_router=llm_router
+        data=data,
+        vector_store_id=vector_store_id,
+        llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
+        should_lookup_registry=False,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -635,6 +817,10 @@ async def vector_store_file_content(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
+    managed_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -643,7 +829,11 @@ async def vector_store_file_content(
 
     # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, llm_router=llm_router
+        data=data,
+        vector_store_id=vector_store_id,
+        llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
+        should_lookup_registry=False,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -729,6 +919,10 @@ async def vector_store_file_update(
     data = await _read_request_body(request=request)
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
+    managed_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -737,7 +931,11 @@ async def vector_store_file_update(
 
     # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, llm_router=llm_router
+        data=data,
+        vector_store_id=vector_store_id,
+        llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
+        should_lookup_registry=False,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -823,6 +1021,10 @@ async def vector_store_file_delete(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
+    managed_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -831,7 +1033,11 @@ async def vector_store_file_delete(
 
     # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, llm_router=llm_router
+        data=data,
+        vector_store_id=vector_store_id,
+        llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
+        should_lookup_registry=False,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)

@@ -161,6 +161,11 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
     | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
 )
 
+# MCP OAuth2 Token Exchange (OBO) Defaults
+MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", "500")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -185,6 +190,10 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
 # Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
 MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 100)
 
+# Metadata key recording which pre_call guardrails the proxy loop already ran,
+# so the deployment-level hook does not re-run them for the same request
+PRE_CALL_EXECUTED_GUARDRAILS_KEY = "_pre_call_executed_guardrails"
+
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
@@ -192,6 +201,18 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
 
 # Provider-specific API base URLs
 XAI_API_BASE = "https://api.x.ai/v1"
+OPEN_SANDBOX_API_BASE_ENV_VAR = "OPEN_SANDBOX_API_BASE"
+OPEN_SANDBOX_API_KEY_ENV_VAR = "OPEN_SANDBOX_API_KEY"
+OPEN_SANDBOX_DEFAULT_TEMPLATE = "opensandbox/code-interpreter:v1.1.0"
+_OPEN_SANDBOX_FALLBACK_ENTRYPOINT = "/opt/code-interpreter/code-interpreter.sh"
+OPEN_SANDBOX_DEFAULT_ENTRYPOINT = (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+OPEN_SANDBOX_DEFAULT_LANGUAGE = "python"
+OPEN_SANDBOX_DEFAULT_CPU_LIMIT = "1"
+OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT = "2Gi"
+OPEN_SANDBOX_EXECD_PORT = 44772
+OPEN_SANDBOX_DEFAULT_TIMEOUT = 300
+OPEN_SANDBOX_READY_TIMEOUT = 30.0
+OPEN_SANDBOX_POLL_INTERVAL = 0.2
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
@@ -201,6 +222,12 @@ DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET = int(
 )
 DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096)
+)
+DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET", 8192)
+)
+DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET", 16384)
 )
 MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
@@ -224,6 +251,16 @@ AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
 )
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+# TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
+# whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
+# Gateway: 350s vs OpenAI/Azure: 600s). Without this, the kernel sends nothing
+# during a long provider call and the NAT reaps the flow before the response
+# arrives. Enabling SO_KEEPALIVE makes the kernel emit TCP probes that reset
+# the NAT idle timer.
+AIOHTTP_SO_KEEPALIVE = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "true"
+AIOHTTP_TCP_KEEPIDLE = int(os.getenv("AIOHTTP_TCP_KEEPIDLE", 60))
+AIOHTTP_TCP_KEEPINTVL = int(os.getenv("AIOHTTP_TCP_KEEPINTVL", 30))
+AIOHTTP_TCP_KEEPCNT = int(os.getenv("AIOHTTP_TCP_KEEPCNT", 5))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
@@ -377,6 +414,9 @@ REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
     os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 )
+REDIS_CIRCUIT_BREAKER_ENABLED = (
+    os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -389,12 +429,15 @@ BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
     os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 )
+# Anthropic's Messages API rejects thinking.budget_tokens < 1024.
+ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 )
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS = int(
     os.getenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
 )
+DEFAULT_OCI_CHAT_MAX_TOKENS = 4096
 TOGETHER_AI_4_B = int(os.getenv("TOGETHER_AI_4_B", 4))
 TOGETHER_AI_8_B = int(os.getenv("TOGETHER_AI_8_B", 8))
 TOGETHER_AI_21_B = int(os.getenv("TOGETHER_AI_21_B", 21))
@@ -409,9 +452,6 @@ CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0
 AUDIO_SPEECH_CHUNK_SIZE = int(
     os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
 )  # chunk_size for audio speech streaming. Balance between latency and memory usage
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
-    os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
-)
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 # Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
@@ -428,6 +468,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
 request_timeout: float = float(
     os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
 )
+request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
@@ -481,6 +522,8 @@ LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS = float(
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
+
+LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED = 499
 
 EMAIL_BUDGET_ALERT_TTL = int(
     os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)
@@ -565,6 +608,7 @@ LITELLM_CHAT_PROVIDERS = [
     "volcengine",
     "codestral",
     "text-completion-codestral",
+    "text-completion-inception",
     "deepseek",
     "sambanova",
     "maritalk",
@@ -593,6 +637,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nscale",
     "nebius",
     "dashscope",
+    "modelscope",
     "moonshot",
     "publicai",
     "v0",
@@ -600,6 +645,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "inception",
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
@@ -656,6 +702,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "include_server_side_tool_invocations",
     "service_tier",
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -717,6 +764,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "verbosity": None,
     "thinking": None,
     "web_search_options": None,
+    "include_server_side_tool_invocations": None,
     "service_tier": None,
     "safety_identifier": None,
     "prompt_cache_key": None,
@@ -748,9 +796,11 @@ openai_compatible_endpoints: List = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
+    "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -758,11 +808,14 @@ openai_compatible_endpoints: List = [
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
+    "https://api.inceptionlabs.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://api.libertai.io/v1",
+    "https://pinstripes.io/v1",
 ]
 
 
@@ -800,19 +853,24 @@ openai_compatible_providers: List = [
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
+    "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "parasail",  # Parasail - JSON-configured provider
+    "libertai",  # LibertAI - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
     "dashscope",
+    "modelscope",
     "moonshot",
     "v0",
     "helicone",
     "morph",
     "lambda_ai",
+    "inception",
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
@@ -821,6 +879,8 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "pinstripes",  # Pinstripes - JSON-configured provider
+    "darkbloom",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -832,9 +892,11 @@ openai_text_completion_compatible_providers: List = (
         "featherless_ai",
         "nebius",
         "dashscope",
+        "modelscope",
         "moonshot",
         "publicai",
         "synthetic",
+        "tensormesh",
         "apertis",
         "nano-gpt",
         "poe",
@@ -848,6 +910,7 @@ openai_text_completion_compatible_providers: List = (
 _openai_like_providers: List = [
     "predibase",
     "databricks",
+    "lemonade",
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
@@ -1090,6 +1153,48 @@ WANDB_MODELS: set = set(
     ]
 )
 
+modelscope_models: set = set(
+    [
+        # Qwen series models
+        "Qwen/Qwen3-0.6B",
+        "Qwen/Qwen3-1.7B",
+        "Qwen/Qwen3-4B",
+        "Qwen/Qwen3-8B",
+        "Qwen/Qwen3-14B",
+        "Qwen/Qwen3-30B-A3B",
+        "Qwen/Qwen3-32B",
+        "Qwen/Qwen3-235B-A22B",
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+        "Qwen/Qwen3-30B-A3B-Thinking-2507",
+        "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-Next-80B-A3B-Instruct",
+        "Qwen/Qwen3-Next-80B-A3B-Thinking",
+        "Qwen/Qwen3-VL-235B-A22B-Instruct",
+        "Qwen/Qwen3-VL-8B-Instruct",
+        "Qwen/Qwen3-VL-8B-Thinking",
+        "Qwen/Qwen3.5-122B-A10B",
+        "Qwen/Qwen3.5-27B",
+        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen/Qwen3.5-397B-A17B",
+        "Qwen/QwQ-32B",
+        "Qwen/QwQ-32B-Preview",
+        "Qwen/QVQ-72B-Preview",
+        "Qwen/Qwen-Image-Edit",
+        # DeepSeek series models
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        "deepseek-ai/DeepSeek-V3.2",
+        "deepseek-ai/DeepSeek-V4-Flash",
+    ]
+)
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -1127,6 +1232,8 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5",
+    "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
@@ -1383,6 +1490,17 @@ except (ValueError, TypeError):
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
+# Stable identifier substituted in place of the master key on UserAPIKeyAuth
+# objects so the master key (or its hash) never propagates to spend logs,
+# Prometheus metrics, audit trails, or any other downstream consumer.
+LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
+
+# Marker placed in ``model_call_details`` on a synthetic ``Logging`` object that
+# records a proxy-gate error (auth/rate-limit rejection) for a request that never
+# reached an upstream provider. Tracing callbacks key off it to avoid fabricating
+# an LLM-call span for a call that did not happen. See
+# ``ProxyLogging._handle_logging_proxy_only_error``.
+LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL = "litellm_no_upstream_llm_call"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
@@ -1411,6 +1529,7 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_SSO_SESSION_TTL_SECONDS = 600
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(
@@ -1418,6 +1537,12 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
+# Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
+# "employment_type->acme_employment_type,org_info.department->department"
+CLI_SSO_CLAIM_MAP = (
+    os.getenv("CLI_SSO_CLAIM_MAP") or os.getenv("LITELLM_CLI_SSO_CLAIM_MAP") or ""
+)
+CLI_SSO_CLAIM_MAX_SCALAR_LENGTH = 1024
 
 ########################### UI SESSION DURATION ###########################
 # Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
@@ -1429,6 +1554,7 @@ DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
+MAVVRIK_FOCUS_EXPORT_JOB_NAME = "mavvrik_focus_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )
@@ -1437,6 +1563,16 @@ KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME = "litellm_expired_ui_session_key_cleanup_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
+SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(
+    os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3)
+)
+SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
+    os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+)
+SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
+SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(
+    os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7)
+)
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
@@ -1538,6 +1674,15 @@ DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
 DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+# Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
+# callers from forcing a DB query per request for unknown names, while bounding
+# staleness so a transient DB error (which surfaces as an empty list) cannot
+# hide a real group for long.
+DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL = 10
+# Maximum number of comma-separated MCP server / access-group tokens accepted
+# in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
+# fan-out an authenticated caller can trigger by stuffing the path with tokens.
+DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS = 16
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [

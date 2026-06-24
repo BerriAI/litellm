@@ -13,8 +13,10 @@ import base64
 import hashlib
 import inspect
 import os
+import re
 import secrets
 from copy import deepcopy
+from html import escape
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -27,20 +29,25 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 if TYPE_CHECKING:
     import httpx
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
+    CLI_SSO_CLAIM_MAP,
+    CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
+    CLI_SSO_SESSION_CACHE_KEY_PREFIX,
+    CLI_SSO_SESSION_TTL_SECONDS,
+    LITELLM_CLI_SOURCE_IDENTIFIER,
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
     MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE,
@@ -70,7 +77,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    _has_user_setup_sso,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -80,7 +90,8 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso_helper_utils import (
@@ -99,8 +110,11 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.table_repositories import SSOConfigRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
-from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
+from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -123,6 +137,562 @@ router = APIRouter()
 # Metadata fields (token_type, expires_in, scope) are intentionally kept so
 # response convertors see the same fields in the PKCE path as in the non-PKCE path.
 _OAUTH_TOKEN_FIELDS = frozenset({"access_token", "id_token", "refresh_token"})
+_CLI_SSO_FLOW_CACHE_KEY_PREFIX = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:flow"
+_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX = (
+    f"{_CLI_SSO_FLOW_CACHE_KEY_PREFIX}:start_rate_limit"
+)
+_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS = 60
+_CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS = 30
+_CLI_SSO_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_CLI_SSO_LOGIN_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
+_CLI_SSO_USER_CODE_RE = re.compile(
+    rf"^[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}-[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}$"
+)
+_CLI_SSO_SCALAR_TYPES = (str, int, float, bool)
+_CLI_SSO_DEST_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_CLI_SSO_SECRET_KEY_FRAGMENTS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "client_secret",
+        "id_token",
+        "password",
+        "private_key",
+        "refresh_token",
+        "secret",
+    }
+)
+
+
+def _hash_cli_sso_secret(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _normalize_cli_sso_user_code(user_code: str) -> str:
+    return "".join(ch for ch in user_code.upper() if ch.isalnum())
+
+
+def _generate_cli_sso_user_code() -> str:
+    user_code = "".join(secrets.choice(_CLI_SSO_USER_CODE_ALPHABET) for _ in range(8))
+    return f"{user_code[:4]}-{user_code[4:]}"
+
+
+def _get_cli_sso_flow_cache_key(login_id: str) -> str:
+    return f"{_CLI_SSO_FLOW_CACHE_KEY_PREFIX}:{login_id}"
+
+
+def _is_valid_cli_sso_login_id(login_id: Optional[str]) -> bool:
+    return isinstance(login_id, str) and bool(_CLI_SSO_LOGIN_ID_RE.fullmatch(login_id))
+
+
+def _is_valid_cli_sso_user_code(user_code: str | None) -> bool:
+    return isinstance(user_code, str) and bool(
+        _CLI_SSO_USER_CODE_RE.fullmatch(user_code)
+    )
+
+
+def _cli_sso_verification_uri_complete_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return bool(general_settings.get("allow_cli_sso_verification_uri_complete", False))
+
+
+def _cli_sso_start_response_body(
+    *,
+    login_id: str,
+    poll_secret: str,
+    user_code: str,
+    verification_uri_complete: str | None,
+) -> dict[str, str | int]:
+    if verification_uri_complete is None:
+        return {
+            "login_id": login_id,
+            "poll_secret": poll_secret,
+            "user_code": user_code,
+            "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+        }
+    return {
+        "login_id": login_id,
+        "poll_secret": poll_secret,
+        "user_code": user_code,
+        "verification_uri_complete": verification_uri_complete,
+        "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+    }
+
+
+def _get_cli_sso_start_rate_limit_cache_key(
+    request: Request, use_x_forwarded_for: Optional[bool] = False
+) -> str:
+    client_ip = (
+        _get_request_ip_address(
+            request=request, use_x_forwarded_for=use_x_forwarded_for
+        )
+        or "unknown"
+    )
+    client_ip_hash = _hash_cli_sso_secret(client_ip)
+    return f"{_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX}:{client_ip_hash}"
+
+
+def _check_cli_sso_start_rate_limit(
+    request: Request,
+    cache: DualCache,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> None:
+    rate_limit_cache_key = _get_cli_sso_start_rate_limit_cache_key(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
+    current_attempts = cache.increment_cache(
+        key=rate_limit_cache_key,
+        value=1,
+        ttl=_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS,
+    )
+    if current_attempts > _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many CLI login attempts. Try again later.",
+        )
+
+
+def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
+    if not _is_valid_cli_sso_login_id(login_id):
+        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+
+    cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
+    flow = cache.get_cache(key=cache_key)
+    if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
+        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+    return flow
+
+
+def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
+    cache.set_cache(
+        key=_get_cli_sso_flow_cache_key(login_id),
+        value=flow,
+        ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+
+
+def _verify_cli_sso_poll_secret(flow: dict, poll_secret: Optional[str]) -> bool:
+    expected_poll_secret_hash = flow.get("poll_secret_hash")
+    if not isinstance(expected_poll_secret_hash, str) or not isinstance(
+        poll_secret, str
+    ):
+        return False
+    supplied_poll_secret_hash = _hash_cli_sso_secret(poll_secret)
+    return secrets.compare_digest(supplied_poll_secret_hash, expected_poll_secret_hash)
+
+
+def _parse_cli_sso_claim_map() -> List[Tuple[str, str]]:
+    """
+    Parse CLI_SSO_CLAIM_MAP / LITELLM_CLI_SSO_CLAIM_MAP.
+
+    Format: comma-separated ``source_claim->metadata_key`` pairs, e.g.
+    ``employment_type->acme_employment_type,org_info.department->department``.
+    Destination keys may use an optional ``metadata.`` prefix; values are stored
+    on the LiteLLM user's ``metadata`` JSON column.
+    """
+    claim_map_raw = CLI_SSO_CLAIM_MAP.strip()
+    if not claim_map_raw:
+        return []
+
+    parsed: List[Tuple[str, str]] = []
+    for entry in claim_map_raw.split(","):
+        entry = entry.strip()
+        if not entry or "->" not in entry:
+            continue
+        source_claim, dest_key = entry.split("->", 1)
+        source_claim = source_claim.strip()
+        dest_key = dest_key.strip()
+        if dest_key.startswith("metadata."):
+            dest_key = dest_key[len("metadata.") :]
+        if source_claim and dest_key:
+            parsed.append((source_claim, dest_key))
+    return parsed
+
+
+def _is_safe_cli_sso_metadata_dest_key(dest_key: str) -> bool:
+    if not dest_key or not _CLI_SSO_DEST_KEY_RE.fullmatch(dest_key):
+        return False
+    lowered = dest_key.lower()
+    return not any(fragment in lowered for fragment in _CLI_SSO_SECRET_KEY_FRAGMENTS)
+
+
+def _is_safe_cli_sso_scalar_claim_value(value: Any) -> bool:
+    if not isinstance(value, _CLI_SSO_SCALAR_TYPES):
+        return False
+    if isinstance(value, str):
+        if len(value) > CLI_SSO_CLAIM_MAX_SCALAR_LENGTH:
+            return False
+        if value.startswith("eyJ") and value.count(".") >= 2:
+            return False
+    return True
+
+
+def _sso_result_to_dict(result: Union[CustomOpenID, OpenID, dict]) -> Dict[str, Any]:
+    if isinstance(result, dict):
+        return result
+    if hasattr(result, "model_dump"):
+        dumped = result.model_dump()
+        if isinstance(dumped, dict):
+            return cast(Dict[str, Any], dumped)
+    return {}
+
+
+def _get_nested_claim_value(data: Dict[str, Any], claim_path: str) -> Any:
+    """Resolve a dot-notation claim path against an SSO result dict.
+
+    Unlike ``get_nested_value``, this does not strip a leading ``metadata.``
+    prefix, since OIDC claims may legitimately use ``metadata`` as a top-level
+    key.
+    """
+    if not claim_path:
+        return None
+    if claim_path in data:
+        return data[claim_path]
+    placeholder = "\x00"
+    parts = claim_path.replace("\\.", placeholder).split(".")
+    parts = [p.replace(placeholder, ".") for p in parts]
+    current: Any = data
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
+def _extract_sso_claim_value(
+    result: Union[CustomOpenID, OpenID, dict], claim_path: str
+) -> Any:
+    extra_fields = getattr(result, "extra_fields", None)
+    if isinstance(extra_fields, dict):
+        if claim_path in extra_fields:
+            return extra_fields[claim_path]
+        nested = _get_nested_claim_value(extra_fields, claim_path)
+        if nested is not None:
+            return nested
+
+    if isinstance(result, dict):
+        return _get_nested_claim_value(result, claim_path)
+
+    result_dict = _sso_result_to_dict(result)
+    return _get_nested_claim_value(result_dict, claim_path)
+
+
+def _set_nested_metadata_value(
+    metadata: Dict[str, Any], key_path: str, value: Any
+) -> None:
+    placeholder = "\x00"
+    parts = key_path.replace("\\.", placeholder).split(".")
+    parts = [p.replace(placeholder, ".") for p in parts]
+    current: Any = metadata
+    for part in parts[:-1]:
+        existing = current.get(part)
+        if not isinstance(existing, dict):
+            existing = {}
+            current[part] = existing
+        current = existing
+    current[parts[-1]] = value
+
+
+def _flatten_cli_sso_metadata_for_poll(
+    metadata: Dict[str, Any],
+) -> Dict[str, Union[str, int, float, bool]]:
+    """Expose scalar attribution metadata as a flat dict for CLI poll responses."""
+    flattened: Dict[str, Union[str, int, float, bool]] = {}
+    stack: List[Tuple[str, Any]] = [("", metadata)]
+    while stack:
+        prefix, value = stack.pop()
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                nested_prefix = f"{prefix}.{key}" if prefix else key
+                stack.append((nested_prefix, nested))
+        elif _is_safe_cli_sso_scalar_claim_value(value):
+            flattened[prefix] = value
+    return flattened
+
+
+def build_cli_sso_attribution_metadata(
+    result: Union[CustomOpenID, OpenID, dict],
+) -> Dict[str, Any]:
+    """
+    Build allowlisted, non-secret scalar attribution metadata from an SSO result.
+
+    Sources are configured via CLI_SSO_CLAIM_MAP / LITELLM_CLI_SSO_CLAIM_MAP and
+    may include claims captured by GENERIC_USER_EXTRA_ATTRIBUTES on CustomOpenID.
+    """
+    claim_map = _parse_cli_sso_claim_map()
+    if not claim_map:
+        return {}
+
+    metadata: Dict[str, Any] = {}
+    for source_claim, dest_key in claim_map:
+        if not _is_safe_cli_sso_metadata_dest_key(dest_key):
+            verbose_proxy_logger.debug(
+                f"Skipping unsafe CLI SSO metadata destination key: {dest_key}"
+            )
+            continue
+
+        raw_value = _extract_sso_claim_value(result=result, claim_path=source_claim)
+        if not _is_safe_cli_sso_scalar_claim_value(raw_value):
+            continue
+
+        _set_nested_metadata_value(
+            metadata=metadata, key_path=dest_key, value=raw_value
+        )
+
+    return metadata
+
+
+def _merge_cli_sso_attribution_metadata(
+    existing_metadata: Dict[str, Any], attribution_metadata: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Merge attribution metadata into existing user metadata in-place.
+
+    Preserves original value types (in particular, string claim values that
+    happen to look numeric are NOT coerced to ``int``/``float``). Nested dicts
+    are merged iteratively so attribution claims do not clobber unrelated keys
+    under the same parent.
+    """
+    pending: List[Tuple[Dict[str, Any], Dict[str, Any]]] = [
+        (existing_metadata, attribution_metadata)
+    ]
+    while pending:
+        target, source = pending.pop()
+        for key, value in source.items():
+            if value is None:
+                continue
+            existing_value = target.get(key)
+            if isinstance(value, dict) and isinstance(existing_value, dict):
+                pending.append((existing_value, value))
+            else:
+                target[key] = value
+    return existing_metadata
+
+
+async def _persist_cli_sso_user_metadata(
+    prisma_client: PrismaClient,
+    user_id: str,
+    attribution_metadata: Dict[str, Any],
+) -> None:
+    if not attribution_metadata:
+        return
+
+    try:
+        user_row = await UserRepository(prisma_client).table.find_unique(
+            where={"user_id": user_id}
+        )
+        existing_metadata: Dict[str, Any] = {}
+        if user_row is not None:
+            row_metadata = user_row.metadata
+            if isinstance(row_metadata, dict):
+                existing_metadata = deepcopy(row_metadata)
+
+        merged_metadata = _merge_cli_sso_attribution_metadata(
+            existing_metadata=existing_metadata,
+            attribution_metadata=attribution_metadata,
+        )
+        await UserRepository(prisma_client).table.update_many(
+            where={"user_id": user_id},
+            data={"metadata": merged_metadata},
+        )
+        verbose_proxy_logger.info(
+            f"Persisted CLI SSO attribution metadata for user {user_id}: "
+            f"{list(_flatten_cli_sso_metadata_for_poll(attribution_metadata).keys())}"
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Failed to persist CLI SSO attribution metadata for user {user_id}: {e}"
+        )
+
+
+def _cli_poll_attribution_metadata_from_session(
+    session_data: Dict[str, Any],
+) -> Dict[str, Union[str, int, float, bool]]:
+    stored = session_data.get("attribution_metadata")
+    if isinstance(stored, dict):
+        return _flatten_cli_sso_metadata_for_poll(stored)
+    return {}
+
+
+def _render_cli_sso_verification_page(
+    verify_url: str,
+    browser_complete_token: str,
+    prefill_user_code: str | None = None,
+) -> str:
+    escaped_verify_url = escape(verify_url, quote=True)
+    escaped_browser_complete_token = escape(browser_complete_token, quote=True)
+    user_code_value_attr = (
+        f' value="{escape(prefill_user_code, quote=True)}"' if prefill_user_code else ""
+    )
+    instructions = (
+        "Confirm the verification code below to finish this login."
+        if prefill_user_code
+        else "Enter the verification code shown in your terminal to finish this login."
+    )
+    return f"""
+    <!doctype html>
+    <html>
+      <head>
+        <title>LiteLLM CLI Login</title>
+        <style>
+          body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f8fafc;
+            color: #0f172a;
+          }}
+          main {{
+            width: min(420px, calc(100vw - 32px));
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 28px;
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+          }}
+          h1 {{ font-size: 22px; margin: 0 0 12px; }}
+          p {{ line-height: 1.5; margin: 0 0 18px; color: #334155; }}
+          label {{ display: block; font-weight: 600; margin-bottom: 8px; }}
+          input {{
+            box-sizing: border-box;
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 20px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }}
+          button {{
+            margin-top: 16px;
+            width: 100%;
+            padding: 12px;
+            border: 0;
+            border-radius: 6px;
+            background: #0f172a;
+            color: #ffffff;
+            font-weight: 600;
+            cursor: pointer;
+          }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Complete CLI Login</h1>
+          <p>{instructions}</p>
+          <form method="post" action="{escaped_verify_url}">
+            <input type="hidden" name="browser_complete_token" value="{escaped_browser_complete_token}" />
+            <label for="user_code">Verification code</label>
+            <input id="user_code" name="user_code" autocomplete="one-time-code"{user_code_value_attr} required autofocus />
+            <button type="submit">Continue</button>
+          </form>
+        </main>
+      </body>
+    </html>
+    """
+
+
+@router.post("/sso/cli/start", tags=["experimental"], include_in_schema=False)
+async def cli_sso_start(request: Request):
+    from litellm.proxy.proxy_server import general_settings, user_api_key_cache
+
+    _check_cli_sso_start_rate_limit(
+        request=request,
+        cache=user_api_key_cache,
+        use_x_forwarded_for=bool(
+            (general_settings or {}).get("use_x_forwarded_for", False)
+        ),
+    )
+
+    login_id = f"cli-{secrets.token_urlsafe(24)}"
+    poll_secret = secrets.token_urlsafe(32)
+    user_code = _generate_cli_sso_user_code()
+
+    flow = {
+        "poll_secret_hash": _hash_cli_sso_secret(poll_secret),
+        "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code(user_code)),
+        "sso_complete": False,
+        "user_code_verified": False,
+        "session_data": None,
+    }
+    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+
+    verification_uri_complete: str | None = (
+        (
+            get_custom_url(
+                request_base_url=str(request.base_url), route="sso/key/generate"
+            )
+            + "?"
+            + urlencode(
+                {
+                    "source": LITELLM_CLI_SOURCE_IDENTIFIER,
+                    "key": login_id,
+                    "user_code": user_code,
+                }
+            )
+        )
+        if _cli_sso_verification_uri_complete_enabled()
+        else None
+    )
+    return _cli_sso_start_response_body(
+        login_id=login_id,
+        poll_secret=poll_secret,
+        user_code=user_code,
+        verification_uri_complete=verification_uri_complete,
+    )
+
+
+@router.post(
+    "/sso/cli/complete/{login_id}", tags=["experimental"], include_in_schema=False
+)
+async def cli_sso_complete(request: Request, login_id: str):
+    from fastapi.responses import HTMLResponse
+
+    from litellm.proxy.common_utils.html_forms.cli_sso_success import (
+        render_cli_sso_success_page,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    if not flow.get("sso_complete") or not flow.get("session_data"):
+        raise HTTPException(status_code=400, detail="CLI login is not ready")
+
+    body = (await request.body()).decode("utf-8")
+    form_values = parse_qs(body)
+    supplied_user_code = (form_values.get("user_code") or [""])[0]
+    supplied_browser_complete_token = (
+        form_values.get("browser_complete_token") or [""]
+    )[0]
+    supplied_user_code_hash = _hash_cli_sso_secret(
+        _normalize_cli_sso_user_code(supplied_user_code)
+    )
+    supplied_browser_complete_token_hash = _hash_cli_sso_secret(
+        supplied_browser_complete_token
+    )
+
+    expected_user_code_hash = flow.get("user_code_hash")
+    if not isinstance(expected_user_code_hash, str) or not secrets.compare_digest(
+        supplied_user_code_hash, expected_user_code_hash
+    ):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    expected_browser_complete_token_hash = flow.get("browser_complete_token_hash")
+    if not isinstance(
+        expected_browser_complete_token_hash, str
+    ) or not secrets.compare_digest(
+        supplied_browser_complete_token_hash, expected_browser_complete_token_hash
+    ):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    flow["user_code_verified"] = True
+    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+
+    html_content = render_cli_sso_success_page()
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 def normalize_email(email: Optional[str]) -> Optional[str]:
@@ -324,15 +894,18 @@ async def google_login(
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
     return_to: Optional[str] = None,
-):  # noqa: PLR0915
+    user_code: str | None = None,
+):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         premium_user,
         prisma_client,
+        user_api_key_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -356,7 +929,7 @@ async def google_login(
         if premium_user is not True:
             # Check if under 'free SSO user' limit
             if prisma_client is not None:
-                total_users = await prisma_client.db.litellm_usertable.count()
+                total_users = await UserRepository(prisma_client).table.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
                         message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
@@ -376,20 +949,21 @@ async def google_login(
     missing_env_vars = show_missing_vars_in_env()
     if missing_env_vars is not None:
         return missing_env_vars
-    ui_username = os.getenv("UI_USERNAME")
 
     # get url from request - always use regular callback, but set state for CLI
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/callback",
-        existing_key=existing_key,
     )
 
-    # Store CLI key in state for OAuth flow
+    if source == LITELLM_CLI_SOURCE_IDENTIFIER:
+        _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+
+    # Store CLI login handle in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
-        existing_key=existing_key,
+        user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -423,6 +997,7 @@ async def google_login(
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
+            request=request,
         )
         if return_to is not None and sso_redirect is not None:
             if SSOAuthenticationHandler._validate_return_to(return_to):
@@ -434,16 +1009,20 @@ async def google_login(
                     samesite="lax",
                 )
         return sso_redirect
-    elif ui_username is not None:
-        # No Google, Microsoft SSO
-        # Use UI Credentials set in .env
-        from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
-    else:
-        from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+    hide_default_credentials_hint = (
+        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
+        or general_settings.get("hide_default_credentials_hint", False) is True
+    )
+    return HTMLResponse(
+        content=build_ui_login_form(
+            show_deprecation_banner=True,
+            hide_default_credentials_hint=hide_default_credentials_hint,
+        ),
+        status_code=200,
+    )
 
 
 def generic_response_convertor(
@@ -484,7 +1063,7 @@ def generic_response_convertor(
 
     all_teams = []
     if sso_jwt_handler is not None:
-        team_ids = sso_jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        team_ids = sso_jwt_handler.get_all_jwt_team_ids(cast(dict, response))
         all_teams.extend(team_ids)
 
     if team_mappings is not None and team_mappings.team_ids_jwt_field is not None:
@@ -499,7 +1078,7 @@ def generic_response_convertor(
                 f"Loaded team_ids from DB team_mappings.team_ids_jwt_field='{team_mappings.team_ids_jwt_field}': {team_ids_from_db_mapping}"
             )
     else:
-        team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        team_ids = jwt_handler.get_all_jwt_team_ids(cast(dict, response))
         all_teams.extend(team_ids)
 
     # Determine user role based on role_mappings if available
@@ -645,7 +1224,7 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
             "Prisma client is None, connect a database to your proxy"
         )
 
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
             where={"id": "sso_config"}
         )
 
@@ -683,7 +1262,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
             "Prisma client is None, connect a database to your proxy"
         )
 
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
             where={"id": "sso_config"}
         )
 
@@ -712,7 +1291,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     generic_role_mappings_group_claim = os.getenv(
         "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", None
     )
-    generic_role_mappoings_default_role = os.getenv(
+    generic_role_mappings_default_role = os.getenv(
         "GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE", None
     )
     if generic_role_mappings is not None:
@@ -731,7 +1310,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                 role_mappings_data = {
                     "provider": "generic",
                     "group_claim": generic_role_mappings_group_claim,
-                    "default_role": generic_role_mappoings_default_role,
+                    "default_role": generic_role_mappings_default_role,
                     "roles": generic_user_role_mappings_data,
                 }
 
@@ -904,6 +1483,30 @@ async def get_generic_sso_response(
         authorization_code = request.query_params.get("code")
 
         if code_verifier:
+            # State-to-session-cookie binding.  The non-PKCE branch below
+            # delegates to fastapi-sso's ``verify_and_process``, which
+            # performs its own session-cookie check.  The PKCE branch
+            # bypasses that helper, so we validate the URL ``state``
+            # against the ``litellm_oauth_state`` cookie set on the
+            # redirect response — without this an attacker can pre-mint
+            # a state + cached PKCE verifier and hijack a victim's auth
+            # code (Login-CSRF / token theft).
+            url_state = request.query_params.get("state")
+            cookie_state = request.cookies.get("litellm_oauth_state")
+            if (
+                not url_state
+                or not cookie_state
+                or not secrets.compare_digest(url_state, cookie_state)
+            ):
+                raise ProxyException(
+                    message=(
+                        "Invalid OAuth state parameter — does not match "
+                        "the browser-bound state cookie."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="state",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             if not authorization_code:
                 raise ProxyException(
                     message="Missing authorization code in callback",
@@ -1050,7 +1653,7 @@ async def get_existing_user_info_from_db(
     user_id: Optional[str],
     user_email: Optional[str],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[LiteLLM_UserTable]:
     try:
@@ -1074,7 +1677,7 @@ async def get_existing_user_info_from_db(
 async def get_user_info_from_db(
     result: Union[CustomOpenID, OpenID, dict],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     user_email: Optional[str],
     user_defined_values: Optional[SSOUserDefinedValues],
@@ -1194,7 +1797,7 @@ async def _sync_user_role_from_jwt_role_map(
     received_response: Optional[dict],
     user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_defined_values: Optional[SSOUserDefinedValues],
 ) -> None:
     """
@@ -1226,18 +1829,15 @@ async def _sync_user_role_from_jwt_role_map(
 
     # Update existing DB record if role differs
     if user_info is not None and user_info.user_role != mapped_role.value:
-        await prisma_client.db.litellm_usertable.update(
+        await UserRepository(prisma_client).table.update(
             where={"user_id": user_info.user_id},
             data={"user_role": mapped_role.value},
         )
         user_info.user_role = mapped_role.value
         await user_api_key_cache.async_set_cache(
             key=user_info.user_id,
-            value=(
-                user_info.model_dump()
-                if hasattr(user_info, "model_dump")
-                else dict(user_info)
-            ),
+            value=user_info,
+            model_type=LiteLLM_UserTable,
         )
 
 
@@ -1293,7 +1893,7 @@ async def check_and_update_if_proxy_admin_id(
             return user_role
 
         if prisma_client:
-            await prisma_client.db.litellm_usertable.update(
+            await UserRepository(prisma_client).table.update(
                 where={"user_id": user_id},
                 data={"user_role": LitellmUserRoles.PROXY_ADMIN.value},
             )
@@ -1304,7 +1904,7 @@ async def check_and_update_if_proxy_admin_id(
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request, state: Optional[str] = None):  # noqa: PLR0915
+async def auth_callback(request: Request, state: Optional[str] = None):
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
 
@@ -1392,17 +1992,18 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         )
 
     if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # Extract the key ID and existing_key from the state
-        # State format: {PREFIX}:{key}:{existing_key} or {PREFIX}:{key}
-        state_parts = state.split(":", 2)  # Split into max 3 parts
+        # State format: {PREFIX}:{login_id}[:{user_code}]
+        state_parts = state.split(":", 2)
         key_id = state_parts[1] if len(state_parts) > 1 else None
-        existing_key = state_parts[2] if len(state_parts) > 2 else None
+        prefill_user_code = state_parts[2] if len(state_parts) > 2 else None
 
-        verbose_proxy_logger.info(
-            f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}"
-        )
+        verbose_proxy_logger.info("CLI SSO callback detected")
         return await cli_sso_callback(
-            request=request, key=key_id, existing_key=existing_key, result=result
+            request=request,
+            key=key_id,
+            prefill_user_code=prefill_user_code,
+            result=result,
+            received_response=received_response,
         )
 
     # Control-plane cross-origin: read return_to from cookie.
@@ -1421,28 +2022,153 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     )
 
 
+async def _build_cli_sso_user_defined_values(
+    result: Union[OpenID, dict],
+    parsed_openid_result: ParsedOpenIDResult,
+) -> Optional[SSOUserDefinedValues]:
+    from litellm.proxy.proxy_server import user_custom_sso
+
+    user_id = parsed_openid_result.get("user_id")
+    if user_custom_sso is not None:
+        if inspect.iscoroutinefunction(user_custom_sso):
+            return await user_custom_sso(result)  # type: ignore
+        raise ValueError("user_custom_sso must be a coroutine function")
+    if user_id is None:
+        return None
+    return SSOUserDefinedValues(
+        models=[],
+        user_id=user_id,
+        user_email=parsed_openid_result.get("user_email"),
+        max_budget=litellm.max_internal_user_budget,
+        user_role=parsed_openid_result.get("user_role"),
+        budget_duration=litellm.internal_user_budget_duration,
+    )
+
+
+async def _fetch_cli_sso_team_details(
+    prisma_client: PrismaClient,
+    teams: List[str],
+) -> List[Dict[str, Any]]:
+    team_details: List[Dict[str, Any]] = []
+    try:
+        if teams:
+            prisma_teams = await TeamRepository(prisma_client).table.find_many(
+                where={"team_id": {"in": teams}}
+            )
+            for team_row in prisma_teams:
+                team_dict = team_row.model_dump()
+                team_details.append(
+                    {
+                        "team_id": team_dict.get("team_id"),
+                        "team_alias": team_dict.get("team_alias"),
+                    }
+                )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error fetching team details for CLI SSO session: {e}"
+        )
+    return team_details
+
+
+async def _complete_cli_sso_callback_session(
+    *,
+    request: Request,
+    key: str,
+    flow: dict,
+    result: Union[OpenID, dict],
+    parsed_openid_result: ParsedOpenIDResult,
+    user_defined_values: Optional[SSOUserDefinedValues],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    prefill_user_code: str | None = None,
+):
+    from fastapi.responses import HTMLResponse
+
+    user_id = parsed_openid_result.get("user_id")
+    user_email = parsed_openid_result.get("user_email")
+    user_info = await get_user_info_from_db(
+        result=result,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        user_email=user_email,
+        user_defined_values=user_defined_values,
+        alternate_user_id=user_id,
+    )
+    if user_info is None:
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve user information from SSO"
+        )
+    if not user_info.user_id:
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve user information from SSO"
+        )
+
+    teams: List[str] = []
+    if hasattr(user_info, "teams") and user_info.teams:
+        teams = user_info.teams if isinstance(user_info.teams, list) else []
+
+    team_details = await _fetch_cli_sso_team_details(
+        prisma_client=prisma_client, teams=teams
+    )
+    attribution_metadata = build_cli_sso_attribution_metadata(result=result)
+    if attribution_metadata:
+        await _persist_cli_sso_user_metadata(
+            prisma_client=prisma_client,
+            user_id=cast(str, user_info.user_id),
+            attribution_metadata=attribution_metadata,
+        )
+
+    flow["session_data"] = {
+        "user_id": cast(str, user_info.user_id),
+        "user_role": user_info.user_role,
+        "models": user_info.models if hasattr(user_info, "models") else [],
+        "user_email": user_email,
+        "teams": teams,
+        "team_details": team_details,
+        "attribution_metadata": attribution_metadata,
+    }
+    flow["sso_complete"] = True
+    browser_complete_token = secrets.token_urlsafe(32)
+    flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
+    _set_cli_sso_flow(login_id=key, cache=user_api_key_cache, flow=flow)
+
+    verbose_proxy_logger.info(
+        f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
+    )
+    verify_url = get_custom_url(
+        request_base_url=str(request.base_url),
+        route=f"sso/cli/complete/{key}",
+    )
+    return HTMLResponse(
+        content=_render_cli_sso_verification_page(
+            verify_url=verify_url,
+            browser_complete_token=browser_complete_token,
+            prefill_user_code=prefill_user_code,
+        ),
+        status_code=200,
+    )
+
+
 async def cli_sso_callback(
     request: Request,
     key: Optional[str] = None,
-    existing_key: Optional[str] = None,
     result: Optional[Union[OpenID, dict]] = None,
+    received_response: Optional[dict] = None,
+    prefill_user_code: str | None = None,
 ):
     """CLI SSO callback - stores session info for JWT generation on polling"""
-    verbose_proxy_logger.info(
-        f"CLI SSO callback for key: {key}, existing_key: {existing_key}"
-    )
+    verbose_proxy_logger.info("CLI SSO callback")
 
     from litellm.proxy.proxy_server import (
+        general_settings,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
-    if not key or not key.startswith("sk-"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid key parameter. Must be a valid key ID starting with 'sk-'",
-        )
+    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
 
     if prisma_client is None:
         raise HTTPException(
@@ -1458,88 +2184,41 @@ async def cli_sso_callback(
     # After None check, cast to non-None type for type checker
     result_non_none: Union[OpenID, dict] = cast(Union[OpenID, dict], result)
 
-    parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(
-        result=result_non_none
-    )
-    verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
-
     try:
-        # Get full user info from DB
-        user_info = await get_user_info_from_db(
+        parsed_openid_result = (
+            SSOAuthenticationHandler._get_user_email_and_id_from_result(
+                result=result_non_none,
+                generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
+            )
+        )
+        verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
+        user_defined_values = await _build_cli_sso_user_defined_values(
             result=result_non_none,
+            parsed_openid_result=parsed_openid_result,
+        )
+
+        SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings=general_settings,
+            result=result_non_none,
+            received_response=received_response,
+        )
+
+        return await _complete_cli_sso_callback_session(
+            request=request,
+            key=cast(str, key),
+            flow=flow,
+            result=result_non_none,
+            parsed_openid_result=parsed_openid_result,
+            user_defined_values=user_defined_values,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            user_email=parsed_openid_result.get("user_email"),
-            user_defined_values=None,
-            alternate_user_id=parsed_openid_result.get("user_id"),
+            prefill_user_code=prefill_user_code,
         )
-
-        if user_info is None:
-            raise HTTPException(
-                status_code=500, detail="Failed to retrieve user information from SSO"
-            )
-
-        # Store session info in cache (10 min TTL)
-        from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
-
-        # Get all teams from user_info - CLI will let user select which one
-        teams: List[str] = []
-        if hasattr(user_info, "teams") and user_info.teams:
-            teams = user_info.teams if isinstance(user_info.teams, list) else []
-
-        # Also fetch team aliases for a better CLI UX. We keep the original
-        # "teams" list of IDs for backwards compatibility and add an
-        # optional "team_details" field containing objects with both
-        # team_id and team_alias.
-        team_details: List[Dict[str, Any]] = []
-        try:
-            if teams:
-                prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
-                    where={"team_id": {"in": teams}}
-                )
-                for team_row in prisma_teams:
-                    team_dict = team_row.model_dump()
-                    team_details.append(
-                        {
-                            "team_id": team_dict.get("team_id"),
-                            "team_alias": team_dict.get("team_alias"),
-                        }
-                    )
-        except Exception as e:
-            # If anything goes wrong here, fall back gracefully without
-            # impacting the SSO flow.
-            verbose_proxy_logger.error(
-                f"Error fetching team details for CLI SSO session: {e}"
-            )
-
-        session_data = {
-            "user_id": user_info.user_id,
-            "user_role": user_info.user_role,
-            "models": user_info.models if hasattr(user_info, "models") else [],
-            "user_email": parsed_openid_result.get("user_email"),
-            "teams": teams,
-            # Optional rich metadata for clients that want nicer display
-            "team_details": team_details,
-        }
-
-        cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key}"
-        user_api_key_cache.set_cache(key=cache_key, value=session_data, ttl=600)
-
-        verbose_proxy_logger.info(
-            f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
-        )
-
-        # Return success page
-        from fastapi.responses import HTMLResponse
-
-        from litellm.proxy.common_utils.html_forms.cli_sso_success import (
-            render_cli_sso_success_page,
-        )
-
-        html_content = render_cli_sso_success_page()
-        return HTMLResponse(content=html_content, status_code=200)
-
+    except ProxyException:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error with CLI SSO callback: {e}")
         raise HTTPException(
@@ -1548,7 +2227,11 @@ async def cli_sso_callback(
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
-async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
+async def cli_poll_key(
+    key_id: str,
+    team_id: Optional[str] = None,
+    x_litellm_cli_poll_secret: Optional[str] = Header(default=None),
+):
     """
     CLI polling endpoint - retrieves session from cache and generates JWT.
 
@@ -1557,22 +2240,25 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
     2. Second poll (with team_id): Generates JWT with selected team and deletes session
 
     Args:
-        key_id: The session key ID
+        key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    if not key_id.startswith("sk-"):
-        raise HTTPException(status_code=400, detail="Invalid key ID format")
-
     try:
-        # Look up session in cache
-        cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key_id}"
-        session_data = user_api_key_cache.get_cache(key=cache_key)
+        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
+        if not _verify_cli_sso_poll_secret(
+            flow=flow, poll_secret=x_litellm_cli_poll_secret
+        ):
+            raise HTTPException(status_code=403, detail="Invalid CLI polling secret")
 
-        if session_data:
+        if not flow.get("sso_complete") or not flow.get("user_code_verified"):
+            return {"status": "pending"}
+
+        session_data = flow.get("session_data")
+
+        if isinstance(session_data, dict):
             user_teams = session_data.get("teams", [])
             user_team_details = session_data.get("team_details")
             user_id = session_data["user_id"]
@@ -1598,13 +2284,19 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                     team_details_response = [
                         {"team_id": t, "team_alias": None} for t in user_teams
                     ]
-                return {
+                poll_response: Dict[str, Any] = {
                     "status": "ready",
                     "user_id": user_id,
                     "teams": user_teams,
                     "team_details": team_details_response,
                     "requires_team_selection": True,
                 }
+                attribution_metadata = _cli_poll_attribution_metadata_from_session(
+                    session_data
+                )
+                if attribution_metadata:
+                    poll_response["attribution_metadata"] = attribution_metadata
+                return poll_response
 
             # Validate team_id if provided
             if team_id is not None:
@@ -1617,6 +2309,17 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
+            team_alias = None
+            if team_id and isinstance(user_team_details, list):
+                team_alias = next(
+                    (
+                        team.get("team_alias")
+                        for team in user_team_details
+                        if team.get("team_id") == team_id
+                    ),
+                    None,
+                )
+
             # Create user object for JWT generation
             user_info = LiteLLM_UserTable(
                 user_id=user_id,
@@ -1628,16 +2331,16 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
             # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
             # Pass selected team_id to ensure JWT has correct team
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-                user_info=user_info, team_id=team_id
+                user_info=user_info, team_id=team_id, team_alias=team_alias
             )
 
             # Delete cache entry (single-use)
-            user_api_key_cache.delete_cache(key=cache_key)
+            user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
             verbose_proxy_logger.info(
                 f"CLI JWT generated for user: {user_id}, team: {team_id}"
             )
-            return {
+            poll_response = {
                 "status": "ready",
                 "key": jwt_token,
                 "user_id": user_id,
@@ -1647,9 +2350,17 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                 # present nicer information if needed.
                 "team_details": user_team_details,
             }
+            attribution_metadata = _cli_poll_attribution_metadata_from_session(
+                session_data
+            )
+            if attribution_metadata:
+                poll_response["attribution_metadata"] = attribution_metadata
+            return poll_response
         else:
             return {"status": "pending"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
         raise HTTPException(
@@ -1898,6 +2609,7 @@ class SSOAuthenticationHandler:
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
         state: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Step 1. Call Get Login Redirect for the SSO provider. Send the redirect response to `redirect_url`
@@ -1907,6 +2619,8 @@ class SSOAuthenticationHandler:
             google_client_id (Optional[str], optional): The Google Client ID. Defaults to None.
             microsoft_client_id (Optional[str], optional): The Microsoft Client ID. Defaults to None.
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
+            request: Optional FastAPI request, used to drive the ``Secure``
+                attribute on the ``litellm_oauth_state`` CSRF cookie.
 
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
@@ -2017,6 +2731,7 @@ class SSOAuthenticationHandler:
                 generic_sso=generic_sso,
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
+                request=request,
             )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -2027,6 +2742,7 @@ class SSOAuthenticationHandler:
         generic_sso: Any,
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Get the redirect response for Generic SSO
@@ -2036,10 +2752,13 @@ class SSOAuthenticationHandler:
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         with generic_sso:
-            # TODO: state should be a random string and added to the user session with cookie
-            # or a cryptographicly signed state that we can verify stateless
-            # For simplification we are using a static state, this is not perfect but some
-            # SSO providers do not allow stateless verification
+            # State is bound to the caller's browser via a ``litellm_oauth_state``
+            # HttpOnly cookie set on the redirect response below; the SSO
+            # callback validates the URL ``state`` against that cookie before
+            # completing the PKCE token exchange.  Without this binding, an
+            # attacker who pre-mints a state + a cached PKCE verifier can hand
+            # the link to a victim and capture the resulting access token
+            # (Login CSRF / token theft).
             (
                 redirect_params,
                 code_verifier,
@@ -2106,6 +2825,31 @@ class SSOAuthenticationHandler:
 
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
+
+                # Bind state to the user's browser session.  The /callback
+                # handler validates the URL ``state`` against this cookie via
+                # ``secrets.compare_digest`` before exchanging the PKCE
+                # code_verifier.  Only set the cookie when PKCE is in use
+                # (i.e. inside this ``code_verifier`` branch) so two
+                # concurrent SSO sessions — one PKCE, one plain — cannot
+                # overwrite each other's state cookie.
+                state_value = redirect_params.get("state")
+                if state_value and redirect_response is not None:
+                    # Production-safe default: require HTTPS for the
+                    # CSRF-protection cookie unless we can prove the
+                    # incoming request is HTTP (local dev).  Without
+                    # ``Secure`` the cookie is sent over plain HTTP,
+                    # letting a network observer read and replay the
+                    # state value and bypass this protection.
+                    secure_flag = request is None or request.url.scheme == "https"
+                    redirect_response.set_cookie(
+                        key="litellm_oauth_state",
+                        value=state_value,
+                        max_age=600,
+                        httponly=True,
+                        samesite="lax",
+                        secure=secure_flag,
+                    )
             return redirect_response
 
     @staticmethod
@@ -2220,7 +2964,7 @@ class SSOAuthenticationHandler:
                     user_id=user_id,
                 )
 
-                await prisma_client.db.litellm_usertable.update_many(
+                await UserRepository(prisma_client).table.update_many(
                     where={"user_id": user_id}, data=update_data
                 )
             else:
@@ -2322,7 +3066,7 @@ class SSOAuthenticationHandler:
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         try:
-            team_obj = await prisma_client.db.litellm_teamtable.find_first(
+            team_obj = await TeamRepository(prisma_client).table.find_first(
                 where={"team_id": litellm_team_id}
             )
             verbose_proxy_logger.debug(f"Team object: {team_obj}")
@@ -2386,27 +3130,28 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _get_cli_state(
-        source: Optional[str], key: Optional[str], existing_key: Optional[str] = None
+        source: str | None,
+        key: str | None,
+        existing_key: str | None = None,
+        user_code: str | None = None,
     ) -> Optional[str]:
         """
         Checks the request 'source' if a cli state token was passed in
 
         This is used to authenticate through the CLI login flow.
 
-        The state parameter format is: {PREFIX}:{key}:{existing_key}
-        - If existing_key is provided, it's included in the state
+        The state parameter format is: {PREFIX}:{login_id}[:{user_code}]
         - The state parameter is used to pass data through the OAuth flow without changing the callback URL
+        - user_code is appended only for the opt-in verification_uri_complete flow so the verify page can pre-fill it
         """
         from litellm.constants import (
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
-            LITELLM_CLI_SOURCE_IDENTIFIER,
         )
 
         if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
-            if existing_key:
-                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{existing_key}"
-            else:
-                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+            if _is_valid_cli_sso_user_code(user_code):
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{user_code}"
+            return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
         else:
             return None
 
@@ -2483,7 +3228,7 @@ class SSOAuthenticationHandler:
         )
 
     @staticmethod
-    async def get_redirect_response_from_openid(  # noqa: PLR0915
+    async def get_redirect_response_from_openid(
         result: Union[OpenID, dict, CustomOpenID],
         request: Request,
         received_response: Optional[dict] = None,
@@ -3728,6 +4473,7 @@ async def debug_sso_login(request: Request):
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            request=request,
         )
 
 
@@ -3775,6 +4521,8 @@ async def debug_sso_callback(request: Request):
         redirect_url += "/sso/debug/callback"
 
     result = None
+    received_response: Optional[dict] = None
+    access_token_payload: Optional[dict] = None
     if google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
             request=request,
@@ -3791,12 +4539,14 @@ async def debug_sso_callback(request: Request):
         )
 
     elif generic_client_id is not None:
-        result, _, _ = await get_generic_sso_response(
-            request=request,
-            jwt_handler=jwt_handler,
-            generic_client_id=generic_client_id,
-            redirect_url=redirect_url,
-            sso_jwt_handler=sso_jwt_handler,
+        result, received_response, access_token_payload = (
+            await get_generic_sso_response(
+                request=request,
+                jwt_handler=jwt_handler,
+                generic_client_id=generic_client_id,
+                redirect_url=redirect_url,
+                sso_jwt_handler=sso_jwt_handler,
+            )
         )
 
     # If result is None, return a basic error message
@@ -3825,10 +4575,32 @@ async def debug_sso_callback(request: Request):
                 except Exception as e:
                     filtered_result[key] = f"Complex value (not displayable): {str(e)}"
 
+    # Defense-in-depth: ensure no bearer tokens leak into the rendered HTML even if
+    # a non-conforming IdP places them in its userinfo response.
+    safe_raw_claims = {
+        k: v
+        for k, v in (received_response or {}).items()
+        if k not in _OAUTH_TOKEN_FIELDS
+    }
+    safe_access_token_claims = {
+        k: v
+        for k, v in (access_token_payload or {}).items()
+        if k not in _OAUTH_TOKEN_FIELDS
+    }
+
+    sso_payload = {
+        "parsed_by_proxy": filtered_result,
+        "raw_claims": safe_raw_claims,
+        "access_token_claims": safe_access_token_claims,
+    }
+
     # Replace the placeholder in the template with the actual data
+    sso_payload_json = json.dumps(sso_payload, indent=2, default=str).replace(
+        "</", "<\\/"
+    )
     html_content = jwt_display_template.replace(
-        "const userData = SSO_DATA;",
-        f"const userData = {json.dumps(filtered_result, indent=2)};",
+        "const ssoData = SSO_DATA;",
+        f"const ssoData = {sso_payload_json};",
     )
 
     return HTMLResponse(content=html_content)

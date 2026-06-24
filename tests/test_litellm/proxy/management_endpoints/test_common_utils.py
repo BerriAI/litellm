@@ -158,6 +158,32 @@ class TestUpdateMetadataFieldsEmptyCollections:
         assert updated_kv["metadata"]["guardrails"] == ["my-guardrail"]
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_does_not_trigger_premium_check(self, mock_premium_check):
+        """
+        Regression #30285: /team/update sends disable_global_guardrails=False
+        (the UI's unchanged default). A falsy boolean must not trigger the
+        premium check, so non-premium users are not wrongly 403'd.
+        """
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_not_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_still_updates_metadata(self, mock_premium_check):
+        """A falsy boolean must still be moved into metadata so it persists."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        assert "disable_global_guardrails" not in updated_kv
+        assert updated_kv["metadata"]["disable_global_guardrails"] is False
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_true_boolean_triggers_premium_check(self, mock_premium_check):
+        """Control: enabling the premium feature (True) still requires a license."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": True}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
     def test_ui_typical_payload_does_not_trigger_premium_check(
         self, mock_premium_check
     ):
@@ -481,3 +507,66 @@ class TestSetObjectMetadataField:
         ):
             _set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
         assert team.metadata == {"model_rpm_limit": {"x": 1}}
+
+    def test_mcp_rpm_limit_is_hoisted_into_metadata(self):
+        """
+        Per-MCP-server rpm limits are stored in the metadata JSON column, not a
+        dedicated DB column. The key/team management endpoints rely on
+        LiteLLM_ManagementEndpoint_MetadataFields to move the request field into
+        metadata; this regression guards that mcp_rpm_limit is in that list and
+        round-trips through the same loop the endpoints use.
+        """
+        from litellm.proxy._types import LiteLLM_ManagementEndpoint_MetadataFields
+
+        assert "mcp_rpm_limit" in LiteLLM_ManagementEndpoint_MetadataFields
+
+        from types import SimpleNamespace
+
+        team = LiteLLM_TeamTable(team_id="t1", metadata={})
+        mcp_rpm_limit = {"github": 100}
+        data = SimpleNamespace(mcp_rpm_limit=mcp_rpm_limit)
+
+        with patch(
+            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+        ):
+            for field in LiteLLM_ManagementEndpoint_MetadataFields:
+                if getattr(data, field, None) is not None:
+                    _set_object_metadata_field(team, field, getattr(data, field))
+
+        assert team.metadata["mcp_rpm_limit"] == mcp_rpm_limit
+
+
+class TestRequireCallerUserIdForNonAdmin:
+    """
+    Security regression: service-account keys (user_id=None) must not bypass
+    the non-admin scoping branch on analytics endpoints.
+    """
+
+    def test_returns_user_id_when_present(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        key_dict = UserAPIKeyAuth(
+            user_id="user-abc",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        assert require_caller_user_id_for_non_admin(key_dict) == "user-abc"
+
+    def test_raises_403_when_user_id_is_none(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        # Simulates a service-account key (user_id forced to None at key creation)
+        service_account_key = UserAPIKeyAuth(
+            user_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            require_caller_user_id_for_non_admin(service_account_key)
+
+        assert exc_info.value.status_code == 403
+        assert "Service-account keys" in str(exc_info.value.detail)

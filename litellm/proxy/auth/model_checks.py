@@ -4,11 +4,19 @@ from typing import Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-from litellm.types.router import LiteLLM_Params
+from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
+from litellm.types.utils import LlmProviders
 from litellm.utils import get_valid_models
+
+_CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
+
+
+_CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -80,7 +88,7 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-        result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        result = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
@@ -110,10 +118,20 @@ def get_key_models(
         all_models = list(
             user_api_key_dict.models
         )  # copy to avoid mutating cached objects
-        if SpecialModelNames.all_team_models.value in all_models:
-            all_models = list(
-                user_api_key_dict.team_models
-            )  # copy to avoid mutating cached objects
+        if (
+            SpecialModelNames.all_team_models.value in all_models
+            and user_api_key_dict.team_id is not None
+        ):
+            all_models = list(user_api_key_dict.team_models)
+            if SpecialModelNames.all_team_models.value in all_models:
+                all_models = [
+                    model
+                    for model in all_models
+                    if model != SpecialModelNames.all_team_models.value
+                ]
+                all_models.extend(proxy_model_list)
+                if include_model_access_groups:
+                    all_models.extend(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
             if include_model_access_groups:
@@ -149,6 +167,12 @@ def get_team_models(
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
             all_models_set.update(team_models)
+            # GH#30619: expand all-team-models sentinel
+            # to the actual proxy model list
+            all_models_set.discard(SpecialModelNames.all_team_models.value)
+            all_models_set.update(proxy_model_list)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models_set:
             all_models_set.update(proxy_model_list)
             if include_model_access_groups:
@@ -178,6 +202,7 @@ def get_complete_model_list(
     model_access_groups: Dict[str, List[str]] = {},
     include_model_access_groups: Optional[bool] = False,
     only_model_access_groups: Optional[bool] = False,
+    team_id: Optional[str] = None,
 ) -> List[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -222,11 +247,35 @@ def get_complete_model_list(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
+        team_id=team_id,
     )
 
     complete_model_list = unique_models + all_wildcard_models
 
     return complete_model_list
+
+
+def _hydrate_litellm_credential_name(
+    litellm_params: Optional[LiteLLM_Params],
+) -> Optional[LiteLLM_Params]:
+    if litellm_params is None or litellm_params.litellm_credential_name is None:
+        return litellm_params
+
+    credential_values = CredentialAccessor.get_credential_values(
+        litellm_params.litellm_credential_name
+    )
+    if not credential_values:
+        return litellm_params
+
+    litellm_params = litellm_params.model_copy()
+    for key, value in credential_values.items():
+        if (
+            key in _CREDENTIAL_LITELLM_PARAM_FIELDS
+            and getattr(litellm_params, key, None) is None
+        ):
+            setattr(litellm_params, key, value)
+    litellm_params.litellm_credential_name = None
+    return litellm_params
 
 
 def get_known_models_from_wildcard(
@@ -247,7 +296,7 @@ def get_known_models_from_wildcard(
     else:
         provider = wildcard_provider_prefix
 
-    # get all known provider models
+    litellm_params = _hydrate_litellm_credential_name(litellm_params)
 
     wildcard_models = get_provider_models(
         provider=provider, litellm_params=litellm_params
@@ -273,10 +322,21 @@ def get_known_models_from_wildcard(
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
+    known_providers = {provider.value for provider in LlmProviders}
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
         if not model.startswith(wildcard_provider_prefix):
-            model = f"{wildcard_provider_prefix}/{model}"
+            # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
+            # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
+            # multiple instances), replace that existing provider prefix instead of stacking
+            # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
+            # Only strip the leading segment when it is a known provider, so ids whose first
+            # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
+            leading, sep, model_suffix = model.partition("/")
+            if sep and leading in known_providers:
+                model = f"{wildcard_provider_prefix}/{model_suffix}"
+            else:
+                model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
 
@@ -285,6 +345,7 @@ def _get_wildcard_models(
     unique_models: List[str],
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
+    team_id: Optional[str] = None,
 ) -> List[str]:
     models_to_remove = set()
     all_wildcard_models = []
@@ -297,7 +358,9 @@ def _get_wildcard_models(
 
             ## get litellm params from model
             if llm_router is not None:
-                model_list = llm_router.get_model_list(model_name=model)
+                model_list = llm_router.get_model_list(
+                    model_name=model, team_id=team_id
+                )
                 if model_list:
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(

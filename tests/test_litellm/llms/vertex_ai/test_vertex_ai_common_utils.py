@@ -15,7 +15,10 @@ from litellm.llms.vertex_ai.common_utils import (
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    pop_vertex_request_labels,
     set_schema_property_ordering,
+    supports_response_json_schema,
+    vertex_request_labels_from_litellm_params,
 )
 
 
@@ -146,6 +149,23 @@ async def test_get_supports_system_message():
         model="random-model-name", custom_llm_provider="vertex_ai"
     )
     assert result == False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("gemini-2.0-flash", True),
+        ("gemini-1.5-pro", False),
+        ("random-model-name", False),
+        ("gemini-3-flash-preview", True),
+        ("gemini-123-pro", True),
+        ("vertex_ai/gemini-3.1-pro-preview", True),
+    ],
+)
+def test_supports_response_json_schema(model: str, expected: bool):
+    """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
+
+    assert supports_response_json_schema(model) == expected
 
 
 def test_set_schema_property_ordering_with_excessive_nesting():
@@ -297,6 +317,18 @@ def test_process_items_basic():
     schema = {"type": "array"}
     process_items(schema)
     assert schema["items"] == {"type": "object"}
+
+    # Test array missing items inside anyOf branch
+    schema = {
+        "type": "object",
+        "properties": {
+            "callbacks": {
+                "anyOf": [{"type": "array"}, {"type": "object"}],
+            }
+        },
+    }
+    process_items(schema)
+    assert schema["properties"]["callbacks"]["anyOf"][0]["items"] == {"type": "object"}
 
 
 def test_build_vertex_schema_array_branch_missing_items_in_anyof():
@@ -1312,6 +1344,63 @@ def test_vertex_ai_zai_is_partner_model():
     assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
 
 
+def test_vertex_ai_gemma_maas_is_partner_model():
+    """
+    Ensure Gemma MaaS models are detected as Vertex AI partner models so they
+    route through the OpenAI-compatible /endpoints/openapi path (not the
+    legacy non-gemini path or the vertex_ai/gemma/ predict-endpoint handler).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model(
+        "google/gemma-4-26b-a4b-it-maas"
+    )
+
+
+def test_vertex_ai_gemma_maas_uses_openai_handler():
+    """
+    Ensure Gemma MaaS partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "google/gemma-4-26b-a4b-it-maas"
+    )
+
+
+def test_vertex_ai_gemma_maas_routes_to_partner_models():
+    """
+    Regression guard for owtaylor's worry that Gemma MaaS could be misrouted as
+    a gemma model. get_vertex_ai_model_route must return PARTNER_MODELS, never
+    GEMMA, MODEL_GARDEN, or NON_GEMINI.
+    """
+    from litellm.llms.vertex_ai.common_utils import (
+        VertexAIModelRoute,
+        get_vertex_ai_model_route,
+    )
+
+    route = get_vertex_ai_model_route("google/gemma-4-26b-a4b-it-maas")
+    assert route == VertexAIModelRoute.PARTNER_MODELS
+
+
+def test_vertex_ai_google_gemini_not_detected_as_gemma_maas():
+    """
+    Negative: adding the "google/gemma-" prefix must not widen detection to
+    other google/* models like google/gemini-* (which should keep flowing
+    through the gemini route, not partner_models).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert not VertexAIPartnerModels.is_vertex_partner_model("google/gemini-1.5-pro")
+    assert not VertexAIPartnerModels.should_use_openai_handler("google/gemini-1.5-pro")
+
+
 def test_build_vertex_schema_empty_properties():
     """
     Test _build_vertex_schema handles empty properties objects correctly.
@@ -1444,3 +1533,61 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
+
+
+def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata():
+    assert vertex_request_labels_from_litellm_params(None) is None
+    assert vertex_request_labels_from_litellm_params({}) is None
+    assert vertex_request_labels_from_litellm_params({"metadata": None}) is None
+    lp = {"metadata": {"requester_metadata": {"team": "analytics", "count": 3}}}
+    assert vertex_request_labels_from_litellm_params(lp) == {"team": "analytics"}
+
+
+def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
+    lp = {"litellm_metadata": {"requester_metadata": {"team": "platform", "count": 3}}}
+    assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
+
+
+def test_vertex_request_labels_prefers_metadata_over_litellm_metadata():
+    lp = {
+        "metadata": {"requester_metadata": {"source": "metadata"}},
+        "litellm_metadata": {"requester_metadata": {"source": "litellm_metadata"}},
+    }
+    assert vertex_request_labels_from_litellm_params(lp) == {"source": "metadata"}
+
+
+def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
+    optional = {"labels": {"env": "prod"}}
+    litellm_params = {"metadata": {"requester_metadata": {"team": "x"}}}
+    assert pop_vertex_request_labels(optional, litellm_params) == {"env": "prod"}
+    assert "labels" not in optional
+
+    optional2: dict = {}
+    assert pop_vertex_request_labels(optional2, litellm_params) == {"team": "x"}
+
+    optional3 = {"labels": {"team": 123}}
+    assert pop_vertex_request_labels(optional3, litellm_params) == {"team": "x"}
+
+
+def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
+    optional: dict = {}
+    litellm_params = {
+        "litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}
+    }
+    assert pop_vertex_request_labels(optional, litellm_params) == {
+        "team": "from_litellm_meta"
+    }
+
+
+def test_vertex_text_embedding_request_includes_labels_from_metadata():
+    import litellm
+
+    req = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+        input="hi",
+        optional_params={},
+        model="text-embedding-004",
+        litellm_params={
+            "metadata": {"requester_metadata": {"project_id": "cost-center-1"}}
+        },
+    )
+    assert req.get("labels") == {"project_id": "cost-center-1"}
