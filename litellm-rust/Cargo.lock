@@ -566,6 +566,7 @@ dependencies = [
  "pyo3",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
 ]
 
