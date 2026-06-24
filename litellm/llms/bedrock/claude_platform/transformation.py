@@ -7,7 +7,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 from .common_utils import (
     BedrockClaudePlatformMixin,
-    _resolve_unsupported_override,
+    resolve_unsupported_override,
     filter_claude_platform_request_body,
 )
 
@@ -94,7 +94,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        unsupported_override = _resolve_unsupported_override(litellm_params)
+        unsupported_override = resolve_unsupported_override(litellm_params)
         optional_params = filter_claude_platform_request_body(
             optional_params, unsupported_override=unsupported_override
         )

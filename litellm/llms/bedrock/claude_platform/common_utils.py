@@ -1,8 +1,12 @@
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional, Protocol, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None) -> object: ...
 from litellm.secret_managers.main import get_secret_str
 
 CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
@@ -74,8 +78,8 @@ def filter_claude_platform_request_body(
     }
 
 
-def _resolve_unsupported_override(
-    litellm_params: dict,
+def resolve_unsupported_override(
+    litellm_params: _SupportsGet,
 ) -> Optional[frozenset[str]]:
     """Read ``claude_platform_unsupported_params`` from litellm_params.
 
@@ -87,7 +91,7 @@ def _resolve_unsupported_override(
     if raw is None:
         return None
     if isinstance(raw, (list, set, frozenset, tuple)):
-        return frozenset(raw)
+        return frozenset(str(item) for item in raw)
     return None
 
 
