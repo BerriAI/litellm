@@ -261,11 +261,11 @@ class CustomCodeGuardrail(CustomGuardrail):
             verbose_proxy_logger.error(
                 f"Custom code guardrail '{self.guardrail_name}' execution error: {e}"
             )
-            raise CustomCodeExecutionError(
-                f"Custom code guardrail execution failed: {e}",
-                details={
-                    "guardrail_name": self.guardrail_name,
-                    "input_type": input_type,
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Custom code guardrail execution failed: {e}",
+                    "guardrail": self.guardrail_name,
                 },
             ) from e
 
