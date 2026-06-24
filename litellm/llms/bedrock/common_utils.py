@@ -933,14 +933,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit converse route.
         """
-        return "converse/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse/")
 
     @staticmethod
     def _explicit_claude_platform_route(model: str) -> bool:
         """
         Check if the model is an explicit Claude Platform on AWS route.
         """
-        return "claude_platform/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "claude_platform/")
 
     @staticmethod
     def get_claude_platform_model(model: str) -> str:
@@ -970,21 +970,21 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit invoke route.
         """
-        return "invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "invoke/")
 
     @staticmethod
     def _explicit_agent_route(model: str) -> bool:
         """
         Check if the model is an explicit agent route.
         """
-        return "agent/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agent/")
 
     @staticmethod
     def _explicit_agentcore_route(model: str) -> bool:
         """
         Check if the model is an explicit agentcore route.
         """
-        return "agentcore/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agentcore/")
 
     @staticmethod
     def _model_has_route_prefix(model: str, prefix: str) -> bool:
@@ -995,6 +995,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
         provider prefix against the ``mantle/`` route, so the body model gets
         mangled to ``bedrock_openai.gpt-5.5``; anchoring to a segment boundary
         keeps the bare model id intact.
+
+        ``f"/{prefix}" in model`` matches the token as a segment at any path
+        depth, not just the second segment; that is intentional and acceptable
+        for these short, unambiguous route tokens.
         """
         return model.startswith(prefix) or f"/{prefix}" in model
 
@@ -1010,14 +1014,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit converse like route.
         """
-        return "converse_like/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse_like/")
 
     @staticmethod
     def _explicit_async_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit async invoke route.
         """
-        return "async_invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "async_invoke/")
 
     @staticmethod
     def _explicit_openai_route(model: str) -> bool:
@@ -1025,7 +1029,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit openai route.
         Used for Bedrock imported models that use OpenAI Chat Completions format.
         """
-        return "openai/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "openai/")
 
     @staticmethod
     def get_bedrock_provider_config_for_messages_api(
