@@ -72,7 +72,13 @@ class CallbackLogsReplayer:
         logging_obj = LiteLLMLogging(
             model=model,
             messages=payload.get("messages") or [],
-            stream=bool(payload.get("stream") or False),
+            # A replayed payload is always a *terminal*, fully-aggregated event —
+            # the producer (e.g. the rust gateway) already collected the whole
+            # session before POSTing. Never mark it streaming: a streaming
+            # Logging object makes async_success_handler wait for a
+            # complete_streaming_response that will never arrive, so the spend
+            # log is never written.
+            stream=False,
             call_type=call_type,
             start_time=start_time,
             litellm_call_id=call_id,
