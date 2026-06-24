@@ -123,6 +123,7 @@ class TestHostedVLLMRerankTransform:
         }
         result = self.config._transform_response(response_dict)
         assert result.id == "abc123"
+        assert result.results is not None
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 0.9
