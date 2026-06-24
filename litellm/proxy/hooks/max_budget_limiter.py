@@ -47,7 +47,17 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             ):
                 return
 
-            from litellm.proxy.proxy_server import get_current_spend
+            from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+            from litellm.proxy.proxy_server import get_current_spend, llm_router
+
+            if data and _is_model_cost_zero(
+                model=data.get("model"), llm_router=llm_router
+            ):
+                verbose_proxy_logger.info(
+                    "MaxBudgetLimiter: skipping personal budget for zero-cost model=%s",
+                    data.get("model"),
+                )
+                return
 
             curr_spend = await get_current_spend(
                 counter_key=user_counter_key,

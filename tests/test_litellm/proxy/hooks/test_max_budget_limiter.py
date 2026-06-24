@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+from litellm.router import Router
 
 
 def _make_user_api_key_auth(
@@ -183,6 +184,85 @@ async def test_team_keys_skip_personal_budget():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zero_cost_model_skips_personal_budget():
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(
+        user_id="user-1",
+        user_max_budget=10.0,
+        user_spend=99.0,
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {
+                    "model": "openai/free-model",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=99.0),
+        ) as mock_get_spend,
+    ):
+        result = await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": "free-model"},
+            call_type="completion",
+        )
+
+    assert result is None
+    mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paid_model_still_enforces_personal_budget():
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(
+        user_id="user-1",
+        user_max_budget=10.0,
+        user_spend=99.0,
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                },
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=99.0),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={"model": "paid-model"},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+    assert "Max budget limit reached." in exc_info.value.detail
 
 
 @pytest.mark.asyncio
