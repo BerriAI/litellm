@@ -33,12 +33,12 @@ class VoyageRerankConfig(BaseRerankConfig):
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
     ) -> Dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
         optional_params: Dict[str, Any] = {"query": query, "documents": documents}
@@ -52,9 +52,9 @@ class VoyageRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
             return "https://api.voyageai.com/v1/rerank"
@@ -71,7 +71,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: Dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
@@ -81,7 +81,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: Dict = {},
         optional_params: Dict = {},
         litellm_params: Dict = {},
@@ -102,7 +102,7 @@ class VoyageRerankConfig(BaseRerankConfig):
             )
 
         # Voyage AI returns results in "data" key, not "results"
-        _results: Optional[List[dict]] = _json_response.get("data")
+        _results: List[dict] | None = _json_response.get("data")
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
@@ -136,8 +136,8 @@ class VoyageRerankConfig(BaseRerankConfig):
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> Dict:
         if api_key is None:
             api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str(
@@ -155,9 +155,9 @@ class VoyageRerankConfig(BaseRerankConfig):
     def calculate_rerank_cost(
         self,
         model: str,
-        custom_llm_provider: Optional[str] = None,
-        billed_units: Optional[RerankBilledUnits] = None,
-        model_info: Optional[ModelInfo] = None,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
     ) -> Tuple[float, float]:
         if (
             model_info is None

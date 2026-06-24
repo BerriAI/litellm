@@ -104,7 +104,7 @@ def _strip_password_from_users(users) -> None:
     include_in_schema=False,
 )
 async def spend_user_fn(
-    user_id: Optional[str] = fastapi.Query(
+    user_id: str | None = fastapi.Query(
         default=None,
         description="Get User Table row for user_id",
     ),
@@ -185,11 +185,11 @@ async def spend_user_fn(
     },
 )
 async def view_spend_tags(
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view key spend",
     ),
@@ -290,11 +290,11 @@ async def get_global_activity_internal_user(
     include_in_schema=False,
 )
 async def get_global_activity(
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view spend",
     ),
@@ -437,11 +437,11 @@ async def get_global_activity_model_internal_user(
     include_in_schema=False,
 )
 async def get_global_activity_model(
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view spend",
     ),
@@ -599,11 +599,11 @@ async def get_global_activity_exceptions_per_deployment(
     model_group: str = fastapi.Query(
         description="Filter by model group",
     ),
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view spend",
     ),
@@ -754,11 +754,11 @@ async def get_global_activity_exceptions(
     model_group: str = fastapi.Query(
         description="Filter by model group",
     ),
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view spend",
     ),
@@ -861,11 +861,11 @@ async def get_global_activity_exceptions(
     },
 )
 async def get_global_spend_provider(
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view spend",
     ),
@@ -996,31 +996,31 @@ async def get_global_spend_provider(
     },
 )
 async def get_global_spend_report(
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view spend",
     ),
-    group_by: Optional[Literal["team", "customer", "api_key"]] = fastapi.Query(
+    group_by: Literal["team", "customer", "api_key"] | None = fastapi.Query(
         default="team",
         description="Group spend by internal team or customer or api_key",
     ),
-    api_key: Optional[str] = fastapi.Query(
+    api_key: str | None = fastapi.Query(
         default=None,
         description="View spend for a specific api_key. Example api_key='sk-1234",
     ),
-    internal_user_id: Optional[str] = fastapi.Query(
+    internal_user_id: str | None = fastapi.Query(
         default=None,
         description="View spend for a specific internal_user_id. Example internal_user_id='1234",
     ),
-    team_id: Optional[str] = fastapi.Query(
+    team_id: str | None = fastapi.Query(
         default=None,
         description="View spend for a specific team_id. Example team_id='1234",
     ),
-    customer_id: Optional[str] = fastapi.Query(
+    customer_id: str | None = fastapi.Query(
         default=None,
         description="View spend for a specific customer_id. Example customer_id='1234. Can be used in conjunction with team_id as well.",
     ),
@@ -1416,15 +1416,15 @@ async def global_get_all_tag_names():
     },
 )
 async def global_view_spend_tags(
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view key spend",
     ),
-    tags: Optional[str] = fastapi.Query(
+    tags: str | None = fastapi.Query(
         default=None,
         description="comman separated tags to filter on",
     ),
@@ -1643,7 +1643,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
             # check if model in llm_router
             _model_in_llm_router = None
-            cost_per_token: Optional[CostPerToken] = None
+            cost_per_token: CostPerToken | None = None
             if llm_router is not None:
                 if (
                     llm_router.model_group_alias is not None
@@ -1736,35 +1736,35 @@ async def calculate_spend(request: SpendCalculateRequest):
 )
 async def ui_view_spend_logs(
     request: Request,
-    api_key: Optional[str] = fastapi.Query(
+    api_key: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
     ),
-    user_id: Optional[str] = fastapi.Query(
+    user_id: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on user_id",
     ),
-    request_id: Optional[str] = fastapi.Query(
+    request_id: str | None = fastapi.Query(
         default=None,
         description="request_id to get spend logs for specific request_id",
     ),
-    team_id: Optional[str] = fastapi.Query(
+    team_id: str | None = fastapi.Query(
         default=None,
         description="Filter spend logs by team_id",
     ),
-    min_spend: Optional[float] = fastapi.Query(
+    min_spend: float | None = fastapi.Query(
         default=None,
         description="Filter logs with spend greater than or equal to this value",
     ),
-    max_spend: Optional[float] = fastapi.Query(
+    max_spend: float | None = fastapi.Query(
         default=None,
         description="Filter logs with spend less than or equal to this value",
     ),
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view key spend",
     ),
@@ -1775,36 +1775,36 @@ async def ui_view_spend_logs(
         default=50, description="Number of items per page", ge=1, le=100
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    status_filter: Optional[str] = fastapi.Query(
+    status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
     ),
-    model: Optional[str] = fastapi.Query(
+    model: str | None = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
-    model_id: Optional[str] = fastapi.Query(
+    model_id: str | None = fastapi.Query(
         default=None,
         description="Filter logs by model ID (litellm model deployment id)",
     ),
-    model_group: Optional[str] = fastapi.Query(
+    model_group: str | None = fastapi.Query(
         default=None, description="Filter logs by model group"
     ),
-    key_alias: Optional[str] = fastapi.Query(
+    key_alias: str | None = fastapi.Query(
         default=None, description="Filter logs by key alias"
     ),
-    end_user: Optional[str] = fastapi.Query(
+    end_user: str | None = fastapi.Query(
         default=None, description="Filter logs by end user"
     ),
-    error_code: Optional[str] = fastapi.Query(
+    error_code: str | None = fastapi.Query(
         default=None, description="Filter logs by error code (e.g., '404', '500')"
     ),
-    error_message: Optional[str] = fastapi.Query(
+    error_message: str | None = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
     ),
     sort_by: str = fastapi.Query(
         default="startTime",
         description="Sort logs by field: spend, total_tokens, startTime, endTime, request_duration_ms, model, or ttft_ms",
     ),
-    sort_order: Optional[str] = fastapi.Query(
+    sort_order: str | None = fastapi.Query(
         default="desc",
         description="Sort order: asc or desc",
     ),
@@ -1968,7 +1968,7 @@ async def ui_view_spend_logs(
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
-        permitted_team_ids: Optional[List[str]] = None
+        permitted_team_ids: List[str] | None = None
         if not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
@@ -2183,11 +2183,11 @@ async def ui_view_spend_logs(
 )
 async def ui_view_request_response_for_request_id(
     request_id: str,
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view key spend",
     ),
@@ -2221,8 +2221,8 @@ async def ui_view_request_response_for_request_id(
     custom_loggers = (
         litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     )
-    start_date_obj: Optional[datetime] = None
-    end_date_obj: Optional[datetime] = None
+    start_date_obj: datetime | None = None
+    end_date_obj: datetime | None = None
     if start_date is not None:
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -2274,23 +2274,23 @@ async def ui_view_request_response_for_request_id(
     },
 )
 async def view_spend_logs(
-    api_key: Optional[str] = fastapi.Query(
+    api_key: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
     ),
-    user_id: Optional[str] = fastapi.Query(
+    user_id: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on user_id",
     ),
-    request_id: Optional[str] = fastapi.Query(
+    request_id: str | None = fastapi.Query(
         default=None,
         description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
     ),
-    start_date: Optional[str] = fastapi.Query(
+    start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
     ),
-    end_date: Optional[str] = fastapi.Query(
+    end_date: str | None = fastapi.Query(
         default=None,
         description="Time till which to view key spend",
     ),
@@ -2626,7 +2626,7 @@ async def global_spend_refresh():
 
 
 async def global_spend_for_internal_user(
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import prisma_client
@@ -2670,7 +2670,7 @@ async def global_spend_for_internal_user(
     include_in_schema=False,
 )
 async def global_spend_logs(
-    api_key: Optional[str] = fastapi.Query(
+    api_key: str | None = fastapi.Query(
         default=None,
         description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
     ),
@@ -3029,7 +3029,7 @@ async def global_view_all_end_users():
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
+async def global_spend_end_users(data: GlobalEndUsersSpend | None = None):
     """
     [BETA] This is a beta endpoint. It will change.
 
@@ -3262,8 +3262,8 @@ async def get_spend_by_tags(
 async def ui_get_spend_by_tags(
     start_date: str,
     end_date: str,
-    prisma_client: Optional[PrismaClient] = None,
-    tags_str: Optional[str] = None,
+    prisma_client: PrismaClient | None = None,
+    tags_str: str | None = None,
 ):
     """
     Should cover 2 cases:
@@ -3274,7 +3274,7 @@ async def ui_get_spend_by_tags(
     # tags_str is a list of strings csv of tags
     # tags_str = tag1,tag2,tag3
     # convert to list if it's not None
-    tags_list: Optional[List[str]] = None
+    tags_list: List[str] | None = None
     if tags_str is not None and len(tags_str) > 0:
         tags_list = tags_str.split(",")
 
@@ -3538,7 +3538,7 @@ async def _build_ui_spend_logs_response(
     }
 
 
-def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:
+def _build_status_filter_condition(status_filter: str | None) -> Dict[str, Any]:
     """
     Helper function to build the status filter condition for database queries.
 
@@ -3577,7 +3577,7 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
 async def _can_team_member_view_log(
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
-    team_id: Optional[str],
+    team_id: str | None,
 ) -> bool:
     """
     Check if the requesting user can view spend logs for the given team.

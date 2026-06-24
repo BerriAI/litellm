@@ -22,8 +22,8 @@ from ..common_utils import (
 class GithubCopilotConfig(OpenAIConfig):
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         custom_llm_provider: str = "openai",
     ) -> None:
         super().__init__()
@@ -32,10 +32,10 @@ class GithubCopilotConfig(OpenAIConfig):
     def _get_openai_compatible_provider_info(
         self,
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> Tuple[str | None, str | None, str]:
         dynamic_api_base = (
             api_base
             or self.authenticator.get_api_base()
@@ -85,8 +85,8 @@ class GithubCopilotConfig(OpenAIConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         # Get base headers from parent
         validated_headers = super().validate_environment(
@@ -173,7 +173,7 @@ class GithubCopilotConfig(OpenAIConfig):
     @staticmethod
     def _parse_anthropic_native_content(
         content_blocks: List[Any],
-    ) -> Tuple[str, List[ChatCompletionToolCallChunk], Optional[List[Any]]]:
+    ) -> Tuple[str, List[ChatCompletionToolCallChunk], List[Any] | None]:
         """
         Parse Anthropic-native content blocks into OpenAI-compatible fields.
 
@@ -205,8 +205,8 @@ class GithubCopilotConfig(OpenAIConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> "ModelResponse":
         """
         Handle newer Copilot models (e.g. claude-opus-4.7, claude-opus-4.8) that
@@ -237,7 +237,7 @@ class GithubCopilotConfig(OpenAIConfig):
         if not response_json.get("choices"):
             content = ""
             tool_calls: List[ChatCompletionToolCallChunk] = []
-            thinking_blocks: Optional[List[Any]] = None
+            thinking_blocks: List[Any] | None = None
             if "content" in response_json and isinstance(
                 response_json["content"], list
             ):

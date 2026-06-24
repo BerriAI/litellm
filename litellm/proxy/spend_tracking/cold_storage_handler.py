@@ -21,7 +21,7 @@ class ColdStorageHandler:
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Get the proxy server request from cold storage using the object key directly.
 
@@ -33,7 +33,7 @@ class ColdStorageHandler:
         """
 
         # select the custom logger to use for cold storage
-        custom_logger_name: Optional[_custom_logger_compatible_callbacks_literal] = (
+        custom_logger_name: _custom_logger_compatible_callbacks_literal | None = (
             self._select_custom_logger_for_cold_storage()
         )
 
@@ -42,7 +42,7 @@ class ColdStorageHandler:
             return None
 
         # get the active/initialized custom logger
-        custom_logger: Optional[CustomLogger] = (
+        custom_logger: CustomLogger | None = (
             litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
                 custom_logger_name
             )
@@ -60,9 +60,7 @@ class ColdStorageHandler:
 
     def _select_custom_logger_for_cold_storage(
         self,
-    ) -> Optional[_custom_logger_compatible_callbacks_literal]:
-        cold_storage_custom_logger: Optional[
-            _custom_logger_compatible_callbacks_literal
-        ] = litellm.cold_storage_custom_logger
+    ) -> _custom_logger_compatible_callbacks_literal | None:
+        cold_storage_custom_logger: _custom_logger_compatible_callbacks_literal | None = litellm.cold_storage_custom_logger
 
         return cold_storage_custom_logger

@@ -9,13 +9,13 @@ def get_optional_rerank_params(
     drop_params: bool,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[str] = None,
-    top_n: Optional[int] = None,
-    rank_fields: Optional[List[str]] = None,
-    return_documents: Optional[bool] = True,
-    max_chunks_per_doc: Optional[int] = None,
-    max_tokens_per_doc: Optional[int] = None,
-    non_default_params: Optional[dict] = None,
+    custom_llm_provider: str | None = None,
+    top_n: int | None = None,
+    rank_fields: List[str] | None = None,
+    return_documents: bool | None = True,
+    max_chunks_per_doc: int | None = None,
+    max_tokens_per_doc: int | None = None,
+    non_default_params: dict | None = None,
 ) -> Dict:
     all_non_default_params = non_default_params or {}
     if query is not None:
