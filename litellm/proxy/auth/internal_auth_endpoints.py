@@ -17,6 +17,7 @@ Security model:
 """
 
 import hmac
+import json
 import os
 from typing import Any, Dict, Optional
 
@@ -61,24 +62,33 @@ class VerifyKeyRequest(BaseModel):
     # hardcoded guess, and never this internal endpoint's path (which a normal
     # virtual key isn't allowed to call).
     route: str
+    # The model being requested, if any. Forwarded so user_api_key_auth's model
+    # access checks (key + team + access-group, via can_key_call_model) run — this
+    # is what stops a valid key from reaching a model it isn't allowed to call.
+    model: Optional[str] = None
 
 
-def _synthetic_request(route: str, api_key: str) -> Request:
+def _synthetic_request(route: str, api_key: str, model: Optional[str]) -> Request:
     """
     Build a minimal ASGI request standing in for the client's real call, so
     ``user_api_key_auth`` evaluates the key against the intended data-plane
-    ``route`` (and an empty body) instead of this internal endpoint's path.
+    ``route`` and ``model`` instead of this internal endpoint's path. The model
+    goes in the JSON body, where the proxy reads it for model-access enforcement.
     """
+    body = json.dumps({"model": model} if model is not None else {}).encode()
 
     async def receive() -> Dict[str, Any]:
-        return {"type": "http.request", "body": b"", "more_body": False}
+        return {"type": "http.request", "body": body, "more_body": False}
 
     scope = {
         "type": "http",
         "method": "POST",
         "path": route,
         "raw_path": route.encode(),
-        "headers": [(b"authorization", f"Bearer {api_key}".encode())],
+        "headers": [
+            (b"authorization", f"Bearer {api_key}".encode()),
+            (b"content-type", b"application/json"),
+        ],
         "query_string": b"",
         "scheme": "http",
         "client": ("127.0.0.1", 0),
@@ -118,7 +128,9 @@ async def verify_key(body: VerifyKeyRequest) -> Dict[str, Any]:
     bearer_key = (
         body.api_key if body.api_key.startswith("Bearer ") else f"Bearer {body.api_key}"
     )
-    synthetic_request = _synthetic_request(route=body.route, api_key=bearer_key)
+    synthetic_request = _synthetic_request(
+        route=body.route, api_key=bearer_key, model=body.model
+    )
     try:
         auth = await user_api_key_auth(request=synthetic_request, api_key=bearer_key)
     except (ProxyException, HTTPException):
