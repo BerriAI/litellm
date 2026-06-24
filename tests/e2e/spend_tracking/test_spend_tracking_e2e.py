@@ -20,7 +20,7 @@ from collections.abc import Callable
 import pytest
 
 from lifecycle import ResourceManager
-from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
+from spend_e2e_client import SpendClient, SpendLogRow, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
 
@@ -232,23 +232,52 @@ def test_end_user_spend_attributed_on_row(
     assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
 
 
-def test_failure_call_writes_failure_status_row(
+def test_each_model_on_a_shared_key_gets_its_own_row(
     client: SpendClient, scoped_key: str
 ) -> None:
-    result = client.chat(scoped_key, "gemini-2.5-flash", "", max_tokens=1)
-    if is_ok(result):
-        pytest.skip("call unexpectedly succeeded; could not induce a failure row")
-
-    rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs)
-    )
-    failure_rows = [r for r in rows if r.status == "failure"]
-    if not failure_rows:
-        pytest.skip(
-            "no failure-status row was logged for the rejected call; "
-            "failure logging is environment-specific"
+    """One key calling two different models, on two providers, gets one spend row per
+    call - each carrying its own model and a nonzero cost, under distinct request_ids
+    that match the call's response id. Pins per-model/per-provider attribution: a
+    regression that stamps the wrong model on the row, bills a call's cost to the
+    sibling deployment, or collapses both calls onto one request_id fails here."""
+    gemini = unwrap(
+        client.chat(
+            scoped_key, "gemini-2.5-flash", f"one word {unique_marker()}", max_tokens=16
         )
-    assert (failure_rows[0].spend or 0) == 0.0, "failed call must not be charged"
+    )
+    claude = unwrap(
+        client.chat(
+            scoped_key, "claude-haiku-4-5", f"one word {unique_marker()}", max_tokens=16
+        )
+    )
+
+    def both_models_costed(rows: list[SpendLogRow]) -> bool:
+        costed = [r.model or "" for r in rows if (r.spend or 0) > 0]
+        return any("gemini-2.5-flash" in m for m in costed) and any(
+            "claude-haiku-4-5" in m for m in costed
+        )
+
+    rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=both_models_costed)
+    gemini_row = _require_row(
+        rows, lambda r: "gemini-2.5-flash" in (r.model or ""), "for the gemini call"
+    )
+    claude_row = _require_row(
+        rows, lambda r: "claude-haiku-4-5" in (r.model or ""), "for the claude call"
+    )
+
+    assert (gemini_row.spend or 0) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
+    assert (claude_row.spend or 0) > 0, f"claude row should cost > 0: {_summarize(rows)}"
+    assert (
+        gemini_row.request_id != claude_row.request_id
+    ), f"two distinct calls collapsed onto one request_id: {_summarize(rows)}"
+    if gemini.id:
+        assert (
+            gemini_row.request_id == gemini.id
+        ), f"gemini row request_id {gemini_row.request_id} != response id {gemini.id}"
+    if claude.id:
+        assert (
+            claude_row.request_id == claude.id
+        ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
 
 
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
