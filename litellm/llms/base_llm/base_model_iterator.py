@@ -123,7 +123,15 @@ class BaseModelResponseIterator:
         stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(
             str_line=str_line
         )
-        if "[DONE]" in str_line:
+        if stripped_json_chunk:
+            return self.chunk_parser(chunk=stripped_json_chunk)
+        # Only treat as termination when the stripped payload is exactly "[DONE]".
+        # A substring check ("in") would falsely match JSON chunks whose string
+        # values contain "[DONE]" — e.g. tool-call arguments like `"[DONE]`,`".
+        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
+            str_line
+        )
+        if stripped_chunk is not None and stripped_chunk.strip() == "[DONE]":
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,
@@ -132,17 +140,14 @@ class BaseModelResponseIterator:
                 index=0,
                 tool_use=None,
             )
-        elif stripped_json_chunk:
-            return self.chunk_parser(chunk=stripped_json_chunk)
-        else:
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+        return GenericStreamingChunk(
+            text="",
+            is_finished=False,
+            finish_reason="",
+            usage=None,
+            index=0,
+            tool_use=None,
+        )
 
     def __next__(self):
         while True:

@@ -68,6 +68,38 @@ class TestBaseModelResponseIterator:
         # Should have 2 chunks: 1 content + 1 DONE
         assert len(chunks) == 2, f"Expected 2 chunks, got {len(chunks)}"
 
+    def test_done_string_in_tool_call_arguments_not_treated_as_termination(self):
+        """
+        Regression: a chunk whose tool-call arguments JSON value contains the
+        string '[DONE]' must NOT trigger the SSE termination path.
+
+        Bug: `if "[DONE]" in str_line` was a substring check, so any line
+        carrying `[DONE]` as part of a JSON string value caused a false stop.
+        """
+        sse_lines = [
+            'data: {"id":"1","choices":[{"delta":{"content":"hello"},"finish_reason":null,"index":0}]}',
+            # Tool-call argument chunk whose value contains "[DONE]" as content
+            'data: {"id":"1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"[DONE]`,"}}]},"finish_reason":null,"index":0}]}',
+            'data: {"id":"1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":" more args"}}]},"finish_reason":null,"index":0}]}',
+            'data: {"id":"1","choices":[{"delta":{},"finish_reason":"stop","index":0}]}',
+            "data: [DONE]",
+        ]
+
+        iterator = BaseModelResponseIterator(
+            streaming_response=iter(sse_lines), sync_stream=True
+        )
+
+        chunks = list(iterator)
+        # Expect 5 chunks: text + 2 tool-arg + finish + [DONE].
+        # Before the fix the tool-arg chunk with [DONE] was wrongly treated as
+        # the terminator, collapsing everything after it.
+        assert len(chunks) == 5, f"Expected 5 chunks, got {len(chunks)}: {chunks}"
+        # The first three chunks must NOT be finished
+        for i, chunk in enumerate(chunks[:3]):
+            assert not chunk[
+                "is_finished"
+            ], f"Chunk {i} should not be finished: {chunk}"
+
     def test_valid_chunks_not_filtered_sync(self):
         """Test that valid data chunks are not filtered"""
         sse_lines = [
