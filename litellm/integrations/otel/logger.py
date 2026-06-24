@@ -362,8 +362,8 @@ class OpenTelemetryV2(CustomLogger):
         self,
         payload: "StandardLoggingPayload",
         destinations: "tuple[OtelDestination, ...]",
-        start_time_ns: int,
-        end_time_ns: int,
+        start_time_ns: int | None,
+        end_time_ns: int | None,
     ) -> Span | None:
         """Emit an LLM-call span outside the ``pre_call`` boundary.
 
