@@ -17,6 +17,20 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.team_endpoints import team_member_update
 
 
+def test_team_member_update_models_accept_spend():
+    """The request/response models must carry an optional `spend` so an admin
+    can reset a team member's accrued spend via /team/member_update."""
+    from litellm.proxy._types import TeamMemberUpdateResponse
+
+    req = TeamMemberUpdateRequest(team_id="t", user_id="u", spend=0.0)
+    assert req.spend == 0.0
+
+    resp = TeamMemberUpdateResponse(
+        team_id="t", user_id="u", user_email=None, spend=0.0
+    )
+    assert resp.spend == 0.0
+
+
 @pytest.mark.asyncio
 async def test_ateam_member_update_admin_requires_premium(monkeypatch):
     # Arrange: patch prisma_client and premium_user

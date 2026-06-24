@@ -3684,6 +3684,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
         default=None,
         description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
     )
+    spend: Optional[float] = Field(
+        default=None,
+        description="Reset this team member's accrued spend to the given value (admin only). Typically 0 to clear usage.",
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -3693,6 +3697,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_models: Optional[List[str]] = None
+    spend: Optional[float] = None
 
 
 class TeamModelAddRequest(BaseModel):
