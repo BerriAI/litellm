@@ -191,7 +191,7 @@ class AmazonConverseConfig(BaseConfig):
         return messages_copy
 
     @staticmethod
-    def _has_orphaned_tool_blocks(messages: List[AllMessageValues]) -> bool:
+    def _has_orphaned_tool_blocks(messages: list[AllMessageValues]) -> bool:
         return any(
             (m.get("role") == "assistant" and m.get("tool_calls"))
             or m.get("role") in ("tool", "function")
@@ -200,8 +200,8 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _neutralize_orphaned_tool_blocks(
-        messages: List[AllMessageValues], optional_params: dict
-    ) -> List[AllMessageValues]:
+        messages: list[AllMessageValues], optional_params: dict
+    ) -> list[AllMessageValues]:
         if optional_params.get(
             "tools"
         ) or not AmazonConverseConfig._has_orphaned_tool_blocks(messages):
@@ -223,9 +223,10 @@ class AmazonConverseConfig(BaseConfig):
 
         def _rewrite(message: AllMessageValues) -> AllMessageValues:
             role = message.get("role")
-            if role == "assistant" and message.get("tool_calls"):
+            tool_calls = message.get("tool_calls")
+            if role == "assistant" and tool_calls:
                 base_text = convert_content_list_to_str(message)
-                call_texts = [_tool_call_text(call) for call in message["tool_calls"]]
+                call_texts = [_tool_call_text(call) for call in tool_calls]
                 text = "\n".join(filter(None, [base_text, *call_texts]))
                 return ChatCompletionAssistantMessage(role="assistant", content=text)
             if role in ("tool", "function"):

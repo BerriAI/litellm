@@ -348,7 +348,8 @@ def test_parallel_function_call_anthropic_error_msg(
 
     Reference Issue: https://github.com/BerriAI/litellm/issues/24158, https://github.com/BerriAI/litellm/issues/27138
     """
-    # Ensure modify_params is False so Bedrock Converse path still raises.
+    # Force modify_params off as a clean baseline: it exercises the Anthropic
+    # dummy-tool path, which injects regardless of modify_params
     # (other tests in this file set it to True and don't reset it)
     original_modify_params = litellm.modify_params
     litellm.modify_params = False
