@@ -130,7 +130,6 @@ model_list:
       model: gemini/gemini-2-embedding
       api_key: os.environ/GEMINI_API_KEY
 
-  # realtime models
   - model_name: openai-realtime
     litellm_params:
       model: openai/gpt-realtime
@@ -138,10 +137,39 @@ model_list:
     model_info:
       mode: realtime
 
+  - model_name: azure-realtime
+    litellm_params:
+      model: azure/gpt-realtime-2
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2025-08-28"
+      realtime_protocol: GA # Possible values: "GA"/ "v1", "beta"
+    model_info:
+      mode: realtime
+
   - model_name: gemini-realtime
     litellm_params:
-      model: gemini/gemini-2.0-flash-live-001
-      api_key: os.environ/GEMINI_API_KEY
+      model: gemini/gemini-3.1-flash-live-preview
+    model_info:
+      mode: realtime
+
+  - model_name: vertex-realtime
+    litellm_params:
+      model: vertex_ai/gemini-live-2.5-flash-native-audio
+    model_info:
+      mode: realtime
+
+  - model_name: bedrock-realtime
+    litellm_params:
+      model: bedrock/amazon.nova-sonic-v1:0
+      aws_region_name: us-east-1
+    model_info:
+      mode: realtime
+
+  - model_name: xai-realtime
+    litellm_params:
+      model: xai/grok-voice-latest
+      api_key: os.environ/XAI_API_KEY
     model_info:
       mode: realtime
 

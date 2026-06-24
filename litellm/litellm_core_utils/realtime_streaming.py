@@ -411,7 +411,11 @@ class RealTimeStreaming:
                                 bobj = {}
                             if any(
                                 k in bobj
-                                for k in ("realtimeInput", "clientContent", "toolResponse")
+                                for k in (
+                                    "realtimeInput",
+                                    "clientContent",
+                                    "toolResponse",
+                                )
                             ):
                                 self._content_sent_after_setup = True
                         self._gemini_pre_setup_buffer = []
@@ -1100,7 +1104,9 @@ class RealTimeStreaming:
                     self.store_message(event)
 
                     if not self._client_wants_beta:
-                        await self.websocket.send_text(self._event_to_client_json(event))
+                        await self.websocket.send_text(
+                            self._event_to_client_json(event)
+                        )
                         continue
 
                     event = self._normalize_event_for_ga_client(event)

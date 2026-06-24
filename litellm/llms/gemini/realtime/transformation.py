@@ -94,6 +94,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: Optional[dict] = None
+
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
@@ -1458,7 +1459,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             server_content_handled = False
 
         tool_call_handled = False
-        for key, value in list(json_message.items()):  # snapshot: handlers may mutate json_message
+        for key, value in list(
+            json_message.items()
+        ):  # snapshot: handlers may mutate json_message
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
             # accompany a primary payload like ``toolCall`` or ``serverContent``.
             # ``map_openai_event`` raises ValueError on unknown keys, which

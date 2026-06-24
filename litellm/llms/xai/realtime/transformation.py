@@ -104,7 +104,11 @@ class XAIRealtimeNormalizer:
         if not isinstance(existing, dict):
             updated = {"type": part_type, field: value}
         else:
-            updated = {**existing, "type": existing.get("type", part_type), field: value}
+            updated = {
+                **existing,
+                "type": existing.get("type", part_type),
+                field: value,
+            }
         self._content_part_by_key[key] = updated
 
     def _resolve_content_part(self, event: dict) -> Dict[str, Any]:
@@ -212,7 +216,9 @@ class XAIRealtimeNormalizer:
         }
 
     @staticmethod
-    def _normalize_usage(usage: Any, *, empty_as_null: bool) -> Optional[Dict[str, Any]]:
+    def _normalize_usage(
+        usage: Any, *, empty_as_null: bool
+    ) -> Optional[Dict[str, Any]]:
         """Coerce a usage object into the full OpenAI GA shape.
 
         ``empty_as_null=True`` for ``response.created`` (usage optional).
