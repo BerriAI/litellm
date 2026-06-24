@@ -163,6 +163,134 @@ def test_aws_profile_path_not_cached_in_iam_cache():
         assert mock_profile.call_count == 2
 
 
+def test_get_credentials_does_not_expand_request_env_reference():
+    """
+    A parameter of the form os.environ/<VAR> reaching get_credentials is left as-is
+    rather than expanded against the process environment, so the downstream auth
+    helper only ever receives the literal value.
+    """
+    env = _os_environ_without_aws_keys()
+    env["SERVER_ONLY_VALUE"] = "config-managed-value"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("ak", "sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name="os.environ/SERVER_ONLY_VALUE")
+
+    assert mock_profile.call_args.args[0] == "os.environ/SERVER_ONLY_VALUE"
+    assert "config-managed-value" not in str(mock_profile.call_args)
+
+
+def test_get_credentials_falls_back_to_ambient_aws_profile_name_env():
+    """
+    The fixed AWS_* ambient fallback keeps working: an unset aws_profile_name
+    resolves from the AWS_PROFILE_NAME environment variable.
+    """
+    env = _os_environ_without_aws_keys()
+    env["AWS_PROFILE_NAME"] = "ambient-profile"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("ak", "sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name=None)
+
+    assert mock_profile.call_args.args[0] == "ambient-profile"
+
+
+def test_get_credentials_ambient_fallback_resolves_aws_external_id():
+    """
+    Each unset param falls back to its own AWS_* env var. Regression for an index
+    misalignment between the value list and the env-name list, which left
+    AWS_EXTERNAL_ID unresolved.
+    """
+    env = _os_environ_without_aws_keys()
+    env["AWS_EXTERNAL_ID"] = "ext-from-env"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_role",
+        return_value=(Credentials("ak", "sk", "tok"), None),
+    ) as mock_role:
+        base.get_credentials(
+            aws_role_name="arn:aws:iam::123456789012:role/x",
+            aws_session_name="s",
+        )
+
+    assert mock_role.call_args.kwargs["aws_external_id"] == "ext-from-env"
+
+
+def _capturing_sts_client(captured: Dict[str, Any]) -> MagicMock:
+    sts = MagicMock()
+
+    def _assume(**params):
+        captured["WebIdentityToken"] = params.get("WebIdentityToken")
+        return {
+            "Credentials": {
+                "AccessKeyId": "AKIA",
+                "SecretAccessKey": "sk",
+                "SessionToken": "tok",
+            },
+            "PackedPolicySize": 10,
+        }
+
+    sts.assume_role_with_web_identity.side_effect = _assume
+    return sts
+
+
+@pytest.mark.parametrize(
+    "token_ref",
+    ["os.environ/SERVER_ONLY_VALUE", "SERVER_ONLY_VALUE"],
+    ids=["os_environ_prefix", "bare_env_name"],
+)
+def test_web_identity_token_env_reference_not_expanded(token_ref):
+    """
+    A web-identity token that is an environment-variable reference (an os.environ/
+    prefix, or a bare name matching an env var) is rejected rather than expanded, so
+    the process-environment value is never used as the token.
+    """
+    env = _os_environ_without_aws_keys()
+    env["SERVER_ONLY_VALUE"] = "server-only-value"
+    captured: Dict[str, Any] = {}
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch(
+        "boto3.client", side_effect=lambda *a, **k: _capturing_sts_client(captured)
+    ), patch("boto3.Session", return_value=MagicMock()):
+        with pytest.raises(AwsAuthError):
+            base.get_credentials(
+                aws_web_identity_token=token_ref,
+                aws_role_name="arn:aws:iam::123456789012:role/x",
+                aws_session_name="s",
+                aws_sts_endpoint="https://custom-sts.example",
+            )
+
+    assert "server-only-value" not in str(captured)
+
+
+def test_web_identity_token_oidc_reference_still_resolved():
+    """
+    The env-reference guard does not over-reject: an oidc/ reference still flows to
+    get_secret (mocked to None here), surfacing the existing 401 rather than the 400
+    used for rejected env-var references.
+    """
+    base = BaseAWSLLM()
+    env = _os_environ_without_aws_keys()
+    with patch.dict(os.environ, env, clear=True), patch(
+        "litellm.llms.bedrock.base_aws_llm.get_secret", return_value=None
+    ):
+        with pytest.raises(AwsAuthError) as exc:
+            base.get_credentials(
+                aws_web_identity_token="oidc/circleci/",
+                aws_role_name="arn:aws:iam::123456789012:role/x",
+                aws_session_name="s",
+            )
+
+    assert exc.value.status_code == 401
+
+
 def test_web_identity_path_not_cached_in_iam_cache():
     base = BaseAWSLLM()
     with patch.object(
