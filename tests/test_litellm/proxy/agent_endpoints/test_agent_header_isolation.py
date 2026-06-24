@@ -231,13 +231,14 @@ async def test_each_agent_gets_only_its_own_static_headers():
 # ---------------------------------------------------------------------------
 
 
-def _fake_get_async_httpx_client_factory(created_clients: list):
+def _fake_get_async_httpx_client_factory(captured_calls: list):
+    """Return a side_effect that records every (params, client) pair."""
     def _fake_get_async_httpx_client(llm_provider, params, **kwargs):
         client = MagicMock()
         client.headers = MagicMock()
-        created_clients.append(client)
         handler = MagicMock()
         handler.client = client
+        captured_calls.append({"params": params.copy(), "client": client})
         return handler
 
     return _fake_get_async_httpx_client
@@ -253,18 +254,25 @@ async def _fake_create_client(base_url, client_config=None, **kwargs):
 @pytest.mark.asyncio
 async def test_create_a2a_client_uses_fresh_httpx_client():
     """
-    Two calls to create_a2a_client with different extra_headers must NOT
-    share the same underlying httpx.AsyncClient instance.
+    Two calls to create_a2a_client with different extra_headers must use distinct
+    cache keys so that a real caching implementation would never return the same
+    underlying httpx client — preventing header bleed between agents.
+
+    The test checks both:
+    1. get_async_httpx_client was called twice (once per create_a2a_client call).
+    2. The cache-key component in params differs between the two calls, which is
+       the actual property that prevents header bleed when the real LRU cache is
+       in use (not just the trivially-distinct MagicMock objects).
     """
     from litellm.a2a_protocol.main import create_a2a_client
 
-    created_clients = []
+    captured_calls: list = []
 
     with (
         patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True),
         patch(
             "litellm.a2a_protocol.main.get_async_httpx_client",
-            side_effect=_fake_get_async_httpx_client_factory(created_clients),
+            side_effect=_fake_get_async_httpx_client_factory(captured_calls),
         ),
         patch(
             "litellm.a2a_protocol.main.create_client",
@@ -280,11 +288,21 @@ async def test_create_a2a_client_uses_fresh_httpx_client():
             extra_headers={"Authorization": "Bearer b"},
         )
 
-    assert len(created_clients) == 2
-    # Must be distinct objects
-    assert (
-        created_clients[0] is not created_clients[1]
-    ), "create_a2a_client reused a cached httpx client — headers will bleed between agents"
+    assert len(captured_calls) == 2, (
+        "create_a2a_client should call get_async_httpx_client once per invocation"
+    )
+
+    # The cache-key param that isolates header sets must differ between agents.
+    # If this is equal, the real LRU cache returns the same httpx client and
+    # agent-A's Authorization header would be mutated into agent-B's.
+    key_a = captured_calls[0]["params"].get("disable_aiohttp_transport")
+    key_b = captured_calls[1]["params"].get("disable_aiohttp_transport")
+    assert key_a is not None, "cache-key param 'disable_aiohttp_transport' missing"
+    assert key_b is not None, "cache-key param 'disable_aiohttp_transport' missing"
+    assert key_a != key_b, (
+        f"create_a2a_client used the same cache key for two agents with different "
+        f"headers — headers will bleed: key_a={key_a!r}, key_b={key_b!r}"
+    )
 
 
 @pytest.mark.asyncio

@@ -107,6 +107,22 @@ def normalize_request_params(
     )
 
 
+def _detect_card_version(card: JsonDict) -> A2AVersion:
+    """Infer the wire version of an agent card dict.
+
+    ``protocolVersion`` is the authoritative indicator; fall back to presence of
+    ``supportedInterfaces`` (a 1.0-only field) only when the explicit field is absent.
+    Cards that set ``protocolVersion: "0.3"`` or carry neither signal are treated as 0.3.
+    """
+    pv = card.get("protocolVersion")
+    if pv == "1.0":
+        return "1.0"
+    if pv == "0.3":
+        return "0.3"
+    # No protocolVersion field: use structural heuristic.
+    return "1.0" if "supportedInterfaces" in card else "0.3"
+
+
 def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     """Convert an extended agent card to ``target``.
 
@@ -116,7 +132,7 @@ def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     if not isinstance(card, dict):
         return card
 
-    current: A2AVersion = "1.0" if "supportedInterfaces" in card else "0.3"
+    current = _detect_card_version(card)
     if current == target:
         return card
     return _best_effort(
@@ -179,7 +195,8 @@ def _send_result_to(
         compat_result = _validate_message_or_task(result, types_v03)
         response = types_v03.SendMessageResponse(
             root=types_v03.SendMessageSuccessResponse(
-                id=str(request_id or ""), result=compat_result
+                id=str(request_id or ""),
+                result=compat_result,  # pyright: ignore[reportArgumentType]
             )
         )
         return MessageToDict(
@@ -254,7 +271,8 @@ def _stream_result_to(
     if target == "1.0":
         event = _validate_stream_event(result, types_v03)
         wrapper = types_v03.SendStreamingMessageSuccessResponse(
-            id=str(request_id or ""), result=event
+            id=str(request_id or ""),
+            result=event,  # pyright: ignore[reportArgumentType]
         )
         return MessageToDict(
             to_core_stream_response(wrapper), preserving_proto_field_name=False

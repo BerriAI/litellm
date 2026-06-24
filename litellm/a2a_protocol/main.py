@@ -738,9 +738,9 @@ async def create_a2a_client(
         httpx_client.headers.update(extra_headers)
         verbose_proxy_logger.debug(f"A2A client created with extra_headers={list(extra_headers.keys())}")
 
-    a2a_client = await create_client(
+    a2a_client = await create_client(  # pyright: ignore[reportOptionalCall]
         base_url,
-        client_config=ClientConfig(
+        client_config=ClientConfig(  # pyright: ignore[reportOptionalCall]
             httpx_client=httpx_client,
             streaming=streaming,
         ),

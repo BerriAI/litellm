@@ -207,9 +207,9 @@ async def handle_a2a_localhost_retry(
             "create_a2a_client, so no LiteLLM httpx client is attached."
         )
 
-    return await create_client(
+    return await create_client(  # pyright: ignore[reportOptionalCall]
         agent_card,
-        client_config=ClientConfig(
+        client_config=ClientConfig(  # pyright: ignore[reportOptionalCall]
             httpx_client=httpx_client,
             streaming=is_streaming,
         ),
