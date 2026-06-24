@@ -5,6 +5,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 from litellm import ModelResponse
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.llms.oci.chat.cohere import (
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
@@ -236,25 +237,30 @@ class TestOCICohereToolCalls:
         assert result.usage.completion_tokens == 22
         assert result.usage.total_tokens == 48
 
-    def test_cohere_request_preserves_json_schema_response_format(self):
-        """Ensure Cohere requests retain JSON schema payloads in responseFormat."""
+    def test_cohere_request_folds_json_schema_into_json_object(self):
+        """A Cohere json_schema must fold the schema onto JSON_OBJECT.
+
+        OCI Cohere has no JSON_SCHEMA type; sending {"type": "JSON_SCHEMA", ...}
+        (or the raw lowercase "json_schema" with a jsonSchema body) is rejected
+        with HTTP 400. The schema rides on JSON_OBJECT instead.
+        """
         config = OCIChatConfig()
         messages = [{"role": "user", "content": "Return structured info"}]
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "test_schema",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {"foo": {"type": "string"}},
-                    "required": ["foo"],
-                },
-            },
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
         }
         optional_params = {
             "oci_compartment_id": TEST_COMPARTMENT_ID,
-            "response_format": response_format,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
         }
 
         transformed_request = config.transform_request(
@@ -265,18 +271,14 @@ class TestOCICohereToolCalls:
             headers={},
         )
 
-        chat_request = transformed_request["chatRequest"]
-        assert chat_request["apiFormat"] == "COHERE"
-        assert "responseFormat" in chat_request
-
-        cohere_response_format = chat_request["responseFormat"]
-        assert cohere_response_format["type"] == "json_schema"
+        cohere_response_format = transformed_request["chatRequest"]["responseFormat"]
+        assert cohere_response_format["type"] == "JSON_OBJECT"
+        assert "jsonSchema" not in cohere_response_format
         assert "json_schema" not in cohere_response_format
-        assert "jsonSchema" in cohere_response_format
-        assert cohere_response_format["jsonSchema"] == response_format["json_schema"]
+        assert cohere_response_format["schema"] == schema
 
-    def test_cohere_request_response_format_text_stays_lowercase(self):
-        """Ensure Cohere keeps response_format type lowercase (e.g. 'text' not 'TEXT')."""
+    def test_cohere_request_response_format_text_is_uppercased(self):
+        """Cohere response_format type 'text' maps to OCI's canonical 'TEXT'."""
         config = OCIChatConfig()
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {
@@ -292,10 +294,7 @@ class TestOCICohereToolCalls:
             headers={},
         )
 
-        chat_request = transformed_request["chatRequest"]
-        assert chat_request["apiFormat"] == "COHERE"
-        assert "responseFormat" in chat_request
-        assert chat_request["responseFormat"]["type"] == "text"
+        assert transformed_request["chatRequest"]["responseFormat"] == {"type": "TEXT"}
 
     def test_cohere_tool_call_only_message_no_text(self):
         """Test chat history with an assistant message that has tool calls but no text content."""
@@ -462,7 +461,8 @@ class TestOCICohereToolCalls:
         assert "tool_choice" not in supported_params
 
     def test_cohere_default_parameters(self):
-        """Test that Cohere requests do not inject hardcoded defaults — caller supplies all params."""
+        """maxTokens is defaulted (OCI's server default truncates at ~20 tokens);
+        every other param is still pass-through with no hardcoded default."""
         config = OCIChatConfig()
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
@@ -477,8 +477,7 @@ class TestOCICohereToolCalls:
 
         chat_request = transformed_request["chatRequest"]
 
-        # No hardcoded defaults injected — only pass through what the user supplies
-        assert "maxTokens" not in chat_request
+        assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
         assert "topK" not in chat_request
         assert "topP" not in chat_request
         assert "frequencyPenalty" not in chat_request

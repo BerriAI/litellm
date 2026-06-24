@@ -2819,3 +2819,37 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         ri["encrypted_content"] == encrypted
     ), "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+def test_streaming_function_call_tool_id_for_degenerate_call_id():
+    """In streaming, Bedrock Mantle's function_call event carries a unique ``id``
+    (``fc_...``) and a non-unique, index-based ``call_id`` (``call_0``). For that
+    degenerate form the chat tool-call chunk must use the unique ``id`` so multi-turn
+    streaming agents don't collapse every tool call to the same id (which makes the
+    agent loop). A normal (unique) ``call_id`` must be preserved. Regression for the
+    bedrock-mantle gpt-5.5 streaming path."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    def stream_tool_id(item_id, call_id):
+        chunk = {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "call_id": call_id,
+                "name": "get_weather",
+                "arguments": "",
+            },
+        }
+        out = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            chunk
+        )
+        tool_calls = out.model_dump()["choices"][0]["delta"]["tool_calls"]
+        assert tool_calls, "expected a tool_call chunk in the streaming delta"
+        return tool_calls[0]["id"]
+
+    assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
+    assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"

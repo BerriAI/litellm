@@ -14,13 +14,11 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
-    DailyTagSpendRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
-    InProductNudgeResponse,
     SSOConfig,
 )
 
@@ -1109,34 +1107,6 @@ async def update_mcp_semantic_filter_settings(
         )
 
     return result
-
-
-@router.get(
-    "/in_product_nudges",
-    tags=["UI Settings"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=InProductNudgeResponse,
-)
-async def get_in_product_nudges():
-    """
-    Get in-product nudges configuration.
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Database not connected. Please connect a database."},
-        )
-
-    db_record = await DailyTagSpendRepository(prisma_client).table.find_first(
-        where={"tag": "User-Agent: claude-cli"}
-    )
-
-    if db_record:
-        return InProductNudgeResponse(is_claude_code_enabled=True)
-
-    return InProductNudgeResponse(is_claude_code_enabled=False)
 
 
 UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"

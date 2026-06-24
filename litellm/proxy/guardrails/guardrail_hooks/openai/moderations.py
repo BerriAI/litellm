@@ -25,7 +25,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+)
 
 from .base import OpenAIGuardrailBase
 
@@ -287,6 +291,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            tracing_detail=self._build_tracing_detail(guardrail_response),
         )
         return response
 
@@ -328,8 +333,35 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            tracing_detail=self._build_tracing_detail(guardrail_response),
         )
         raise e
+
+    @staticmethod
+    def _build_tracing_detail(
+        guardrail_response: Union[dict, str, Exception],
+    ) -> Optional[GuardrailTracingDetail]:
+        """
+        Pull the flagged category names out of the moderation response so trace
+        backends can index a short, queryable ``guardrail_violation_categories``
+        attribute instead of the full ``guardrail_response`` blob, whose
+        ``category_scores`` map (one float per category) blows past indexed-field
+        length limits on backends like ELK (1024 chars).
+        """
+        if not isinstance(guardrail_response, dict):
+            return None
+
+        results = guardrail_response.get("results") or []
+        violation_categories = [
+            category
+            for result in results
+            if isinstance(result, dict)
+            for category, is_flagged in (result.get("categories") or {}).items()
+            if is_flagged
+        ]
+        if not violation_categories:
+            return None
+        return GuardrailTracingDetail(violation_categories=violation_categories)
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

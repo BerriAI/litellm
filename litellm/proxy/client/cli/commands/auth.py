@@ -624,7 +624,7 @@ def whoami():
     token_data = load_token()
 
     if not token_data:
-        click.echo("❌ Not authenticated. Run 'litellm-proxy login' to authenticate.")
+        click.echo("❌ Not authenticated. Run 'lite login' to authenticate.")
         return
 
     click.echo("✅ Authenticated")

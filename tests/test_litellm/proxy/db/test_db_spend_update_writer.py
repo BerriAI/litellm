@@ -240,6 +240,54 @@ async def test_update_daily_spend_sorting():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_drains_all_batches_over_batch_size():
+    """
+    Regression for #30281: >BATCH_SIZE (100) unique entities in one flush must all
+    be written and the in-memory dict fully drained within a single call. Pre-fix,
+    only the first 100 sorted items were upserted then the method returned, silently
+    dropping the remaining entities.
+    """
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailyuserspend = mock_table
+
+    num_entities = 250
+    daily_spend_transactions = {
+        f"test_key_{i}": {
+            "user_id": f"user{i:04d}",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+        for i in range(num_entities)
+    }
+
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_table.upsert.call_count == num_entities
+    assert mock_prisma_client.db.batch_.call_count == 3
+    assert daily_spend_transactions == {}
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_tag_with_request_id():
     """
     Test that request_id is included in update_data when updating tag transactions.

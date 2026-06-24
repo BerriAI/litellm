@@ -338,9 +338,9 @@ sequenceDiagram
 
 The CLI provides three authentication commands:
 
-- **`litellm-proxy login`** - Start SSO authentication flow
-- **`litellm-proxy logout`** - Clear stored authentication token
-- **`litellm-proxy whoami`** - Show current authentication status
+- **`lite login`** - Start SSO authentication flow
+- **`lite logout`** - Clear stored authentication token
+- **`lite whoami`** - Show current authentication status
 
 ### Authentication Flow Steps
 
@@ -382,14 +382,14 @@ Once authenticated, the CLI will automatically use the stored token for all requ
 
 ```bash
 # Login
-litellm-proxy login
+lite login
 
 # Use CLI without specifying API key
-litellm-proxy models list
+lite models list
 
 # Check authentication status
-litellm-proxy whoami
+lite whoami
 
 # Logout
-litellm-proxy logout
+lite logout
 ``` 

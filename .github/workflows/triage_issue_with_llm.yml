@@ -1,0 +1,96 @@
+name: Agent Shin — Issue triage
+
+# LLM-as-judge triage for external GitHub issues.
+#
+# DRY-RUN BY DEFAULT. See .github/workflows/triage_pr_with_llm.yml for the
+# enablement procedure — same repo variable (`AGENT_SHIN_ENABLED=true`)
+# unlocks the PR and issue triage flows together.
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to triage manually."
+        required: true
+      close:
+        description: "If true and AGENT_SHIN_ENABLED=true, actually close on fail."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triage script
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install LLM client
+        run: pip install --no-cache-dir --require-hashes -r .github/scripts/triage-requirements.txt
+
+      - name: Run Agent Shin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only expose the LLM key when the bot is enabled or a collaborator
+          # triggers it manually, so an external user can't force paid LLM
+          # calls by churning issues while the bot is still in dry-run.
+          # The Python script calls the LLM whenever this var is set
+          # (regardless of `--close`); stripping `--close` doesn't suppress
+          # the API call, only the destructive side effects.
+          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
+          AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
+          DISPATCH_CLOSE: ${{ github.event.inputs.close }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          ARGS=(--repo "${{ github.repository }}" --issue "${ISSUE_NUMBER}")
+          # Fail-safe gating: only the EXACT string "true" enables the
+          # destructive --close path. The workflow_dispatch input is a
+          # `choice` dropdown of "true"/"false" so the UI is constrained,
+          # but the API (`gh workflow run -f close=...`) accepts any
+          # string, and a `!= "false"` check would treat "True", "yes",
+          # "1", "TRUE", typos, and accidental whitespace as enabling
+          # closure. Mirror the Greptile closer's `= "true"` pattern.
+          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
+            ARGS+=(--close)
+            echo "::notice::Agent Shin is ENABLED and running in close-on-fail mode."
+          elif [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
+            echo "::notice::Agent Shin is ENABLED but this trigger is dry-run (workflow_dispatch close != 'true')."
+          else
+            echo "::notice::Agent Shin is in DRY-RUN mode (AGENT_SHIN_ENABLED is not 'true'). No comments will be posted; no issues will be closed."
+          fi
+          # Automatic `issues` events stay dry-run regardless until the team
+          # explicitly invokes workflow_dispatch with close=true.
+          if [ "${GITHUB_EVENT_NAME:-}" = "issues" ]; then
+            # filter out --close rather than substituting to "" (which would
+            # leave an empty positional arg that argparse rejects)
+            FILTERED=()
+            for arg in "${ARGS[@]}"; do
+              if [ "${arg}" != "--close" ]; then
+                FILTERED+=("${arg}")
+              fi
+            done
+            ARGS=("${FILTERED[@]}")
+            echo "::notice::issues trigger -> forcing dry-run."
+          fi
+          python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"

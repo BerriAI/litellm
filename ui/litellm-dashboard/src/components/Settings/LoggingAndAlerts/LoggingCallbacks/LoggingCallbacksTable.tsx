@@ -48,7 +48,6 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       key: "name",
       render: (_: string, record: CallbackRow) => {
         const id = record.name;
-        console.log("availableCallbacks", availableCallbacks);
         const displayName = availableCallbacks[id]?.ui_callback_name || id;
         return <div className="font-medium text-gray-800">{displayName}</div>;
       },
@@ -57,7 +56,10 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700">Mode</span>,
       key: "mode",
       render: (_: unknown, record: CallbackRow) => {
-        const mode = record.mode || "success";
+        // Backend sends `type` (success | failure); legacy in-memory rows
+        // from add-callback flow set `mode`. Read both so newly-added rows
+        // and server-fetched rows both render correctly.
+        const mode = record.type || record.mode || "success";
         const label = CALLBACK_MODES.find((m) => m.value === mode)?.label || mode;
         const badgeClass =
           mode === "success"
@@ -109,7 +111,10 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
             <Table
               columns={columns}
               dataSource={callbacks as CallbackRow[]}
-              rowKey={(record) => record.name}
+              // `generic_api` can appear as both a success and a failure
+              // callback simultaneously — keying by `name` alone produced
+              // duplicate React keys. Compose with type to keep keys unique.
+              rowKey={(record) => `${record.name}-${record.type || record.mode || "success"}`}
               pagination={false}
               rowClassName={() => "hover:bg-gray-50"}
             />

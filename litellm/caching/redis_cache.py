@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
+    REDIS_CIRCUIT_BREAKER_ENABLED,
     REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
 )
@@ -114,15 +115,23 @@ class RedisCircuitBreaker:
     OPEN = "open"
     HALF_OPEN = "half_open"
 
-    def __init__(self, failure_threshold: int, recovery_timeout: int) -> None:
+    def __init__(
+        self,
+        failure_threshold: int,
+        recovery_timeout: int,
+        enabled: bool = True,
+    ) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
+        self.enabled = enabled
         self._failure_count = 0
         self._opened_at: Optional[float] = None
         self._state = self.CLOSED
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
+        if not self.enabled:
+            return False
         if self._state == self.HALF_OPEN:
             # Probe already in flight — fast-fail all concurrent requests.
             # Only the one call that caused the OPEN→HALF_OPEN transition
@@ -136,6 +145,8 @@ class RedisCircuitBreaker:
         return False
 
     def record_failure(self) -> None:
+        if not self.enabled:
+            return
         self._failure_count += 1
         self._opened_at = time.time()
         if self._failure_count >= self.failure_threshold:
@@ -149,6 +160,8 @@ class RedisCircuitBreaker:
             self._state = self.OPEN
 
     def record_success(self) -> None:
+        if not self.enabled:
+            return
         if self._state == self.HALF_OPEN:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
         self._failure_count = 0
@@ -243,6 +256,7 @@ class RedisCache(BaseCache):
         self._circuit_breaker = RedisCircuitBreaker(
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+            enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
 
         self._setup_health_pings()
@@ -355,6 +369,8 @@ class RedisCache(BaseCache):
         """
         Make sure each key starts with the given namespace
         """
+        if key is None:
+            return key  # type: ignore[return-value]
         if self.namespace is not None and not key.startswith(self.namespace):
             key = self.namespace + ":" + key
 
@@ -886,6 +902,43 @@ class RedisCache(BaseCache):
                 value,
             )
             raise e
+
+    @_redis_circuit_breaker_guard
+    async def async_set_max(
+        self,
+        key: str,
+        value: float,
+        ttl: int | None = None,
+    ) -> float | None:
+        """Atomically set ``key`` to ``value`` only when ``value`` is greater
+        than the stored value (or the key is unset), refreshing the TTL.
+
+        Monotonic by construction: it never lowers the stored value, so a repair
+        that writes an authoritative-but-slightly-stale total cannot clobber a
+        concurrent increment that has already pushed the counter higher. The
+        GET/compare/SET runs in a single Lua call, so it is also atomic across
+        racing callers and pods. Returns the resulting value.
+        """
+        _redis_client = self.init_async_client()
+        _used_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
+        lua = (
+            "local cur = redis.call('GET', KEYS[1]) "
+            "if cur == false or tonumber(cur) < tonumber(ARGV[1]) then "
+            "redis.call('SET', KEYS[1], ARGV[1]) "
+            "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+            "return ARGV[1] end "
+            "return cur"
+        )
+        result = cast(
+            "str | bytes | int | float | None",
+            await _redis_client.eval(lua, 1, key, str(value), str(int(_used_ttl or 0))),
+        )
+        if result is None:
+            return None
+        if isinstance(result, bytes):
+            result = result.decode()
+        return float(result)
 
     async def flush_cache_buffer(self):
         print_verbose(

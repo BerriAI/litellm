@@ -58,7 +58,10 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import (
+    ProviderConfigManager,
+    client,
+)
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
@@ -673,6 +676,8 @@ def _resolve_model_provider_for_responses(
     litellm_params: GenericLiteLLMParams,
     local_vars: Dict[str, Any],
 ) -> tuple[str, Optional[str]]:
+    if custom_llm_provider is not None and not litellm_params.custom_llm_provider:
+        litellm_params.custom_llm_provider = custom_llm_provider
     (
         model,
         custom_llm_provider,
@@ -680,9 +685,7 @@ def _resolve_model_provider_for_responses(
         dynamic_api_base,
     ) = litellm.get_llm_provider(
         model=model,
-        custom_llm_provider=custom_llm_provider,
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
     local_vars["custom_llm_provider"] = custom_llm_provider
     if dynamic_api_key is not None:
@@ -1972,26 +1975,12 @@ def compact_responses(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        (
-            model,
-            custom_llm_provider,
-            dynamic_api_key,
-            dynamic_api_base,
-        ) = litellm.get_llm_provider(
+        model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
+            litellm_params=litellm_params,
+            local_vars=local_vars,
         )
-
-        # Update local_vars with detected provider (fixes #19782)
-        local_vars["custom_llm_provider"] = custom_llm_provider
-
-        # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
-        if dynamic_api_key is not None:
-            litellm_params.api_key = dynamic_api_key
-        if dynamic_api_base is not None:
-            litellm_params.api_base = dynamic_api_base
 
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")

@@ -1,6 +1,10 @@
 """Weave (W&B) preset."""
 
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.integrations.weave.weave_otel import (
     _get_weave_authorization_header,
@@ -23,6 +27,7 @@ def weave_preset(
                     kind=weave_cfg.protocol or "otlp_http",
                     endpoint=weave_cfg.endpoint,
                     headers=weave_cfg.otlp_auth_headers,
+                    owner=ExporterOwner.WEAVE_OTEL,
                 ),
             ],
             # Weave consumes OpenInference + a small Weave-specific overlay.

@@ -72,8 +72,13 @@ class CompressionInterceptionLogger(CustomLogger):
         compression_params: CompressionInterceptionConfig = {}
         if "compression_interception_params" in litellm_settings:
             compression_params = litellm_settings["compression_interception_params"]
-        elif "compression_interception" in callback_specific_params:
-            compression_params = callback_specific_params["compression_interception"]
+        elif "compression_interception" in callback_specific_params and isinstance(
+            callback_specific_params["compression_interception"], dict
+        ):
+            compression_params = cast(
+                CompressionInterceptionConfig,
+                callback_specific_params["compression_interception"],
+            )
         return CompressionInterceptionLogger.from_config_yaml(compression_params)
 
     async def async_pre_call_deployment_hook(

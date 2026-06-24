@@ -146,6 +146,21 @@ class Error:
     TYPE: Final = "error.type"
 
 
+class ExceptionEvent:
+    """OTel exception-event name and attribute keys (semconv ``exception.*``).
+
+    The full error message rides ``exception.message`` on a span event rather than
+    a custom string attribute. Backends recognise these semantic-convention names
+    and map them as full text; an unrecognised key (e.g. ``error_message``) falls
+    into the default dynamic template, which truncates strings to a 1024-char
+    ``keyword``.
+    """
+
+    NAME: Final = "exception"
+    TYPE: Final = "exception.type"
+    MESSAGE: Final = "exception.message"
+
+
 class Server:
     ADDRESS: Final = "server.address"
     PORT: Final = "server.port"
@@ -215,6 +230,10 @@ class Metric:
 
     TOKEN_USAGE: Final = "gen_ai.client.token.usage"
     OPERATION_DURATION: Final = "gen_ai.client.operation.duration"
+    TOKEN_COST: Final = "gen_ai.client.token.cost"
+    TIME_TO_FIRST_TOKEN: Final = "gen_ai.client.response.time_to_first_token"
+    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.client.response.time_per_output_token"
+    RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.

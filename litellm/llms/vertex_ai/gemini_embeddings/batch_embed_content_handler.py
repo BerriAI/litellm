@@ -124,7 +124,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         return resolved_files
 
-    def batch_embeddings(  # noqa: PLR0915
+    def batch_embeddings(
         self,
         model: str,
         input: GeminiEmbeddingInput,

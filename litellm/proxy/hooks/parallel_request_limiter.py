@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -50,7 +50,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(print_statement)  # noqa: T201
         except Exception:
             pass
 
@@ -239,7 +239,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_end_user_id=results[5],
         )
 
-    async def async_pre_call_hook(  # noqa: PLR0915
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -506,9 +506,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
         return
 
-    async def async_log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -570,7 +568,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             total_tokens = 0
 
-            if isinstance(response_obj, ModelResponse):
+            if isinstance(
+                response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)
+            ):
                 total_tokens = response_obj.usage.total_tokens  # type: ignore
 
             # ------------
@@ -659,7 +659,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_user_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -692,7 +695,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_team_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -725,7 +731,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_end_user_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -758,7 +767,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=litellm_parent_otel_span,
             )
         except Exception as e:
-            self.print_verbose(e)  # noqa
+            self.print_verbose(e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:

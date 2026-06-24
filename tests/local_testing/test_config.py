@@ -224,8 +224,22 @@ async def test_db_error_new_model_check():
         model_info={"id": deployment.model_info.id},
     )
 
-    db_models = []
-    deleted_deployments = await pc._delete_deployment(db_models=db_models)
+    # Mock get_config to return the two deployments as config-backed models so
+    # they appear in combined_id_list and are not evicted when db_models is empty
+    # (simulates the real-world case: DB error returns [], but models live in config).
+    config_model_list = [
+        deployment.to_json(exclude_none=True),
+        deployment_2.to_json(exclude_none=True),
+    ]
+    from unittest.mock import AsyncMock, patch
+
+    with patch.object(
+        pc,
+        "get_config",
+        new=AsyncMock(return_value={"model_list": config_model_list}),
+    ):
+        db_models = []
+        deleted_deployments = await pc._delete_deployment(db_models=db_models)
     assert deleted_deployments == 0
 
     assert init_len_list == len(llm_router.model_list)

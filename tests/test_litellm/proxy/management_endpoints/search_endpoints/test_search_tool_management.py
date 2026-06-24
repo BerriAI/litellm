@@ -611,6 +611,45 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
                     app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+@pytest.mark.asyncio
+async def test_get_all_search_tools_from_db_retries_on_transport_error():
+    """`SearchToolRegistry.get_all_search_tools_from_db` self-heals across one
+    ClientNotConnectedError via call_with_db_reconnect_retry."""
+    import prisma
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+    )
+
+    invocations: list = []
+
+    async def _flaky_find_many(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return []
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
+        side_effect=_flaky_find_many
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    result = await SearchToolRegistry.get_all_search_tools_from_db(
+        prisma_client=mock_prisma_client
+    )
+
+    assert result == []
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "get_all_search_tools_from_db_lookup_failure"
+    )
+
+
 @contextlib.contextmanager
 def _mock_search_tool_backend(db_tools):
     """Patch the DB registry, prisma client, and config so /search_tools/list

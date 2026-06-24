@@ -25,7 +25,7 @@ class AzureTextCompletion(BaseAzureLLM):
             headers["Authorization"] = f"Bearer {azure_ad_token}"
         return headers
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,

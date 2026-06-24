@@ -44,8 +44,8 @@ class HealthCheckHelpers:
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
         model_params["max_tokens"] = model_params.get(
-            "max_tokens", 10
-        )  # gpt-5-nano throws errors for max_tokens=1
+            "max_tokens", 16
+        )  # GPT-5 models require max_output_tokens >= 16
         await acompletion(**model_params)
         return {}
 

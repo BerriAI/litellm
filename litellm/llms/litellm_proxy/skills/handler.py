@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
 from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -68,7 +69,7 @@ class LiteLLMSkillsHandler:
     ) -> LiteLLM_SkillsTable:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        skill_id = f"litellm_skill_{uuid.uuid4()}"
+        skill_id = f"{LITELLM_SKILL_ID_PREFIX}{uuid.uuid4()}"
         owner = get_primary_resource_owner_scope(user_api_key_dict) or user_id
         if owner is None:
             # Identity-less callers (no user_id / team_id / org_id /

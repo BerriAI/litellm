@@ -159,7 +159,7 @@ def video_generation(
 
 
 @client
-def video_generation(  # noqa: PLR0915
+def video_generation(
     prompt: str,
     model: Optional[str] = None,
     input_reference: Optional[FileTypes] = None,
@@ -569,7 +569,7 @@ def video_remix(
 
 
 @client
-def video_remix(  # noqa: PLR0915
+def video_remix(
     video_id: str,
     prompt: str,
     timeout=600,  # default to 10 minutes
@@ -790,7 +790,7 @@ def video_list(
 
 
 @client
-def video_list(  # noqa: PLR0915
+def video_list(
     after: Optional[str] = None,
     limit: Optional[int] = None,
     order: Optional[str] = None,
@@ -993,7 +993,7 @@ def video_status(
 
 
 @client
-def video_status(  # noqa: PLR0915
+def video_status(
     video_id: str,
     timeout=600,  # default to 10 minutes
     custom_llm_provider=None,

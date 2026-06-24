@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import AgentBuilderView from "@/components/playground/chat_ui/AgentBuilderView";
-import ChatUI from "@/components/playground/chat_ui/ChatUI";
-import CompareUI from "@/components/playground/compareUI/CompareUI";
-import ComplianceUI from "@/components/playground/complianceUI/ComplianceUI";
+import AgentBuilderView from "@/app/(dashboard)/playground/components/chat_ui/AgentBuilderView";
+import ChatUI from "@/app/(dashboard)/playground/components/chat_ui/ChatUI";
+import CompareUI from "@/app/(dashboard)/playground/components/compareUI/CompareUI";
+import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/ComplianceUI";
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";

@@ -120,6 +120,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/robots.txt",
     # Health (k8s probes)
     "/health",
+    # Plugin system
+    "/api/plugins",
+    "/plugin-proxy/",
 )
 
 BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
@@ -131,5 +134,11 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/fallback/login",
+    }
+)
+
+BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
+    {
+        "/swagger",  # API documentation static assets belong to the backend
     }
 )

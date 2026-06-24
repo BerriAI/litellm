@@ -9,6 +9,7 @@ class LiteLLMCacheType(str, Enum):
     LOCAL = "local"
     REDIS = "redis"
     REDIS_SEMANTIC = "redis-semantic"
+    VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
@@ -118,4 +119,5 @@ class CachedEmbedding(TypedDict):
     index: Optional[int]
     object: Optional[str]
     model: Optional[str]
+    prompt_tokens: Optional[int]
     prompt_tokens_details: Optional[dict]

@@ -1106,7 +1106,7 @@ async def test_proxy_admin_expired_key_from_cache():
     # Mock get_key_object to return expired token from cache
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key_object,
         patch(
@@ -1261,7 +1261,7 @@ async def test_scim_deactivated_user_key_is_rejected():
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
@@ -1696,7 +1696,9 @@ class TestJWTOAuth2Coexistence:
         assert mock_auto_register.call_args.kwargs["team_id"] == "validated-team"
         assert mock_auto_register.call_args.kwargs["user_id"] == "validated-user"
         assert mock_auto_register.call_args.kwargs["org_id"] == "validated-org"
-        assert mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
+        assert (
+            mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
+        )
         assert result.org_id == "validated-org"
 
     @pytest.mark.asyncio
@@ -2482,7 +2484,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
                 stack.enter_context(p)
             stack.enter_context(
                 patch(
-                    "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                    "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                     new_callable=AsyncMock,
                     return_value=valid_token,
                 )
@@ -2596,7 +2598,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
@@ -2685,6 +2687,67 @@ async def test_centralized_common_checks_runs_for_standard_auth():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+        "/v1/messages",
+    ],
+)
+async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(route):
+    """GH#30629: on LITELLM_METADATA_ROUTES the tag-budget read resolves to
+    litellm_metadata, so the litellm_metadata pre-seed must run before
+    apply_client_tag_policy_pre_auth merges x-litellm-tags. Otherwise header tags
+    land in metadata and silently escape _tag_max_budget_check. This guards the
+    pre-seed call site in _run_centralized_common_checks; dropping it routes header
+    tags back into metadata.
+    """
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"x-litellm-tags", b"tenant:acme")],
+            "query_string": b"",
+        }
+    )
+    request._url = URL(url=route)
+    request_data: dict = {"model": "us.anthropic.claude-sonnet-4-6"}
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data=request_data,
+                route=route,
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert request_data["litellm_metadata"]["tags"] == ["tenant:acme"]
+    assert "metadata" not in request_data
 
 
 @pytest.mark.asyncio
@@ -3608,3 +3671,118 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+def _proxy_attrs_for_db_lookup():
+    """Minimal proxy_server attributes for driving the real
+    ``_user_api_key_auth_builder`` down to the DB key lookup."""
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    return {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": DualCache(),
+        "proxy_logging_obj": proxy_logging_obj,
+        "master_key": "sk-test-master",
+        "general_settings": {"allow_requests_on_db_unavailable": False},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+
+
+async def _run_builder_with_key_lookup(get_key_object_mock):
+    """Drive the real auth builder with ``get_key_object`` replaced by the
+    given mock. Returns the builder result. Patches ``seed_request_identity``
+    so the failure path doesn't touch OTEL."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_attrs_for_db_lookup()
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                get_key_object_mock,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+            ),
+        ):
+            return await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-db-lookup-test",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_builder_returns_503_when_db_lookup_raises_infra_error():
+    """End-to-end: a DB infrastructure failure during the key lookup must
+    propagate past the ``except ProxyException`` guard and surface as 503,
+    not the 401 that masked the 4-hour outage. Killing the new 503 branch
+    flips this to 401 and fails the test."""
+    get_key_object = AsyncMock(side_effect=ConnectionError("connection refused"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert "Invalid API key" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_builder_returns_401_when_db_lookup_reports_missing_key():
+    """Regression guard: a genuinely missing key (DB returned no row, which
+    ``get_key_object`` raises as a 401 ProxyException) must still be 401."""
+    missing_key_error = ProxyException(
+        message="Authentication Error, Invalid proxy server token passed. key=..., not found in db.",
+        type=ProxyErrorTypes.token_not_found_in_db,
+        param="key",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+    get_key_object = AsyncMock(side_effect=missing_key_error)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_builder_succeeds_when_db_lookup_returns_valid_token():
+    """Regression guard: a valid key still authenticates. Proves the 503
+    conversion only fires on the failure path and never intercepts success."""
+    valid_token = UserAPIKeyAuth(api_key="sk-db-lookup-test", token="hashed-valid")
+    get_key_object = AsyncMock(return_value=valid_token)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth._return_user_api_key_auth_obj",
+        new_callable=AsyncMock,
+        return_value=valid_token,
+    ) as mock_return:
+        result = await _run_builder_with_key_lookup(get_key_object)
+
+    assert isinstance(result, UserAPIKeyAuth)
+    # Reaching the success-assembly return (never the exception handler)
+    # proves a valid key is unaffected by the 503 conversion.
+    mock_return.assert_awaited_once()

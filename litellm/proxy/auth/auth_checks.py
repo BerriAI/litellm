@@ -61,6 +61,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
@@ -519,7 +520,7 @@ MODEL_DISCOVERY_ROUTES = frozenset(
 )
 
 
-async def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -698,6 +699,11 @@ async def common_checks(  # noqa: PLR0915
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+                request_data=request_body,
+                route=route,
+            )
+
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
                 user_api_key_dict=valid_token,
@@ -725,6 +731,7 @@ async def common_checks(  # noqa: PLR0915
             user_spend = await get_current_spend(
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
+                max_budget=user_budget,
             )
             if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
@@ -1127,6 +1134,8 @@ async def _check_end_user_budget(
     end_user_spend = await get_current_spend(
         counter_key=f"spend:end_user:{end_user_obj.user_id}",
         fallback_spend=end_user_obj.spend or 0.0,
+        max_budget=end_user_budget,
+        fallback_authoritative=True,
     )
     if end_user_spend > end_user_budget:
         raise litellm.BudgetExceededError(
@@ -2945,6 +2954,26 @@ async def _get_agent_ids_from_access_groups(
     )
 
 
+def _resolve_all_team_model_sentinel_for_auth_check(
+    models: List[str],
+    llm_router: Optional[Router],
+    team_id: Optional[str],
+) -> List[str]:
+    if (
+        SpecialModelNames.all_team_models.value not in models
+        or team_id is None
+        or llm_router is None
+    ):
+        return models
+    proxy_models = llm_router.get_model_names()
+    non_sentinel_models = [
+        model for model in models if model != SpecialModelNames.all_team_models.value
+    ]
+    if not proxy_models:
+        return non_sentinel_models or models
+    return list(dict.fromkeys(non_sentinel_models + proxy_models))
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Optional[Router],
@@ -2961,6 +2990,12 @@ def _check_model_access_helper(
         access_groups = llm_router.get_model_access_groups(
             model_name=model, team_id=team_id
         )
+
+    models = _resolve_all_team_model_sentinel_for_auth_check(
+        models=models,
+        llm_router=llm_router,
+        team_id=team_id,
+    )
 
     if (
         len(access_groups) > 0 and llm_router is not None
@@ -3153,6 +3188,98 @@ async def can_key_call_model(
                     object_type="key",
                 )
         raise
+
+
+async def can_key_call_resolved_model(
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
+) -> None:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    skip_key_model_check = valid_token.config or (
+        isinstance(valid_token.models, list)
+        and SpecialModelNames.all_team_models.value in valid_token.models
+    )
+    if not skip_key_model_check:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
+            llm_router=llm_router,
+        )
+
+    team_object: Optional[LiteLLM_TeamTableCachedObj] = None
+    team_object_from_lookup = False
+    if valid_token.team_id is not None:
+        try:
+            team_object = await get_team_object(
+                team_id=valid_token.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=valid_token.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            team_object_from_lookup = True
+        except Exception:
+            team_object = LiteLLM_TeamTableCachedObj(
+                team_id=valid_token.team_id,
+                models=valid_token.team_models,
+                blocked=valid_token.team_blocked,
+                team_alias=valid_token.team_alias,
+                metadata=valid_token.team_metadata,
+                object_permission_id=valid_token.team_object_permission_id,
+                object_permission=valid_token.team_object_permission,
+            )
+
+    if team_object is not None:
+        try:
+            await can_team_access_model(
+                model=model,
+                team_object=team_object,
+                llm_router=llm_router,
+                team_model_aliases=valid_token.team_model_aliases,
+            )
+        except ProxyException as team_denial:
+            if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                raise
+            if not await _key_access_group_grants_model(
+                model=model,
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=llm_router,
+            ):
+                raise
+
+        if valid_token.user_id is not None and team_object_from_lookup:
+            await _check_team_member_model_access(
+                model=model,
+                team_object=team_object,
+                valid_token=valid_token,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    if valid_token.project_id is not None:
+        project_object = await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if project_object is not None and len(project_object.models) > 0:
+            can_project_access_model(
+                model=model,
+                project_object=project_object,
+                llm_router=llm_router,
+            )
 
 
 def can_org_access_model(
@@ -3516,10 +3643,14 @@ async def _virtual_key_max_budget_check(
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
+        fallback_spend = valid_token.spend or 0.0
+        counter_key = f"spend:key:{valid_token.token}"
+
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend = await get_current_spend(
-            counter_key=f"spend:key:{valid_token.token}",
-            fallback_spend=valid_token.spend or 0.0,
+            counter_key=counter_key,
+            fallback_spend=fallback_spend,
+            max_budget=valid_token.max_budget,
         )
 
         ####################################
@@ -3558,9 +3689,18 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            # name the key in the error so operators don't have to reverse-map
+            # spend back to a key; key_name is the masked form (last 4 chars)
+            key_label = valid_token.key_alias or "key"
+            key_descriptor = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 
@@ -3589,6 +3729,10 @@ async def _virtual_key_multi_budget_check(
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="Key",
+            window_entity_id=valid_token.token,
+            window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
@@ -3843,6 +3987,7 @@ async def _check_team_member_budget(
             team_member_spend = await get_current_spend(
                 counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
                 fallback_spend=team_member_spend,
+                max_budget=team_member_budget,
             )
 
             if (
@@ -3928,6 +4073,7 @@ async def _team_max_budget_check(
         spend = await get_current_spend(
             counter_key=f"spend:team:{team_object.team_id}",
             fallback_spend=team_object.spend or 0.0,
+            max_budget=team_object.max_budget,
         )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
@@ -3977,6 +4123,10 @@ async def _team_multi_budget_check(
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="Team",
+            window_entity_id=team_object.team_id,
+            window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
@@ -4282,6 +4432,7 @@ async def _organization_max_budget_check(
     org_spend = await get_current_spend(
         counter_key=f"spend:org:{org_id}",
         fallback_spend=org_table.spend or 0.0,
+        max_budget=org_max_budget,
     )
 
     # Check if organization spend exceeds max budget
@@ -4359,6 +4510,8 @@ async def _tag_max_budget_check(
             tag_spend = await get_current_spend(
                 counter_key=f"spend:tag:{tag_name}",
                 fallback_spend=tag_object.spend or 0.0,
+                max_budget=tag_object.litellm_budget_table.max_budget,
+                fallback_authoritative=True,
             )
             if tag_spend <= tag_object.litellm_budget_table.max_budget:
                 continue

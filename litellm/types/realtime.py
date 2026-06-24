@@ -115,3 +115,40 @@ class RealtimeClientSecretResponse(BaseModel):
     expires_at: Optional[int] = None
     value: str
     session: Optional[Dict[str, Any]] = None
+
+
+class RealtimeTranscriptionSessionRequest(BaseModel):
+    """
+    Request body for POST /v1/realtime/transcription_sessions.
+
+    Mirrors OpenAI's RealtimeTranscriptionSessionCreateRequest. The model used
+    for routing is taken from the LiteLLM-only top-level `model` hint, falling
+    back to `input_audio_transcription.model`. All other fields pass through
+    unchanged to the provider.
+    """
+
+    model_config = {"extra": "allow"}
+
+    # LiteLLM-only routing hint — stripped before forwarding upstream.
+    model: Optional[str] = None
+    input_audio_transcription: Optional[Dict[str, Any]] = None
+
+    def resolved_model(self) -> Optional[str]:
+        if self.model:
+            return self.model
+        if self.input_audio_transcription:
+            return self.input_audio_transcription.get("model")
+        return None
+
+
+class RealtimeTranscriptionSessionResponse(BaseModel):
+    """
+    Response from POST /v1/realtime/transcription_sessions.
+
+    `client_secret.value` contains the encrypted token instead of the raw
+    ephemeral key. Unknown fields pass through unchanged.
+    """
+
+    model_config = {"extra": "allow"}
+
+    client_secret: Optional[Dict[str, Any]] = None

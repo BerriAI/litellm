@@ -7,9 +7,21 @@ Common utilities used across bedrock chat/embedding/image generation
 import functools
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    TypedDict,
+    Union,
+)
 
 if TYPE_CHECKING:
+    from botocore.model import Shape
+
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
@@ -610,6 +622,31 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
     return model
 
 
+MANTLE_MESSAGES_PATH = "/anthropic/v1/messages"
+
+
+def build_mantle_messages_url(
+    api_base: Optional[str],
+    aws_bedrock_runtime_endpoint: Optional[str],
+    region: str,
+) -> str:
+    """Build the bedrock-mantle Anthropic /messages URL.
+
+    Honors an explicit endpoint override (``api_base``, then
+    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
+    endpoints are reachable; otherwise falls back to the public regional host.
+    The mantle messages path is appended unless the override already carries it,
+    so callers can pass either the host or the full messages URL.
+    """
+    override = api_base or aws_bedrock_runtime_endpoint
+    if override:
+        base = override.rstrip("/")
+        if base.endswith(MANTLE_MESSAGES_PATH):
+            return base
+        return f"{base}{MANTLE_MESSAGES_PATH}"
+    return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
+
+
 def get_bedrock_base_model(model: str) -> str:
     """
     Get the base model from the given model name.
@@ -1132,6 +1169,39 @@ def get_bedrock_response_stream_shape():
     return _load_bedrock_response_stream_shape()
 
 
+class BedrockEventStreamResponseDict(TypedDict):
+    status_code: int
+    headers: Mapping[str, str]
+    body: bytes
+
+
+def build_bedrock_stream_error(
+    response_dict: BedrockEventStreamResponseDict,
+    response_stream_shape: Shape | None,
+) -> BedrockError:
+    """Build a BedrockError for a non-200 event-stream error event.
+
+    botocore hard-codes HTTP 400 on every mid-stream error event, so the modeled
+    ResponseStream member's httpStatusCode is the real status. Resolve it from the
+    shape and fall back to the raw status when the type is not modeled.
+    """
+    exception_type = response_dict["headers"].get(":exception-type")
+    decoded_body = response_dict["body"].decode()
+    message = f"{exception_type} {decoded_body}" if exception_type else decoded_body
+
+    status_code = response_dict["status_code"]
+    if exception_type is not None and response_stream_shape is not None:
+        member = response_stream_shape.members.get(exception_type)
+        if member is not None:
+            modeled_status = (
+                (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            )
+            if modeled_status is not None:
+                status_code = int(modeled_status)
+
+    return BedrockError(status_code=status_code, message=message)
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
@@ -1156,23 +1226,7 @@ class BedrockEventStreamDecoderBase:
         parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
-            decoded_body = response_dict["body"].decode()
-            if isinstance(decoded_body, dict):
-                error_message = decoded_body.get("message")
-            elif isinstance(decoded_body, str):
-                error_message = decoded_body
-            else:
-                error_message = ""
-            exception_status = response_dict["headers"].get(":exception-type")
-            error_message = exception_status + " " + error_message
-            raise BedrockError(
-                status_code=response_dict["status_code"],
-                message=(
-                    json.dumps(error_message)
-                    if isinstance(error_message, dict)
-                    else error_message
-                ),
-            )
+            raise build_bedrock_stream_error(response_dict, response_stream_shape)
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:

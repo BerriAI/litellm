@@ -15,15 +15,19 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _extract_group_member_ids,
     _handle_team_membership_changes,
     _process_group_patch_operations,
+    _recompute_scim_member_roles,
     create_group,
     create_user,
+    delete_group,
     get_users,
     get_service_provider_config,
+    patch_group,
     patch_user,
     update_group,
     update_user,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ENTERPRISE_USER_SCHEMA,
     SCIMGroup,
     SCIMMember,
     SCIMPatchOp,
@@ -113,6 +117,59 @@ async def test_create_user_defaults_to_viewer(mocker, monkeypatch):
 
     called_args = new_user_mock.call_args.kwargs["data"]
     assert called_args.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_create_user_ingests_enterprise_extension(mocker, monkeypatch):
+    """A SCIM create payload carrying the enterprise extension block should land
+    in the created user's metadata under scim_enterprise"""
+
+    scim_user = SCIMUser.model_validate(
+        {
+            "schemas": [
+                "urn:ietf:params:scim:schemas:core:2.0:User",
+                SCIM_ENTERPRISE_USER_SCHEMA,
+            ],
+            "userName": "ent-user",
+            "name": {"familyName": "User", "givenName": "Ent"},
+            "emails": [{"value": "ent@example.com"}],
+            SCIM_ENTERPRISE_USER_SCHEMA: {
+                "costCenter": "CC-42",
+                "department": "Platform",
+            },
+        }
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="ent-user")),
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    created_metadata = new_user_mock.call_args.kwargs["data"].metadata
+    assert created_metadata["scim_enterprise"] == {
+        "costCenter": "CC-42",
+        "department": "Platform",
+    }
 
 
 @pytest.mark.asyncio
@@ -1720,3 +1777,1015 @@ async def test_process_group_patch_operations_with_flag_false_rejects(
     assert exc_info.value.status_code == 400
     assert "does not exist" in str(exc_info.value.detail)
     assert "new-user-1" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_user_grants_admin_when_in_scim_admin_group(mocker, monkeypatch):
+    """When scim_admin_group is configured and a created user's groups include it,
+    the user is provisioned as PROXY_ADMIN."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="new-admin",
+        emails=[SCIMUserEmail(value="new-admin@example.com")],
+        groups=[SCIMUserGroup(value="litellm-admins", display="LiteLLM Admins")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="new-admin")),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
+async def test_create_user_keeps_default_when_not_in_scim_admin_group(
+    mocker, monkeypatch
+):
+    """When scim_admin_group is configured but the user's groups don't include it,
+    the user keeps the non-admin default role."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="regular-user",
+        emails=[SCIMUserEmail(value="regular@example.com")],
+        groups=[SCIMUserGroup(value="engineering", display="Engineering")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="regular-user")),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_update_user_demotes_admin_when_removed_from_scim_admin_group(
+    mocker, monkeypatch
+):
+    """Core demotion test: a PUT whose new groups no longer include the configured
+    admin group must re-evaluate the role and write the non-admin default, so an
+    admin removed from the IdP group is demoted without re-login."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["litellm-admins"]
+    existing_user.metadata = {}
+
+    updated_user = {
+        "user_id": "demote-me",
+        "user_email": "demote@example.com",
+        "user_alias": None,
+        "teams": ["engineering"],
+        "metadata": "{}",
+    }
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="demote-me",
+        emails=[SCIMUserEmail(value="demote@example.com")],
+        groups=[SCIMUserGroup(value="engineering", display="Engineering")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await update_user(user_id="demote-me", user=scim_user)
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_update_user_does_not_force_role_when_scim_admin_group_unset(
+    mocker, monkeypatch
+):
+    """When scim_admin_group is unset, PUT must not touch user_role (current
+    behavior preserved)."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["litellm-admins"]
+    existing_user.metadata = {}
+
+    updated_user = {
+        "user_id": "no-touch",
+        "user_email": "no-touch@example.com",
+        "user_alias": None,
+        "teams": ["litellm-admins"],
+        "metadata": "{}",
+    }
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="no-touch",
+        emails=[SCIMUserEmail(value="no-touch@example.com")],
+        groups=[SCIMUserGroup(value="litellm-admins", display="LiteLLM Admins")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await update_user(user_id="no-touch", user=scim_user)
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert "user_role" not in call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_update_user_demotes_when_default_params_lack_user_role(
+    mocker, monkeypatch
+):
+    """Regression: default_internal_user_params set without a user_role key must
+    still resolve to the non-admin default on demotion, not silently skip and
+    leave the user PROXY_ADMIN."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params", {"max_budget": 10}, raising=False
+    )
+
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["litellm-admins"]
+    existing_user.metadata = {}
+
+    updated_user = {
+        "user_id": "demote-me",
+        "user_email": "demote@example.com",
+        "user_alias": None,
+        "teams": ["engineering"],
+        "metadata": "{}",
+    }
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="demote-me",
+        emails=[SCIMUserEmail(value="demote@example.com")],
+        groups=[SCIMUserGroup(value="engineering", display="Engineering")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await update_user(user_id="demote-me", user=scim_user)
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(
+    mocker, monkeypatch
+):
+    """PATCH that drops the admin team from the resulting team set must write the
+    non-admin default, mirroring the PUT demotion path."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["litellm-admins"]
+    existing_user.metadata = {}
+
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(
+                op="replace", path="groups", value=[{"value": "engineering"}]
+            )
+        ],
+    )
+
+    updated_user = {
+        "user_id": "demote-me",
+        "user_alias": None,
+        "teams": ["engineering"],
+        "metadata": "{}",
+    }
+
+    engineering_team = mocker.MagicMock()
+    engineering_team.team_alias = "Engineering"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=engineering_team
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(
+            return_value=SCIMUser(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+                userName="demote-me",
+            )
+        ),
+    )
+
+    await patch_user(user_id="demote-me", patch_ops=patch_ops)
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch):
+    """PATCH carries groups as team ids, so admin-group matching must fall back to
+    each team's display name; an admin group configured as a human-readable alias
+    grants PROXY_ADMIN even when the team id differs."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "LiteLLM Admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    existing_user = mocker.MagicMock()
+    existing_user.teams = []
+    existing_user.metadata = {}
+
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(
+                op="replace", path="groups", value=[{"value": "team-abc-123"}]
+            )
+        ],
+    )
+
+    updated_user = {
+        "user_id": "promote-me",
+        "user_alias": None,
+        "teams": ["team-abc-123"],
+        "metadata": "{}",
+    }
+
+    admin_team = mocker.MagicMock()
+    admin_team.team_alias = "LiteLLM Admins"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=admin_team
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(
+            return_value=SCIMUser(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+                userName="promote-me",
+            )
+        ),
+    )
+
+    await patch_user(user_id="promote-me", patch_ops=patch_ops)
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
+
+
+def _scim_admin_prisma(mocker, *, user_teams):
+    """Prisma double whose user resolves to user_teams and whose teams expose an
+    alias equal to their id, used by the role-recompute helper tests."""
+    user = mocker.MagicMock()
+    user.user_id = "member-1"
+    user.teams = user_teams
+
+    def _team_find_unique(where):
+        team = mocker.MagicMock()
+        team.team_alias = where["team_id"]
+        return team
+
+    prisma = mocker.MagicMock()
+    prisma.db = mocker.MagicMock()
+    prisma.db.litellm_usertable = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
+    prisma.db.litellm_teamtable = mocker.MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_recompute_scim_member_roles_demotes_when_not_in_admin_group(
+    mocker, monkeypatch
+):
+    """The shared recompute helper writes the non-admin default for a member whose
+    resulting teams no longer include the configured admin group."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["engineering"])
+
+    await _recompute_scim_member_roles(prisma, ["member-1"])
+
+    call_args = prisma.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_recompute_scim_member_roles_grants_when_in_admin_group(
+    mocker, monkeypatch
+):
+    """The shared recompute helper grants PROXY_ADMIN when a member's resulting
+    teams include the configured admin group."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+
+    await _recompute_scim_member_roles(prisma, ["member-1"])
+
+    call_args = prisma.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
+async def test_recompute_scim_member_roles_noop_when_admin_group_unset(
+    mocker, monkeypatch
+):
+    """With scim_admin_group unset the recompute helper must not touch any role,
+    preserving current behavior for SCIM group writes."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+
+    await _recompute_scim_member_roles(prisma, ["member-1"])
+
+    prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_group_recomputes_roles_for_changed_members(mocker):
+    """PUT /Groups must recompute the global role for every member whose
+    membership changed, so an admin dropped from the admin group is demoted."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "test-team-123"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Admins",
+        members=["user1", "user2"],
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user"),
+        ],
+        metadata={},
+    )
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Admins",
+        members=[SCIMMember(value="user2"), SCIMMember(value="user3")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock()
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group_update),
+    )
+
+    await update_group(group_id=group_id, group=scim_group_update)
+
+    recompute_mock.assert_awaited_once()
+    assert set(recompute_mock.call_args[0][1]) == {"user1", "user3"}
+
+
+@pytest.mark.asyncio
+async def test_patch_group_recomputes_roles_for_changed_members(mocker):
+    """PATCH /Groups must recompute the global role for every member whose
+    membership changed, mirroring the PUT path."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "test-team-123"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Admins",
+        members=["user1", "user2"],
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user"),
+        ],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="remove", path="members", value=[{"value": "user1"}])
+        ],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock()
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(
+            return_value=SCIMGroup(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                id=group_id,
+                displayName="Admins",
+            )
+        ),
+    )
+
+    await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    recompute_mock.assert_awaited_once()
+    assert set(recompute_mock.call_args[0][1]) == {"user1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_group_recomputes_roles_for_members(mocker):
+    """DELETE /Groups must recompute the global role for the team's members, so
+    deleting the admin group demotes everyone who was only admin through it."""
+    from litellm.proxy._types import Member
+
+    existing_team = mocker.MagicMock()
+    existing_team.members_with_roles = [
+        Member(user_id="user1", role="user"),
+        Member(user_id="user2", role="user"),
+    ]
+
+    member = mocker.MagicMock()
+    member.teams = ["test-team-123"]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_teamtable.delete = AsyncMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=member)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock()
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+
+    await delete_group(group_id="test-team-123")
+
+    recompute_mock.assert_awaited_once()
+    assert list(recompute_mock.call_args[0][1]) == ["user1", "user2"]
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_applies_role_when_admin_group_set(mocker):
+    """When admin_group is configured, re-upserting an existing email persists the
+    resolved role so a now-non-admin user can't keep a stale PROXY_ADMIN."""
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "old-user-id"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value={"user_id": "new-user-id"}
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="new-user-id",
+        user_email="test@example.com",
+        teams=["engineering"],
+        metadata={},
+        auto_create_key=False,
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client,
+        new_user_request=new_user_request,
+        admin_group="litellm-admins",
+    )
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_leaves_role_when_admin_group_unset(mocker):
+    """With admin_group unset, the existing-email upsert must not write user_role,
+    preserving current behavior when the feature is off."""
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "old-user-id"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value={"user_id": "new-user-id"}
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="new-user-id",
+        user_email="test@example.com",
+        teams=["engineering"],
+        metadata={},
+        auto_create_key=False,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client,
+        new_user_request=new_user_request,
+    )
+
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert "user_role" not in call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_create_user_existing_email_upsert_demotes_when_admin_group_set(
+    mocker, monkeypatch
+):
+    """End-to-end create wiring: a SCIM POST that upserts an existing email while
+    the user is not in the admin group must write the non-admin default, not leave
+    a stale PROXY_ADMIN."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="returning-user",
+        emails=[SCIMUserEmail(value="returning@example.com")],
+        groups=[SCIMUserGroup(value="engineering", display="Engineering")],
+    )
+
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "returning-user"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value={"user_id": "returning-user"}
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="returning-user")),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    new_user_mock.assert_not_called()
+    call_args = mock_prisma_client.db.litellm_usertable.update.call_args
+    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_create_group_recomputes_roles_for_members(mocker):
+    """POST /Groups must recompute the global role for the new team's members, so a
+    team created with the admin-group display name elevates its members."""
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "admin-team-1"
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="LiteLLM Admins",
+        members=[SCIMMember(value="user1"), SCIMMember(value="user2")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock()
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group),
+    )
+
+    await create_group(group=scim_group)
+
+    recompute_mock.assert_awaited_once()
+    assert set(recompute_mock.call_args[0][1]) == {"user1", "user2"}
+
+
+@pytest.mark.asyncio
+async def test_update_group_rename_recomputes_retained_members(mocker):
+    """A PUT that renames the group (alias changes) but leaves membership unchanged
+    must still recompute retained members, since a rename can flip whether the
+    group matches scim_admin_group by display name."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "test-team-123"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="LiteLLM Admins",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Engineering",
+        members=[SCIMMember(value="user1")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock()
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group_update),
+    )
+
+    await update_group(group_id=group_id, group=scim_group_update)
+
+    recompute_mock.assert_awaited_once()
+    assert set(recompute_mock.call_args[0][1]) == {"user1"}
+
+
+@pytest.mark.asyncio
+async def test_patch_group_rename_recomputes_retained_members(mocker):
+    """A PATCH that renames the group (displayName op) but leaves membership
+    unchanged must still recompute retained members, mirroring the PUT path."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "test-team-123"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="LiteLLM Admins",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="replace", path="displayName", value="Engineering")
+        ],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock()
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    recompute_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(
+            return_value=SCIMGroup(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                id=group_id,
+                displayName="Engineering",
+            )
+        ),
+    )
+
+    await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    recompute_mock.assert_awaited_once()
+    assert set(recompute_mock.call_args[0][1]) == {"user1"}

@@ -464,6 +464,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store vectors in S3 Vectors using PutVectors API.
@@ -480,6 +481,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             content_type: MIME type (not used for S3 Vectors)
             chunks: Text chunks
             embeddings: Vector embeddings
+            existing_file_id: Existing provider file ID, unsupported for S3 Vectors
 
         Returns:
             Tuple of (index_name, filename)

@@ -138,7 +138,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         return prepped_request
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,

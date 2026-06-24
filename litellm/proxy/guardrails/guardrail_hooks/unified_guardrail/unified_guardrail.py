@@ -248,12 +248,16 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Fallback: resolve call_type from logging_obj for pass-through endpoints
         if call_type is None:
             litellm_logging_obj = data.get("litellm_logging_obj")
-            if (
-                litellm_logging_obj is not None
-                and getattr(litellm_logging_obj, "call_type", None)
-                == CallTypes.pass_through.value
+            logging_call_type = (
+                getattr(litellm_logging_obj, "call_type", None)
+                if litellm_logging_obj is not None
+                else None
+            )
+            if logging_call_type in (
+                CallTypes.pass_through.value,
+                CallTypes.allm_passthrough_route.value,
             ):
-                call_type = CallTypes.pass_through.value
+                call_type = logging_call_type
 
         if call_type is None:
             return response
@@ -284,7 +288,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         return response
 
-    async def async_post_call_streaming_iterator_hook(  # noqa: PLR0915
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Alert, Form, Input, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 interface S3VectorsConfigProps {
   accessToken: string | null;
