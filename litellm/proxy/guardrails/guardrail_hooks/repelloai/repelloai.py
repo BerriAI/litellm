@@ -439,13 +439,10 @@ class RepelloAIGuardrail(CustomGuardrail):
         return data
 
     def _build_post_call_text(self, data: dict[str, object], response_text: str) -> str:
-        messages = build_inspection_messages(data)
-        if not messages:
+        history_parts = self._extract_prompt_message_text(data)
+        if not history_parts:
             return response_text
-        history = "\n".join(
-            f"{msg['role']}: {msg['content']}" for msg in messages
-        )
-        return history + "\n" + response_text
+        return "\n".join(history_parts) + "\n" + response_text
 
     async def async_post_call_success_hook(
         self,

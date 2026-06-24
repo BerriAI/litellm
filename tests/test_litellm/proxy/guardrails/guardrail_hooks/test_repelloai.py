@@ -621,7 +621,7 @@ class TestRepelloAIPostCall:
             data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
         )
         assert captured["url"] == ANALYZE_RESPONSE_URL
-        assert captured["json"]["scan_data"] == {"response": "user: q\nthe answer content"}
+        assert captured["json"]["scan_data"] == {"response": "q\nthe answer content"}
 
     @pytest.mark.asyncio
     async def test_text_completion_response_text_extracted_to_endpoint(
@@ -672,7 +672,7 @@ class TestRepelloAIPostCall:
         await guardrail.async_post_call_success_hook(
             data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
         )
-        assert captured["json"]["scan_data"]["response"] == "user: q\nfirst part and second part"
+        assert captured["json"]["scan_data"]["response"] == "q\nfirst part and second part"
 
     @pytest.mark.asyncio
     async def test_responses_api_dict_output_extracted_to_endpoint(self, monkeypatch):
@@ -699,7 +699,7 @@ class TestRepelloAIPostCall:
         await guardrail.async_post_call_success_hook(
             data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
         )
-        assert captured["json"]["scan_data"]["response"] == "user: q\nraw dict"
+        assert captured["json"]["scan_data"]["response"] == "q\nraw dict"
 
     @pytest.mark.asyncio
     async def test_responses_api_function_call_output_scanned(self, monkeypatch):
@@ -755,7 +755,7 @@ class TestRepelloAIPostCall:
         await guardrail.async_post_call_success_hook(
             data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
         )
-        assert captured["json"]["scan_data"]["response"] == "user: q\nfirst\nsecond"
+        assert captured["json"]["scan_data"]["response"] == "q\nfirst\nsecond"
 
     @pytest.mark.asyncio
     async def test_empty_choices_skips(self, monkeypatch):
@@ -1071,7 +1071,7 @@ class TestRepelloAIStreaming:
                 request_data=data,
             ):
                 pass
-        assert captured["json"]["scan_data"]["response"] == "user: q\nunsafe answer"
+        assert captured["json"]["scan_data"]["response"] == "q\nunsafe answer"
 
     @pytest.mark.asyncio
     async def test_streaming_flagged_logs_warning(self, monkeypatch):
