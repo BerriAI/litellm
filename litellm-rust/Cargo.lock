@@ -568,6 +568,7 @@ dependencies = [
  "litellm-core",
  "litellm-providers",
  "pyo3",
+ "reqwest",
  "serde",
  "serde_json",
  "subtle",
