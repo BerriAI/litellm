@@ -1449,8 +1449,15 @@ model LiteLLM_BenchRun {
 
 // Service accounts for programmatic access
 model LiteLLM_ServiceAccountTable {
-  user_id    String   @id
-  owner_ids  String[] @default([])
-  created_at DateTime @default(now()) @map("created_at")
-  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+  user_id                      String   @id
+  owner_ids                    String[] @default([])
+  name                         String?
+  requested_models             String[] @default([])
+  use_case                     String?
+  requested_rpm_limit          Int?
+  requested_parallel_requests_limit Int?
+  is_active                    Boolean  @default(false)
+  is_key_rotation_requested    Boolean  @default(false)
+  created_at                   DateTime @default(now()) @map("created_at")
+  updated_at                   DateTime @default(now()) @updatedAt @map("updated_at")
 }
