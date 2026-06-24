@@ -438,6 +438,15 @@ class RepelloAIGuardrail(CustomGuardrail):
         )
         return data
 
+    def _build_post_call_text(self, data: dict[str, object], response_text: str) -> str:
+        # Prepend conversation history (all roles) so Argus can evaluate the
+        # response in context — e.g. detect system-prompt leakage or
+        # multi-turn policy violations.
+        history_parts = self._extract_prompt_message_text(data)
+        if history_parts:
+            return "\n".join(history_parts) + "\n" + response_text
+        return response_text
+
     async def async_post_call_success_hook(
         self,
         data: dict[str, object],
@@ -455,12 +464,14 @@ class RepelloAIGuardrail(CustomGuardrail):
         ):
             return response
 
-        text = self._extract_response_text(response)
-        if not text:
+        response_text = self._extract_response_text(response)
+        if not response_text:
             verbose_proxy_logger.warning(
                 "RepelloAI Argus: no inspectable response text - skipping."
             )
             return response
+
+        text = self._build_post_call_text(data, response_text)
 
         repelloai_response = await self._call_analyze(
             text=text,
@@ -501,9 +512,14 @@ class RepelloAIGuardrail(CustomGuardrail):
         assembled = litellm_main.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             chunks=chunks
         )
-        text = (
+        response_text = (
             self._extract_response_text(assembled)
             if isinstance(assembled, ModelResponse)
+            else None
+        )
+        text = (
+            self._build_post_call_text(request_data, response_text)
+            if response_text
             else None
         )
         if text:
