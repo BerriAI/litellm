@@ -67,8 +67,11 @@ def test_basic_scheme_base64_encodes_the_token():
     )
     assert spec is not None and isinstance(spec.config, ApiKeyConfig)
     assert spec.config.value_prefix == "Basic"
+    assert spec.config.encode_base64 is True
+    # the raw token is stored; base64 is applied when the header is written
+    assert spec.config.key_source.value.get_secret_value() == "user:pass"
     expected = base64.b64encode(b"user:pass").decode()
-    assert spec.config.key_source.value.get_secret_value() == expected
+    assert spec.config.header("user:pass") == ("Authorization", f"Basic {expected}")
 
 
 @pytest.mark.parametrize(

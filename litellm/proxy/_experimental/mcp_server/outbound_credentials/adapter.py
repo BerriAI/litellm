@@ -11,7 +11,6 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 
 from __future__ import annotations
 
-import base64
 from typing import TYPE_CHECKING, NoReturn, Optional
 
 from fastapi import HTTPException
@@ -110,14 +109,14 @@ def _shared_key_spec(
     token = server.authentication_token
     if not token:
         return None  # no key configured -> defer to v1 (parity-safe)
-    value = base64.b64encode(token.encode("utf-8")).decode() if encode else token
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=ApiKeyConfig(
             header_name=header_name,
             value_prefix=value_prefix,
-            key_source=SharedKey(value=SecretStr(value)),
+            encode_base64=encode,
+            key_source=SharedKey(value=SecretStr(token)),
         ),
     )
 

@@ -25,6 +25,7 @@ union (see `result.py`), not `expression.Result`.
 
 from __future__ import annotations
 
+import base64
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -220,9 +221,12 @@ class ApiKeyConfig(BaseModel):
     kind: Literal[AuthSpecKind.api_key] = AuthSpecKind.api_key
     header_name: str = "Authorization"
     value_prefix: str = "Bearer"
+    encode_base64: bool = False  # the basic scheme: base64 the value at write time
     key_source: ApiKeySource
 
     def header(self, value: str) -> tuple[str, str]:
+        if self.encode_base64:
+            value = base64.b64encode(value.encode("utf-8")).decode()
         formatted = f"{self.value_prefix} {value}" if self.value_prefix else value
         return self.header_name, formatted
 
