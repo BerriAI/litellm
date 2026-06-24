@@ -4301,6 +4301,131 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
     dummy_logging_obj.async_success_handler.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_drives_success_logging():
+    """
+    Regression: the REST/UI tool-call endpoint (`POST /mcp-rest/tools/call`)
+    invokes `execute_mcp_tool` directly instead of the `@client`-wrapped
+    `call_mcp_tool`, so `execute_mcp_tool` must drive the success logging itself.
+    Without it, `async_success_handler` never runs for dashboard-initiated tool
+    calls and no OTel MCP tool-call span (or spend log) is emitted.
+    """
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        execute_mcp_tool,
+        global_mcp_tool_registry,
+    )
+    from litellm.types.utils import CallTypes
+
+    server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+
+    tool_result = CallToolResult(
+        content=[TextContent(type="text", text="ok")], isError=False
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.post_call = MagicMock()
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+    logging_obj.async_success_handler = AsyncMock()
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=tool_result,
+        ) as mock_handle,
+        patch.object(global_mcp_tool_registry, "get_tool", return_value=None),
+    ):
+        result = await execute_mcp_tool(
+            name="test_server-some_tool",
+            arguments={"x": 1},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            user_api_key_auth=user_auth,
+            litellm_logging_obj=logging_obj,
+            requested_server_id="server-123",
+        )
+
+    mock_handle.assert_awaited_once()
+    assert result is tool_result
+    logging_obj.async_post_mcp_tool_call_hook.assert_awaited_once()
+    logging_obj.async_success_handler.assert_awaited_once()
+    assert logging_obj.async_success_handler.await_args.kwargs["result"] is tool_result
+    assert logging_obj.call_type == CallTypes.call_mcp_tool.value
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_returns_result_when_success_logging_fails():
+    """
+    Logging is non-blocking: a tool call that succeeds must return its result
+    even if async_success_handler raises (e.g. an exporter error), rather than
+    surfacing the logging error as a failed tool call.
+    """
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        execute_mcp_tool,
+        global_mcp_tool_registry,
+    )
+
+    server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+
+    tool_result = CallToolResult(
+        content=[TextContent(type="text", text="ok")], isError=False
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.post_call = MagicMock()
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+    logging_obj.async_success_handler = AsyncMock(
+        side_effect=RuntimeError("otel exporter down")
+    )
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=tool_result,
+        ),
+        patch.object(global_mcp_tool_registry, "get_tool", return_value=None),
+    ):
+        result = await execute_mcp_tool(
+            name="test_server-some_tool",
+            arguments={"x": 1},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            user_api_key_auth=user_auth,
+            litellm_logging_obj=logging_obj,
+            requested_server_id="server-123",
+        )
+
+    assert result is tool_result
+    logging_obj.async_success_handler.assert_awaited_once()
+
+
 def test_tool_name_matches_case_insensitive():
     """Test that _tool_name_matches performs case-insensitive comparison.
 
