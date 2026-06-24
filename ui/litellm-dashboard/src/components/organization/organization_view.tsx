@@ -157,9 +157,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         },
         metadata: {
           ...(values.metadata ? JSON.parse(values.metadata) : {}),
-          ...(values.logging_exporters !== undefined
-            ? { logging_exporters: values.logging_exporters }
-            : {}),
+          ...(values.logging_exporters !== undefined ? { logging_exporters: values.logging_exporters } : {}),
         },
       };
 

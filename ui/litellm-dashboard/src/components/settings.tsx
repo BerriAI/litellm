@@ -39,11 +39,7 @@ import {
   setCallbacksCall,
 } from "./networking";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
-import {
-  AlertingObject,
-  CredentialAccess,
-  ResolvedScope,
-} from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
+import { AlertingObject, CredentialAccess, ResolvedScope } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -273,8 +269,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   // access for the destination branch of the unified Add modal
   const [addAccess, setAddAccess] = useState<CredentialAccess>({});
   const addingDestination = selectedCallback != null && LOGGING_BACKEND_IDS.has(selectedCallback);
-  const addingDestinationFields =
-    LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedCallback)?.fields ?? [];
+  const addingDestinationFields = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedCallback)?.fields ?? [];
 
   const teamAlias = (id: string): string => {
     const t = (teamsData ?? []).find((team) => team.team_id === id);
@@ -876,7 +871,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   key={f.name}
                   label={<span className="text-sm font-medium text-gray-700">{f.label}</span>}
                   name={f.name}
-                  rules={f.optional ? undefined : [{ required: true, message: `Please enter the ${f.label.toLowerCase()}` }]}
+                  rules={
+                    f.optional ? undefined : [{ required: true, message: `Please enter the ${f.label.toLowerCase()}` }]
+                  }
                 >
                   {f.type === "password" ? <Input.Password size="large" /> : <Input size="large" />}
                 </FormItem>

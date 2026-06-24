@@ -551,9 +551,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
-          ...(values.logging_exporters !== undefined
-            ? { logging_exporters: values.logging_exporters }
-            : {}),
+          ...(values.logging_exporters !== undefined ? { logging_exporters: values.logging_exporters } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"

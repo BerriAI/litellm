@@ -53,7 +53,9 @@ def to_otel_span_kind(kind: LiteLLMSpanKind) -> SpanKind:
 _EXPORTER_FACTORIES: dict[str, Callable[[ExporterSpec], SpanExporter]] = {}
 
 
-def register_exporter_factory(kind: str, factory: Callable[[ExporterSpec], SpanExporter]) -> None:
+def register_exporter_factory(
+    kind: str, factory: Callable[[ExporterSpec], SpanExporter]
+) -> None:
     """Register a custom exporter ``factory`` for the exporter ``kind``."""
     _EXPORTER_FACTORIES[kind.lower()] = factory
 
@@ -70,7 +72,9 @@ class LiteLLMBaggageSpanProcessor(SpanProcessor):
         self._allowed_prefixes = tuple(allowed_prefixes)
 
     def _is_allowed(self, key: str) -> bool:
-        return key in self._allowed_keys or any(key.startswith(prefix) for prefix in self._allowed_prefixes)
+        return key in self._allowed_keys or any(
+            key.startswith(prefix) for prefix in self._allowed_prefixes
+        )
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         for key, value in baggage.get_all(parent_context).items():
@@ -164,7 +168,11 @@ def build_span_exporter(config: OpenTelemetryV2Config) -> SpanExporter:
     ``exporter`` / ``endpoint`` / ``headers`` fields. To configure multiple
     exporters, populate ``config.exporters`` directly.
     """
-    return _exporter_from_spec(ExporterSpec(kind=config.exporter, endpoint=config.endpoint, headers=config.headers))
+    return _exporter_from_spec(
+        ExporterSpec(
+            kind=config.exporter, endpoint=config.endpoint, headers=config.headers
+        )
+    )
 
 
 def _otlp_metrics_endpoint(endpoint: str | None) -> str | None:
@@ -313,7 +321,9 @@ def build_tracer_provider(
     """
     provider = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
-        baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
+        baggage_processor = LiteLLMBaggageSpanProcessor(
+            allowed_keys=config.baggage_promoted_keys
+        )
     provider.add_span_processor(baggage_processor)
 
     if tenant_fan_out_owner is not None:
@@ -321,7 +331,9 @@ def build_tracer_provider(
             TenantFanOutSpanProcessor,
         )
 
-        provider.add_span_processor(TenantFanOutSpanProcessor(owner_callback_name=tenant_fan_out_owner))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(owner_callback_name=tenant_fan_out_owner)
+        )
 
     if exporter is not None:
         provider.add_span_processor(_processor_for(exporter, use_simple_processor))
@@ -334,7 +346,11 @@ def build_tracer_provider(
         provider.add_span_processor(
             _processor_for(
                 exp,
-                (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
+                (
+                    spec.use_simple_processor
+                    if spec.use_simple_processor is not None
+                    else use_simple_processor
+                ),
             )
         )
     return provider

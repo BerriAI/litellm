@@ -27,7 +27,9 @@ _PROPAGATOR = TraceContextTextMapPropagator()
 # and is inherited by ``asyncio.create_task`` children — i.e. the async logging
 # callbacks that close the span. It is never reset: the contextvar dies with the
 # request task, so there is nothing to leak.
-_request_root_span: "ContextVar[Span | None]" = ContextVar("litellm_otel_request_root_span", default=None)
+_request_root_span: "ContextVar[Span | None]" = ContextVar(
+    "litellm_otel_request_root_span", default=None
+)
 
 # Per-request admin-resolved destinations. Set once at the auth boundary (the
 # earliest point a request's identity is known) and read by the global-provider
@@ -38,7 +40,9 @@ _request_root_span: "ContextVar[Span | None]" = ContextVar("litellm_otel_request
 # ``asyncio.create_task`` children (the success/failure logging callbacks close
 # the LLM span in a worker copied from the request context). Request-scoped: the
 # contextvar dies with the request task, so nothing leaks across requests.
-_request_destinations: "ContextVar[tuple]" = ContextVar("litellm_otel_request_destinations", default=())
+_request_destinations: "ContextVar[tuple]" = ContextVar(
+    "litellm_otel_request_destinations", default=()
+)
 
 
 def set_request_destinations(destinations: tuple) -> None:
@@ -68,7 +72,9 @@ def request_root_span() -> "Span | None":
     return span if is_recordable_span(span) else None
 
 
-def set_request_baggage(values: Mapping[str, str], context: Context | None = None) -> Context:
+def set_request_baggage(
+    values: Mapping[str, str], context: Context | None = None
+) -> Context:
     """Return a context with ``values`` written into Baggage."""
     ctx = context
     for key, value in values.items():

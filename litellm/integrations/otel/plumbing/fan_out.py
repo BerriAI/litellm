@@ -37,8 +37,8 @@ if TYPE_CHECKING:
 # Bound on cached per-destination processors. One processor per
 # ``(endpoint, sorted(headers))`` pair, so the working set is one entry per
 # admin-resolved tenant credential -- a real-world deployment with hundreds of
-# tenants stays well under this. The LRU shuts down the evicted processor's
-# exporter thread so the working set is reclaimed.
+# tenants stays well under this. Evicted entries are dropped (not shut down; see
+# the eviction site) and reclaimed at process exit.
 _MAX_CACHED_PROCESSORS = 256
 
 
@@ -100,7 +100,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             try:
                 processor.shutdown()
             except Exception as exc:
-                verbose_logger.debug("OTel V2 fan-out: processor shutdown failed: %s", exc)
+                verbose_logger.debug(
+                    "OTel V2 fan-out: processor shutdown failed: %s", exc
+                )
         self._processors.clear()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
@@ -121,7 +123,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return cached
         from litellm.integrations.otel.plumbing.providers import (
             _exporter_from_spec,
-            _processor_for,
+            _processor_for as _build_processor,
             default_otlp_kind_for_backend,
         )
 
@@ -133,7 +135,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 owner=None,
             )
             exporter = _exporter_from_spec(spec)
-            processor = _processor_for(exporter, use_simple=False)
+            processor = _build_processor(exporter, use_simple=False)
         except Exception as exc:
             verbose_logger.debug(
                 "OTel V2 fan-out: failed to build processor for %s: %s",
@@ -177,7 +179,9 @@ def _destination_resource_attrs(destination: "OtelDestination") -> dict[str, str
     return {}
 
 
-def _with_destination_resource(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+def _with_destination_resource(
+    span: ReadableSpan, destination: "OtelDestination"
+) -> ReadableSpan:
     """Return ``span`` with its Resource augmented by the destination's required
     attributes. The original span object is left untouched; a shallow wrapper
     reuses every other field and only swaps the ``resource`` property."""
