@@ -39,7 +39,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
-from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -82,7 +81,6 @@ def _should_sdk_support_streaming(
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
-bedrock_files_instance = BedrockFilesHandler()
 #################################################
 
 
@@ -1017,15 +1015,6 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 litellm_params=litellm_params_dict,
-            )
-        elif custom_llm_provider == "bedrock":
-            response = bedrock_files_instance.file_content(
-                _is_async=_is_async,
-                file_content_request=_file_content_request,
-                api_base=optional_params.api_base,
-                optional_params=litellm_params_dict,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
             )
         else:
             raise litellm.exceptions.BadRequestError(
