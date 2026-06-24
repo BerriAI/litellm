@@ -393,6 +393,40 @@ async def test_callback_vars_walker_migrates_callback_settings_shape(
     assert "v2:gcm:" in inner
 
 
+@pytest.mark.asyncio
+async def test_check_reports_callback_var_legacy_with_gate_off(salt_key, monkeypatch):
+    """check_encryption must report residual legacy callback vars even when the
+    AES gate is OFF.
+
+    Detection is decrypt-based, not a re-encrypt delta, so it does not depend on
+    the write gate. A heuristic that re-encrypts and counts new v2 values would
+    read zero here (gate off -> no v2 produced) and emit a false-clean
+    attestation -- exactly the compliance trap this guards against.
+    """
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    # Legacy-encrypt a callback var, and leave the gate OFF for the check itself.
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    legacy_meta = encrypt_callback_vars(
+        {"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]}
+    )
+    team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_teamtable.update = AsyncMock()
+
+    report = await cm.check_encryption(client)
+
+    assert report.residual_legacy == 1
+    assert report.as_dict()["locations"]["team.callback_vars"]["legacy"] == 1
+    client.db.litellm_teamtable.update.assert_not_awaited()  # read-only
+
+
 # --------------------------- covered-tables scanner ---------------------------
 
 

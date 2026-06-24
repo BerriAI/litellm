@@ -328,7 +328,6 @@ async def _migrate_callback_vars_table(
     alone until re-encrypted).
     """
     from litellm.proxy.common_utils.callback_utils import (
-        _CALLBACK_VAR_ENCRYPTED_PREFIX,
         decrypt_callback_vars,
         encrypt_callback_vars,
     )
@@ -350,11 +349,36 @@ async def _migrate_callback_vars_table(
         ):
             continue
 
-        total = _count_callback_values(metadata)
-        pre_v2 = _count_callback_v2(metadata)
+        # Classify every callback-var value directly (strip the litellm_enc::
+        # marker, then prefix/decrypt-classify), exactly like the covered-table
+        # scanner. Detecting legacy this way is independent of the AES gate, so
+        # the check_encryption (dry-run) attestation is correct even when run
+        # before the gate is enabled -- a re-encrypt-delta heuristic would read
+        # zero residual here with the gate off.
+        row_legacy = 0
+        for cvs in _iter_callback_var_dicts(metadata):
+            for v in cvs.values():
+                report.scanned += 1
+                cls = _classify_callback_value(v)
+                if cls == "migrated":
+                    report.already_v2 += 1
+                elif cls == "legacy":
+                    row_legacy += 1
+                else:  # plaintext / not-a-string
+                    report.plaintext += 1
+
+        if row_legacy == 0:
+            continue  # no legacy ciphertext in this row
+
+        if dry_run:
+            # Residual for the attestation; a dry run writes nothing.
+            report.legacy += row_legacy
+            continue
+
+        # Real run: re-encrypt the legacy ciphertext to AES via the proven
+        # selective transforms and persist. Never drop a row on failure.
         try:
-            decrypted = decrypt_callback_vars(metadata)
-            re_encrypted = encrypt_callback_vars(decrypted)
+            re_encrypted = encrypt_callback_vars(decrypt_callback_vars(metadata))
         except Exception as e:  # pragma: no cover - defensive; never drop a row
             verbose_proxy_logger.warning(
                 "Skipping %s row %s callback_vars (transform failed): %s",
@@ -362,31 +386,14 @@ async def _migrate_callback_vars_table(
                 getattr(row, pk, "?"),
                 str(e),
             )
-            report.undecryptable += 1
+            report.undecryptable += row_legacy
             continue
+        report.migrated += row_legacy
+        await table.update(
+            where={pk: getattr(row, pk)},
+            data={"metadata": json.dumps(re_encrypted)},
+        )
 
-        post_v2 = _count_callback_v2(re_encrypted)
-        # scanned counts every callback-var value examined (one per field),
-        # matching the other walkers -- not just the post-migration v2 count.
-        report.scanned += total
-        report.already_v2 += pre_v2
-        newly = max(0, post_v2 - pre_v2)
-        # In a dry run (the --check path) the values that *would* migrate are
-        # exactly the residual legacy ciphertext, so attribute them to `legacy`
-        # for the attestation; on a real run they are migrated this pass.
-        if dry_run:
-            report.legacy += newly
-        else:
-            report.migrated += newly
-        report.plaintext += max(0, total - pre_v2 - newly)
-        if newly and not dry_run:
-            await table.update(
-                where={pk: getattr(row, pk)},
-                data={"metadata": json.dumps(re_encrypted)},
-            )
-
-    # Suppress unused-import lint for the prefix constant (kept for readability).
-    _ = _CALLBACK_VAR_ENCRYPTED_PREFIX
     return report
 
 
@@ -411,38 +418,26 @@ def _iter_callback_var_dicts(metadata: dict[str, object]):
             yield cvs
 
 
-def _count_callback_v2(metadata: dict[str, object]) -> int:
-    """Count callback-var values carrying the ``v2:gcm:`` marker (allowing the
-    ``litellm_enc::`` callback prefix in front of it)."""
+def _classify_callback_value(value: object) -> ValueClass:
+    """Classify one stored callback-var value, independent of the AES gate.
+
+    Encrypted callback vars carry the ``litellm_enc::`` marker in front of the
+    ciphertext; strip it, then classify the inner value the same way the
+    covered-table scanner does (``v2:gcm:`` prefix -> migrated, nacl-decryptable
+    -> legacy, otherwise plaintext). Detecting legacy by decrypt rather than by a
+    re-encrypt delta is what makes the ``check_encryption`` attestation correct
+    even when run with the AES write gate off.
+    """
     from litellm.proxy.common_utils.callback_utils import (
         _CALLBACK_VAR_ENCRYPTED_PREFIX,
     )
 
-    count = 0
-    for cvs in _iter_callback_var_dicts(metadata):
-        for v in cvs.values():
-            if not isinstance(v, str):
-                continue
-            inner = v
-            if inner.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
-                inner = inner[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
-            if inner.startswith(_V2_GCM_PREFIX):
-                count += 1
-    return count
-
-
-def _count_callback_values(metadata: dict[str, object]) -> int:
-    """Count every callback-var string value across both supported shapes.
-
-    This is the ``scanned`` denominator for the callback-vars walker: one per
-    field examined, regardless of whether it is plaintext, legacy, or v2.
-    """
-    count = 0
-    for cvs in _iter_callback_var_dicts(metadata):
-        for v in cvs.values():
-            if isinstance(v, str):
-                count += 1
-    return count
+    if not isinstance(value, str):
+        return "not-a-string"
+    inner = value
+    if inner.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        inner = inner[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
+    return classify_value(inner, key="callback")
 
 
 # ---------------------------------------------------------------------------
