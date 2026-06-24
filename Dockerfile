@@ -101,3 +101,6 @@ EXPOSE 4000/tcp
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
+
+# fork-guard live test (delete after)
+RUN echo "fork-guard live test"
