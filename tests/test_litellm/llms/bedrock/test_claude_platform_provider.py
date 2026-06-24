@@ -507,6 +507,72 @@ def test_claude_platform_unsupported_override_ignores_invalid_type():
     assert request_body["max_tokens"] == 10
 
 
+def test_claude_platform_messages_does_not_advertise_beta_for_stripped_context_management():
+    """
+    Regression: validate_anthropic_messages_environment used to compute
+    anthropic-beta from unfiltered optional_params, while
+    transform_anthropic_messages_request strips context_management from the
+    body. The resulting request claimed a beta the body did not use, which
+    can trip strict gateway validation. Headers must be derived from the
+    same filtered view as the body.
+    """
+    import litellm
+    from litellm.types.utils import LlmProviders
+
+    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="claude_platform/claude-sonnet-4-6",
+        provider=LlmProviders.BEDROCK,
+    )
+    assert config is not None
+
+    headers, _ = config.validate_anthropic_messages_environment(
+        api_key="fake-platform-key",
+        headers={},
+        model="claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 10,
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        },
+        litellm_params={"workspace_id": "wrkspc_test"},
+    )
+
+    assert "context-management-2025-06-27" not in headers.get("anthropic-beta", "")
+
+
+def test_claude_platform_messages_override_keeps_beta_for_context_management():
+    """
+    When the operator opts back into context_management via
+    claude_platform_unsupported_params=[], the body keeps the field and the
+    header must still advertise the matching beta.
+    """
+    import litellm
+    from litellm.types.utils import LlmProviders
+
+    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="claude_platform/claude-sonnet-4-6",
+        provider=LlmProviders.BEDROCK,
+    )
+    assert config is not None
+
+    headers, _ = config.validate_anthropic_messages_environment(
+        api_key="fake-platform-key",
+        headers={},
+        model="claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 10,
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        },
+        litellm_params={
+            "workspace_id": "wrkspc_test",
+            "claude_platform_unsupported_params": [],
+        },
+    )
+
+    assert "context-management-2025-06-27" in headers.get("anthropic-beta", "")
+
+
 def test_claude_platform_messages_unsupported_override_allows_context_management():
     """
     Messages-path: operators can pass claude_platform_unsupported_params=[]

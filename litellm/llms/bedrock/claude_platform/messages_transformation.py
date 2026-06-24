@@ -52,9 +52,15 @@ class BedrockClaudePlatformMessagesConfig(
         if resolved_api_key and "x-api-key" not in headers:
             headers["x-api-key"] = resolved_api_key
 
+        unsupported_override = resolve_unsupported_override(litellm_params)
+        filtered_optional_params = filter_claude_platform_request_body(
+            optional_params,
+            unsupported_override=unsupported_override,
+            log_dropped=False,
+        )
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
-            optional_params=optional_params,
+            optional_params=filtered_optional_params,
         )
 
         return headers, api_base

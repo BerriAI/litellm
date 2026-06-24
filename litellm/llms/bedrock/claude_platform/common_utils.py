@@ -34,6 +34,7 @@ CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS = {
 def filter_claude_platform_request_body(
     params: dict,
     unsupported_override: Optional[frozenset[str]] = None,
+    log_dropped: bool = True,
 ) -> dict:
     """Return a copy of ``params`` with fields the Claude Platform on AWS
     endpoint rejects removed.
@@ -58,7 +59,7 @@ def filter_claude_platform_request_body(
         else CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS
     )
     dropped_unsupported = [k for k in params if k in unsupported]
-    if dropped_unsupported:
+    if dropped_unsupported and log_dropped:
         verbose_logger.warning(
             "bedrock/claude_platform: dropping unsupported Messages API "
             "param(s) %s from the request body - the Claude Platform on AWS "
