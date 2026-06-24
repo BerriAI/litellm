@@ -513,3 +513,90 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     # The flag must STILL be True so the next attempt re-enters the heavy
     # branch instead of silently demoting to the lightweight path.
     assert client._engine_confirmed_dead is True
+
+
+# ---------------------------------------------------------------------------
+# Consecutive-failures gate (PR 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_defers_reconnect_below_threshold(mock_proxy_logging):
+    """With threshold=3, two consecutive probe failures must NOT trigger reconnect."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(side_effect=asyncio.TimeoutError())
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+    client._watchdog_failures_before_reconnect = 3
+
+    with patch(
+        "litellm.proxy.utils.asyncio.sleep",
+        AsyncMock(side_effect=[None, None, asyncio.CancelledError()]),
+    ):
+        await client._db_health_watchdog_loop()
+
+    client.attempt_db_reconnect.assert_not_awaited()
+    assert client._consecutive_probe_failures == 2
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_triggers_reconnect_at_threshold(mock_proxy_logging):
+    """With threshold=3, exactly three consecutive failures must trigger one reconnect."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(side_effect=asyncio.TimeoutError())
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+    client._db_watchdog_reconnect_timeout_seconds = 7.0
+    client._watchdog_failures_before_reconnect = 3
+
+    with patch(
+        "litellm.proxy.utils.asyncio.sleep",
+        AsyncMock(side_effect=[None, None, None, asyncio.CancelledError()]),
+    ):
+        await client._db_health_watchdog_loop()
+
+    client.attempt_db_reconnect.assert_awaited_once_with(
+        reason="db_health_watchdog_connection_error",
+        timeout_seconds=7.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_resets_failure_counter_on_successful_probe(
+    mock_proxy_logging,
+):
+    """A successful probe resets the failure counter so two failures before and two
+    after do not add up to a threshold of three."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(
+        side_effect=[
+            asyncio.TimeoutError(),
+            asyncio.TimeoutError(),
+            [{"1": 1}],
+            asyncio.TimeoutError(),
+            asyncio.TimeoutError(),
+        ]
+    )
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+    client._watchdog_failures_before_reconnect = 3
+
+    with patch(
+        "litellm.proxy.utils.asyncio.sleep",
+        AsyncMock(
+            side_effect=[None, None, None, None, None, asyncio.CancelledError()]
+        ),
+    ):
+        await client._db_health_watchdog_loop()
+
+    client.attempt_db_reconnect.assert_not_awaited()
+    assert client._consecutive_probe_failures == 2
