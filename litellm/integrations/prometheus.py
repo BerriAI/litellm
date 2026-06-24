@@ -556,6 +556,12 @@ class PrometheusLogger(CustomLogger):
                 labelnames=[],
             )
 
+            self.litellm_active_users_metric = self._gauge_factory(
+                "litellm_active_users",
+                "Number of billable users in LiteLLM (excludes SCIM-deactivated users)",
+                labelnames=[],
+            )
+
             self.litellm_teams_count_metric = self._gauge_factory(
                 "litellm_teams_count",
                 "Total number of teams in LiteLLM",
@@ -3371,6 +3377,7 @@ class PrometheusLogger(CustomLogger):
 
         Updates:
         - litellm_total_users: Total count of users in the database
+        - litellm_active_users: Count of billable users (excludes SCIM-deactivated)
         - litellm_teams_count: Total count of teams in the database
         """
         from litellm.proxy.proxy_server import prisma_client
@@ -3387,6 +3394,12 @@ class PrometheusLogger(CustomLogger):
             self.litellm_total_users_metric.set(total_users)
             verbose_logger.debug(
                 f"Prometheus: set litellm_total_users to {total_users}"
+            )
+
+            billable_users = await UserRepository(prisma_client).count_billable_users()
+            self.litellm_active_users_metric.set(billable_users)
+            verbose_logger.debug(
+                f"Prometheus: set litellm_active_users to {billable_users}"
             )
 
             # Get total team count
