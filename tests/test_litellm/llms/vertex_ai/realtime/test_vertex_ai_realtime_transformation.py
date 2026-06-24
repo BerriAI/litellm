@@ -112,7 +112,7 @@ def test_vertex_session_update_defaults_to_audio_modality():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
         session_configuration_request=None,
     )
     assert len(messages) == 1
@@ -135,7 +135,7 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
         session_configuration_request=None,
     )
 
@@ -169,7 +169,7 @@ def test_vertex_session_update_normalizes_ga_remapped_fields():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
         session_configuration_request=None,
     )
     assert len(messages) == 1
@@ -332,7 +332,7 @@ def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         result = cfg.transform_realtime_request(
             json.dumps(session_update),
-            "gemini-live-2.5-flash-native-audio",
+            "gemini-live-2.5-flash-preview-native-audio-09-2025",
             session_configuration_request=json.dumps({"setup": {"model": "x"}}),
         )
 
@@ -361,7 +361,7 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         cfg.transform_realtime_request(
             json.dumps(session_update),
-            "gemini-live-2.5-flash-native-audio",
+            "gemini-live-2.5-flash-preview-native-audio-09-2025",
             session_configuration_request=json.dumps({"setup": {"model": "x"}}),
         )
 
@@ -379,10 +379,10 @@ def test_vertex_backend_url_must_not_include_client_query_params():
         access_token="tok", project="my-proj", location="us-central1"
     )
     backend_url = cfg.get_complete_url(
-        api_base=None, model="gemini-live-2.5-flash-native-audio"
+        api_base=None, model="gemini-live-2.5-flash-preview-native-audio-09-2025"
     )
     client_query_params = {
-        "model": "gemini-live-2.5-flash-native-audio",
+        "model": "gemini-live-2.5-flash-preview-native-audio-09-2025",
         "intent": "chat",
     }
 
@@ -412,7 +412,7 @@ def test_vertex_function_call_output_omits_id():
                 },
             }
         ),
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
         session_configuration_request="existing",
     )
 
