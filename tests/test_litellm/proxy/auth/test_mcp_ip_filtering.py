@@ -95,6 +95,61 @@ class TestMCPClientIPExtraction:
         assert result == "8.8.8.8"
         assert IPAddressUtils.is_internal_ip(result) is False
 
+    def test_warns_once_that_xff_is_trusted_for_access_control_without_ranges(self):
+        # Security observability: when XFF is honored for access control without
+        # mcp_trusted_proxy_ranges, operators must be told (once) that the gate
+        # rests on an unvalidated header that a direct caller could spoof.
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "203.0.113.5"
+        request.headers = {"x-forwarded-for": "10.0.0.1"}
+
+        with (
+            patch(
+                "litellm.proxy.auth.ip_address_utils._warned_xff_access_control_without_trusted_ranges",
+                False,
+            ),
+            patch(
+                "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+            ) as mock_logger,
+        ):
+            IPAddressUtils.get_mcp_client_ip(
+                request, general_settings={"use_x_forwarded_for": True}
+            )
+            IPAddressUtils.get_mcp_client_ip(
+                request, general_settings={"use_x_forwarded_for": True}
+            )
+
+        assert mock_logger.warning.call_count == 1
+        message = mock_logger.warning.call_args[0][0]
+        assert "access control" in message.lower()
+        assert "mcp_trusted_proxy_ranges" in message
+
+    def test_no_access_control_warning_when_trusted_ranges_configured(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.5"
+        request.headers = {"x-forwarded-for": "192.168.1.10"}
+
+        with (
+            patch(
+                "litellm.proxy.auth.ip_address_utils._warned_xff_access_control_without_trusted_ranges",
+                False,
+            ),
+            patch(
+                "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+            ) as mock_logger,
+        ):
+            IPAddressUtils.get_mcp_client_ip(
+                request,
+                general_settings={
+                    "use_x_forwarded_for": True,
+                    "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                },
+            )
+
+        mock_logger.warning.assert_not_called()
+
     def test_honours_xff_from_trusted_proxy(self):
         request = MagicMock(spec=Request)
         request.client = MagicMock()

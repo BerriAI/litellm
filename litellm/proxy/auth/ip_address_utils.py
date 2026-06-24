@@ -13,9 +13,10 @@ from fastapi import Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
 
-# One-shot warning so operators upgrading from the prior "always trust X-Forwarded-*"
-# behaviour see an actionable message in their logs the first time it triggers.
+# One-shot warnings so operators upgrading from the prior "always trust X-Forwarded-*"
+# behaviour see an actionable message in their logs the first time each path triggers.
 _warned_xff_without_trusted_ranges = False
+_warned_xff_access_control_without_trusted_ranges = False
 
 
 class IPAddressUtils:
@@ -178,7 +179,11 @@ class IPAddressUtils:
         rather than the proxy's peer address. When ``mcp_trusted_proxy_ranges``
         is also configured, the forwarded header is only honored if the direct
         peer falls inside a trusted range; an untrusted peer falls back to its
-        literal IP so a spoofed header cannot grant internal access.
+        literal IP so a spoofed header cannot grant internal access. With
+        ``use_x_forwarded_for`` enabled but no trusted ranges configured the
+        header is trusted as-is (matching the proxy's wider X-Forwarded-For
+        contract), and a one-shot warning is logged so operators know
+        access control rests on an unvalidated header.
 
         Args:
             request: FastAPI request object
@@ -199,11 +204,14 @@ class IPAddressUtils:
             general_settings = {}
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
+        xff_present = use_xff and "x-forwarded-for" in request.headers
+        trusted_ranges_configured = bool(
+            general_settings.get("mcp_trusted_proxy_ranges")
+        )
 
         if (
-            use_xff
-            and "x-forwarded-for" in request.headers
-            and general_settings.get("mcp_trusted_proxy_ranges")
+            xff_present
+            and trusted_ranges_configured
             and not IPAddressUtils.is_request_from_trusted_proxy(
                 request, general_settings=general_settings
             )
@@ -213,4 +221,24 @@ class IPAddressUtils:
                 "XFF header from untrusted IP %s, ignoring", direct_ip
             )
             return direct_ip
+
+        if xff_present and not trusted_ranges_configured:
+            IPAddressUtils._warn_xff_trusted_for_access_control()
+
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
+
+    @staticmethod
+    def _warn_xff_trusted_for_access_control() -> None:
+        global _warned_xff_access_control_without_trusted_ranges
+        if _warned_xff_access_control_without_trusted_ranges:
+            return
+        verbose_proxy_logger.warning(
+            "use_x_forwarded_for is enabled but mcp_trusted_proxy_ranges is not "
+            "configured. X-Forwarded-For is trusted as-is for MCP IP-based "
+            "access control, so a caller with direct network access to the proxy "
+            "could spoof an internal IP and reach available_on_public_internet="
+            "false servers. Set mcp_trusted_proxy_ranges in general_settings to "
+            "your reverse-proxy CIDR(s) to validate the proxy before trusting "
+            "X-Forwarded-For."
+        )
+        _warned_xff_access_control_without_trusted_ranges = True
