@@ -72,6 +72,20 @@ such as `ai-gateway`, router hosts, or standalone servers:
 - Avoid `expect`/`unwrap` in server startup and request paths unless the panic is
   impossible by construction and documented.
 
+## Constants
+
+Magic numbers and fixed strings go in a crate-level `constants.rs`, never
+hardcoded inline — the Rust mirror of Python's `litellm/constants.py`.
+
+- Each crate that needs them has `src/constants.rs` (declared `mod constants;`);
+  import from it (`use crate::constants::...`). Don't scatter `const` values at
+  the top of feature modules.
+- An env-overridable tunable still lives in `constants.rs` as its `DEFAULT_*`
+  value; the env read (with fallback to that default) happens at the host/config
+  resolution layer, not in `core`/`providers`.
+- Exception: a value that is purely local to one function and has no meaning
+  elsewhere may stay inline, but prefer `constants.rs` when in doubt.
+
 ## Checks
 
 Run these before pushing Rust changes. The same checks run in GitHub Actions

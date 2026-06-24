@@ -12,13 +12,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use litellm_core::realtime::types::RealtimeEvent;
 use serde_json::Value;
 
+use crate::constants::DEFAULT_PROVIDER;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload, Usage,
 };
-
-/// The provider this gateway fronts. The Rust gateway is OpenAI-realtime-only.
-const DEFAULT_PROVIDER: &str = "openai";
 
 /// Current wall-clock time as epoch seconds (float), matching the Python
 /// `startTime`/`endTime` contract.

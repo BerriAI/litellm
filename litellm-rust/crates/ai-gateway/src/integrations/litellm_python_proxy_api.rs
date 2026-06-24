@@ -15,27 +15,14 @@ use reqwest::Client;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
+use crate::constants::{
+    CALLBACK_LOGS_PATH, DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
+    DEFAULT_PROXY_BASE_URL,
+};
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::{
     CallbackLogsRequest, LogError, LogRecord, LoggingError, StandardLoggingPayload,
 };
-
-/// Default proxy base URL when `LITELLM_PROXY_BASE_URL` is unset.
-const DEFAULT_PROXY_BASE_URL: &str = "http://localhost:4000";
-
-/// The logs ingest path appended to the proxy base. Not a tunable — it is the
-/// proxy's API contract.
-const CALLBACK_LOGS_PATH: &str = "/v1/callbacks/logs";
-
-/// Default bounded channel depth. Beyond this, `try_send` fails fast (we drop +
-/// count rather than block the realtime splice). Override: `LITELLM_LOG_CHANNEL_CAPACITY`.
-const DEFAULT_CHANNEL_CAPACITY: usize = 4096;
-
-/// Default max records flushed in one POST. Override: `LITELLM_LOG_BATCH_SIZE`.
-const DEFAULT_MAX_BATCH_SIZE: usize = 256;
-
-/// Default partial-batch flush cadence, in ms. Override: `LITELLM_LOG_FLUSH_INTERVAL_MS`.
-const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 
 /// Egress worker tunables. Each field defaults to the `DEFAULT_*` const above and
 /// is overridable via an env var (read once at logger construction).

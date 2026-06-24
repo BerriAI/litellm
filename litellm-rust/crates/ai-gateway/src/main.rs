@@ -5,6 +5,7 @@
 //! server owns transport + config; routing lives in the `router` crate.
 
 mod auth;
+mod constants;
 mod gil;
 mod integrations;
 #[cfg(feature = "python-config")]
