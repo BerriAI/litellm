@@ -153,6 +153,13 @@ async def _send_message_via_completion_bridge(
         else dict(request.params)
     )
 
+    if agent_extra_headers:
+        merged = dict(litellm_params)
+        existing = dict(merged.get("extra_headers") or {})
+        existing.update(agent_extra_headers)
+        merged["extra_headers"] = existing
+        litellm_params = merged
+
     response_dict = await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id=str(request.id),
         params=params,
@@ -506,6 +513,13 @@ async def asend_message_streaming(
             if hasattr(request.params, "model_dump")
             else dict(request.params)
         )
+
+        if agent_extra_headers:
+            merged = dict(litellm_params)
+            existing = dict(merged.get("extra_headers") or {})
+            existing.update(agent_extra_headers)
+            merged["extra_headers"] = existing
+            litellm_params = merged
 
         async for chunk in A2ACompletionBridgeHandler.handle_streaming(
             request_id=str(request.id),
