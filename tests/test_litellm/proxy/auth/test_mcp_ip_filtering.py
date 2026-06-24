@@ -60,7 +60,11 @@ class TestIsInternalIp:
 
 
 class TestMCPClientIPExtraction:
-    def test_fails_closed_when_xff_enabled_without_trusted_proxy_ranges(self):
+    def test_honours_xff_for_internal_client_without_trusted_proxy_ranges(self):
+        # LIT-3964 regression: use_x_forwarded_for enabled, no mcp_trusted_proxy_ranges,
+        # internal client behind a load balancer. The forwarded client IP must be
+        # honored (matching use_x_forwarded_for semantics and pre-1.89 behavior) so
+        # the caller is classified internal, not fail-closed to "" and then 404'd.
         request = MagicMock(spec=Request)
         request.client = MagicMock()
         request.client.host = "203.0.113.5"
@@ -71,17 +75,13 @@ class TestMCPClientIPExtraction:
             general_settings={"use_x_forwarded_for": True},
         )
 
-        # XFF is untrusted (no mcp_trusted_proxy_ranges) so it must be ignored,
-        # and we must not trust the direct peer either: fail closed so the caller
-        # is classified as external and is_internal_ip("") is False.
-        assert result == ""
-        assert IPAddressUtils.is_internal_ip(result) is False
+        assert result == "10.0.0.1"
+        assert IPAddressUtils.is_internal_ip(result) is True
 
-    def test_private_proxy_peer_does_not_grant_internal_access(self):
-        # Regression: behind an internal reverse proxy with use_x_forwarded_for
-        # enabled but mcp_trusted_proxy_ranges unset, the direct peer is the
-        # proxy's private IP. Returning it would mis-classify an external caller
-        # as internal and expose available_on_public_internet=false servers.
+    def test_external_client_via_xff_stays_external_without_trusted_proxy_ranges(self):
+        # External caller forwarded through an internal reverse proxy: the forwarded
+        # IP is the real public client, so it is still classified external and cannot
+        # reach available_on_public_internet=false servers.
         request = MagicMock(spec=Request)
         request.client = MagicMock()
         request.client.host = "10.0.0.7"
@@ -92,7 +92,7 @@ class TestMCPClientIPExtraction:
             general_settings={"use_x_forwarded_for": True},
         )
 
-        assert result == ""
+        assert result == "8.8.8.8"
         assert IPAddressUtils.is_internal_ip(result) is False
 
     def test_honours_xff_from_trusted_proxy(self):
@@ -128,6 +128,48 @@ class TestMCPClientIPExtraction:
         assert result == "203.0.113.5"
 
 
+class TestInternalOnlyServerResolutionRegression:
+    """LIT-3964: with use_x_forwarded_for enabled and no mcp_trusted_proxy_ranges,
+    internal-only servers must still resolve for forwarded internal callers
+    (previously failed closed to "" and 404'd every internal-only server)."""
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"use_x_forwarded_for": True},
+    )
+    def test_internal_only_server_found_for_forwarded_internal_client(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.7"  # load balancer peer
+        request.headers = {"x-forwarded-for": "192.168.1.50"}  # real internal client
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        assert client_ip == "192.168.1.50"
+
+        manager = _make_manager([_make_server("internal_math", available_on_public_internet=False)])
+        server = manager.get_mcp_server_by_name("internal_math", client_ip=client_ip)
+        assert server is not None
+        assert server.server_id == "internal_math"
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"use_x_forwarded_for": True},
+    )
+    def test_internal_only_server_hidden_from_forwarded_external_client(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.7"
+        request.headers = {"x-forwarded-for": "8.8.8.8"}  # real external client
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        assert client_ip == "8.8.8.8"
+
+        manager = _make_manager([_make_server("internal_math", available_on_public_internet=False)])
+        assert manager.get_mcp_server_by_name("internal_math", client_ip=client_ip) is None
+
+
 class TestMCPServerIPFiltering:
     """Tests that external callers only see public MCP servers."""
 
@@ -148,9 +190,7 @@ class TestMCPServerIPFiltering:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        result = manager.filter_server_ids_by_ip(
-            ["pub", "priv"], client_ip="192.168.1.1"
-        )
+        result = manager.filter_server_ids_by_ip(["pub", "priv"], client_ip="192.168.1.1")
         assert result == ["pub", "priv"]
 
     @patch("litellm.public_mcp_servers", [])
@@ -173,9 +213,7 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
-            ["pub", "priv"], client_ip="8.8.8.8"
-        )
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["pub", "priv"], client_ip="8.8.8.8")
         assert allowed == ["pub"]
         assert blocked == 1
 
@@ -186,9 +224,7 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
-            ["pub", "priv"], client_ip="192.168.1.1"
-        )
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["pub", "priv"], client_ip="192.168.1.1")
         assert allowed == ["pub", "priv"]
         assert blocked == 0
 
@@ -198,9 +234,7 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
-            ["priv"], client_ip=None
-        )
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["priv"], client_ip=None)
         assert allowed == ["priv"]
         assert blocked == 0
 
@@ -211,8 +245,6 @@ class TestFilterServerIdsByIpWithInfo:
         priv2 = _make_server("priv2", available_on_public_internet=False)
         manager = _make_manager([priv1, priv2])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
-            ["priv1", "priv2"], client_ip="1.2.3.4"
-        )
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["priv1", "priv2"], client_ip="1.2.3.4")
         assert allowed == []
         assert blocked == 2

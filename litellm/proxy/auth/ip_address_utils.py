@@ -42,9 +42,7 @@ class IPAddressUtils:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
             except ValueError:
-                verbose_proxy_logger.warning(
-                    "Invalid CIDR in mcp_internal_ip_ranges: %s, skipping", cidr
-                )
+                verbose_proxy_logger.warning("Invalid CIDR in mcp_internal_ip_ranges: %s, skipping", cidr)
         return networks if networks else IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
 
     @staticmethod
@@ -62,9 +60,7 @@ class IPAddressUtils:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
             except ValueError:
-                verbose_proxy_logger.warning(
-                    "Invalid CIDR in mcp_trusted_proxy_ranges: %s, skipping", cidr
-                )
+                verbose_proxy_logger.warning("Invalid CIDR in mcp_trusted_proxy_ranges: %s, skipping", cidr)
         return networks
 
     @staticmethod
@@ -84,9 +80,7 @@ class IPAddressUtils:
     @staticmethod
     def is_internal_ip(
         client_ip: Optional[str],
-        internal_networks: Optional[
-            List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]
-        ] = None,
+        internal_networks: Optional[List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]] = None,
     ) -> bool:
         """
         Check if a client IP is from an internal/private network.
@@ -152,12 +146,11 @@ class IPAddressUtils:
             if not _warned_xff_without_trusted_ranges:
                 verbose_proxy_logger.warning(
                     "use_x_forwarded_for is enabled but mcp_trusted_proxy_ranges "
-                    "is not configured. X-Forwarded-* headers will NOT be "
-                    "trusted, so MCP OAuth discovery URLs and access-control "
-                    "client IPs will use the proxy's literal request values. "
-                    "Set mcp_trusted_proxy_ranges in "
-                    "general_settings to your reverse-proxy CIDR(s) to allow "
-                    "X-Forwarded-* through."
+                    "is not configured. X-Forwarded-Host/Proto will NOT be "
+                    "trusted when building MCP OAuth discovery URLs, which fall "
+                    "back to the proxy's literal request URL. Set "
+                    "mcp_trusted_proxy_ranges in general_settings to your "
+                    "reverse-proxy CIDR(s) to allow X-Forwarded-* through."
                 )
                 _warned_xff_without_trusted_ranges = True
             return False
@@ -174,9 +167,12 @@ class IPAddressUtils:
         """
         Extract client IP from a FastAPI request for MCP access control.
 
-        Security: Only trusts X-Forwarded-For if:
-        1. use_x_forwarded_for is enabled in settings
-        2. The direct connection is from a trusted proxy (if mcp_trusted_proxy_ranges configured)
+        Honors X-Forwarded-For whenever ``use_x_forwarded_for`` is enabled, so a
+        client behind a reverse proxy is classified by its real (forwarded) IP
+        rather than the proxy's peer address. When ``mcp_trusted_proxy_ranges``
+        is also configured, the forwarded header is only honored if the direct
+        peer falls inside a trusted range; an untrusted peer falls back to its
+        literal IP so a spoofed header cannot grant internal access.
 
         Args:
             request: FastAPI request object
@@ -198,21 +194,13 @@ class IPAddressUtils:
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
 
-        # If XFF is enabled, validate the request comes from a trusted proxy
-        if use_xff and "x-forwarded-for" in request.headers:
-            if not IPAddressUtils.is_request_from_trusted_proxy(
-                request, general_settings=general_settings
-            ):
-                direct_ip = request.client.host if request.client else None
-                if general_settings.get("mcp_trusted_proxy_ranges"):
-                    # Direct connection isn't in any configured trusted CIDR.
-                    verbose_proxy_logger.warning(
-                        "XFF header from untrusted IP %s, ignoring", direct_ip
-                    )
-                    return direct_ip
-                # XFF enabled but no trusted proxy ranges configured: the direct
-                # peer is typically the reverse proxy's own (private) IP, so
-                # returning it would mis-classify external callers as internal.
-                # Fail closed for access control.
-                return ""
+        if (
+            use_xff
+            and "x-forwarded-for" in request.headers
+            and general_settings.get("mcp_trusted_proxy_ranges")
+            and not IPAddressUtils.is_request_from_trusted_proxy(request, general_settings=general_settings)
+        ):
+            direct_ip = request.client.host if request.client else None
+            verbose_proxy_logger.warning("XFF header from untrusted IP %s, ignoring", direct_ip)
+            return direct_ip
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
