@@ -15,3 +15,4 @@ futures-util.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+futures-channel = "0.3"
