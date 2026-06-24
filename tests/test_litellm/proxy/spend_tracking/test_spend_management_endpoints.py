@@ -3821,7 +3821,8 @@ def _normalized_tags(literal: str, query_guards_strings: bool) -> Optional[List[
     if typeof != "string":
         return None
     inner = json.loads(literal)
-    if not inner.lstrip().startswith("["):
+    stripped = inner.strip()
+    if not (stripped.startswith("[") and stripped.endswith("]")):
         return None
     parsed = json.loads(inner)
     return parsed if isinstance(parsed, list) else None
@@ -3843,7 +3844,7 @@ class _FakeSpendLogsJsonbTable:
         self._rows = rows
 
     async def query_raw(self, query: str, *args: object) -> List[Dict[str, object]]:
-        guards_strings = "jsonb_typeof(request_tags) = 'string'" in query
+        guards_strings = "normalized_tags" in query
         expanded = tuple(
             (tag, spend)
             for literal, spend in self._rows
@@ -3879,6 +3880,10 @@ async def test_get_spend_by_tags_surfaces_scalar_string_tags() -> None:
         (json.dumps(["already-array"]), 0.03),
         (json.dumps(None), 0.99),
         (json.dumps("not-json-at-all"), 0.99),
+        # Opens a bracket but never closes it. The pre-fix guard matched on a
+        # leading "[" and the ::jsonb cast then aborted the entire query; the
+        # closing-bracket guard skips this row instead.
+        (json.dumps("[unclosed"), 0.99),
     )
 
     prisma_client = MagicMock()
@@ -3901,3 +3906,4 @@ async def test_get_spend_by_tags_surfaces_scalar_string_tags() -> None:
     assert by_tag["already-array"]["total_spend"] == pytest.approx(0.03)
 
     assert "not-json-at-all" not in by_tag
+    assert "[unclosed" not in by_tag

@@ -3245,7 +3245,7 @@ async def get_spend_by_tags(
                 CASE
                     WHEN jsonb_typeof(request_tags) = 'array' THEN request_tags
                     WHEN jsonb_typeof(request_tags) = 'string'
-                         AND (request_tags #>> '{}') ~ '^\\s*\\['
+                         AND (request_tags #>> '{}') ~ '^\\s*\\[.*\\]\\s*$'
                         THEN (request_tags #>> '{}')::jsonb
                     ELSE NULL
                 END AS tags
