@@ -1,0 +1,45 @@
+# Dockerfile-specific ignore-file for the Rust AI Gateway build.
+#
+# The build context is the repo root (so the image can pip install litellm from
+# source AND build the rust workspace). BuildKit honors `<Dockerfile>.dockerignore`
+# next to the Dockerfile and it takes precedence over the repo-root `.dockerignore`,
+# so this file shrinks the (large) repo-root context for THIS build only without
+# touching the root `.dockerignore` used by the main litellm images.
+#
+# Strategy: ignore everything, then re-include only what the build needs:
+#   - litellm/            (pip install . needs the full package + proxy reader)
+#   - litellm-rust/       (the rust workspace; Cargo.lock + crate sources)
+#   - pyproject.toml / README.md / LICENSE  (packaging metadata for pip install)
+*
+
+# --- re-include the build inputs ---
+!litellm/
+!litellm-rust/
+!pyproject.toml
+!README.md
+!LICENSE
+
+# --- prune heavy / irrelevant subpaths back out of the re-included trees ---
+# Rust build artifacts (huge; regenerated in the builder).
+**/target/
+# Python caches and compiled bytecode.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+# Node / UI build output bundled under the python package (not needed to import
+# litellm.proxy.read_model_list).
+**/node_modules/
+litellm/proxy/_experimental/out/
+# Tests, logs, and local scratch.
+**/tests/
+**/test/
+*.log
+log.txt
+*.tgz
+# VCS / editor / CI metadata that may live under re-included trees.
+**/.git/
+.git/
+**/.DS_Store
