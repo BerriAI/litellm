@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
@@ -1363,18 +1364,12 @@ class LiteLLMAnthropicMessagesAdapter:
                         else truncated_name
                     )
 
-                    # Strip Gemini thought-signature suffix from id (mirrors streaming
-                    # path below); base64 chars (+ / =) violate Anthropic's
-                    # `^[a-zA-Z0-9_-]+$` tool_use.id pattern when replayed.
+                    # Strip Gemini thought-signature suffix and normalize id chars
+                    # (e.g. ``functions.Bash:0`` from cross-provider clients).
                     raw_id = tool_call.id or ""
-                    base_id = (
-                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
-                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
-                        else raw_id
-                    )
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=base_id,
+                        id=normalize_anthropic_tool_use_id(raw_id),
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
@@ -1501,15 +1496,13 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
                 tool_name = choice.delta.tool_calls[0].function.name or ""
-                base_id = raw_id
                 thought_sig: Optional[str] = None
                 if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
                     parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-                    base_id = parts[0]
                     thought_sig = parts[1] if len(parts) > 1 else None
                 tool_block: Dict[str, Any] = {
                     "type": "tool_use",
-                    "id": base_id,
+                    "id": normalize_anthropic_tool_use_id(raw_id),
                     "name": tool_name,
                     "input": {},
                 }
