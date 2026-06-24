@@ -5,11 +5,12 @@ from functools import wraps
 from typing import Any, Callable, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -30,7 +31,11 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     VirtualKeyEvent,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.user_repository import UserRepository
 
 
 def get_new_internal_user_defaults(
@@ -109,7 +114,7 @@ async def handle_budget_for_entity(
                 budget_row.model_dump(exclude_none=True)
             )
 
-            _budget = await prisma_client.db.litellm_budgettable.create(
+            _budget = await BudgetRepository(prisma_client).table.create(
                 data={
                     **new_budget_data,  # type: ignore
                     "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -172,7 +177,7 @@ async def _clone_team_default_budget_for_member(
     so the member starts with the team default's values but gets their own
     private budget row (which can be edited independently).
     """
-    default_budget = await prisma_client.db.litellm_budgettable.find_unique(
+    default_budget = await BudgetRepository(prisma_client).table.find_unique(
         where={"budget_id": default_team_budget_id}
     )
     if default_budget is None:
@@ -200,7 +205,7 @@ async def _clone_team_default_budget_for_member(
             cloned_data["budget_duration"]
         )
 
-    new_budget = await prisma_client.db.litellm_budgettable.create(data=cloned_data)
+    new_budget = await BudgetRepository(prisma_client).table.create(data=cloned_data)
     return new_budget.budget_id
 
 
@@ -227,7 +232,7 @@ async def add_new_member(
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        _returned_user = await prisma_client.db.litellm_usertable.upsert(
+        _returned_user = await UserRepository(prisma_client).table.upsert(
             where={"user_id": new_member.user_id},
             data={
                 "update": {"teams": {"push": [team_id]}},
@@ -257,7 +262,7 @@ async def add_new_member(
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            _returned_user = await prisma_client.db.litellm_usertable.update(
+            _returned_user = await UserRepository(prisma_client).table.update(
                 where={"user_id": user_info.user_id},  # type: ignore
                 data={"teams": {"push": [team_id]}},
             )
@@ -282,7 +287,7 @@ async def add_new_member(
             budget_data["max_budget"] = max_budget_in_team
         if allowed_models is not None:
             budget_data["allowed_models"] = allowed_models
-        response = await prisma_client.db.litellm_budgettable.create(data=budget_data)
+        response = await BudgetRepository(prisma_client).table.create(data=budget_data)
 
         _budget_id = response.budget_id
     elif default_team_budget_id is not None:
@@ -301,15 +306,15 @@ async def add_new_member(
         _budget_id = None
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
-        _returned_team_membership = (
-            await prisma_client.db.litellm_teammembership.create(
-                data={
-                    "team_id": team_id,
-                    "user_id": returned_user.user_id,
-                    "budget_id": _budget_id,
-                },
-                include={"litellm_budget_table": True},
-            )
+        _returned_team_membership = await TeamMembershipRepository(
+            prisma_client
+        ).table.create(
+            data={
+                "team_id": team_id,
+                "user_id": returned_user.user_id,
+                "budget_id": _budget_id,
+            },
+            include={"litellm_budget_table": True},
         )
 
         returned_team_membership = LiteLLM_TeamMembership(
@@ -435,6 +440,58 @@ async def send_management_endpoint_alert(
             )
 
 
+def _redacted_env_var(entry: Any) -> dict:
+    get = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
+    return {
+        "name": get("name"),
+        "scope": get("scope"),
+        "description": get("description"),
+        "value": "",
+    }
+
+
+def _redact_record_env_vars(record: Any) -> Any:
+    """Return ``record`` with its ``env_vars[].value`` blanked.
+
+    Copies rather than mutating, because the record aliases the live response
+    object that is also returned to the caller. Records without an ``env_vars``
+    list are returned unchanged.
+    """
+    env_vars = (
+        record.get("env_vars")
+        if isinstance(record, dict)
+        else getattr(record, "env_vars", None)
+    )
+    if not isinstance(env_vars, list):
+        return record
+    redacted = [_redacted_env_var(entry) for entry in env_vars]
+    if isinstance(record, dict):
+        return {**record, "env_vars": redacted}
+    if isinstance(record, BaseModel):
+        return record.model_copy(update={"env_vars": redacted})
+    return record
+
+
+def _redact_env_var_values(response: dict) -> None:
+    """Blank ``env_vars[].value`` in a management response before telemetry.
+
+    MCP endpoints return decrypted ``scope="global"`` env var values so the admin
+    UI can pre-fill the edit form; those values are upstream credentials and must
+    not be serialized verbatim into OTEL spans, where an observability user could
+    read them. The values surface both at the top level (single-server
+    create/update) and nested under ``items`` (the submissions queue), so both are
+    scrubbed. Names, scopes, and descriptions are kept so traces stay useful.
+    """
+    if isinstance(response.get("env_vars"), list):
+        response["env_vars"] = [
+            _redacted_env_var(entry) for entry in response["env_vars"]
+        ]
+
+    items = response.get("items")
+    if isinstance(items, list):
+        response["items"] = [_redact_record_env_vars(item) for item in items]
+
+
 async def _emit_management_endpoint_otel_span(
     func: Callable,
     kwargs: dict,
@@ -456,6 +513,12 @@ async def _emit_management_endpoint_otel_span(
     from litellm.proxy.proxy_server import open_telemetry_logger
 
     if open_telemetry_logger is None:
+        return
+
+    # Under V2 OTel, management endpoints are ordinary FastAPI routes already
+    # spanned by the mounted instrumentor — there is no management hook to fire, so
+    # skip the payload build entirely. The legacy logger still needs the hook.
+    if is_otel_v2_enabled():
         return
 
     http_request: Optional[Request] = kwargs.get("http_request")
@@ -490,6 +553,7 @@ async def _emit_management_endpoint_otel_span(
         try:
             raw = dict(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
+            _redact_env_var_values(_response)
         except Exception:
             _response = None
 

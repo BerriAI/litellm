@@ -29,6 +29,16 @@ class OpenAIModerationGuardrailConfigModel(BaseOpenAIModerationGuardrailConfigMo
         description="OpenAI API base URL. Defaults to 'https://api.openai.com/v1'.",
     )
 
+    streaming_end_of_stream_only: Optional[bool] = Field(
+        default=False,
+        description="If False (default), moderation runs on sampled chunks during the stream at the cadence set by streaming_sampling_rate, and an in-flight violation stops further chunks from streaming. If True, moderation runs once at end of stream over the assembled response — lower cost and latency, but flagged content has already streamed to the client before the terminal block.",
+    )
+
+    streaming_sampling_rate: Optional[int] = Field(
+        default=5,
+        description="When streaming_end_of_stream_only is False, moderation runs every Nth streamed chunk. Ignored when streaming_end_of_stream_only is True.",
+    )
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "OpenAI Moderation"

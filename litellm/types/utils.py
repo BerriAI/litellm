@@ -37,8 +37,9 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    SkipValidation,
+    field_serializer,
     field_validator,
-    model_validator,
 )
 from typing_extensions import Required, TypedDict
 
@@ -148,6 +149,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[
         Literal["low", "medium", "high", "max", "xhigh"]
     ]
@@ -196,16 +198,24 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
+    cache_read_input_token_cost_above_200k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_read_input_token_cost_above_512k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_200k_tokens_priority: Optional[float]
     input_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
+    input_cost_per_token_above_272k_tokens_priority: Optional[float]
+    input_cost_per_token_above_512k_tokens: Optional[
+        float
+    ]  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -236,9 +246,14 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_200k_tokens_priority: Optional[float]
     output_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
+    output_cost_per_token_above_272k_tokens_priority: Optional[float]
+    output_cost_per_token_above_512k_tokens: Optional[
+        float
+    ]  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -422,6 +437,14 @@ class CallTypes(str, Enum):
     alist_container_files = "alist_container_files"
     upload_container_file = "upload_container_file"
     aupload_container_file = "aupload_container_file"
+    create_sandbox = "create_sandbox"
+    acreate_sandbox = "acreate_sandbox"
+    delete_sandbox = "delete_sandbox"
+    adelete_sandbox = "adelete_sandbox"
+    run_code = "run_code"
+    arun_code = "arun_code"
+    code_interpreter_tool = "code_interpreter_tool"
+    acode_interpreter_tool = "acode_interpreter_tool"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -492,6 +515,7 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "allm_passthrough_route",
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
@@ -526,6 +550,7 @@ CallTypesLiteral = Literal[
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
+    "acreate_realtime_transcription_session",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -1540,6 +1565,11 @@ class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
 
+    def __getitem__(self, key: str) -> Optional[int]:
+        if key not in self.__class__.model_fields:
+            raise KeyError(key)
+        return getattr(self, key)
+
 
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
@@ -1558,7 +1588,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -1570,7 +1600,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
-        server_tool_use: Optional[ServerToolUse] = None,
+        server_tool_use: Optional[Union[ServerToolUse, dict]] = None,
         cost: Optional[float] = None,
         **params,
     ):
@@ -1670,6 +1700,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        if isinstance(server_tool_use, dict):
+            server_tool_use = ServerToolUse(**server_tool_use)
 
         if server_tool_use is not None:
             self.server_tool_use = server_tool_use
@@ -1891,7 +1924,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         id=None,
         choices=None,
@@ -2478,6 +2511,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     litellm_call_id: Optional[str]
     model_alias_map: Optional[dict]
     metadata: Optional[dict]
+    litellm_metadata: Optional[dict]
     model_info: Optional[dict]
     proxy_server_request: Optional[dict]
     acompletion: Optional[bool]
@@ -2578,6 +2612,12 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     mcp_server_cost_info: Optional[MCPServerCostInfo]
     """
     Cost per query for the MCP server tool call
+    """
+
+    mcp_session_id: Optional[str]
+    """
+    The MCP `mcp-session-id` of the stateful session this tool call ran in, when
+    the client is driving a stateful session. Absent for stateless calls.
     """
 
 
@@ -2713,6 +2753,23 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: Optional[str]
     traceback: Optional[str]
     error_message: Optional[str]
+    # error_rate_limit_category:
+    #   For 429 / rate-limit errors, the source of the rate limit. One of the
+    #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
+    #   (vendor_rate_limit, vendor_batch_rate_limit, litellm_rate_limit,
+    #   litellm_batch_rate_limit). None for non-rate-limit exceptions.
+    #   Surfaced here so custom callbacks / metrics consumers can switch on
+    #   the rate-limit source without reaching for the raw exception.
+    error_rate_limit_category: Optional[str]
+    # error_rate_limit_type:
+    #   For 429 / rate-limit errors, the dimension that was exceeded. One of
+    #   the string values defined by `litellm.exceptions.RateLimitType`
+    #   (requests, tokens, concurrent_requests, budget, max_iterations).
+    #   None for non-rate-limit exceptions and for rate-limit exceptions that
+    #   did not classify the failure (e.g. legacy vendor 429 with no header
+    #   hints). Lets dashboards split rate-limit failures by cause without
+    #   parsing free-text error messages.
+    error_rate_limit_type: Optional[str]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3019,6 +3076,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     wandb_api_key: Optional[str]
     weave_project_id: Optional[str]
 
+    # Datadog dynamic params
+    dd_api_key: Optional[str]
+    dd_site: Optional[str]
+    dd_agent_host: Optional[str]
+    dd_agent_port: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
@@ -3046,6 +3109,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_flex: Optional[float] = None
     cache_read_input_token_cost_priority: Optional[float] = None
     cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_read_input_token_cost_above_200k_tokens_priority: Optional[float] = None
+    cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
@@ -3053,6 +3118,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_cache_hit: Optional[float] = None
     input_cost_per_token_above_128k_tokens: Optional[float] = None
     input_cost_per_token_above_200k_tokens: Optional[float] = None
+    input_cost_per_token_above_200k_tokens_priority: Optional[float] = None
+    input_cost_per_token_above_272k_tokens_priority: Optional[float] = None
     input_cost_per_query: Optional[float] = None
     input_cost_per_image: Optional[float] = None
     input_cost_per_image_above_128k_tokens: Optional[float] = None
@@ -3070,6 +3137,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_audio_token: Optional[float] = None
     output_cost_per_token_above_128k_tokens: Optional[float] = None
     output_cost_per_token_above_200k_tokens: Optional[float] = None
+    output_cost_per_token_above_200k_tokens_priority: Optional[float] = None
+    output_cost_per_token_above_272k_tokens_priority: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
@@ -3079,10 +3148,41 @@ class CustomPricingLiteLLMParams(BaseModel):
     search_context_cost_per_query: Optional[Dict[str, Any]] = None
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
+    cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
+    input_cost_per_image_token: Optional[float] = None
+    input_cost_per_token_above_272k_tokens: Optional[float] = None
+    input_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_cost_per_token_above_272k_tokens: Optional[float] = None
+    output_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_vector_size: Optional[int] = None
+    ocr_cost_per_page: Optional[float] = None
+    ocr_cost_per_credit: Optional[float] = None
+    annotation_cost_per_page: Optional[float] = None
+    regional_processing_uplift_multiplier_eu: Optional[float] = None
+    regional_processing_uplift_multiplier_us: Optional[float] = None
 
+
+# Server-controlled fields that bound or drive an interceptor's agentic loop
+# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
+# in all_litellm_params so they are treated as LiteLLM-level and excluded from
+# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
+# any unrecognized top-level key into extra_body and leaks them to the provider.
+# This is what lets the loop carry state across rerun calls without a provider
+# scrubber.
+agentic_loop_internal_litellm_params = [
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_agentic_loop_api_surface",
+    "max_agentic_loops",
+    "_code_interpreter_interception_active",
+    "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_converted_stream",
+]
 
 all_litellm_params = (
-    [
+    agentic_loop_internal_litellm_params
+    + [
         "metadata",
         "litellm_metadata",
         "litellm_trace_id",
@@ -3180,11 +3280,18 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
         "order",
         "enable_json_schema_validation",
+        "use_xai_oauth",
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3282,17 +3389,21 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    SONIOX = "soniox"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -3357,13 +3468,20 @@ class LlmProviders(str, Enum):
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
+    LANGFLOW = "langflow"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
     POE = "poe"
     CHUTES = "chutes"
+    NEOSANTARA = "neosantara"
+    PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
+    TENSORMESH = "tensormesh"
+    LIBERTAI = "libertai"
+    PINSTRIPES = "pinstripes"
+    DARKBLOOM = "darkbloom"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3399,15 +3517,29 @@ class SearchProviders(str, Enum):
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
+    FASTCRW = "fastcrw"
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
     SERPER = "serper"
+    YOU_COM = "you_com"
+    APISERPENT = "apiserpent"
+    TINYFISH = "tinyfish"
 
 
 # Create a set of all search provider values for quick lookup
 SearchProvidersSet = {provider.value for provider in SearchProviders}
+
+
+class SandboxProviders(str, Enum):
+    """
+    Enum for code execution sandbox provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+
+    E2B = "e2b"
+    OPENSANDBOX = "opensandbox"
 
 
 class LiteLLMLoggingBaseClass:
@@ -3513,9 +3645,19 @@ class LiteLLMBatch(Batch):
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
-    results: OpenAIRealtimeStreamList
+    # Events are already well-formed provider dicts. Validating them against the
+    # OpenAIRealtimeEvents union makes Pydantic try every member per event, which
+    # floods thousands of ValidationErrors for events outside the union (e.g.
+    # rate_limits.updated), blocks the event loop, and discards the session usage.
+    results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     _hidden_params: dict = {}
+
+    @field_serializer("results")
+    def _serialize_results(
+        self, results: OpenAIRealtimeStreamList
+    ) -> List[Dict[str, Any]]:
+        return [dict(event) for event in results]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -3544,25 +3686,11 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-class CredentialBase(BaseModel):
-    credential_name: str
-    credential_info: dict
-
-
-class CredentialItem(CredentialBase):
-    credential_values: dict
-
-
-class CreateCredentialItem(CredentialBase):
-    credential_values: Optional[dict] = None
-    model_id: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_credential_params(cls, values):
-        if not values.get("credential_values") and not values.get("model_id"):
-            raise ValueError("Either credential_values or model_id must be set")
-        return values
+from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
+from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
+from litellm.models.credentials import (  # noqa: E402
+    CreateCredentialItem as CreateCredentialItem,
+)
 
 
 class ExtractedFileData(TypedDict):
@@ -3602,10 +3730,15 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
 
+    AUTO = "auto"
     FLEX = "flex"
     PRIORITY = "priority"
 

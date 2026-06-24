@@ -41,7 +41,10 @@ from litellm.llms.bedrock.common_utils import (
     pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+)
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -445,7 +448,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             if isinstance(e, dict) and e.get("type") == "compact_20260112"
         ]
         if compact_edits:
-            beta_set.add("compact-2026-01-12")
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
             anthropic_messages_request["context_management"] = {
                 **cm,
                 "edits": compact_edits,

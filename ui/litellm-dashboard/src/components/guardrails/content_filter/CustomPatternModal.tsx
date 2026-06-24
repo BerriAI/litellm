@@ -28,13 +28,7 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
   onCancel,
 }) => {
   return (
-    <Modal
-      title="Add custom regex pattern"
-      open={visible}
-      onCancel={onCancel}
-      footer={null}
-      width={800}
-    >
+    <Modal title="Add custom regex pattern" open={visible} onCancel={onCancel} footer={null} width={800}>
       <Space direction="vertical" style={{ width: "100%" }} size="large">
         <div>
           <Text strong>Pattern name</Text>
@@ -64,11 +58,7 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
           <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
             Choose what action the guardrail should take when this pattern is detected
           </Text>
-          <Select
-            value={patternAction}
-            onChange={onActionChange}
-            style={{ width: "100%" }}
-          >
+          <Select value={patternAction} onChange={onActionChange} style={{ width: "100%" }}>
             <Option value="BLOCK">Block</Option>
             <Option value="MASK">Mask</Option>
           </Select>
@@ -76,9 +66,7 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
       </Space>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>
-          Cancel
-        </Button>
+        <Button onClick={onCancel}>Cancel</Button>
         <Button type="primary" onClick={onAdd}>
           Add
         </Button>
@@ -88,4 +76,3 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
 };
 
 export default CustomPatternModal;
-

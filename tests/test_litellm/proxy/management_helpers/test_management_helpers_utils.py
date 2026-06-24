@@ -20,6 +20,154 @@ from litellm.proxy.management_helpers.utils import add_new_member
 
 
 @pytest.mark.asyncio
+async def test_management_otel_span_redacts_mcp_global_env_var_secrets(monkeypatch):
+    """A decrypted MCP global env var secret must never reach telemetry.
+
+    MCP create/update endpoints return the server with decrypted
+    ``scope="global"`` env var values so the admin UI can pre-fill the edit
+    form. ``management_endpoint_wrapper`` serializes the response into an OTEL
+    span, and that span is readable by observability users, so the secret value
+    must be blanked there while names/scopes stay for usefulness. The endpoint's
+    own return value must keep the decrypted value for the admin.
+    """
+    import datetime
+
+    from litellm.proxy._types import (
+        LiteLLM_MCPServerTable,
+        MCPEnvVar,
+        MCPEnvVarScope,
+    )
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    captured = {}
+
+    class _FakeOtelLogger:
+        async def async_management_endpoint_success_hook(
+            self, logging_payload, parent_otel_span
+        ):
+            captured["response"] = logging_payload.response
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", _FakeOtelLogger())
+    monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
+
+    secret = "s3cr3t-p@ss"
+    result = LiteLLM_MCPServerTable(
+        server_id="srv-1",
+        alias="echo",
+        url="http://localhost:8765/mcp",
+        transport="http",
+        env_vars=[
+            MCPEnvVar(name="DB_PASSWORD", value=secret, scope=MCPEnvVarScope.global_),
+            MCPEnvVar(
+                name="CORP_USER",
+                value="",
+                scope=MCPEnvVarScope.user,
+                description="Your DB username",
+            ),
+        ],
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now(),
+    )
+
+    await mgmt_utils._emit_management_endpoint_otel_span(
+        func=lambda: None,
+        kwargs={},
+        parent_otel_span=object(),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        result=result,
+    )
+
+    serialized = captured["response"]["env_vars"]
+    # The secret must not appear anywhere the span serializer would stringify.
+    assert secret not in str(captured["response"])
+    assert all(entry["value"] == "" for entry in serialized)
+    # Names and scopes survive so the trace stays useful.
+    assert {entry["name"] for entry in serialized} == {"DB_PASSWORD", "CORP_USER"}
+    assert any(entry["scope"] == MCPEnvVarScope.global_ for entry in serialized)
+    # The endpoint's own return value is untouched: the admin still gets the
+    # decrypted value to pre-fill the edit form.
+    assert result.env_vars[0].value == secret
+
+
+@pytest.mark.asyncio
+async def test_management_otel_span_redacts_nested_submission_env_var_secrets(
+    monkeypatch,
+):
+    """Decrypted global env var secrets nested under ``items`` must also be blanked.
+
+    ``GET /v1/mcp/server/submissions`` returns ``MCPSubmissionsSummary`` whose
+    ``items[].env_vars`` carry decrypted ``scope="global"`` values for full admins.
+    ``management_endpoint_wrapper`` stringifies that nested ``items`` value into the
+    OTEL span, so redaction has to walk into ``items`` and not just the top level,
+    while the endpoint's own return value keeps the value for the admin UI.
+    """
+    import datetime
+
+    from litellm.proxy._types import (
+        LiteLLM_MCPServerTable,
+        MCPEnvVar,
+        MCPEnvVarScope,
+        MCPSubmissionsSummary,
+    )
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    captured = {}
+
+    class _FakeOtelLogger:
+        async def async_management_endpoint_success_hook(
+            self, logging_payload, parent_otel_span
+        ):
+            captured["response"] = logging_payload.response
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", _FakeOtelLogger())
+    monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
+
+    secret = "s3cr3t-submission"
+    server = LiteLLM_MCPServerTable(
+        server_id="srv-sub",
+        alias="echo",
+        url="http://localhost:8765/mcp",
+        transport="http",
+        env_vars=[
+            MCPEnvVar(name="DB_PASSWORD", value=secret, scope=MCPEnvVarScope.global_),
+        ],
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now(),
+    )
+    result = MCPSubmissionsSummary(
+        total=1, pending_review=1, active=0, rejected=0, items=[server]
+    )
+
+    await mgmt_utils._emit_management_endpoint_otel_span(
+        func=lambda: None,
+        kwargs={},
+        parent_otel_span=object(),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        result=result,
+    )
+
+    # The nested secret must not appear anywhere the span serializer stringifies.
+    assert secret not in str(captured["response"])
+
+    redacted_item = captured["response"]["items"][0]
+    redacted_env_vars = (
+        redacted_item["env_vars"]
+        if isinstance(redacted_item, dict)
+        else redacted_item.env_vars
+    )
+    assert [entry["value"] for entry in redacted_env_vars] == [""]
+    assert redacted_env_vars[0]["name"] == "DB_PASSWORD"
+    # The endpoint's own return value is untouched for the admin UI.
+    assert result.items[0].env_vars[0].value == secret
+
+
+@pytest.mark.asyncio
 async def test_add_new_member_clones_default_team_budget_id():
     """
     Test that add_new_member CLONES the team's default member budget when

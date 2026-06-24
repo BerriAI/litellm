@@ -42,6 +42,8 @@ class BaseRAGIngestion(ABC):
     vector stores, so it overrides the embedding step to be a no-op.
     """
 
+    supports_existing_file_id: bool = False
+
     def __init__(
         self,
         ingest_options: RAGIngestOptions,
@@ -280,6 +282,7 @@ class BaseRAGIngestion(ABC):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in vector store.
@@ -292,6 +295,7 @@ class BaseRAGIngestion(ABC):
             content_type: MIME type
             chunks: Text chunks (if chunking was done locally)
             embeddings: Embeddings (if embedding was done locally)
+            existing_file_id: Provider file ID supplied by the caller, if any
 
         Returns:
             Tuple of (vector_store_id, file_id)
@@ -326,6 +330,12 @@ class BaseRAGIngestion(ABC):
         )
 
         try:
+            if existing_file_id and not self.supports_existing_file_id:
+                raise ValueError(
+                    f"{self.__class__.__name__} does not support ingesting an existing file_id. "
+                    "Upload file data or provide file_url instead."
+                )
+
             # Step 2: OCR (optional)
             extracted_text = await self.ocr(
                 file_content=file_content,
@@ -349,6 +359,7 @@ class BaseRAGIngestion(ABC):
                 content_type=content_type,
                 chunks=chunks,
                 embeddings=embeddings,
+                existing_file_id=existing_file_id,
             )
 
             return RAGIngestResponse(

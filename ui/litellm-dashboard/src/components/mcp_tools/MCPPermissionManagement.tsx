@@ -25,12 +25,23 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   const form = Form.useFormInstance();
   const watchedAuthType = Form.useWatch("auth_type", form);
   const isOAuth2 = watchedAuthType === AUTH_TYPE.OAUTH2;
+  const isNoneAuth = watchedAuthType === AUTH_TYPE.NONE || watchedAuthType == null;
+  const watchedExtraHeaders = Form.useWatch("extra_headers", form);
+  const hasAuthorizationHeader =
+    Array.isArray(watchedExtraHeaders) &&
+    watchedExtraHeaders.some((h) => typeof h === "string" && h.toLowerCase() === "authorization");
+  // Two distinct, independent opt-ins:
+  //   - delegate_auth_to_upstream: oauth2 servers only (PKCE passthrough —
+  //     bypass LiteLLM admission).
+  //   - oauth_passthrough: auth_type=none + Authorization in extra_headers
+  //     (OAuth pass-through: proxy upstream oauth-protected-resource, emit 401
+  //     challenges, propagate upstream 401/403).
+  // Kept as separate flags so neither silently implies the other and existing
+  // oauth2 servers can't regress into pass-through behavior.
+  const canEnableOAuthPassthrough = isNoneAuth && hasAuthorizationHeader;
   const watchedDelegateAuth = Form.useWatch("delegate_auth_to_upstream", form);
   const watchedPublicInternet = Form.useWatch("available_on_public_internet", form);
-  const showInternalDelegatePkceWarning =
-    isOAuth2 &&
-    watchedDelegateAuth === true &&
-    watchedPublicInternet === false;
+  const showInternalDelegatePkceWarning = isOAuth2 && watchedDelegateAuth === true && watchedPublicInternet === false;
 
   // Set initial values when mcpServer changes
   useEffect(() => {
@@ -42,6 +53,17 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }));
         form.setFieldValue("static_headers", staticHeaders);
       }
+      if (Array.isArray(mcpServer.env_vars) && mcpServer.env_vars.length > 0) {
+        form.setFieldValue(
+          "env_vars",
+          mcpServer.env_vars.map((entry) => ({
+            name: entry.name,
+            value: entry.value ?? "",
+            scope: entry.scope ?? "global",
+            description: entry.description ?? "",
+          })),
+        );
+      }
       if (typeof mcpServer.allow_all_keys === "boolean") {
         form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
       }
@@ -51,21 +73,33 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       if (typeof mcpServer.delegate_auth_to_upstream === "boolean") {
         form.setFieldValue("delegate_auth_to_upstream", mcpServer.delegate_auth_to_upstream);
       }
+      if (typeof mcpServer.oauth_passthrough === "boolean") {
+        form.setFieldValue("oauth_passthrough", mcpServer.oauth_passthrough);
+      }
     } else {
       form.setFieldValue("allow_all_keys", false);
       form.setFieldValue("available_on_public_internet", true);
       form.setFieldValue("delegate_auth_to_upstream", false);
+      form.setFieldValue("oauth_passthrough", false);
     }
   }, [mcpServer, form]);
 
-  // delegate_auth_to_upstream is only honored server-side when auth_type=oauth2.
+  // delegate_auth_to_upstream is only honored server-side for oauth2 servers.
   // Force it back to false whenever the user switches away from oauth2 so a
-  // stale toggle value doesn't get persisted with another auth type.
+  // stale toggle value doesn't get persisted unexpectedly.
   useEffect(() => {
     if (!isOAuth2) {
       form.setFieldValue("delegate_auth_to_upstream", false);
     }
   }, [isOAuth2, form]);
+
+  // oauth_passthrough is only honored for auth_type=none servers that forward
+  // Authorization upstream. Force it back to false otherwise.
+  useEffect(() => {
+    if (!canEnableOAuthPassthrough) {
+      form.setFieldValue("oauth_passthrough", false);
+    }
+  }, [canEnableOAuthPassthrough, form]);
 
   return (
     <Collapse className="bg-gray-50 border border-gray-200 rounded-lg" expandIconPosition="end" ghost={false}>
@@ -92,7 +126,9 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
-              <p className="text-sm text-gray-600 mt-1">Enable if this server should be &quot;public&quot; to all keys.</p>
+              <p className="text-sm text-gray-600 mt-1">
+                Enable if this server should be &quot;public&quot; to all keys.
+              </p>
             </div>
             <Form.Item
               name="allow_all_keys"
@@ -112,7 +148,9 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
-              <p className="text-sm text-gray-600 mt-1">Turn on to restrict access to callers within your internal network only.</p>
+              <p className="text-sm text-gray-600 mt-1">
+                Turn on to restrict access to callers within your internal network only.
+              </p>
             </div>
             <Form.Item
               name="available_on_public_internet"
@@ -143,6 +181,31 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 name="delegate_auth_to_upstream"
                 valuePropName="checked"
                 initialValue={mcpServer?.delegate_auth_to_upstream ?? false}
+                className="mb-0"
+              >
+                <Switch />
+              </Form.Item>
+            </div>
+          )}
+
+          {canEnableOAuthPassthrough && (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  OAuth pass-through
+                  <Tooltip title="When on, this server is treated as an OAuth pass-through: the gateway proxies the upstream /.well-known/oauth-protected-resource metadata, emits spec-compliant 401 challenges when no bearer is supplied, and propagates upstream 401/403 responses. Only honored when Auth Type is None and 'Authorization' is in Extra Headers.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+                <p className="text-sm text-gray-600 mt-1">
+                  Forward upstream OAuth discovery and 401 challenges so clients negotiate OAuth directly with the
+                  upstream MCP server.
+                </p>
+              </div>
+              <Form.Item
+                name="oauth_passthrough"
+                valuePropName="checked"
+                initialValue={mcpServer?.oauth_passthrough ?? false}
                 className="mb-0"
               >
                 <Switch />
@@ -251,12 +314,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                         className="flex-1"
                         rules={[{ required: true, message: "Header value is required" }]}
                       >
-                        <Input
-                          size="large"
-                          allowClear
-                          className="rounded-lg"
-                          placeholder="Header value"
-                        />
+                        <Input size="large" allowClear className="rounded-lg" placeholder="Header value" />
                       </Form.Item>
                       <MinusCircleOutlined
                         onClick={() => remove(name)}

@@ -6,10 +6,7 @@ import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, Expo
 // Resolve display name for an entity. For teams the teamAliasMap provides
 // a human-readable alias; for every other entity type the entity key itself
 // (tag name, org id, customer id, …) is already the correct label.
-const resolveEntityDisplay = (
-  entity: string,
-  teamAliasMap: Record<string, string>,
-): { id: string; alias: string } => ({
+const resolveEntityDisplay = (entity: string, teamAliasMap: Record<string, string>): { id: string; alias: string } => ({
   id: entity,
   alias: teamAliasMap[entity] || entity,
 });
@@ -17,9 +14,15 @@ const resolveEntityDisplay = (
 // Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
 // If the backend adds a field, add it here too.
 const METRIC_KEYS = [
-  "spend", "api_requests", "successful_requests", "failed_requests",
-  "total_tokens", "prompt_tokens", "completion_tokens",
-  "cache_read_input_tokens", "cache_creation_input_tokens",
+  "spend",
+  "api_requests",
+  "successful_requests",
+  "failed_requests",
+  "total_tokens",
+  "prompt_tokens",
+  "completion_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
 ] as const;
 
 // When breakdown.entities is empty (aggregated endpoint), reconstruct entities
@@ -234,9 +237,13 @@ export const generateDailyWithModelsData = (
       }
 
       Object.entries(day.breakdown.models || {}).forEach(([model, modelData]: [string, any]) => {
-        const apiKeyBreakdown = entityData.api_key_breakdown || {};
+        const entityApiKeys = entityData.api_key_breakdown || {};
+        const modelApiKeys = modelData.api_key_breakdown || {};
 
-        Object.entries(apiKeyBreakdown).forEach(([apiKey, apiKeyData]: [string, any]) => {
+        Object.keys(entityApiKeys).forEach((apiKey) => {
+          const keyMetrics = modelApiKeys[apiKey]?.metrics;
+          if (!keyMetrics) return;
+
           if (!dailyEntityModels[entity][model]) {
             dailyEntityModels[entity][model] = {
               spend: 0,
@@ -246,11 +253,11 @@ export const generateDailyWithModelsData = (
               tokens: 0,
             };
           }
-          dailyEntityModels[entity][model].spend += apiKeyData.metrics.spend || 0;
-          dailyEntityModels[entity][model].requests += apiKeyData.metrics.api_requests || 0;
-          dailyEntityModels[entity][model].successful += apiKeyData.metrics.successful_requests || 0;
-          dailyEntityModels[entity][model].failed += apiKeyData.metrics.failed_requests || 0;
-          dailyEntityModels[entity][model].tokens += apiKeyData.metrics.total_tokens || 0;
+          dailyEntityModels[entity][model].spend += keyMetrics.spend || 0;
+          dailyEntityModels[entity][model].requests += keyMetrics.api_requests || 0;
+          dailyEntityModels[entity][model].successful += keyMetrics.successful_requests || 0;
+          dailyEntityModels[entity][model].failed += keyMetrics.failed_requests || 0;
+          dailyEntityModels[entity][model].tokens += keyMetrics.total_tokens || 0;
         });
       });
     });

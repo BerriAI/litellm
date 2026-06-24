@@ -70,9 +70,9 @@ export enum Providers {
   OOBABOOGA = "Oobabooga",
   OpenAI = "OpenAI",
   OPENAI_LIKE = "Openai Like",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
+  OpenAI_Compatible = "OpenAI-Compatible Chat Completions (Together AI, vLLM, etc.)",
   OpenAI_Text = "OpenAI Text Completion",
-  OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
+  OpenAI_Text_Compatible = "OpenAI-Compatible Completions (legacy /v1/completions)",
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
@@ -87,6 +87,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   Snowflake = "Snowflake",
+  Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
@@ -195,6 +196,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   Snowflake: "snowflake",
+  Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
@@ -214,7 +216,7 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,
@@ -286,6 +288,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.SAP]: `${asset_logos_folder}sap.png`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
+  [Providers.Soniox]: `${asset_logos_folder}soniox.svg`,
   [Providers.TEXT_COMPLETION_CODESTRAL]: `${asset_logos_folder}mistral.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
   [Providers.TOPAZ]: `${asset_logos_folder}topaz.svg`,
@@ -315,10 +318,12 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
     return { logo, displayName };
   }
 
-  // Find the enum key by matching provider_map values
-  const enumKey = Object.keys(provider_map).find(
-    (key) => provider_map[key].toLowerCase() === providerValue.toLowerCase(),
-  );
+  // Resolve by the litellm provider slug (e.g. "bedrock_mantle"); fall back to
+  // the enum key (e.g. "BedrockMantle") for callers like the Add Model dropdown
+  // that pass the key instead of the slug.
+  const enumKey =
+    Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === providerValue.toLowerCase()) ??
+    Object.keys(provider_map).find((key) => key.toLowerCase() === providerValue.toLowerCase());
 
   if (!enumKey) {
     return { logo: "", displayName: providerValue };

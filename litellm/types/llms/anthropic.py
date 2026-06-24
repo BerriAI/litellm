@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import Literal, Required, TypedDict
+from typing_extensions import Literal, NotRequired, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -515,6 +515,41 @@ class UsageDelta(TypedDict, total=False):
     cache_read_input_tokens: int
 
 
+class AppliedEdit(TypedDict, total=False):
+    """One applied context_management edit (Anthropic response shape)."""
+
+    type: str
+    cleared_input_tokens: int
+    cleared_tool_uses: int
+    cleared_thinking_turns: int
+    # compact_20260112 fields
+    summary_input_tokens: int
+    summary_output_tokens: int
+    error: str
+    warnings: List[str]
+
+
+class ContextManagementResponse(TypedDict, total=False):
+    """Response ``context_management`` with ``applied_edits``."""
+
+    applied_edits: List[AppliedEdit]
+
+
+class CompactionBlock(TypedDict, total=False):
+    """Synthesized ``compaction`` content block (compact_20260112)."""
+
+    type: Required[Literal["compaction"]]
+    content: Optional[str]
+
+
+class UsageIteration(TypedDict, total=False):
+    """One sampling iteration's token usage (compact_20260112)."""
+
+    type: Required[Literal["compaction", "message"]]
+    input_tokens: int
+    output_tokens: int
+
+
 class MessageBlockDelta(TypedDict):
     """
     Anthropic
@@ -524,6 +559,7 @@ class MessageBlockDelta(TypedDict):
     type: Literal["message_delta"]
     delta: MessageDelta
     usage: UsageDelta
+    context_management: NotRequired[ContextManagementResponse]
 
 
 class MessageChunk(TypedDict, total=False):

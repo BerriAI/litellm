@@ -113,7 +113,8 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
           {availableTeams.length === 0 && (
             <TableRow>
               <TableCell colSpan={5} className="text-center">
-                <Text>No available teams to join. See how to set available teams{" "}
+                <Text>
+                  No available teams to join. See how to set available teams{" "}
                   <a
                     href="https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
                     target="_blank"
@@ -121,7 +122,8 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
                     className="text-blue-500 hover:text-blue-700 underline"
                   >
                     here
-                  </a>.
+                  </a>
+                  .
                 </Text>
               </TableCell>
             </TableRow>

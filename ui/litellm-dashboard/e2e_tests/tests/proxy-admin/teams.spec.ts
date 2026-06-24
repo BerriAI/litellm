@@ -7,19 +7,7 @@ import {
   E2E_TEAM_ORG_ID,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
-import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
-
-/**
- * Click on a team ID in the table. Team IDs are rendered differently depending
- * on the component version — try button first (Tremor Button), fall back to
- * clickable span (OldTeams Typography.Text).
- */
-async function clickTeamId(page: import("@playwright/test").Page, teamId: string) {
-  const cell = page.locator("td").filter({ hasText: teamId }).first();
-  await expect(cell).toBeVisible({ timeout: 10_000 });
-  await cell.click();
-  await expect(page.getByText("Back to Teams")).toBeVisible({ timeout: 10_000 });
-}
+import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 
 test.describe("Proxy Admin - Teams", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -31,7 +19,10 @@ test.describe("Proxy Admin - Teams", () => {
     const uniqueAlias = `e2e-created-team-${Date.now()}`;
 
     // Click the Create Team button — accessible name includes "Create Team"
-    await page.getByRole("button", { name: /Create Team/i }).first().click();
+    await page
+      .getByRole("button", { name: /Create Team/i })
+      .first()
+      .click();
 
     // Wait for the Create Team modal
     const dialog = page.locator(".ant-modal:visible");
@@ -169,8 +160,9 @@ test.describe("Proxy Admin - Teams", () => {
 
       await page.getByRole("button", { name: "Save Changes" }).click();
 
-      await expect(page.getByText(/Team settings updated|updated successfully/i).first())
-        .toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(/Team settings updated|updated successfully/i).first()).toBeVisible({
+        timeout: 10_000,
+      });
     } finally {
       // Leave the team in its seeded state for any subsequent test or rerun.
       await restore();
