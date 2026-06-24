@@ -285,8 +285,10 @@ class PassThroughStreamingHandler:
         Returns:
             List of string lines, with each line being a complete data: {} chunk
         """
-        # Combine all bytes and decode to string
-        combined_str = b"".join(raw_bytes).decode("utf-8")
+        # errors="replace" so a stream cut mid-multibyte-sequence (client disconnect)
+        # still decodes and logs the usage events already received, instead of raising
+        # and dropping the whole request from SpendLogs
+        combined_str = b"".join(raw_bytes).decode("utf-8", errors="replace")
 
         # Split by newlines and filter out empty lines
         lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
