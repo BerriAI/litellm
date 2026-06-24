@@ -11,7 +11,6 @@ from typing import (
     Literal,
     Mapping,
     NamedTuple,
-    Optional,
     Union,
 )
 
