@@ -167,3 +167,38 @@ async def test_verify_key_401_on_http_exception(monkeypatch):
     assert exc_info.value.status_code == 401
     # Internals must not leak.
     assert exc_info.value.detail == "invalid api key"
+
+
+@pytest.mark.asyncio
+async def test_verify_key_propagates_http_5xx(monkeypatch):
+    # A 5xx (e.g. DB outage) must NOT be masked as 401 — operators need the real error.
+    async def fake_user_api_key_auth(request, api_key):
+        raise HTTPException(status_code=503, detail="db unavailable")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+        fake_user_api_key_auth,
+    )
+
+    body = VerifyKeyRequest(api_key="sk-key", route="/v1/realtime")
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_key(body=body)
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_verify_key_propagates_proxy_5xx(monkeypatch):
+    # A ProxyException carrying a 5xx code propagates too (not converted to 401).
+    async def fake_user_api_key_auth(request, api_key):
+        raise ProxyException(
+            message="internal", type="internal_error", param=None, code="500"
+        )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+        fake_user_api_key_auth,
+    )
+
+    body = VerifyKeyRequest(api_key="sk-key", route="/v1/realtime")
+    with pytest.raises(ProxyException):
+        await verify_key(body=body)
