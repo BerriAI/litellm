@@ -103,7 +103,7 @@ class GroundingChecker:
                 f"Timeout searching {source.name} for claim: {claim}"
             )
             return []
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             verbose_logger.warning(f"Error searching {source.name}: {e}")
             return []
 

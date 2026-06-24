@@ -63,7 +63,7 @@ def _read_tail(fh: BinaryIO, size: int) -> bytes:
         chunk_size *= 2
 
 
-def _content_digest(value: Any) -> Optional[str]:
+def _content_digest(value: Any) -> Optional[str]:  # noqa: ANN401
     """Return a SHA-256 hex digest of a content value, or None if empty."""
     if value is None:
         return None
@@ -73,9 +73,9 @@ def _content_digest(value: Any) -> Optional[str]:
 
 def _extract_loggable(
     kwargs: dict[str, Any],
-    response_obj: Any,
-    start_time: Any,
-    end_time: Any,
+    response_obj: Any,  # noqa: ANN401
+    start_time: Any,  # noqa: ANN401
+    end_time: Any,  # noqa: ANN401
     status: str,
 ) -> dict[str, Any]:
     """Pull metadata + digests out of a callback invocation.
@@ -121,7 +121,7 @@ def _extract_loggable(
             # litellm_params.metadata keys to avoid unexpected bleed.
             if k in _PROXY_IDENTITY_KEYS:
                 metadata.setdefault(k, v)
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
 
     # Timing
@@ -129,7 +129,7 @@ def _extract_loggable(
     try:
         if start_time is not None and end_time is not None:
             latency_ms = int((end_time - start_time).total_seconds() * 1000)
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
 
     # Usage
@@ -149,7 +149,7 @@ def _extract_loggable(
             provider_request_id = response_obj._hidden_params.get(
                 "x-request-id"
             ) or response_obj._hidden_params.get("cf-ray")
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
 
     # Content digests (not content itself)
@@ -160,7 +160,7 @@ def _extract_loggable(
         if hasattr(response_obj, "choices") and response_obj.choices:
             content = response_obj.choices[0].message.content
             response_content_digest = _content_digest(content)
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
 
     # Standard logging payload may carry call_id / litellm_call_id
@@ -169,7 +169,7 @@ def _extract_loggable(
         slp: Any = kwargs.get("standard_logging_object")
         if slp and isinstance(slp, dict):
             call_id = slp.get("id") or slp.get("litellm_call_id")
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     if not call_id:
         call_id = kwargs.get("litellm_call_id") or kwargs.get(
@@ -264,7 +264,7 @@ class AsqavLogger(CustomLogger):
             last_record = json.loads(lines[-1].decode("utf-8"))
             self._prev_hash = last_record.get("record_hash", _GENESIS_HASH)
             self._call_count = last_record.get("seq", -1) + 1
-        except Exception:
+        except Exception:  # noqa: BLE001
             verbose_logger.debug(
                 f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}"
             )
@@ -276,9 +276,9 @@ class AsqavLogger(CustomLogger):
     def _build_and_append(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
+        response_obj: Any,  # noqa: ANN401
+        start_time: Any,  # noqa: ANN401
+        end_time: Any,  # noqa: ANN401
         status: str,
     ) -> None:
         """Build one audit record and append it to the JSONL log.
@@ -299,7 +299,7 @@ class AsqavLogger(CustomLogger):
                         loggable["response_content"] = response_obj.choices[
                             0
                         ].message.content
-                except Exception:
+                except Exception:  # noqa: BLE001
                     pass
 
             # The file write happens under the same lock that assigns seq and
@@ -326,7 +326,7 @@ class AsqavLogger(CustomLogger):
                 self._prev_hash = record_hash
                 self._call_count += 1
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             verbose_logger.debug(
                 f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}"
             )
@@ -350,7 +350,7 @@ class AsqavLogger(CustomLogger):
             try:
                 with os.fdopen(fd, "a", encoding="utf-8", closefd=True) as fh:
                     fh.write(json.dumps(record, separators=(",", ":")) + "\n")
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # fdopen owns fd; if it raises before returning the context
                 # manager the fd may still be open - close defensively.
                 try:
@@ -359,7 +359,7 @@ class AsqavLogger(CustomLogger):
                     pass
                 raise
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001
             verbose_logger.warning(
                 f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}"
             )
@@ -370,17 +370,17 @@ class AsqavLogger(CustomLogger):
     # ------------------------------------------------------------------
 
     def log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
     def log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -392,7 +392,7 @@ class AsqavLogger(CustomLogger):
         )
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -454,5 +454,5 @@ class AsqavLogger(CustomLogger):
             return True, "ok"
         except FileNotFoundError:
             return False, f"log file not found: {path}"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return False, f"verification error: {exc}"

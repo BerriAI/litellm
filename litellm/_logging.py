@@ -113,7 +113,7 @@ class HealthCheckAccessLogFilter(logging.Filter):
             path = full_path.split("?", 1)[0]
             if path in _DISABLED_ACCESS_LOG_PATHS:
                 return False
-        except Exception:
+        except Exception:  # noqa: BLE001
             return True
         return True
 

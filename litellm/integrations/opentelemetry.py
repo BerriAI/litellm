@@ -2125,7 +2125,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 if hasattr(response_obj, "model_dump"):
                     try:
                         response_obj = response_obj.model_dump()
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         response_obj = None
                 else:
                     response_obj = None

@@ -132,7 +132,7 @@ class FileDataSource(DataSource):
                         list[str | dict[str, Any]],
                         [{"text": line.strip()} for line in f if line.strip()],
                     )
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         return []
 
@@ -187,7 +187,7 @@ class URLDataSource(DataSource):
                     if response.status == 200:
                         content = await response.text()
                         return self._parse_content(content)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         return []
 
@@ -300,7 +300,7 @@ class VectorStoreDataSource(DataSource):
                     )
                     for doc in docs
                 ]
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         return []
 
@@ -356,7 +356,7 @@ class KnowledgeGraphDataSource(DataSource):
                             for text in (self._extract_text(binding),)
                             if text
                         ]
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         return []
 

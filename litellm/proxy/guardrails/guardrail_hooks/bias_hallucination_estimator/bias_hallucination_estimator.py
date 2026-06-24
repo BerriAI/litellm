@@ -150,7 +150,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         if not self._should_check(input_type):
             return inputs
 
-        start_time = datetime.now()
+        start_time = datetime.now()  # noqa: DTZ005
         texts = self._extract_texts(inputs)
         if not texts:
             return inputs
@@ -274,7 +274,7 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
             request_data=request_data,
             guardrail_status=status,
             start_time=start_time.timestamp(),
-            end_time=datetime.now().timestamp(),
+            end_time=datetime.now().timestamp(),  # noqa: DTZ005
             duration=(datetime.now() - start_time).total_seconds(),
             tracing_detail=tracing_detail,
         )

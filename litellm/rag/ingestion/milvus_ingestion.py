@@ -188,7 +188,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             )
             inner = data.get("data")
             return bool(inner.get("has")) if isinstance(inner, dict) else False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             verbose_logger.debug(f"Milvus collection 'has' check failed: {e}")
             return False
 

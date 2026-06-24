@@ -2437,7 +2437,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _bill_partial_stream_on_disconnect(
-        response: Any, request_data: dict
+        response: Any, request_data: dict  # noqa: ANN401
     ) -> None:
         """Record SpendLogs for tokens already produced when a stream is cut off.
 
@@ -2465,7 +2465,7 @@ class ProxyBaseLLMRequestProcessing:
                 messages=getattr(response, "messages", None),
                 logging_obj=logging_obj,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             verbose_proxy_logger.exception(
                 "Failed to assemble partial streaming usage on client disconnect"
             )
@@ -2494,7 +2494,7 @@ class ProxyBaseLLMRequestProcessing:
                     cache_hit=False,
                     prefer_async_handlers=True,
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001
             verbose_proxy_logger.exception(
                 "Failed to record partial streaming usage on client disconnect"
             )

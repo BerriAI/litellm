@@ -144,13 +144,13 @@ def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
     return gid, (name or gid or "")
 
 
-def _get_guardrail_dict_field(g: Any, field_name: str) -> Any:
+def _get_guardrail_dict_field(g: Any, field_name: str) -> Any:  # noqa: ANN401
     if isinstance(g, dict):
         return g.get(field_name)
     return getattr(g, field_name, None)
 
 
-def _get_guardrail_litellm_params(g: Any) -> dict[str, Any]:
+def _get_guardrail_litellm_params(g: Any) -> dict[str, Any]:  # noqa: ANN401
     litellm_params = _get_guardrail_dict_field(g, "litellm_params")
     if isinstance(litellm_params, dict):
         return litellm_params
@@ -159,7 +159,7 @@ def _get_guardrail_litellm_params(g: Any) -> dict[str, Any]:
     return {}
 
 
-def _get_guardrail_info(g: Any) -> dict[str, Any]:
+def _get_guardrail_info(g: Any) -> dict[str, Any]:  # noqa: ANN401
     guardrail_info = _get_guardrail_dict_field(g, "guardrail_info")
     return guardrail_info if isinstance(guardrail_info, dict) else {}
 
@@ -175,7 +175,7 @@ def _get_config_loaded_guardrails() -> list[Any]:
     ]
 
 
-def _find_config_loaded_guardrail(guardrail_id_or_name: str) -> Optional[Any]:
+def _find_config_loaded_guardrail(guardrail_id_or_name: str) -> Optional[Any]:  # noqa: ANN401
     for guardrail in _get_config_loaded_guardrails():
         gid, display_name = _get_guardrail_attrs(guardrail)
         if guardrail_id_or_name in (gid, display_name):
@@ -183,7 +183,7 @@ def _find_config_loaded_guardrail(guardrail_id_or_name: str) -> Optional[Any]:
     return None
 
 
-def _merge_config_loaded_guardrails(db_guardrails: Any) -> list[Any]:
+def _merge_config_loaded_guardrails(db_guardrails: Any) -> list[Any]:  # noqa: ANN401
     guardrails = list(db_guardrails)
     seen_keys: set[str] = set()
     for guardrail in guardrails:
