@@ -3911,3 +3911,81 @@ async def test_expired_cli_session_token_is_rejected(monkeypatch):
         monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
         importlib.reload(constants)
         importlib.reload(auth_checks)
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypatch):
+    """A CLI session token minted for a non-admin (INTERNAL_USER) must flow
+    through the production auth path, not the admin early-return. The key
+    regression: without the fix, valid_token is None after the decrypt block
+    (gated behind EXPERIMENTAL_UI_LOGIN), so the builder raises 401 at the
+    sk- guard. With the fix, valid_token is set, the sk- guard is skipped, and
+    _return_user_api_key_auth_obj is called with the correct identity."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    user_info = LiteLLM_UserTable(
+        user_id="internal-user-1",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+    )
+    cli_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info, team_id="team-abc", team_alias="my-team"
+    )
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    assembled = UserAPIKeyAuth(
+        user_id="internal-user-1",
+        team_id="team-abc",
+        is_session_token=True,
+    )
+    attrs = _proxy_attrs_for_db_lookup()
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._return_user_api_key_auth_obj",
+                new_callable=AsyncMock,
+                return_value=assembled,
+            ) as mock_assemble,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=__import__("fastapi").HTTPException(status_code=404),
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {cli_token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    mock_assemble.assert_awaited_once()
+    call_kwargs = mock_assemble.call_args.kwargs
+    assert call_kwargs["valid_token_dict"]["user_id"] == "internal-user-1"
+    assert call_kwargs["valid_token_dict"]["team_id"] == "team-abc"
+    assert call_kwargs["valid_token_dict"]["is_session_token"] is True
+    assert call_kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
+    assert result.is_session_token is True
