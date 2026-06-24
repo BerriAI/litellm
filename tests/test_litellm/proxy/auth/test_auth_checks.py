@@ -538,6 +538,26 @@ def test_get_cli_jwt_auth_token_unique_per_session(valid_sso_user_defined_values
     assert first["key_name"] == second["key_name"] == expected_alias
 
 
+def test_get_cli_jwt_auth_token_applies_fallback_budget(valid_sso_user_defined_values):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values, max_budget=litellm.max_ui_session_budget
+    )
+    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    assert decrypted is not None
+    assert json.loads(decrypted).get("max_budget") == litellm.max_ui_session_budget
+
+
+def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
+    valid_sso_user_defined_values,
+):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values, max_budget=None
+    )
+    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    assert decrypted is not None
+    assert json.loads(decrypted).get("max_budget") is None
+
+
 @pytest.mark.asyncio
 async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     """Test that default_internal_user_params is used when creating a new user via get_user_object"""

@@ -2417,6 +2417,7 @@ class ExperimentalUIJWTToken:
         user_info: LiteLLM_UserTable,
         team_id: Optional[str] = None,
         team_alias: Optional[str] = None,
+        max_budget: Optional[float] = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2462,6 +2463,7 @@ class ExperimentalUIJWTToken:
             key_name=session_alias,
             key_alias=session_alias,
             expires=expires,
+            max_budget=max_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
