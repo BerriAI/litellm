@@ -107,7 +107,9 @@ class ContentFilterScanner:
 
         fallback_pattern_indexes: Set[int] = set()
         for index, entry in enumerate(compiled_patterns):
-            if entry.get("keyword_regex") is not None or entry.get("allow_word_numbers"):
+            if entry.get("keyword_regex") is not None or entry.get(
+                "allow_word_numbers"
+            ):
                 # Contextual extras are not modeled by the scanner; screen in Python.
                 fallback_pattern_indexes.add(index)
                 continue
@@ -116,7 +118,9 @@ class ContentFilterScanner:
             id_lookup[term_id] = (_KIND_PATTERN, index)
             regexes.append({"id": term_id, "pattern": entry["regex"].pattern})
 
-        scanner = scanner_factory(json.dumps({"literals": literals, "regexes": regexes}))
+        scanner = scanner_factory(
+            json.dumps({"literals": literals, "regexes": regexes})
+        )
 
         # Any regex Rust could not compile (lookaround, backrefs) falls back to
         # Python screening for that pattern only.
