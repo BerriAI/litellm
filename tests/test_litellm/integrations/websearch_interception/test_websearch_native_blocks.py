@@ -133,7 +133,30 @@ class TestBuildWebSearchToolResultBlock:
         assert first["url"] == "https://docs.litellm.ai/"
         assert first["title"] == "LiteLLM Docs"
         assert first["page_age"] == "2025-01-15"
-        assert first["encrypted_content"] == ""
+        # The provider snippet is passed through encrypted_content so client
+        # citation panels render result text instead of an empty shell.
+        assert first["encrypted_content"] == "Unified interface for LLMs."
+
+    def test_snippet_passthrough_for_all_results(self):
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="toolu_abc",
+            search_response=_make_search_response(),
+        )
+        snippets = [item["encrypted_content"] for item in block["content"]]
+        assert snippets == [
+            "Unified interface for LLMs.",
+            "Pay-per-use pricing model.",
+        ]
+
+    def test_empty_snippet_stays_empty_string(self):
+        response = SearchResponse(
+            results=[SearchResult(title="No Snippet", url="https://x.test/", snippet="")]
+        )
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="toolu_abc",
+            search_response=response,
+        )
+        assert block["content"][0]["encrypted_content"] == ""
 
     def test_handles_none_search_response(self):
         block = WebSearchTransformation.build_web_search_tool_result_block(
@@ -482,3 +505,47 @@ class TestLegacyPathMatchesNewPath:
         assert out["content"][0]["type"] == "web_search_tool_result"
         assert out["content"][0]["tool_use_id"] == "toolu_legacy"
         assert out["content"][1]["type"] == "text"
+
+
+class TestFollowupDisablesToolChoice:
+    """The synthesis (follow-up) call must answer from the search results
+    instead of searching again. A client that forced ``tool_choice`` at the
+    web_search tool (Claude Code does) would otherwise make the model emit
+    another tool_use with no answer text, and since this loop is single-shot
+    that second tool_use is passed through unanswered. The follow-up patch
+    pins ``tool_choice`` to ``{"type": "none"}``."""
+
+    @pytest.mark.asyncio
+    async def test_followup_patch_sets_tool_choice_none(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        tool_calls = [
+            {
+                "id": "toolu_x",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "q"},
+            }
+        ]
+
+        with patch.object(
+            logger,
+            "_execute_search",
+            new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
+        ):
+            patch_obj, _ = await logger._build_anthropic_request_patch(
+                model="bedrock/claude",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=tool_calls,
+                thinking_blocks=[],
+                # Client forced the search tool on the original request.
+                anthropic_messages_optional_request_params={
+                    "tool_choice": {"type": "tool", "name": "litellm_web_search"},
+                },
+                logging_obj=MagicMock(model_call_details={}),
+                kwargs={"tool_choice": {"type": "tool", "name": "litellm_web_search"}},
+            )
+
+        # optional_params drives the follow-up call; forcing must be cleared.
+        assert patch_obj.optional_params["tool_choice"] == {"type": "none"}
+        # The forwarded kwargs must not smuggle the original forcing back in.
+        assert "tool_choice" not in patch_obj.kwargs
