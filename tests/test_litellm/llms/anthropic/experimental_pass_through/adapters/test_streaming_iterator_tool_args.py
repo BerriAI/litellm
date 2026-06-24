@@ -151,8 +151,8 @@ async def test_async_stream_emits_input_json_delta_for_bundled_tool_args():
 async def test_async_stream_no_extra_delta_when_tool_args_empty():
     """
     When a provider sends tool name/id WITHOUT arguments in the first chunk
-    (OpenAI-style), the wrapper should NOT emit an extra input_json_delta
-    after content_block_start. This verifies backward compatibility.
+    (OpenAI-style), the block transition still queues the trigger chunk's
+    empty input_json_delta (#25212); the follow-up chunk carries real args.
     """
     # Chunk 1: text
     text_chunk = _make_chunk(Delta(content="Hi", role="assistant", tool_calls=None))
@@ -221,9 +221,9 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
 
     assert tool_start_idx is not None
 
-    # Count how many input_json_delta events appear after the tool_use block start.
-    # With empty args in the trigger chunk, only the subsequent tool_args_chunk
-    # should produce one — not the trigger chunk itself.
+    # Count input_json_delta events after the tool_use block start.  The trigger
+    # chunk is now queued on block transition (#25212), so an empty partial_json
+    # delta precedes the follow-up chunk with real arguments.
     input_json_deltas = [
         e
         for e in events[tool_start_idx + 1 :]
@@ -232,11 +232,12 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
         and isinstance(e.get("delta"), dict)
         and e["delta"].get("type") == "input_json_delta"
     ]
-    assert len(input_json_deltas) == 1, (
-        f"Expected exactly 1 input_json_delta (from the follow-up chunk), "
+    assert len(input_json_deltas) == 2, (
+        f"Expected trigger empty delta + follow-up args delta, "
         f"got {len(input_json_deltas)}"
     )
-    assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
+    assert input_json_deltas[0]["delta"]["partial_json"] == ""
+    assert input_json_deltas[1]["delta"]["partial_json"] == '{"location": "NYC"}'
 
 
 def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
@@ -308,8 +309,9 @@ def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
 
 def test_sync_stream_no_extra_delta_when_tool_args_empty():
     """
-    Sync counterpart: empty args (OpenAI-style) should not emit an extra
-    input_json_delta from the trigger chunk.
+    Sync counterpart: empty args on the trigger chunk still emit an
+    input_json_delta from the block transition (#25212); the follow-up chunk
+    carries the real arguments.
     """
     text_chunk = _make_chunk(Delta(content="Hi", role="assistant", tool_calls=None))
     tool_name_chunk = _make_chunk(
@@ -376,8 +378,9 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
         and isinstance(e.get("delta"), dict)
         and e["delta"].get("type") == "input_json_delta"
     ]
-    assert len(input_json_deltas) == 1, (
-        f"Expected exactly 1 input_json_delta (from the follow-up chunk), "
+    assert len(input_json_deltas) == 2, (
+        f"Expected trigger empty delta + follow-up args delta, "
         f"got {len(input_json_deltas)}"
     )
-    assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
+    assert input_json_deltas[0]["delta"]["partial_json"] == ""
+    assert input_json_deltas[1]["delta"]["partial_json"] == '{"location": "NYC"}'

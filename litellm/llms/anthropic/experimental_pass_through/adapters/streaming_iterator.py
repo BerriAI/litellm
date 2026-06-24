@@ -396,13 +396,58 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
                 self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                first_chunk = None
+                for chunk in self.completion_stream:
+                    if chunk == "None" or chunk is None:
+                        continue
+                    first_chunk = chunk
+                    break
+                if first_chunk is not None:
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=first_chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    if block_type == "thinking":
+                        initial_block: Dict[str, Any] = {"type": "thinking", "thinking": ""}
+                    elif block_type == "tool_use":
+                        initial_block = dict(content_block_start)
+                    else:
+                        initial_block = {"type": "text", "text": ""}
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": initial_block,
+                        }
+                    )
+                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=first_chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    if (
+                        isinstance(processed_first, dict)
+                        and processed_first.get("type") == "message_delta"
+                    ):
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
+                    self.chunk_queue.append(processed_first)
+                else:
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
                 return self.chunk_queue.popleft()
 
             for chunk in self.completion_stream:
@@ -468,7 +513,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
 
-                    # 2. Start new content block
                     self.chunk_queue.append(
                         {
                             "type": "content_block_start",
@@ -618,13 +662,58 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
                 self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                first_chunk = None
+                async for chunk in self.completion_stream:
+                    if chunk == "None" or chunk is None:
+                        continue
+                    first_chunk = chunk
+                    break
+                if first_chunk is not None:
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=first_chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    if block_type == "thinking":
+                        initial_block: Dict[str, Any] = {"type": "thinking", "thinking": ""}
+                    elif block_type == "tool_use":
+                        initial_block = dict(content_block_start)
+                    else:
+                        initial_block = {"type": "text", "text": ""}
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": initial_block,
+                        }
+                    )
+                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=first_chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    if (
+                        isinstance(processed_first, dict)
+                        and processed_first.get("type") == "message_delta"
+                    ):
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
+                    self.chunk_queue.append(processed_first)
+                else:
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
                 return self.chunk_queue.popleft()
 
             async for chunk in self.completion_stream:
