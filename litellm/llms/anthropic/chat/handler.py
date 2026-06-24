@@ -782,7 +782,14 @@ class ModelResponseIterator:
             usage: Usage | None = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: str | None = None
-            thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
+            thinking_blocks: (
+                List[
+                    Union[
+                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                    ]
+                ]
+                | None
+            ) = None
 
             # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
             index = 0

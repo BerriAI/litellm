@@ -1789,9 +1789,7 @@ async def ui_view_spend_logs(
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
     ),
-    model: str | None = fastapi.Query(
-        default=None, description="Filter logs by model"
-    ),
+    model: str | None = fastapi.Query(default=None, description="Filter logs by model"),
     model_id: str | None = fastapi.Query(
         default=None,
         description="Filter logs by model ID (litellm model deployment id)",

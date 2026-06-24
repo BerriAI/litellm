@@ -60,6 +60,8 @@ class ColdStorageHandler:
     def _select_custom_logger_for_cold_storage(
         self,
     ) -> _custom_logger_compatible_callbacks_literal | None:
-        cold_storage_custom_logger: _custom_logger_compatible_callbacks_literal | None = litellm.cold_storage_custom_logger
+        cold_storage_custom_logger: (
+            _custom_logger_compatible_callbacks_literal | None
+        ) = litellm.cold_storage_custom_logger
 
         return cold_storage_custom_logger
