@@ -2174,7 +2174,7 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         llm_provider: Optional[str],
-        model_group: Optional[str] = None,
+        model_group: str | None = None,
     ):
         """
         Set the deployment TPM and RPM limits metrics
@@ -2743,7 +2743,7 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         api_provider: str,
-        model_group: Optional[str] = None,
+        model_group: str | None = None,
     ):
         """
         Set the deployment state.
@@ -2767,7 +2767,7 @@ class PrometheusLogger(CustomLogger):
         model_id: str,
         api_base: str,
         api_provider: str,
-        model_group: Optional[str] = None,
+        model_group: str | None = None,
     ):
         self.set_litellm_deployment_state(
             0, litellm_model_name, model_id, api_base, api_provider, model_group
@@ -2779,7 +2779,7 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         api_provider: str,
-        model_group: Optional[str] = None,
+        model_group: str | None = None,
     ):
         self.set_litellm_deployment_state(
             1, litellm_model_name, model_id, api_base, api_provider, model_group
@@ -2791,7 +2791,7 @@ class PrometheusLogger(CustomLogger):
         model_id: Optional[str],
         api_base: Optional[str],
         api_provider: str,
-        model_group: Optional[str] = None,
+        model_group: str | None = None,
     ):
         self.set_litellm_deployment_state(
             2, litellm_model_name, model_id, api_base, api_provider, model_group
@@ -2804,7 +2804,7 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
         exception_status: str,
-        model_group: Optional[str] = None,
+        model_group: str | None = None,
     ):
         """
         increment metric when litellm.Router / load balancing logic places a deployment in cool down

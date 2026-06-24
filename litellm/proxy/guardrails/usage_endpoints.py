@@ -179,7 +179,7 @@ def _get_config_loaded_guardrails() -> list[Any]:
 
 def _find_config_loaded_guardrail(
     guardrail_id_or_name: str,
-) -> Optional[object]:
+) -> object | None:
     for guardrail in _get_config_loaded_guardrails():
         gid, display_name = _get_guardrail_attrs(guardrail)
         if guardrail_id_or_name in (gid, display_name):
@@ -479,7 +479,7 @@ def _build_usage_logs_where(
 
 
 def _usage_log_entry_from_row(
-    r: object, sl: object, action_filter: Optional[str]
+    r: object, sl: object, action_filter: str | None
 ) -> Optional[UsageLogEntry]:
     meta = sl.metadata
     if isinstance(meta, str):
@@ -530,7 +530,7 @@ def _usage_log_entry_from_row(
     )
 
 
-def _snippet(text: object, max_len: int = 200) -> Optional[str]:
+def _snippet(text: object, max_len: int = 200) -> str | None:
     if text is None:
         return None
     if isinstance(text, str):
@@ -552,7 +552,7 @@ def _snippet(text: object, max_len: int = 200) -> Optional[str]:
     return result
 
 
-def _input_snippet_for_log(sl: object) -> Optional[str]:
+def _input_snippet_for_log(sl: object) -> str | None:
     """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
     out = _snippet(sl.messages)
     if out:

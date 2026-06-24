@@ -4,9 +4,27 @@ import asyncio
 import json
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from importlib.util import find_spec as _find_spec
 from pathlib import Path
 from typing import Any, cast
+
+
+@dataclass
+class FetchConfig:
+    """HTTP fetch settings for URL-backed data sources."""
+
+    cache_ttl: int = 3600
+    timeout: float = 5.0
+
+
+@dataclass
+class VectorStoreClientConfig:
+    """Optional pre-built client and embedding model for vector store sources."""
+
+    client: object | None = None
+    embedding_model: object | None = None
+
 
 _AIOHTTP_AVAILABLE: bool = _find_spec("aiohttp") is not None
 
@@ -147,13 +165,13 @@ class URLDataSource(DataSource):
         name: str = "url_source",
         enabled: bool = True,
         priority: int = 0,
-        cache_ttl: int = 3600,
-        timeout: float = 5.0,
+        fetch_config: FetchConfig | None = None,
     ) -> None:
         super().__init__(name=name, enabled=enabled, priority=priority)
         self.urls = urls
-        self.cache_ttl = cache_ttl
-        self.timeout = timeout
+        _fetch = fetch_config or FetchConfig()
+        self.cache_ttl = _fetch.cache_ttl
+        self.timeout = _fetch.timeout
         self._documents: list[str | dict[str, Any]] = []
         self._index: dict[str, list[int]] = {}
         self._fetched = False
@@ -226,8 +244,7 @@ class VectorStoreDataSource(DataSource):
         name: str = "",
         enabled: bool = True,
         priority: int = 0,
-        client: object | None = None,
-        embedding_model: object | None = None,
+        client_config: VectorStoreClientConfig | None = None,
         **config: str,
     ) -> None:
         super().__init__(
@@ -235,12 +252,15 @@ class VectorStoreDataSource(DataSource):
         )
         self.provider = provider
         self.config = config
+        _client_config = client_config or VectorStoreClientConfig()
         self.client: object | None = (
-            client if client is not None else self._initialize_client(provider, config)
+            _client_config.client
+            if _client_config.client is not None
+            else self._initialize_client(provider, config)
         )
         self.embedding_model: object | None = (
-            embedding_model
-            if embedding_model is not None
+            _client_config.embedding_model
+            if _client_config.embedding_model is not None
             else self._load_embedding_model()
         )
 

@@ -2192,7 +2192,7 @@ async def cli_poll_key(
 async def insert_sso_user(
     result_openid: Optional[Union[OpenID, dict]],
     user_defined_values: Optional[SSOUserDefinedValues] = None,
-    prisma_client: Optional[PrismaClient] = None,
+    prisma_client: PrismaClient | None = None,
 ) -> NewUserResponse:
     """
     Helper function to create a New User in LiteLLM DB after a successful SSO login

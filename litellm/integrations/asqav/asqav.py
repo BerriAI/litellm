@@ -22,7 +22,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timezone
-from typing import Any, BinaryIO, Optional
+from typing import Any, BinaryIO
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -63,7 +63,7 @@ def _read_tail(fh: BinaryIO, size: int) -> bytes:
         chunk_size *= 2
 
 
-def _content_digest(value: object) -> Optional[str]:
+def _content_digest(value: object) -> str | None:
     """Return a SHA-256 hex digest of a content value, or None if empty."""
     if value is None:
         return None
@@ -74,8 +74,8 @@ def _content_digest(value: object) -> Optional[str]:
 def _extract_loggable(
     kwargs: dict[str, Any],
     response_obj: object,
-    start_time: Optional[datetime],
-    end_time: Optional[datetime],
+    start_time: datetime | None,
+    end_time: datetime | None,
     status: str,
 ) -> dict[str, Any]:
     """Pull metadata + digests out of a callback invocation.
@@ -125,7 +125,7 @@ def _extract_loggable(
         pass
 
     # Timing
-    latency_ms: Optional[int] = None
+    latency_ms: int | None = None
     try:
         if start_time is not None and end_time is not None:
             latency_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -133,11 +133,11 @@ def _extract_loggable(
         pass
 
     # Usage
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
-    total_tokens: Optional[int] = None
-    finish_reason: Optional[str] = None
-    provider_request_id: Optional[str] = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    finish_reason: str | None = None
+    provider_request_id: str | None = None
     try:
         if hasattr(response_obj, "usage") and response_obj.usage:
             prompt_tokens = response_obj.usage.prompt_tokens
@@ -153,9 +153,9 @@ def _extract_loggable(
         pass
 
     # Content digests (not content itself)
-    messages_digest: Optional[str] = _content_digest(messages)
+    messages_digest: str | None = _content_digest(messages)
 
-    response_content_digest: Optional[str] = None
+    response_content_digest: str | None = None
     try:
         if hasattr(response_obj, "choices") and response_obj.choices:
             content = response_obj.choices[0].message.content
@@ -164,7 +164,7 @@ def _extract_loggable(
         pass
 
     # Standard logging payload may carry call_id / litellm_call_id
-    call_id: Optional[str] = None
+    call_id: str | None = None
     try:
         slp: Any = kwargs.get("standard_logging_object")
         if slp and isinstance(slp, dict):
@@ -215,7 +215,7 @@ class AsqavLogger(CustomLogger):
 
     def __init__(
         self,
-        log_path: Optional[str] = None,
+        log_path: str | None = None,
         redact_content: bool = True,
     ) -> None:
         super().__init__()
@@ -277,8 +277,8 @@ class AsqavLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: object,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        start_time: datetime | None,
+        end_time: datetime | None,
         status: str,
     ) -> None:
         """Build one audit record and append it to the JSONL log.
@@ -373,8 +373,8 @@ class AsqavLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: object,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        start_time: datetime | None,
+        end_time: datetime | None,
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
@@ -382,8 +382,8 @@ class AsqavLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: object,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        start_time: datetime | None,
+        end_time: datetime | None,
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
@@ -391,8 +391,8 @@ class AsqavLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: object,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        start_time: datetime | None,
+        end_time: datetime | None,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -407,8 +407,8 @@ class AsqavLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: object,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        start_time: datetime | None,
+        end_time: datetime | None,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -423,7 +423,7 @@ class AsqavLogger(CustomLogger):
     # Chain verification (utility; not called on the hot path)
     # ------------------------------------------------------------------
 
-    def verify_chain(self, log_path: Optional[str] = None) -> tuple[bool, str]:
+    def verify_chain(self, log_path: str | None = None) -> tuple[bool, str]:
         """Verify the integrity of the audit log at log_path.
 
         Returns (True, "ok") when every record's hash matches its content and

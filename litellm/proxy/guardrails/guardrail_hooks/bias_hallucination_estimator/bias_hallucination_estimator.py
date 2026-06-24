@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
@@ -33,7 +34,7 @@ from litellm.types.utils import (
 )
 
 from .estimator_core import BiasDetector, HallucinationDetector
-from .risk_scorer import RiskScorer
+from .risk_scorer import RiskScorer, RiskThresholds, RiskWeights
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -69,6 +70,46 @@ class TextRiskAnalysis:
     risk: RiskScore
 
 
+@dataclass
+class GuardrailBehaviorConfig:
+    """Controls what the guardrail checks and how it reacts to violations."""
+
+    block_on_high_risk: bool = True
+    log_only: bool = False
+    check_request: bool = False
+    check_response: bool = True
+    violation_message: str | None = None
+
+
+@dataclass
+class GuardrailSessionConfig:
+    """Session-level routing and messaging settings."""
+
+    mask_request_content: bool = False
+    mask_response_content: bool = False
+    violation_message_template: str | None = None
+    end_session_after_n_fails: int | None = None
+    on_violation: str | None = None
+    realtime_violation_message: str | None = None
+    on_sensitive_data: str | None = None
+    sensitive_data_route_to_model: str | None = None
+    sticky_session_routing: bool = True
+
+
+@dataclass
+class GuardrailConfig:
+    """Top-level configuration bundle for the bias/hallucination guardrail."""
+
+    thresholds: RiskThresholds = dataclasses_field(default_factory=RiskThresholds)
+    weights: RiskWeights = dataclasses_field(default_factory=RiskWeights)
+    behavior: GuardrailBehaviorConfig = dataclasses_field(
+        default_factory=GuardrailBehaviorConfig
+    )
+    session: GuardrailSessionConfig = dataclasses_field(
+        default_factory=GuardrailSessionConfig
+    )
+
+
 class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -76,28 +117,13 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         guardrail_id: str | None = None,
         event_hook: GuardrailEventHookInput | None = None,
-        default_on: bool = False,
-        bias_threshold: float = 0.5,
-        hallucination_threshold: float = 0.5,
-        risk_flag_threshold: float = 0.25,
-        risk_block_threshold: float = 0.5,
-        block_on_high_risk: bool = True,
-        log_only: bool = False,
-        check_request: bool = False,
-        check_response: bool = True,
-        violation_message: str | None = None,
-        bias_weight: float = 0.4,
-        hallucination_weight: float = 0.6,
-        mask_request_content: bool = False,
-        mask_response_content: bool = False,
-        violation_message_template: str | None = None,
-        end_session_after_n_fails: int | None = None,
-        on_violation: str | None = None,
-        realtime_violation_message: str | None = None,
-        on_sensitive_data: str | None = None,
-        sensitive_data_route_to_model: str | None = None,
-        sticky_session_routing: bool = True,
+        config: GuardrailConfig | None = None,
     ) -> None:
+        _config = config or GuardrailConfig()
+        _thresholds = _config.thresholds
+        _weights = _config.weights
+        _behavior = _config.behavior
+        _session = _config.session
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             supported_event_hooks=[
@@ -106,38 +132,30 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
             ],
             event_hook=self._normalize_event_hook(event_hook)
             or GuardrailEventHooks.post_call,
-            default_on=default_on,
-            mask_request_content=mask_request_content,
-            mask_response_content=mask_response_content,
-            violation_message_template=violation_message_template,
-            end_session_after_n_fails=end_session_after_n_fails,
-            on_violation=on_violation,
-            realtime_violation_message=realtime_violation_message,
-            on_sensitive_data=on_sensitive_data,
-            sensitive_data_route_to_model=sensitive_data_route_to_model,
-            sticky_session_routing=sticky_session_routing,
+            mask_request_content=_session.mask_request_content,
+            mask_response_content=_session.mask_response_content,
+            violation_message_template=_session.violation_message_template,
+            end_session_after_n_fails=_session.end_session_after_n_fails,
+            on_violation=_session.on_violation,
+            realtime_violation_message=_session.realtime_violation_message,
+            on_sensitive_data=_session.on_sensitive_data,
+            sensitive_data_route_to_model=_session.sensitive_data_route_to_model,
+            sticky_session_routing=_session.sticky_session_routing,
         )
         self.guardrail_provider = GUARDRAIL_PROVIDER
         self.guardrail_id = guardrail_id
-        self.bias_threshold = bias_threshold
-        self.hallucination_threshold = hallucination_threshold
-        self.risk_flag_threshold = risk_flag_threshold
-        self.risk_block_threshold = risk_block_threshold
-        self.block_on_high_risk = block_on_high_risk
-        self.log_only = log_only
-        self.check_request = check_request
-        self.check_response = check_response
-        self.violation_message = violation_message
+        self.bias_threshold = _thresholds.bias_threshold
+        self.hallucination_threshold = _thresholds.hallucination_threshold
+        self.risk_flag_threshold = _thresholds.flag_threshold
+        self.risk_block_threshold = _thresholds.block_threshold
+        self.block_on_high_risk = _behavior.block_on_high_risk
+        self.log_only = _behavior.log_only
+        self.check_request = _behavior.check_request
+        self.check_response = _behavior.check_response
+        self.violation_message = _behavior.violation_message
         self.bias_detector = BiasDetector()
         self.hallucination_detector = HallucinationDetector()
-        self.risk_scorer = RiskScorer(
-            bias_weight=bias_weight,
-            hallucination_weight=hallucination_weight,
-            bias_threshold=bias_threshold,
-            hallucination_threshold=hallucination_threshold,
-            flag_threshold=risk_flag_threshold,
-            block_threshold=risk_block_threshold,
-        )
+        self.risk_scorer = RiskScorer(thresholds=_thresholds, weights=_weights)
 
     @log_guardrail_information
     async def apply_guardrail(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Literal
 
 from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator import (
@@ -10,23 +11,39 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bias_hallucination_estimator
 )
 
 
+@dataclass
+class RiskThresholds:
+    """Thresholds used to classify risk levels."""
+
+    bias_threshold: float = 0.5
+    hallucination_threshold: float = 0.5
+    flag_threshold: float = 0.25
+    block_threshold: float = 0.5
+
+
+@dataclass
+class RiskWeights:
+    """Weights applied when computing the combined risk score."""
+
+    bias_weight: float = 0.4
+    hallucination_weight: float = 0.6
+
+
 class RiskScorer:
     def __init__(
         self,
         *,
-        bias_weight: float = 0.4,
-        hallucination_weight: float = 0.6,
-        bias_threshold: float = 0.5,
-        hallucination_threshold: float = 0.5,
-        flag_threshold: float = 0.25,
-        block_threshold: float = 0.5,
+        thresholds: RiskThresholds | None = None,
+        weights: RiskWeights | None = None,
     ) -> None:
-        self.bias_weight = bias_weight
-        self.hallucination_weight = hallucination_weight
-        self.bias_threshold = bias_threshold
-        self.hallucination_threshold = hallucination_threshold
-        self.flag_threshold = flag_threshold
-        self.block_threshold = block_threshold
+        _thresholds = thresholds or RiskThresholds()
+        _weights = weights or RiskWeights()
+        self.bias_weight = _weights.bias_weight
+        self.hallucination_weight = _weights.hallucination_weight
+        self.bias_threshold = _thresholds.bias_threshold
+        self.hallucination_threshold = _thresholds.hallucination_threshold
+        self.flag_threshold = _thresholds.flag_threshold
+        self.block_threshold = _thresholds.block_threshold
 
     def compute_risk(
         self,
