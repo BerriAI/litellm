@@ -301,11 +301,11 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
 @pytest.mark.parametrize(
     "model, messages, expect_unsupported_params_error",
     [
-        # Bedrock Converse still requires modify_params to inject the dummy tool.
+        # Bedrock Converse neutralizes orphaned tool blocks to text; no error.
         (
             "anthropic.claude-3-sonnet-20240229-v1:0",
             _PARALLEL_TOOL_HISTORY_MESSAGES,
-            True,
+            False,
         ),
         # Anthropic Messages API: dummy tool is injected without modify_params.
         (
@@ -341,12 +341,12 @@ def test_parallel_function_call_anthropic_error_msg(
     """
     Tool history without an explicit ``tools`` param:
 
-    - Bedrock **Converse** still raises ``UnsupportedParamsError`` unless
-      ``litellm.modify_params`` is enabled (dummy tool is only added there).
+    - Bedrock **Converse** neutralizes the orphaned tool blocks into plain text
+      and sends no ``toolConfig`` (see #24158, #27138). It no longer raises.
     - **Anthropic** (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
       always get a dummy tool so CLIs work with ``modify_params`` left off.
 
-    Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
+    Reference Issue: https://github.com/BerriAI/litellm/issues/24158, https://github.com/BerriAI/litellm/issues/27138
     """
     # Ensure modify_params is False so Bedrock Converse path still raises.
     # (other tests in this file set it to True and don't reset it)
