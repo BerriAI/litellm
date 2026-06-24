@@ -152,8 +152,9 @@ curl -X POST https://api.render.com/v1/services \
 # LITELLM_CONFIG_PATH=/app/config.yaml
 ```
 
-Health check path **must** be `/health/readiness`. `autoDeploy` is off by default
-in the blueprint — trigger deploys manually (or flip it on) to pick up new commits.
+Health check path **must** be `/health/readiness`. The blueprint sets
+`autoDeployTrigger: off`, so deploys are manual — trigger them in the dashboard /
+API (or set it to `commit` / `checksPass`) to pick up new commits.
 
 ## Scaling
 
