@@ -9,8 +9,8 @@
 //! Layering: this stays in `providers` (axum-free) next to the dial/splice it
 //! reuses. The gateway holds an `Arc<RealtimePool>` in its state and asks for a
 //! warm socket per connect; on a miss it fresh-dials exactly as before. The pool
-//! is a latency optimization, never a correctness dependency — see
-//! `REALTIME_POOL_DESIGN.md`.
+//! is a latency optimization, never a correctness dependency — see the gateway's
+//! `src/routes/realtime/README.md`.
 //!
 //! ## Caveats (enforced here)
 //! - One warm socket serves exactly one session (realtime isn't multiplexed), so
