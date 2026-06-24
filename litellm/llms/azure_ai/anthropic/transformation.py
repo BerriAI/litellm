@@ -3,8 +3,12 @@ Azure Anthropic transformation config - extends AnthropicConfig with Azure authe
 """
 
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
+
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.output_params_utils import (
+    sanitize_azure_anthropic_output_params,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
@@ -138,8 +142,6 @@ class AzureAnthropicConfig(AnthropicConfig):
         data.pop("max_retries", None)
         data.pop("stream_options", None)
 
-        # Azure AI Foundry Haiku models reject output_config.effort with 400
-        if "haiku" in model.lower():
-            data.pop("output_config", None)
+        sanitize_azure_anthropic_output_params(data, model)
 
         return data

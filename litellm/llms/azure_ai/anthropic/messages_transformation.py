@@ -8,6 +8,9 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.output_params_utils import (
+    sanitize_azure_anthropic_output_params,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -167,7 +170,5 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)
-        # Azure AI Foundry Haiku models reject output_config.effort with 400
-        if "haiku" in model.lower():
-            anthropic_messages_request.pop("output_config", None)
+        sanitize_azure_anthropic_output_params(anthropic_messages_request, model)
         return anthropic_messages_request

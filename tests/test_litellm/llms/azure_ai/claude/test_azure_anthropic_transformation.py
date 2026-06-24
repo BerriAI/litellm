@@ -242,11 +242,9 @@ class TestAzureAnthropicConfig:
         assert result["max_tokens"] == 100
         assert "messages" in result
 
-    def test_transform_request_strips_output_config_for_haiku_4_5(self):
-        """Regression test: Azure AI Foundry rejects output_config.effort for Haiku 4.5.
+    def test_transform_request_strips_output_config_effort_for_unsupported_model(self):
+        """Regression test: Azure AI Foundry returns 400 when output_config.effort is forwarded to a model without supports_output_config in the model map (e.g. Haiku 4.5).
 
-        Azure returns 400 {"type":"invalid_request_error","message":"This model does not
-        support the effort parameter."} when output_config is forwarded unchanged.
         See: https://github.com/BerriAI/litellm/issues/27168
         """
         config = AzureAnthropicConfig()
@@ -280,8 +278,8 @@ class TestAzureAnthropicConfig:
         assert result["model"] == "claude-haiku-4-5"
         assert result["max_tokens"] == 100
 
-    def test_transform_request_preserves_output_config_for_non_haiku(self):
-        """output_config must NOT be stripped for non-Haiku Azure AI models."""
+    def test_transform_request_preserves_output_config_for_supported_model(self):
+        """output_config must be forwarded for models that advertise supports_output_config (e.g. Sonnet 4.6+)."""
         config = AzureAnthropicConfig()
 
         messages = [{"role": "user", "content": "Hello"}]

@@ -287,15 +287,13 @@ class TestAzureAnthropicMessagesConfig:
             result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
         )
 
-    def test_transform_anthropic_messages_request_strips_output_config(self):
-        """Regression test: Azure AI Foundry rejects output_config.effort for Haiku 4.5.
+    def test_transform_anthropic_messages_request_strips_output_config_effort_for_unsupported_model(
+        self,
+    ):
+        """Regression: output_config.effort forwarded via /anthropic/v1/messages to a model without supports_output_config causes 400 on Azure AI Foundry.
 
-        When a request enters via /anthropic/v1/messages (e.g. Claude Code with
-        ANTHROPIC_BASE_URL set) and includes output_config.effort, Azure AI returns:
-          400 {"type":"invalid_request_error","message":"This model does not support
-          the effort parameter."}
         additional_drop_params does not suppress this because it operates on the
-        OpenAI→provider translation layer, not on the Anthropic pass-through path.
+        OpenAI->provider translation layer, not on the Anthropic pass-through path.
         See: https://github.com/BerriAI/litellm/issues/27168
         """
         config = AzureAnthropicMessagesConfig()
@@ -319,10 +317,10 @@ class TestAzureAnthropicMessagesConfig:
         assert "output_config" not in result
         assert result["max_tokens"] == 1024
 
-    def test_transform_anthropic_messages_request_preserves_output_config_for_non_haiku(
+    def test_transform_anthropic_messages_request_preserves_output_config_for_supported_model(
         self,
     ):
-        """output_config must NOT be stripped for non-Haiku Azure AI models."""
+        """output_config must be forwarded for models that advertise supports_output_config (e.g. Sonnet 4.6+)."""
         config = AzureAnthropicMessagesConfig()
         model = "claude-sonnet-4-6"
         messages = [{"role": "user", "content": "Hello"}]
