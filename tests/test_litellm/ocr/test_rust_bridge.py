@@ -3,6 +3,7 @@
 import importlib
 import sys
 import types
+from typing import Any
 
 import httpx
 import pytest
@@ -17,9 +18,12 @@ ocr_main = importlib.import_module("litellm.ocr.main")
 rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
 
 MODEL = "mistral/mistral-ocr-latest"
-DOCUMENT = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
+DOCUMENT: dict[str, object] = {
+    "type": "document_url",
+    "document_url": "https://example.com/doc.pdf",
+}
 
-FAKE_OCR_RESPONSE = {
+FAKE_OCR_RESPONSE: dict[str, object] = {
     "pages": [{"index": 0, "markdown": "hello world"}],
     "model": "mistral-ocr-2505-completion",
     "document_annotation": None,
@@ -31,20 +35,20 @@ FAKE_OCR_RESPONSE = {
 class RecordingBridge:
     """A fake ``RustOcr`` callable that records the args it was handed."""
 
-    def __init__(self):
-        self.calls = []
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
 
     def __call__(
         self,
-        model,
-        document,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        optional_params,
-        timeout_seconds,
-    ):
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
         self.calls.append(
             {
                 "model": model,
@@ -63,20 +67,20 @@ class RecordingBridge:
 class RecordingAsyncBridge:
     """A fake async ``RustAocr`` callable that records the args it was handed."""
 
-    def __init__(self):
-        self.calls = []
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
 
     async def __call__(
         self,
-        model,
-        document,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        optional_params,
-        timeout_seconds,
-    ):
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
         self.calls.append(
             {
                 "model": model,
@@ -95,10 +99,16 @@ class RecordingAsyncBridge:
 class RecordingLogging:
     """A spy standing in for ``LiteLLMLoggingObj`` to capture ``pre_call``."""
 
-    def __init__(self):
-        self.pre_call_kwargs = None
+    def __init__(self) -> None:
+        self.pre_call_kwargs: dict[str, object] | None = None
 
-    def pre_call(self, *, input, api_key, additional_args):
+    def pre_call(
+        self,
+        *,
+        input: str,
+        api_key: str | None,
+        additional_args: dict[str, object],
+    ) -> None:
         self.pre_call_kwargs = {
             "input": input,
             "api_key": api_key,
@@ -109,35 +119,48 @@ class RecordingLogging:
 class FakeOCRConfig:
     """A stand-in ``BaseOCRConfig`` that echoes the request it would build."""
 
-    def __init__(self, api_key_env_var="MISTRAL_API_KEY"):
+    def __init__(self, api_key_env_var: str = "MISTRAL_API_KEY") -> None:
         self.api_key_env_var = api_key_env_var
 
-    def get_api_key_env_var(self):
+    def get_api_key_env_var(self) -> str:
         return self.api_key_env_var
 
     def validate_environment(
-        self, *, headers, model, api_key, api_base, litellm_params
-    ):
+        self,
+        *,
+        headers: dict[str, object],
+        model: str,
+        api_key: str | None,
+        api_base: str | None,
+        litellm_params: dict[str, object],
+    ) -> dict[str, object]:
         return {"Authorization": f"Bearer {api_key}", **headers}
 
-    def get_complete_url(self, *, api_base, model, optional_params, litellm_params):
+    def get_complete_url(
+        self,
+        *,
+        api_base: str | None,
+        model: str,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+    ) -> str:
         return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
 
 
 def build_prepared_request(
     *,
-    logging_obj=None,
-    provider_config=None,
-    model="mistral-ocr-latest",
-    document=DOCUMENT,
-    api_key="sk-test",
-    api_base=None,
-    custom_llm_provider="mistral",
-    extra_headers=None,
-    optional_params=None,
-    litellm_params=None,
-    timeout=12.5,
-):
+    logging_obj: RecordingLogging | None = None,
+    provider_config: FakeOCRConfig | None = None,
+    model: str = "mistral-ocr-latest",
+    document: dict[str, object] = DOCUMENT,
+    api_key: str | None = "sk-test",
+    api_base: str | None = None,
+    custom_llm_provider: str = "mistral",
+    extra_headers: dict[str, object] | None = None,
+    optional_params: dict[str, object] | None = None,
+    litellm_params: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = 12.5,
+) -> Any:
     return ocr_main._PreparedOCRRequest(
         model=model,
         document=document,

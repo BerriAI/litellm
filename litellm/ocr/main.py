@@ -37,7 +37,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 @dataclass
 class _PreparedOCRRequest:
     model: str
-    document: dict[str, object]
+    document: dict[str, Any]
     api_key: Optional[str]
     api_base: Optional[str]
     custom_llm_provider: str
@@ -80,7 +80,7 @@ def _prepare_ocr_request(
     timeout: Optional[Union[float, httpx.Timeout]],
     custom_llm_provider: Optional[str],
     extra_headers: Optional[dict[str, Any]],
-    kwargs: dict[str, object],
+    kwargs: dict[str, Any],
 ) -> _PreparedOCRRequest:
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
     litellm_call_id = cast(Optional[str], kwargs.get("litellm_call_id", None))
@@ -160,7 +160,7 @@ def _prepare_ocr_request(
 
     return _PreparedOCRRequest(
         model=model,
-        document=cast(dict[str, object], document),
+        document=document,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
@@ -235,7 +235,7 @@ def _run_rust_ocr(
     return OCRResponse.model_validate(
         rust_ocr(
             model=prepared_request.model,
-            document=prepared_request.document,
+            document=cast(dict[str, object], prepared_request.document),
             api_key=prepared.api_key,
             api_base=prepared_request.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
@@ -258,7 +258,7 @@ async def _run_rust_aocr(
     return OCRResponse.model_validate(
         await rust_aocr(
             model=prepared_request.model,
-            document=prepared_request.document,
+            document=cast(dict[str, object], prepared_request.document),
             api_key=prepared.api_key,
             api_base=prepared_request.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
