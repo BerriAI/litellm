@@ -54,6 +54,10 @@ fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
 ///
 /// Generic over the client transport (typed events) so this crate stays
 /// framework-agnostic; the gateway adapts its axum socket to these.
+///
+/// `observe` is invoked on **upstream→client** events only (the trusted side that
+/// carries `session.created` and `response.done` usage) — never on client events,
+/// so a client cannot fabricate usage into its own logs.
 pub async fn realtime<In, Out>(
     model: &str,
     api_key: Option<&str>,
@@ -100,7 +104,10 @@ where
             // client -> upstream
             client_event = client_in.next() => {
                 let Some(event) = client_event else { break }; // client disconnected
-                observe(&event);
+                // NOTE: do NOT observe client events. session.created / response.done
+                // (carrying usage) are server→client events; observing the client arm
+                // would let an authenticated client POST a fabricated response.done and
+                // inflate its own spend log. Logging observes upstream events only.
                 for outbound in config.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
