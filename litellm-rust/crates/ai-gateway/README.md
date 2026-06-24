@@ -78,9 +78,9 @@ stand-in only for the leanest possible build.
 The gateway runs no spend logic. When a session ends it builds one
 `StandardLoggingPayload` and POSTs it to `{LITELLM_PROXY_BASE_URL}/v1/callbacks/logs`
 (admin-only, bearer = `LITELLM_MASTER_KEY`), and the proxy replays it through its
-normal callbacks (spend logs, Langfuse, …). The POST is non-blocking — a bounded
+normal callbacks (spend logs, Langfuse, etc.). The POST is non-blocking: a bounded
 channel drained by a background worker, dropping with a counter if the proxy is
-down — and sends one payload per session. Both env vars are in the table above.
+down. It sends one payload per session. Both env vars are in the table above.
 
 Worker tuning, rarely needed: `LITELLM_LOG_CHANNEL_CAPACITY` (4096),
 `LITELLM_LOG_BATCH_SIZE` (256), `LITELLM_LOG_FLUSH_INTERVAL_MS` (500).
