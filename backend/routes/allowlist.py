@@ -83,8 +83,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Callbacks / hooks
     "/active/callbacks",
     "/callbacks",
-    "/v1/callbacks/",
     "/team_callback",
+    # Rust data-plane gateway → proxy control-plane API (logging today, auth later)
+    "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
     "/email/",

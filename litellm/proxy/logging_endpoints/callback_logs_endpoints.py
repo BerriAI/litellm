@@ -31,7 +31,12 @@ from litellm.types.proxy.callback_logs_endpoints import (
     CallbackLogsResponse,
 )
 
-router = APIRouter()
+# Routes the Python proxy exposes for the Rust data-plane gateway to call into
+# (logging today; auth/budgets later). Namespaced under /v1/rust_control_plane so
+# they're clearly distinct from the proxy's own control-plane/management routes.
+rust_control_plane_router = APIRouter(
+    prefix="/v1/rust_control_plane", tags=["rust control plane"]
+)
 
 
 class CallbackLogsReplayer:
@@ -180,9 +185,8 @@ class CallbackLogsReplayer:
         )
 
 
-@router.post(
-    "/v1/callbacks/logs",
-    tags=["logging"],
+@rust_control_plane_router.post(
+    "/logs",
     dependencies=[Depends(user_api_key_auth)],
 )
 async def ingest_callback_logs(
@@ -198,7 +202,7 @@ async def ingest_callback_logs(
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
-            detail="/v1/callbacks/logs is admin-only (proxy admin key required).",
+            detail="/v1/rust_control_plane/logs is admin-only (proxy admin key required).",
         )
 
     return await CallbackLogsReplayer().replay_batch(body.records)
