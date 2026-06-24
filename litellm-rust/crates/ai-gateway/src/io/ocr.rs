@@ -12,8 +12,8 @@ use litellm_core::ocr::transformation::OcrProviderConfig;
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
-use crate::mistral::ocr::transformation as mistral;
-use crate::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use litellm_core::providers::mistral::ocr::transformation as mistral;
+use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
 /// OCR over large documents can take a while; bound it generously rather than
 /// hanging forever on an unresponsive upstream. The client-level limit is the

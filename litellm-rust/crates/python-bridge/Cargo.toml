@@ -11,6 +11,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 litellm-core.workspace = true
-litellm-providers.workspace = true
+litellm-ai-gateway = { workspace = true, default-features = false }
 pyo3 = { workspace = true, features = ["extension-module"] }
 serde_json.workspace = true

@@ -6,7 +6,7 @@
 //! sockets **already connected and already past `session.created`** so a connect
 //! can be served from a warm socket and the handshake is off the critical path.
 //!
-//! Layering: this stays in `providers` (axum-free) next to the dial/splice it
+//! Layering: this lives in the gateway's `io` module next to the dial/splice it
 //! reuses. The gateway holds an `Arc<RealtimePool>` in its state and asks for a
 //! warm socket per connect; on a miss it fresh-dials exactly as before. The pool
 //! is a latency optimization, never a correctness dependency — see the gateway's
@@ -31,7 +31,7 @@ use futures_util::StreamExt;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::CoreResult;
 
-use crate::realtime::{
+use crate::io::realtime::{
     dial_upstream, read_event, resolve_api_key, UpstreamRx, UpstreamTx, UpstreamWs,
 };
 

@@ -1,13 +1,13 @@
 //! End-to-end OpenAI realtime invocation.
 //!
-//! The host-facing entry point, mirroring `providers::ocr::run_ocr`: open the
+//! The host-facing entry point, mirroring `crate::io::ocr::run_ocr`: open the
 //! WebSocket to OpenAI, then splice a client realtime stream to the upstream,
 //! driving typed events through the pure `OPENAI_REALTIME_CONFIG` transforms.
 //! Network, auth header, key resolution, and wire (de)serialization live here so
 //! the `transformation` module stays pure and typed.
 //!
 //! The dial and splice steps are factored out ([`dial_upstream`], [`splice`]) so
-//! the connection pool ([`crate::realtime_pool`]) can pre-establish an upstream,
+//! the connection pool ([`crate::io::realtime_pool`]) can pre-establish an upstream,
 //! buffer its `session.created`, and later hand the live socket to the same
 //! splice loop a fresh dial uses.
 
@@ -26,7 +26,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
-use crate::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
+use litellm_core::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -235,12 +235,12 @@ where
     .await
 }
 
-/// Splice a pre-warmed upstream (taken from [`crate::realtime_pool`]) to the
+/// Splice a pre-warmed upstream (taken from [`crate::io::realtime_pool`]) to the
 /// client. Relays the buffered `session.created` first, then splices exactly like
 /// the fresh-dial path — so a warm session is indistinguishable from a fresh one.
 pub async fn realtime_warm<In, Out>(
     model: &str,
-    handoff: crate::realtime_pool::WarmHandoff,
+    handoff: crate::io::realtime_pool::WarmHandoff,
     idle_timeout: Option<Duration>,
     client_in: In,
     client_out: Out,
@@ -281,7 +281,7 @@ mod tests {
 
     /// Live end-to-end check against OpenAI. Ignored by default (CI never runs
     /// it); run explicitly with `OPENAI_API_KEY` set:
-    ///   `cargo test -p litellm-providers realtime_invokes_openai -- --ignored --nocapture`
+    ///   `cargo test -p litellm-ai-gateway --features server realtime_invokes_openai -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "hits the live OpenAI realtime API; needs OPENAI_API_KEY"]
     async fn realtime_invokes_openai_and_responds() {
