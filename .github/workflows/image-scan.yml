@@ -1,0 +1,80 @@
+name: Image Scan
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+    paths:
+      - Dockerfile
+      - docker/Dockerfile.database
+      - docker/Dockerfile.non_root
+      - migrations/Dockerfile
+      - backend/Dockerfile
+      - gateway/Dockerfile
+      - uv.lock
+      - ui/litellm-dashboard/package-lock.json
+      - .github/workflows/image-scan.yml
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image-scan:
+    name: image-scan (${{ matrix.dockerfile }})
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - Dockerfile
+          - docker/Dockerfile.database
+          - docker/Dockerfile.non_root
+          - migrations/Dockerfile
+          - backend/Dockerfile
+          - gateway/Dockerfile
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Download Grype v0.114.0
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/grype.tar.gz" \
+            https://github.com/anchore/grype/releases/download/v0.114.0/grype_0.114.0_linux_amd64.tar.gz
+          echo "edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343  $RUNNER_TEMP/grype.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/grype.tar.gz" -C "$RUNNER_TEMP" grype
+          chmod +x "$RUNNER_TEMP/grype"
+
+      - name: Build image (${{ matrix.dockerfile }})
+        run: |
+          tag="litellm-image-scan-$(echo '${{ matrix.dockerfile }}' | tr '/.' '--' | tr 'A-Z' 'a-z'):${{ github.sha }}"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          docker build -f '${{ matrix.dockerfile }}' -t "$tag" .
+
+      # Scans the whole shipped artifact: OS/apk plus every language package
+      # baked into the image, including ones no lockfile declares (e.g. prisma's
+      # vendored node engine) that osv-scan cannot see. osv-scan stays the fast
+      # source-level gate; this is the customer's-eye-view backstop. Credential-
+      # free OSS, run as a pinned, checksum-verified binary; no GitHub Action
+      # dependency and no vendor SaaS callout.
+      - name: Scan image for fixable HIGH/CRITICAL CVEs
+        run: |
+          "$RUNNER_TEMP/grype" "$TAG" \
+            --only-fixed \
+            --fail-on high \
+            --output table
