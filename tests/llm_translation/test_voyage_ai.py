@@ -143,6 +143,7 @@ class TestVoyageContextualEmbeddings:
 
         # Test contextual model detection
         assert config.is_contextualized_embeddings("voyage-context-3") is True
+        assert config.is_contextualized_embeddings("voyage-context-4") is True
         assert config.is_contextualized_embeddings("voyage-context-2") is True
         assert config.is_contextualized_embeddings("context-model") is True
 
@@ -432,3 +433,14 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+    def test_contextual_embedding_model_registry(self):
+        """voyage-context-4 must be registered with contextual embedding config"""
+        model_info = litellm.get_model_info(
+            model="voyage/voyage-context-4", custom_llm_provider="voyage"
+        )
+
+        assert model_info["litellm_provider"] == "voyage"
+        assert model_info["mode"] == "embedding"
+        assert model_info["max_input_tokens"] == 120000
+        assert model_info["input_cost_per_token"] == 1.2e-07
