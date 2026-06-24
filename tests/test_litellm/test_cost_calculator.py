@@ -20,7 +20,11 @@ from litellm.cost_calculator import (
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
-from litellm.utils import TranscriptionResponse
+from litellm.utils import (
+    TranscriptionResponse,
+    _invalidate_model_cost_lowercase_map,
+    get_max_tokens,
+)
 
 
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
@@ -39,6 +43,52 @@ def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     )
 
     assert prompt_usd + completion_usd > 0
+
+
+def test_cost_per_token_unmapped_mistral_raises_model_not_mapped_error(monkeypatch):
+    """
+    Users should be able to catch unmapped-model cost lookups without string
+    matching a generic exception.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+
+    with pytest.raises(litellm.ModelNotMappedError) as exc_info:
+        cost_per_token(
+            model="definitely-unmapped-mistral-model",
+            prompt_tokens=100,
+            completion_tokens=100,
+            custom_llm_provider="mistral",
+        )
+
+    assert isinstance(exc_info.value, ValueError)
+    assert exc_info.value.model == "definitely-unmapped-mistral-model"
+    assert exc_info.value.llm_provider == "mistral"
+    assert "This model isn't mapped yet" in str(exc_info.value)
+
+
+def test_get_max_tokens_preserves_model_not_mapped_error(monkeypatch):
+    """
+    get_max_tokens should not re-wrap typed mapping errors from inner helpers,
+    so callers can inspect the original provider.
+    """
+
+    def mock_get_llm_provider(*args, **kwargs):
+        raise litellm.ModelNotMappedError(
+            "This model isn't mapped yet.",
+            model="provider/model-name",
+            llm_provider="test-provider",
+        )
+
+    monkeypatch.setattr(litellm, "model_cost", {})
+    monkeypatch.setattr("litellm.utils.get_llm_provider", mock_get_llm_provider)
+
+    with pytest.raises(litellm.ModelNotMappedError) as exc_info:
+        get_max_tokens("provider/model-name")
+
+    assert exc_info.value.model == "provider/model-name"
+    assert exc_info.value.llm_provider == "test-provider"
 
 
 def test_cost_per_token_non_string_model_does_not_hang():

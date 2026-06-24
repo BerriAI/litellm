@@ -292,6 +292,19 @@ class ImageFetchError(BadRequestError):
         )
 
 
+class ModelNotMappedError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        model: Optional[str] = None,
+        llm_provider: Optional[str] = None,
+    ):
+        self.message = "litellm.ModelNotMappedError: {}".format(message)
+        self.model = model
+        self.llm_provider = llm_provider
+        super().__init__(self.message)
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
     def __init__(
         self,
@@ -965,6 +978,7 @@ LITELLM_EXCEPTION_TYPES = [
     AuthenticationError,
     NotFoundError,
     BadRequestError,
+    ModelNotMappedError,
     UnprocessableEntityError,
     UnsupportedParamsError,
     Timeout,

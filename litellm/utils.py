@@ -410,6 +410,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    ModelNotMappedError,
     NotFoundError,
     OpenAIError,
     PermissionDeniedError,
@@ -5442,7 +5443,7 @@ def get_max_tokens(model: str) -> Optional[int]:
         int: The maximum number of tokens allowed for the given model.
 
     Raises:
-        Exception: If the model is not mapped yet.
+        ModelNotMappedError: If the model is not mapped yet.
 
     Example:
         >>> get_max_tokens("gpt-4")
@@ -5487,9 +5488,13 @@ def get_max_tokens(model: str) -> Optional[int]:
         else:
             raise Exception()
         return None
+    except ModelNotMappedError:
+        raise
     except Exception:
-        raise Exception(
-            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+        raise ModelNotMappedError(
+            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+            model=model,
+            llm_provider=None,
         )
 
 
@@ -5994,8 +5999,10 @@ def _get_model_info_helper(
                         _model_info = None
 
             if _model_info is None or key is None:
-                raise ValueError(
-                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                raise ModelNotMappedError(
+                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+                    model=model,
+                    llm_provider=custom_llm_provider,
                 )
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
@@ -6238,13 +6245,17 @@ def _get_model_info_helper(
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
             )
+    except ModelNotMappedError:
+        raise
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
-        raise Exception(
+        raise ModelNotMappedError(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider
-            )
-        )
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        ) from e
 
 
 def _build_model_info(
