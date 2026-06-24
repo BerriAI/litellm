@@ -18,6 +18,10 @@ services:
     dockerContext: .
     healthCheckPath: /health/readiness
     numInstances: 1
+    # Deploy manually (or via API) — don't rebuild the image on every commit. The
+    # Rust + Python multi-stage build is slow, so opt out of commit-triggered
+    # deploys explicitly rather than relying on Render's default.
+    autoDeployTrigger: off
     envVars:
       # The gateway loads its model_list from this config.yaml via the embedded
       # python config reader. The image bakes a default config at /app/config.yaml;
