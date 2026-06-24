@@ -5,7 +5,7 @@
 //! with the GIL released (via the bridge's [`crate::gil`] chokepoint), keeping
 //! the proxy event loop responsive while Rust does the regex work.
 
-use litellm_ai_gateway::io::guardrails::{run_guardrail, Unsupported};
+use litellm_ai_gateway::io::guardrails::{config_supported, run_guardrail, Unsupported};
 use litellm_core::guardrails::{
     GuardrailInput, GuardrailStatus, InputType, LiteralTerm, LocalPiiConfig, LocalPiiEngine,
     RegexTerm, RequestContext, Scanner, Verdict,
@@ -73,6 +73,16 @@ fn apply_guardrail(py: Python<'_>, request_json: String) -> PyResult<String> {
         }
         Err(Unsupported(reason)) => Err(GuardrailUnsupported::new_err(reason)),
     }
+}
+
+/// Whether the Rust engine can handle this guardrail type and params. Called at
+/// init time so Python can register the Rust path only when it applies and fall
+/// back to the Python guardrail otherwise.
+#[pyfunction]
+fn guardrail_config_supported(guardrail_type: &str, params_json: &str) -> PyResult<bool> {
+    let params: serde_json::Value = serde_json::from_str(params_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid guardrail params JSON: {e}")))?;
+    Ok(config_supported(guardrail_type, &params))
 }
 
 #[derive(Deserialize)]
@@ -158,6 +168,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ContentScanner>()?;
     module.add_class::<PiiEngine>()?;
     module.add_function(wrap_pyfunction!(apply_guardrail, module)?)?;
+    module.add_function(wrap_pyfunction!(guardrail_config_supported, module)?)?;
     module.add(
         "GuardrailUnsupported",
         module.py().get_type::<GuardrailUnsupported>(),

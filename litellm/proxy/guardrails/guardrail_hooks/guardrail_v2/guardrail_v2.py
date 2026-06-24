@@ -1,8 +1,6 @@
+import asyncio
 import json
-import os
-from typing import TYPE_CHECKING, Literal, Optional
-
-from litellm.proxy.guardrails import _rust  # type: ignore[attr-defined]
+from typing import TYPE_CHECKING, Callable, Literal, Optional
 
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException
@@ -15,7 +13,23 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.guardrails import LitellmParams
+
+
+def _load_bridge():
+    """Return the compiled litellm_python_bridge module, or raise ImportError when
+    the optional extension is not installed so callers can fall back to Python."""
+    import litellm_python_bridge
+
+    return litellm_python_bridge
+
+
+def config_supported(guardrail_type: str, params: dict) -> bool:
+    """Whether the Rust engine can handle this guardrail type and params. Raises
+    ImportError when the extension is absent."""
+    bridge = _load_bridge()
+    return bridge.guardrail_config_supported(
+        guardrail_type, json.dumps(params, default=str)
+    )
 
 
 def _extract_raw_headers(
@@ -67,13 +81,7 @@ def _extract_user_metadata(request_data: dict) -> dict:
     return out
 
 
-def _resolve_secret(value: Optional[str]) -> Optional[str]:
-    if value and value.startswith("os.environ/"):
-        return os.environ.get(value.removeprefix("os.environ/"))
-    return value
-
-
-def _get_optional_param(litellm_params: "LitellmParams", name: str) -> object:
+def _get_optional_param(litellm_params, name: str) -> object:
     """Read a guardrail param from optional_params, then litellm_params itself."""
     optional_params = getattr(litellm_params, "optional_params", None)
     if optional_params is not None:
@@ -83,183 +91,28 @@ def _get_optional_param(litellm_params: "LitellmParams", name: str) -> object:
     return getattr(litellm_params, name, None)
 
 
-def build_v2_config(
-    guardrail_type: str, litellm_params: "LitellmParams"
-) -> Optional[dict]:
-    """Map litellm_params to the engine ProviderConfig JSON for this guardrail type.
-
-    Returns None when the config uses features the Rust engine does not support
-    yet, in which case the caller must fall back to the Python implementation.
-    """
-    api_key = _resolve_secret(getattr(litellm_params, "api_key", None))
-    api_base = _resolve_secret(getattr(litellm_params, "api_base", None))
-
-    if guardrail_type == "generic_guardrail_api":
-        if not api_base:
-            return None
-        return {
-            "guardrail": guardrail_type,
-            "api_base": api_base,
-            "api_key": api_key,
-            "headers": getattr(litellm_params, "headers", None),
-            "additional_provider_specific_params": getattr(
-                litellm_params, "additional_provider_specific_params", None
-            )
-            or {},
-            "unreachable_fallback": getattr(
-                litellm_params, "unreachable_fallback", None
-            ),
-        }
-
-    if guardrail_type == "openai_moderation":
-        return {
-            "guardrail": guardrail_type,
-            "api_key": api_key or os.environ.get("OPENAI_API_KEY"),
-            "api_base": api_base,
-            "model": getattr(litellm_params, "model", None),
-        }
-
-    if guardrail_type == "azure/prompt_shield":
-        if not api_base:
-            return None
-        return {
-            "guardrail": guardrail_type,
-            "api_key": api_key,
-            "api_base": api_base,
-            "api_version": getattr(litellm_params, "api_version", None),
-        }
-
-    if guardrail_type == "azure/text_moderations":
-        if not api_base:
-            return None
-        severity_threshold = getattr(litellm_params, "severity_threshold", None)
-        by_category = (
-            getattr(litellm_params, "severity_threshold_by_category", None) or {}
-        )
-        return {
-            "guardrail": guardrail_type,
-            "api_key": api_key,
-            "api_base": api_base,
-            "api_version": getattr(litellm_params, "api_version", None),
-            "severity_threshold": (
-                int(severity_threshold) if severity_threshold is not None else None
-            ),
-            "severity_threshold_by_category": {
-                str(k): int(v) for k, v in by_category.items()
-            },
-            "categories": getattr(litellm_params, "categories", None),
-            "blocklist_names": getattr(litellm_params, "blocklistNames", None) or [],
-            "halt_on_blocklist_hit": bool(
-                getattr(litellm_params, "haltOnBlocklistHit", None)
-            ),
-            "output_type": getattr(litellm_params, "outputType", None),
-        }
-
-    if guardrail_type == "presidio":
-        if getattr(litellm_params, "output_parse_pii", None) or getattr(
-            litellm_params, "mock_redacted_text", None
-        ):
-            return None
-        analyzer_base = _resolve_secret(
-            getattr(litellm_params, "presidio_analyzer_api_base", None)
-        ) or os.environ.get("PRESIDIO_ANALYZER_API_BASE")
-        anonymizer_base = _resolve_secret(
-            getattr(litellm_params, "presidio_anonymizer_api_base", None)
-        ) or os.environ.get("PRESIDIO_ANONYMIZER_API_BASE")
-        if not analyzer_base:
-            return None
-
-        ad_hoc_recognizers = None
-        recognizers_path = getattr(litellm_params, "presidio_ad_hoc_recognizers", None)
-        if recognizers_path:
-            try:
-                with open(recognizers_path) as f:
-                    ad_hoc_recognizers = json.load(f).get("recognizers")
-            except (OSError, json.JSONDecodeError):
-                return None
-
-        return {
-            "guardrail": guardrail_type,
-            "presidio_analyzer_api_base": analyzer_base,
-            "presidio_anonymizer_api_base": anonymizer_base,
-            "pii_entities_config": getattr(litellm_params, "pii_entities_config", None)
-            or {},
-            "presidio_language": getattr(litellm_params, "presidio_language", None),
-            "presidio_score_thresholds": getattr(
-                litellm_params, "presidio_score_thresholds", None
-            )
-            or {},
-            "presidio_entities_deny_list": getattr(
-                litellm_params, "presidio_entities_deny_list", None
-            )
-            or [],
-            "presidio_ad_hoc_recognizers": ad_hoc_recognizers,
-        }
-
-    if guardrail_type == "lakera_v2":
-        return {
-            "guardrail": guardrail_type,
-            "api_key": api_key or os.environ.get("LAKERA_API_KEY"),
-            "api_base": api_base,
-            "project_id": getattr(litellm_params, "project_id", None),
-            "payload": getattr(litellm_params, "payload", None),
-            "breakdown": getattr(litellm_params, "breakdown", None),
-            "metadata": getattr(litellm_params, "metadata", None),
-            "dev_info": getattr(litellm_params, "dev_info", None),
-            "on_flagged": getattr(litellm_params, "on_flagged", None),
-        }
-
-    if guardrail_type == "bedrock":
-        unsupported = (
-            getattr(litellm_params, "aws_role_name", None),
-            getattr(litellm_params, "aws_profile_name", None),
-            getattr(litellm_params, "aws_web_identity_token", None),
-            getattr(litellm_params, "disable_exception_on_block", None),
-        )
-        if any(unsupported):
-            return None
-        identifier = getattr(litellm_params, "guardrailIdentifier", None)
-        version = getattr(litellm_params, "guardrailVersion", None)
-        if not identifier or not version:
-            return None
-        return {
-            "guardrail": guardrail_type,
-            "guardrailIdentifier": identifier,
-            "guardrailVersion": version,
-            "aws_region_name": getattr(litellm_params, "aws_region_name", None),
-            "aws_access_key_id": _resolve_secret(
-                getattr(litellm_params, "aws_access_key_id", None)
-            ),
-            "aws_secret_access_key": _resolve_secret(
-                getattr(litellm_params, "aws_secret_access_key", None)
-            ),
-            "aws_session_token": _resolve_secret(
-                getattr(litellm_params, "aws_session_token", None)
-            ),
-            "aws_bedrock_runtime_endpoint": getattr(
-                litellm_params, "aws_bedrock_runtime_endpoint", None
-            ),
-        }
-
-    return None
-
-
 class GuardrailV2(CustomGuardrail):
     def __init__(
         self,
-        engine_config: dict,
+        guardrail_type: str,
+        params: dict,
         extra_headers: Optional[list] = None,
         streaming_end_of_stream_only: Optional[bool] = None,
         streaming_sampling_rate: Optional[int] = None,
+        apply_guardrail_fn: Optional[Callable[[str], str]] = None,
         **kwargs: object,
     ):
-        self.engine_config = engine_config
+        self.guardrail_type = guardrail_type
+        # Raw guardrail params; the Rust engine builds the provider config from
+        # these per request (resolving secrets and files), so Python never builds
+        # or round-trips a provider config.
+        self.params = params
+        self._apply_guardrail_fn = apply_guardrail_fn
         self.extra_header_allowlist = [
             h for h in (extra_headers or []) if isinstance(h, str)
         ]
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook to
-        # drive streaming moderation; the apply call still routes to the Rust
-        # engine. Defaults match the Python moderation guardrail.
+        # drive streaming moderation. Defaults match the Python moderation guardrail.
         self.streaming_end_of_stream_only: bool = (
             False
             if streaming_end_of_stream_only is None
@@ -278,6 +131,11 @@ class GuardrailV2(CustomGuardrail):
 
         super().__init__(**kwargs)
 
+    def _apply(self, request_json: str) -> str:
+        if self._apply_guardrail_fn is not None:
+            return self._apply_guardrail_fn(request_json)
+        return _load_bridge().apply_guardrail(request_json)
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -289,8 +147,9 @@ class GuardrailV2(CustomGuardrail):
         request_body = (request_data or {}).get("body") or {}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
 
-        payload = {
-            "config": self.engine_config,
+        request = {
+            "guardrail_type": self.guardrail_type,
+            "params": self.params,
             "input": {
                 "texts": inputs.get("texts", []),
                 "images": inputs.get("images") or [],
@@ -319,30 +178,29 @@ class GuardrailV2(CustomGuardrail):
                 "litellm_version": litellm_version,
                 "extra_header_allowlist": self.extra_header_allowlist,
             },
-            "timeout_ms": 10000,
         }
 
-        result_json = await _rust.apply_guardrail(json.dumps(payload, default=str))
+        request_json = json.dumps(request, default=str)
+        # The engine releases the GIL during the provider call, so running it in a
+        # worker thread keeps the event loop responsive.
+        result_json = await asyncio.get_running_loop().run_in_executor(
+            None, self._apply, request_json
+        )
         result = json.loads(result_json)
         verdict = result.get("verdict", {})
         action = verdict.get("action")
 
         if action == "block":
             raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name
-                or self.engine_config.get("guardrail", "guardrail_v2"),
+                guardrail_name=self.guardrail_name or self.guardrail_type,
                 message=verdict.get("violation_message", "Content violates policy"),
                 should_wrap_with_default_message=False,
             )
 
+        out: GenericGuardrailAPIInputs = {}
+        out.update(inputs)
         if action == "mask":
-            out: GenericGuardrailAPIInputs = {}
-            out.update(inputs)
             masked = verdict.get("texts")
             if masked is not None:
                 out["texts"] = masked
-            return out
-
-        out = {}
-        out.update(inputs)
         return out

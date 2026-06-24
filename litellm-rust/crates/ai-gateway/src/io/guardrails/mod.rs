@@ -20,6 +20,12 @@ use litellm_core::guardrails::{
 
 pub use config_builder::Unsupported;
 
+/// Whether the Rust engine can build a config for this guardrail type and params
+/// (without running it). Used at init time to decide Rust vs Python routing.
+pub fn config_supported(guardrail_type: &str, params: &serde_json::Value) -> bool {
+    config_builder::build_config(guardrail_type, params).is_ok()
+}
+
 /// Build and run a guardrail end to end.
 ///
 /// `Err(Unsupported)` means the Rust engine cannot handle this config and the

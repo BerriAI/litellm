@@ -47,9 +47,9 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
     )
 
     try:
-        from litellm.proxy.guardrails import _rust  # noqa: F401
+        import litellm_python_bridge  # noqa: F401
     except ImportError:
-        pytest.skip("litellm guardrails _rust engine not built")
+        pytest.skip("litellm_python_bridge engine not built")
 
     from litellm.proxy.guardrails.guardrail_hooks.guardrail_v2.guardrail_v2 import (
         GuardrailV2,

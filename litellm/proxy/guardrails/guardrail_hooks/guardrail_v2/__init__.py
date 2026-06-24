@@ -15,7 +15,7 @@ _INITIALIZERS = "litellm.proxy.guardrails.guardrail_initializers"
 # initializer used as a fallback when the Rust wheel is not installed or the
 # config uses a feature Rust does not support yet (module_path, function_name).
 # This module is the single source of truth for routing these types; adding a
-# provider is one entry here plus a branch in build_v2_config.
+# provider is one entry here plus a branch in the Rust config_builder.
 _PYTHON_FALLBACKS: Dict[str, Tuple[str, str]] = {
     SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: (
         f"{_HOOKS}.generic_guardrail_api",
@@ -60,18 +60,24 @@ def _initialize_rust(
     import litellm
     from litellm._logging import verbose_proxy_logger
 
+    from .guardrail_v2 import GuardrailV2, _get_optional_param, config_supported
+
+    params = (
+        litellm_params.model_dump()
+        if hasattr(litellm_params, "model_dump")
+        else dict(litellm_params)
+    )
+
     try:
-        from .guardrail_v2 import GuardrailV2, _get_optional_param, build_v2_config
+        if not config_supported(guardrail_type, params):
+            return None
     except ImportError:
         # Rust engine not built/installed; fall back to the Python implementation.
         return None
 
-    engine_config = build_v2_config(guardrail_type, litellm_params)
-    if engine_config is None:
-        return None
-
     instance = GuardrailV2(
-        engine_config=engine_config,
+        guardrail_type=guardrail_type,
+        params=params,
         extra_headers=getattr(litellm_params, "extra_headers", None),
         streaming_end_of_stream_only=cast(
             Optional[bool],
