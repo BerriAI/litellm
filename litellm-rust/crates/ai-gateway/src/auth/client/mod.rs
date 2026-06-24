@@ -1,4 +1,13 @@
-//! The auth **swap seam**.
+//! `auth/client` — turn a raw API key into an authenticated identity.
+//!
+//! When a request presents a virtual key, the gateway needs to know two things:
+//! is the key valid, and who does it belong to. This module is the backend that
+//! answers that — given a key string, it returns a [`UserApiKeyAuth`] or rejects
+//! it. In v0 the answer comes from the Python control plane over HTTP
+//! ([`python::PythonAuthClient`]); the [`KeyAuthenticator`] trait lets that be
+//! swapped for a native Rust implementation later without touching callers.
+//!
+//! ## The swap seam
 //!
 //! [`KeyAuthenticator`] is the single trait the extractor depends on. v0 ships
 //! [`python::PythonAuthClient`], which delegates verification to the Python proxy
@@ -24,5 +33,8 @@ pub enum AuthError {
 /// backends implement; see the module docs for the swap rationale.
 #[axum::async_trait]
 pub trait KeyAuthenticator: Send + Sync {
-    async fn verify(&self, key: &str) -> Result<UserApiKeyAuth, AuthError>;
+    /// Resolve `key` for the given `route` (the gateway's own request path, e.g.
+    /// `/v1/realtime`). The route is forwarded so route/model restrictions on the
+    /// key are evaluated against the route it's actually being used on.
+    async fn verify(&self, key: &str, route: &str) -> Result<UserApiKeyAuth, AuthError>;
 }
