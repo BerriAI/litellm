@@ -1803,11 +1803,13 @@ def test_gemini_in_frame_usage_metadata_clears_pending_buffer():
     assert config._pending_usage_metadata is None
 
 
-def test_gemini_post_tool_bare_turn_complete_does_not_emit_spurious_response_done():
-    """After tool results, Gemini Live can emit a bare ``turnComplete`` with
-    usage but no model content before the follow-up answer stream. That must
-    not surface as an empty ``response.done`` or clients stop collecting before
-    the real answer arrives."""
+def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
+    """After a tool call, Gemini Live can emit a bare ``turnComplete`` (with
+    usage but no model content) before the follow-up answer stream. That bare
+    ``turnComplete`` may produce an extra ``response.done``; Pipecat is tolerant
+    of that because ``_process_completed_function_calls`` is idempotent (the
+    pending call queue is empty by the time the second ``response.done`` arrives).
+    The important thing is that the post-tool answer is correctly generated."""
     config = GeminiRealtimeConfig()
     logging_obj = MagicMock()
     logging_obj.litellm_trace_id = "trace_post_tool_bare_turn_complete"
@@ -1849,7 +1851,6 @@ def test_gemini_post_tool_bare_turn_complete_does_not_emit_spurious_response_don
         realtime_response_transform_input=base_input,
     )
     assert tool_result["response"][-1]["type"] == "response.done"
-    assert config._suppress_bare_turn_complete_done_after_tool_call is True
 
     bare_turn_complete = config.transform_realtime_response(
         json.dumps(
@@ -1874,6 +1875,9 @@ def test_gemini_post_tool_bare_turn_complete_does_not_emit_spurious_response_don
             "current_delta_type": tool_result["current_delta_type"],
         },
     )
+    # The bare turnComplete must not surface as a response.done because clients
+    # that use collect_until("response.done") would stop collecting prematurely
+    # before the real follow-up answer arrives.
     assert bare_turn_complete["response"] == []
 
     post_tool_answer = config.transform_realtime_response(
@@ -1913,7 +1917,6 @@ def test_gemini_post_tool_bare_turn_complete_does_not_emit_spurious_response_don
         if event["type"] == "response.output_audio_transcript.delta"
     )
     assert "72" in transcript_delta["delta"]
-    assert config._suppress_bare_turn_complete_done_after_tool_call is False
 
     final_turn = config.transform_realtime_response(
         json.dumps({"serverContent": {"turnComplete": True}}),
@@ -1935,4 +1938,3 @@ def test_gemini_post_tool_bare_turn_complete_does_not_emit_spurious_response_don
         if event["type"] == "response.done"
     )
     assert response_done["response"]["status"] == "completed"
-    assert config._suppress_bare_turn_complete_done_after_tool_call is False

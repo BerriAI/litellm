@@ -70,10 +70,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[
     "toolCall": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
 }
 
-# Top-level keys in a Gemini realtime message that map_openai_event knows how
-# to handle. Other keys (e.g. ``usageMetadata``) can appear alongside these as
-# siblings and must be skipped by the main transform loop — otherwise
-# map_openai_event raises ``ValueError`` and the WebSocket session terminates.
+# Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {
     map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
 }
@@ -89,29 +86,14 @@ _GEMINI_FLASH_LIVE_MODEL_MARKER = "flash-live"
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
-    # Cap the LRU of in-flight tool calls so long sessions with many tool
-    # calls don't grow the dict without bound. Sized large enough to cover
-    # bursts of pending tool responses; the oldest entry is evicted when a
-    # new call beyond the cap arrives.
-    _TOOL_CALL_ID_TO_NAME_MAX = 256
+    _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
     def __init__(self):
         super().__init__()
-        # Store call_id → function_name mapping for tool call round-trip
         self._tool_call_id_to_name: "OrderedDict[str, str]" = OrderedDict()
-        # Buffer ``usageMetadata`` that Gemini Live emits as a standalone
-        # frame (between turns) so the next ``response.done`` attributes the
-        # tokens consumed. Without this an authenticated client can drive
-        # tool-call or normal turns whose token usage is recorded as zero,
-        # bypassing spend and budget accounting.
+        # Gemini Live sometimes emits usageMetadata in a standalone frame between
+        # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: Optional[dict] = None
-        # After a tool-call ``response.done``, Gemini Live can emit a bare
-        # ``turnComplete`` (with ``usageMetadata`` but no model content) as
-        # soon as the client sends ``toolResponse``, before the model's
-        # follow-up answer stream starts. Suppress that orphan ``response.done``
-        # until the next model turn emits ``response.created``.
-        self._suppress_bare_turn_complete_done_after_tool_call: bool = False
-
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
@@ -599,11 +581,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         item = json_message.get("item", {})
         item_type = item.get("type")
 
-        # Handle function call output (tool response)
         if item_type == "function_call_output":
             return self._handle_function_call_output(item)
-
-        # Handle regular text content
         return self._handle_user_text_content(item)
 
     def _handle_function_call_output(self, item: dict) -> List[str]:
@@ -615,10 +594,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             f"Gemini Realtime: Transforming function_call_output for call_id={call_id}"
         )
 
-        # Parse the output to get the result. Gemini's
-        # functionResponses[].response field is a Struct, so it must be a
-        # dict; wrap any non-dict (primitives, lists, invalid JSON) under a
-        # `result` key.
+        # Gemini functionResponses[].response must be a dict; wrap non-dicts.
         try:
             parsed_output = json.loads(output) if isinstance(output, str) else output
         except json.JSONDecodeError:
@@ -629,11 +605,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             else {"result": parsed_output}
         )
 
-        # Look up the function name from stored mapping. Keep the entry so a
-        # client SDK that retries function_call_output (or sends it twice for
-        # the same tool call) still produces a Gemini toolResponse with the
-        # required ``name`` field; refresh the LRU position so an active
-        # call_id stays warm across long sessions.
+        # Keep the entry (don't delete) so retried tool responses still find the name.
         function_name = self._tool_call_id_to_name.get(call_id)
         if function_name:
             self._tool_call_id_to_name.move_to_end(call_id)
@@ -643,7 +615,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "This may cause Gemini to reject the response."
             )
 
-        # Build Gemini toolResponse format
         function_response: Dict[str, Any] = {"response": output_dict}
         if self._include_function_response_id() and call_id:
             function_response["id"] = call_id
@@ -668,7 +639,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if not text:
             return []
 
-        # Build clientContent message with turns (proper Gemini Live API format)
         client_content_message = {
             "clientContent": {
                 "turns": [{"role": "user", "parts": [{"text": text}]}],
@@ -697,21 +667,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         messages: List[str] = []
         msg_type = json_message.get("type")
 
-        ## HANDLE SESSION UPDATE — translate to Gemini setup ##
         if msg_type == "session.update":
             return self._handle_session_update(
                 json_message, model, session_configuration_request
             )
 
-        ## HANDLE response.create — Gemini responds automatically; nothing to forward ##
         if msg_type == "response.create":
-            return []
+            return []  # Gemini responds automatically; nothing to forward
 
-        ## HANDLE conversation.item.create — extract user text or function call output ##
         if msg_type == "conversation.item.create":
             return self._handle_conversation_item(json_message)
 
-        ## HANDLE INPUT AUDIO BUFFER - use realtimeInput for audio streaming ##
         if msg_type == "input_audio_buffer.append":
             realtime_input_dict["audio"] = HttpxBlobType(
                 mimeType=self.get_audio_mime_type(), data=json_message["audio"]
@@ -737,15 +703,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
 
         if msg_type == "input_audio_buffer.clear":
-            # Local OpenAI buffer op — nothing to forward to Gemini Live.
-            verbose_logger.debug(
-                "Gemini Realtime: input_audio_buffer.clear is a local buffer op"
-            )
-            return []
+            return []  # local buffer op, nothing to forward
 
-        # Unknown/unsupported OpenAI event type — drop silently rather than
-        # forwarding raw JSON as text input to the model.
-        return []
+        return []  # unknown/unsupported event type
 
     def transform_session_created_event(
         self,
@@ -778,11 +738,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if _system_instruction is not None and isinstance(_system_instruction, str):
             session["instructions"] = _system_instruction
         if _model is not None and isinstance(_model, str):
-            # Normalise to bare model name for OpenAI compatibility.
-            # Vertex AI uses a full resource path:
-            #   projects/{project}/locations/{location}/publishers/google/models/{model}
-            # Google AI Studio uses:
-            #   models/{model}
+            # Strip Vertex/AI Studio path prefixes to expose the bare model name.
             if "/models/" in _model:
                 session["model"] = _model.split("/models/")[-1]
             elif _model.startswith("models/"):
@@ -836,9 +792,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         _max_output_tokens = generation_config.get("maxOutputTokens")
 
         response_items: List[OpenAIRealtimeEvents] = []
-        self._suppress_bare_turn_complete_done_after_tool_call = False
-
-        ## - return response.created
         response_created = OpenAIRealtimeStreamResponseBaseObject(
             type="response.created",
             event_id="event_{}".format(uuid.uuid4()),
@@ -1052,28 +1005,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return returned_items
 
     def _consume_usage_metadata_for_response_done(self, frame: dict) -> Optional[dict]:
-        """Return the ``usageMetadata`` to attribute to a ``response.done``.
+        """Pop usageMetadata from the frame (authoritative) or drain the pending buffer.
 
-        Gemini Live emits ``usageMetadata`` either alongside the closing
-        frame (``serverContent.turnComplete`` / ``toolCall``) or as a
-        standalone frame between turns. The standalone form would otherwise
-        be discarded by the no-op branch in ``transform_realtime_response``
-        and the consumed tokens silently dropped from spend/budget
-        accounting. ``_pending_usage_metadata`` buffers any such standalone
-        frames so the next emitted ``response.done`` carries the deferred
-        token counts.
-
-        Returns the in-frame ``usageMetadata`` if present (and clears the
-        buffer since the in-frame counts are the authoritative attribution
-        for this turn), otherwise returns the buffered counts. ``None`` is
-        returned when neither is available so the caller can fall back to
-        ``get_empty_usage()``.
+        Uses pop so a frame with both ``toolCall`` and ``turnComplete`` can't
+        attribute the same counts to two response.done events.
         """
-        # ``pop`` (rather than ``get``) so a single Gemini frame containing
-        # multiple closing keys (e.g. both ``toolCall`` and
-        # ``serverContent.turnComplete``) cannot attribute the same
-        # ``usageMetadata`` to two ``response.done`` events and double-count
-        # tokens in spend/budget accounting.
         in_frame = frame.pop("usageMetadata", None) if isinstance(frame, dict) else None
         if isinstance(in_frame, dict):
             self._pending_usage_metadata = None
@@ -1082,39 +1018,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._pending_usage_metadata = None
         return buffered
 
-    def _should_suppress_bare_turn_complete_done(
-        self,
-        *,
-        current_response_id: Optional[str],
-        current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]],
-        current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]],
-        returned_message: List[OpenAIRealtimeEvents],
-    ) -> bool:
-        """Return True when a ``turnComplete`` would emit an empty ``response.done`` that
-        precedes the model's post-tool answer stream."""
-        if not self._suppress_bare_turn_complete_done_after_tool_call:
-            return False
-        if current_response_id is not None:
-            return False
-        if current_item_chunks or current_delta_chunks:
-            return False
-        return not any(
-            event.get("type") == "response.output_audio_transcript.delta"
-            for event in returned_message
-        )
-
     def transform_tool_call_events(
         self,
         tool_call_message: dict,
         response_id: Optional[str] = None,
         output_item_id: Optional[str] = None,
     ) -> List[OpenAIRealtimeFunctionCallArgumentsDone]:
-        """
-        Transform Gemini toolCall message to OpenAI function call events.
-
-        Converts Gemini's functionCalls format to OpenAI's response.function_call_arguments.done events.
-        Also stores call_id → name mapping for later use in function_call_output responses.
-        """
         function_calls = tool_call_message.get("functionCalls", [])
         resolved_response_id = response_id or f"resp_{uuid.uuid4()}"
         resolved_output_item_id = output_item_id or f"item_{uuid.uuid4()}"
@@ -1128,9 +1037,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             call_id = fc.get("id", "") or f"call_{uuid.uuid4().hex[:16]}"
             name = fc.get("name", "")
 
-            # Store call_id → name mapping for round-trip. Use an LRU so
-            # repeated function_call_output lookups (retries) still hit, while
-            # sessions with many tool calls don't grow the dict unboundedly.
             if call_id and name:
                 self._tool_call_id_to_name[call_id] = name
                 self._tool_call_id_to_name.move_to_end(call_id)
@@ -1179,13 +1085,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                         any_delta_chunk = True
                 if not any_delta_chunk:
-                    current_delta_chunks = (
-                        None  # reset current_delta_chunks if no delta chunks
-                    )
+                    current_delta_chunks = None
             else:
                 if (
                     transformed_message["type"] == "response.output_text.delta"
-                ):  # ONLY ACCUMULATE TEXT DELTA CHUNKS - AUDIO WILL CAUSE SERVER MEMORY ISSUES
+                ):  # audio deltas are not accumulated (memory)
                     if current_delta_chunks is None:
                         current_delta_chunks = []
                     current_delta_chunks.append(
@@ -1215,9 +1119,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                         any_item_chunk = True
                 if not any_item_chunk:
-                    current_item_chunks = (
-                        None  # reset current_item_chunks if no item chunks
-                    )
+                    current_item_chunks = None
             else:
                 if transformed_message["type"] == "response.output_item.done":
                     if current_item_chunks is None:
@@ -1486,9 +1388,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         returned_message: List[OpenAIRealtimeEvents] = []
 
-        # Handle transcription events that arrive independently from model
-        # content.  Gemini sends inputTranscription / outputTranscription
-        # inside serverContent, separately from modelTurn / turnComplete.
         server_content = json_message.get("serverContent")
         if isinstance(server_content, dict):
             input_tx = server_content.get("inputTranscription")
@@ -1524,8 +1423,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             delta_type="audio",
                         )
                     )
-                # Emit as the GA event name; _GA_TO_BETA_EVENT_TYPES translates
-                # this back to response.audio_transcript.delta for beta clients.
                 returned_message.append(
                     cast(
                         OpenAIRealtimeEvents,
@@ -1542,11 +1439,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
                 )
 
-            # If serverContent only contained transcription(s) and no model
-            # content, mark it as already handled so the main loop skips it
-            # (map_openai_event would raise on an unknown serverContent
-            # subkey). Fall through so sibling top-level keys such as
-            # ``toolCall`` are still processed in the main loop.
+            # Mark transcription-only serverContent as handled so the main loop
+            # skips it; sibling keys like toolCall are still processed below.
             _model_content_keys = {
                 "modelTurn",
                 "turnComplete",
@@ -1560,11 +1454,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             server_content_handled = False
 
         tool_call_handled = False
-        # Snapshot the items so handlers below can safely mutate
-        # ``json_message`` (e.g. ``_consume_usage_metadata_for_response_done``
-        # pops ``usageMetadata`` to prevent a single frame from attributing
-        # the same token counts to two ``response.done`` events).
-        for key, value in list(json_message.items()):
+        for key, value in list(json_message.items()):  # snapshot: handlers may mutate json_message
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
             # accompany a primary payload like ``toolCall`` or ``serverContent``.
             # ``map_openai_event`` raises ValueError on unknown keys, which
@@ -1591,23 +1481,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 returned_message.append(transformed_message)
             elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
-                # Handle toolCall from Gemini. If the payload has no function
-                # calls, emit nothing — an orphaned response.created/done pair
-                # with no output items would confuse OpenAI-compatible clients.
-                # Mark the key as intentionally consumed (mirroring
-                # ``server_content_handled``) so any sibling keys in the same
-                # frame are still processed by the rest of the loop and the
-                # post-loop guard doesn't treat the no-op as fatal.
                 if not value.get("functionCalls"):
+                    # Empty toolCall — mark consumed so the post-loop guard doesn't raise.
                     tool_call_handled = True
                     continue
 
                 if current_conversation_id is None:
                     current_conversation_id = f"conv_{uuid.uuid4()}"
 
-                # Extract session-level response metadata once so both
-                # response.created and response.done can include matching
-                # modalities/temperature/max_output_tokens fields.
                 session_setup: BidiGenerateContentSetup = {}
                 if session_configuration_request is not None:
                     try:
@@ -1629,16 +1510,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
                 ]
 
-                # Emit response.created preamble if this is the first event in the response
                 if current_response_id is None:
                     current_response_id = f"resp_{uuid.uuid4()}"
                     current_output_item_id = f"item_{uuid.uuid4()}"
-
-                    # Mirror the audio/text path: include modalities,
-                    # temperature, and max_output_tokens on response.created so
-                    # spec-compliant clients see consistent response metadata
-                    # regardless of whether the response starts with content or
-                    # a tool call.
                     returned_message.append(
                         {
                             "type": "response.created",
@@ -1666,7 +1540,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     response_id=current_response_id,
                     output_item_id=current_output_item_id,
                 )
-                # Emit output_item.added and conversation.item.created for each function call
                 for idx, tool_call in enumerate(tool_call_events):
                     item_id = tool_call["item_id"]
                     function_call_item: OpenAIRealtimeStreamResponseOutputItem = {
@@ -1678,7 +1551,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         "name": tool_call["name"],
                         "arguments": tool_call["arguments"],
                     }
-                    # response.output_item.added
                     returned_message.append(
                         OpenAIRealtimeStreamResponseOutputItemAdded(
                             type="response.output_item.added",
@@ -1692,14 +1564,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             },
                         )
                     )
-                    # conversation.item.added — Pipecat 1.3.x registers the
-                    # call_id into _pending_function_calls inside
-                    # _handle_evt_conversation_item_added, which is triggered
-                    # by this event (NOT by response.output_item.added and NOT
-                    # by the old conversation.item.created which Pipecat 1.3.x
-                    # does not handle). Without this event the subsequent
-                    # response.function_call_arguments.done finds an empty
-                    # pending-calls dict and drops the tool invocation silently.
+                    # conversation.item.added is required for Pipecat 1.3.x to
+                    # register the call_id into _pending_function_calls before
+                    # response.function_call_arguments.done fires.
                     returned_message.append(
                         cast(
                             OpenAIRealtimeEvents,
@@ -1715,13 +1582,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             },
                         )
                     )
-                    # response.function_call_arguments.delta — Gemini delivers
-                    # the full arguments string in a single toolCall frame
-                    # rather than streaming partial chunks, so emit one delta
-                    # carrying the complete payload before the matching
-                    # ``.done`` event. Spec-compliant OpenAI Realtime SDK
-                    # clients accumulate ``delta.delta`` and rely on at least
-                    # one delta before ``.done``.
+                    # Gemini delivers args in one shot; emit a single delta before .done
+                    # so clients that accumulate deltas get the full payload.
                     returned_message.append(
                         cast(
                             OpenAIRealtimeEvents,
@@ -1736,12 +1598,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             },
                         )
                     )
-                    # response.function_call_arguments.done
                     returned_message.append(tool_call)
-                    # response.output_item.done — pass a fresh copy so
-                    # downstream handlers that mutate the item dict (e.g. the
-                    # beta-protocol translator) don't corrupt the references
-                    # used by sibling events sharing the same function_call_item.
+                    # Fresh copy — downstream handlers may mutate the item dict.
                     returned_message.append(
                         OpenAIRealtimeOutputItemDone(
                             type="response.output_item.done",
@@ -1752,18 +1610,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                     )
 
-                # response.done - close the response so clients can submit tool
-                # results. Mirror the non-tool-call RESPONSE_DONE path: if Gemini
-                # delivered ``usageMetadata`` alongside this ``toolCall`` frame,
-                # propagate the real token counts so spend/budget accounting
-                # records the tokens consumed by the tool-call turn. Standalone
-                # ``usageMetadata`` frames emitted in a separate WebSocket frame
-                # are buffered on the instance so the next ``response.done``
-                # picks them up (otherwise an authenticated client could drive
-                # tool-call turns whose token usage is recorded as zero,
-                # bypassing budgets). Falls back to an empty usage block when
-                # neither is available (OpenAI-compatible clients expect
-                # ``usage`` to always be present on response.done).
                 resolved_tool_call_usage_metadata = (
                     self._consume_usage_metadata_for_response_done(json_message)
                 )
@@ -1824,21 +1670,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         int, tool_call_max_output_tokens
                     )
                 returned_message.append(tool_call_done_event)
-                self._suppress_bare_turn_complete_done_after_tool_call = True
-                # Reset IDs so the next model turn (after tool results) starts a
-                # fresh response with its own response.created preamble.
                 current_output_item_id = None
                 current_response_id = None
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
-                if self._should_suppress_bare_turn_complete_done(
-                    current_response_id=current_response_id,
-                    current_item_chunks=current_item_chunks,
-                    current_delta_chunks=current_delta_chunks,
-                    returned_message=returned_message,
-                ):
+                _has_pending_function_call = current_item_chunks and any(
+                    chunk.get("item", {}).get("type") == "function_call"
+                    for chunk in current_item_chunks
+                )
+                if current_response_id is None and _has_pending_function_call:
+                    # Trailing bare turnComplete after a toolCall (Vertex emits ~5
+                    # bookkeeping tokens before the follow-up answer). Suppress the
+                    # empty response.done so collect_until("response.done") clients
+                    # don't stop prematurely; buffer usage for the next real turn.
                     standalone_usage_metadata = json_message.get("usageMetadata")
                     if isinstance(standalone_usage_metadata, dict):
                         self._pending_usage_metadata = standalone_usage_metadata
+                    server_content_handled = True
                     continue
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
@@ -1848,11 +1695,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     output_items=None,
                 )
                 returned_message.append(transformed_response_done_event)
-                self._suppress_bare_turn_complete_done_after_tool_call = False
-                # Reset IDs so a subsequent turn (e.g. a `toolCall` arriving in
-                # a later WebSocket frame after `turnComplete`) starts a fresh
-                # response with its own `response.created` preamble instead of
-                # reusing the just-completed response ID.
                 current_output_item_id = None
                 current_response_id = None
             elif (
@@ -1861,11 +1703,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
             ):
-                # Pass the locally-updated state (rather than the original
-                # input snapshot) so that prior iterations of this loop —
-                # e.g. a tool-call or response.done that just reset
-                # current_response_id/current_output_item_id to None — are
-                # honoured by the modality handler.
+                # Use locally-updated state so prior loop iterations' ID resets are visible.
                 _modality_input: RealtimeResponseTransformInput = {
                     **realtime_response_transform_input,
                     "current_output_item_id": current_output_item_id,
@@ -1891,15 +1729,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             else:
                 raise ValueError(f"Unknown openai event: {openai_event}")
         if len(returned_message) == 0:
-            # A frame whose only top-level keys are sibling metadata (e.g.
-            # a standalone ``{"usageMetadata": {...}}`` emitted by Gemini
-            # Live between turns) is not an error — there is just nothing
-            # to forward to the OpenAI-shaped client. Returning the
-            # unchanged state keeps the WebSocket alive; raising would
-            # terminate the session for a benign no-op frame.
-            # serverContent already consumed by the transcription handler is
-            # a benign no-op for downstream — treat it like a metadata-only
-            # key when deciding whether to raise.
             unhandled_known_keys = [
                 key
                 for key in json_message
@@ -1907,11 +1736,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 and not (key == "serverContent" and server_content_handled)
                 and not (key == "toolCall" and tool_call_handled)
             ]
-            # Buffer standalone usage metadata so the next response.done can
-            # attribute the token counts. Without this, an authenticated
-            # client driving turns whose usageMetadata is emitted in a
-            # separate frame would have those tokens recorded as zero spend,
-            # bypassing budget enforcement.
             standalone_usage_metadata = json_message.get("usageMetadata")
             if isinstance(standalone_usage_metadata, dict):
                 self._pending_usage_metadata = standalone_usage_metadata
@@ -1959,9 +1783,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         }
 
     def requires_session_configuration(self) -> bool:
-        # Default behavior is backwards-compatible: send setup on connect.
-        # Opt-in to deferred setup for tool-injection flow via:
-        #   litellm.gemini_live_defer_setup = True
+        # Deferred setup opt-in: litellm.gemini_live_defer_setup = True
         return not litellm.gemini_live_defer_setup
 
     def session_configuration_request(self, model: str) -> str:
