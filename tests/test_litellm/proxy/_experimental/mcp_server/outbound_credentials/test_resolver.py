@@ -174,6 +174,26 @@ async def test_api_key_byok_with_no_store_wired_is_unauthorized():
     assert result.error.tag == "unauthorized"
 
 
+@pytest.mark.asyncio
+async def test_api_key_byok_store_unavailable_surfaces_the_challenge():
+    # A store outage is surfaced as the same 401 challenge as a missing key (v1 parity), never
+    # a 500; the store, not the arm, is responsible for not caching the failure.
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
+        ByokStoreUnavailable,
+    )
+
+    class _UnavailableStore:
+        async def fetch(self, user_id: str, server_id: str):
+            raise ByokStoreUnavailable("db down")
+
+    provider = UpstreamCredentialProvider(byok_store=_UnavailableStore())
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _byok_spec()
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
 _STUBBED = [
     ("passthrough", PassthroughConfig()),
     ("client_credentials", ClientCredentialsConfig()),

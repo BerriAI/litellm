@@ -31,6 +31,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
     ByokCredentialStore,
+    ByokStoreUnavailable,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
@@ -97,7 +98,14 @@ class UpstreamCredentialProvider:
                 )
                 return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Byok():
-                key = await self._byok_store.fetch(subject.subject_id, server.server_id)
+                try:
+                    key = await self._byok_store.fetch(
+                        subject.subject_id, server.server_id
+                    )
+                except ByokStoreUnavailable:
+                    # Store unreachable: not cached, and surfaced as the same 401 challenge as a
+                    # missing key (v1 parity) so a transient outage does not 500.
+                    key = None
                 if not key:
                     return Error(_byok_challenge(server.server_id))
                 header_name, header_value = config.header(key)

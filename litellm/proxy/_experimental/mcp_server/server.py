@@ -2368,20 +2368,18 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-
-        credential = await global_mcp_server_manager.fetch_byok_credential(
-            user_id, mcp_server.server_id
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
+            ByokStoreUnavailable,
         )
-        if credential is not None:
-            # A fresh cache hit is served here without touching the DB, so an owner verified
-            # within the TTL is not locked out during a transient DB outage.
-            return
 
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            # Nothing cached and the DB is unreachable: fail closed rather than bypass the
+        try:
+            credential = await global_mcp_server_manager.fetch_byok_credential(
+                user_id, mcp_server.server_id
+            )
+        except ByokStoreUnavailable:
+            # Nothing usable and the DB is unreachable: fail closed rather than bypass the
             # ownership check (a silent pass here previously let any caller invoke BYOK tools).
+            # The store does not cache this, so recovery is immediate.
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -2390,7 +2388,11 @@ if MCP_AVAILABLE:
                     "server_name": mcp_server.server_name or mcp_server.name,
                     "message": "BYOK credential check requires a database connection.",
                 },
-            )
+            ) from None
+        if credential is not None:
+            # A fresh cache hit is served here without touching the DB, so an owner verified
+            # within the TTL is not locked out during a transient DB outage.
+            return
 
         raise HTTPException(
             status_code=401,

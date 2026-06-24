@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Optional
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
+    ByokStoreUnavailable,
+)
+
 
 class DbBackedByokStore:
     """Reads the per-user BYOK key from the MCP credentials table via ``get_user_credential``.
@@ -28,7 +32,9 @@ class DbBackedByokStore:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return None
+            raise ByokStoreUnavailable(
+                "BYOK credential store is unavailable (no database connection)"
+            )
 
         credential = await get_user_credential(
             prisma_client=prisma_client, user_id=user_id, server_id=server_id

@@ -2,8 +2,13 @@
 
 from typing import Dict, List, Optional, Tuple
 
+import pytest
+
 from litellm.proxy._experimental.mcp_server.outbound_credentials.byok_store import (
     CachedByokStore,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
+    ByokStoreUnavailable,
 )
 
 
@@ -92,3 +97,23 @@ async def test_invalidate_forces_refetch_so_a_provisioned_key_is_not_masked():
 
     assert await store.fetch("u", "s") == "freshly-provisioned"
     assert inner.calls == [("u", "s"), ("u", "s")]  # re-hit after invalidation
+
+
+async def test_store_unavailable_is_not_cached():
+    # An outage must not be cached as "no key": the exception propagates and the next call
+    # re-attempts, so a recovered backing store is seen immediately rather than after the TTL.
+    class _FailingStore:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, user_id: str, server_id: str) -> Optional[str]:
+            self.calls += 1
+            raise ByokStoreUnavailable("down")
+
+    inner = _FailingStore()
+    store = CachedByokStore(inner, ttl_seconds=60, clock=_Clock())
+
+    for _ in range(2):
+        with pytest.raises(ByokStoreUnavailable):
+            await store.fetch("u", "s")
+    assert inner.calls == 2  # the failure was re-attempted, not served from cache
