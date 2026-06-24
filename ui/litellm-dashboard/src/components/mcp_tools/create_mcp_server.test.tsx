@@ -868,6 +868,27 @@ describe("CreateMCPServer BYOK toggle", () => {
     expect(payload.credentials).toBeUndefined();
   });
 
+  it("shows a base64 clarification in the BYOK hint for Basic auth only", async () => {
+    await selectHttpTransport();
+    await selectAntOption("Authentication", "Basic Auth");
+    await waitFor(() => expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+    await waitFor(() => expect(screen.getByText(/base64-encoded/)).toBeInTheDocument());
+
+    cleanup();
+
+    await selectHttpTransport();
+    await selectAntOption("Authentication", "Bearer Token");
+    await waitFor(() => expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+    await waitFor(() => expect(screen.getByText("Access Description")).toBeInTheDocument());
+    expect(screen.queryByText(/base64-encoded/)).not.toBeInTheDocument();
+  });
+
   it("blocks submit when the API Key Help URL is not a valid URL", async () => {
     await selectHttpTransport();
 

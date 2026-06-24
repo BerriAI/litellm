@@ -20,6 +20,7 @@ const ByokFields: React.FC<ByokFieldsProps> = ({ form }) => {
   const isByok = Form.useWatch("is_byok", form);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const formatHint = authType ? BYOK_AUTH_FORMAT_HINT[authType] : undefined;
+  const isBasicAuth = authType === AUTH_TYPE.BASIC;
 
   return (
     <>
@@ -45,6 +46,14 @@ const ByokFields: React.FC<ByokFieldsProps> = ({ form }) => {
               <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
               <span>
                 User keys will be sent as: <code className="font-mono bg-blue-100 px-1 rounded">{formatHint}</code>
+                {isBasicAuth && (
+                  <>
+                    {" "}
+                    Each user&apos;s key must be a base64-encoded{" "}
+                    <code className="font-mono bg-blue-100 px-1 rounded">user:password</code> string, or a raw token if
+                    the server accepts one.
+                  </>
+                )}
               </span>
             </div>
           )}
