@@ -59,7 +59,7 @@ jobs:
 
       - name: Build image (${{ matrix.dockerfile }})
         run: |
-          tag="litellm-image-scan-$(echo '${{ matrix.dockerfile }}' | tr '/.' '--'):${{ github.sha }}"
+          tag="litellm-image-scan-$(echo '${{ matrix.dockerfile }}' | tr '/.' '--' | tr 'A-Z' 'a-z'):${{ github.sha }}"
           echo "TAG=$tag" >> "$GITHUB_ENV"
           docker build -f '${{ matrix.dockerfile }}' -t "$tag" .
 
