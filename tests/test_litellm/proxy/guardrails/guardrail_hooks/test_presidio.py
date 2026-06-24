@@ -477,6 +477,212 @@ async def test_no_messages_field(presidio_guardrail, mock_user_api_key, mock_cac
 
 
 @pytest.mark.asyncio
+async def test_responses_api_input_string_is_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """The Responses API carries the prompt in data['input'] (string), which
+    must be masked like chat `messages` (issue #30728)."""
+    test_data = {
+        "input": "My email is test@example.com and card 4111-1111-1111-1111",
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("test@example.com", "[EMAIL]").replace(
+            "4111-1111-1111-1111", "[CREDIT_CARD]"
+        )
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    assert result["input"] == "My email is [EMAIL] and card [CREDIT_CARD]"
+    assert "test@example.com" not in result["input"]
+    assert "4111-1111-1111-1111" not in result["input"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_input_role_messages_are_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Responses API `input` given as a list of role messages must be masked."""
+    test_data = {
+        "input": [{"role": "user", "content": "Contact me at test@example.com"}],
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("test@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    assert result["input"][0]["content"] == "Contact me at [EMAIL]"
+    assert "test@example.com" not in result["input"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_input_text_content_parts_are_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Responses API `input` carries prompt text as `input_text` content parts;
+    these must be masked too (issue #30728 / veria-ai review). The earlier
+    refactor only recognised Chat-Completions `text` parts, so `input_text`
+    slipped through unmasked while non-text parts stay untouched."""
+    test_data = {
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "card 4111-1111-1111-1111"},
+                    {"type": "input_image", "image_url": "https://x/y.png"},
+                ],
+            }
+        ],
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    content = result["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "card [CREDIT_CARD]"}
+    # Non-text part must be left untouched.
+    assert content[1] == {"type": "input_image", "image_url": "https://x/y.png"}
+    assert "4111-1111-1111-1111" not in str(result["input"])
+
+
+@pytest.mark.asyncio
+async def test_responses_api_mixed_input_items_are_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Responses `input` can mix a role message with non-message items (e.g.
+    function_call_output) for tool use. The message's PII must still be masked
+    while the tool item is left untouched (issue #30728 / veria-ai review)."""
+    test_data = {
+        "input": [
+            {"role": "user", "content": "my card is 4111-1111-1111-1111"},
+            {"type": "function_call_output", "call_id": "c1", "output": "done"},
+        ],
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    assert result["input"][0]["content"] == "my card is [CREDIT_CARD]"
+    assert result["input"][1] == {
+        "type": "function_call_output",
+        "call_id": "c1",
+        "output": "done",
+    }
+    assert "4111-1111-1111-1111" not in str(result["input"])
+
+
+@pytest.mark.asyncio
+async def test_both_messages_and_input_are_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """When both `messages` and `input` are present, both must be masked."""
+    test_data = {
+        "messages": [{"role": "user", "content": "msg card 4111-1111-1111-1111"}],
+        "input": "input email test@example.com",
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]").replace(
+            "test@example.com", "[EMAIL]"
+        )
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    assert result["messages"][0]["content"] == "msg card [CREDIT_CARD]"
+    assert result["input"] == "input email [EMAIL]"
+
+
+@pytest.mark.asyncio
+async def test_non_text_call_type_input_is_not_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Embedding/moderation calls also expose `data['input']`, but the masking
+    path rewrites text in place and must not mutate non-text payloads. The
+    pre-refactor hook skipped these implicitly by reading only `messages`;
+    the call-type guard preserves that (issue #30728 review feedback)."""
+    test_data = {
+        "input": ["My email is test@example.com", "card 4111-1111-1111-1111"],
+        "model": "text-embedding-3-small",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        raise AssertionError("check_pii should not run for embedding call_type")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aembedding",
+    )
+    # Payload returned untouched.
+    assert result["input"] == [
+        "My email is test@example.com",
+        "card 4111-1111-1111-1111",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_input_is_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """`/v1/messages` (call_type 'anthropic_messages') carries chat text and must
+    be masked — it is part of the text-content call-type set."""
+    test_data = {
+        "messages": [{"role": "user", "content": "Contact me at test@example.com"}],
+        "model": "claude-3-opus-20240229",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("test@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="anthropic_messages",
+    )
+    assert result["messages"][0]["content"] == "Contact me at [EMAIL]"
+    assert "test@example.com" not in result["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_logging_hook_multimodal_message_format(presidio_guardrail):
     """
     Test Presidio async_logging_hook with multimodal message format for completion call type.
