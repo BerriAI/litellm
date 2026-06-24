@@ -115,4 +115,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         data.pop("max_retries", None)
         data.pop("stream_options", None)
 
+        # Azure AI Foundry does not support output_config parameter, remove it if present
+        data.pop("output_config", None)
+
         return data

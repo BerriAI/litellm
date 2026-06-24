@@ -287,6 +287,38 @@ class TestAzureAnthropicMessagesConfig:
             result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
         )
 
+    def test_transform_anthropic_messages_request_strips_output_config(self):
+        """Regression test: Azure AI Foundry rejects output_config.effort for Haiku 4.5.
+
+        When a request enters via /anthropic/v1/messages (e.g. Claude Code with
+        ANTHROPIC_BASE_URL set) and includes output_config.effort, Azure AI returns:
+          400 {"type":"invalid_request_error","message":"This model does not support
+          the effort parameter."}
+        additional_drop_params does not suppress this because it operates on the
+        OpenAI→provider translation layer, not on the Anthropic pass-through path.
+        See: https://github.com/BerriAI/litellm/issues/27168
+        """
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": "Hello"}]
+        anthropic_messages_optional_request_params = {
+            "max_tokens": 1024,
+            "output_config": {"effort": "medium"},  # Should be stripped
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "output_config" not in result
+        assert result["max_tokens"] == 1024
+
 
 class TestProviderConfigManagerAzureAnthropicMessages:
     """Test ProviderConfigManager returns correct config for Azure AI Anthropic Messages API"""

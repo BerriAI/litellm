@@ -242,6 +242,44 @@ class TestAzureAnthropicConfig:
         assert result["max_tokens"] == 100
         assert "messages" in result
 
+    def test_transform_request_strips_output_config_for_haiku_4_5(self):
+        """Regression test: Azure AI Foundry rejects output_config.effort for Haiku 4.5.
+
+        Azure returns 400 {"type":"invalid_request_error","message":"This model does not
+        support the effort parameter."} when output_config is forwarded unchanged.
+        See: https://github.com/BerriAI/litellm/issues/27168
+        """
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {"max_tokens": 100}
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with patch.object(
+            config.__class__.__bases__[0],  # AnthropicConfig
+            "transform_request",
+            return_value={
+                "model": "claude-haiku-4-5",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+                ],
+                "max_tokens": 100,
+                "output_config": {"effort": "medium"},  # Should be stripped
+            },
+        ):
+            result = config.transform_request(
+                model="claude-haiku-4-5",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+
+        assert "output_config" not in result
+        assert result["model"] == "claude-haiku-4-5"
+        assert result["max_tokens"] == 100
+
     def test_context_management_compact_beta_header(self):
         """Test that context_management with compact adds the correct beta header for Azure AI"""
         config = AzureAnthropicConfig()
