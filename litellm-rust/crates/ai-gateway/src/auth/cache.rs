@@ -1,11 +1,17 @@
-//! A bounded, in-memory cache of verified keys.
+//! A bounded, in-memory cache of verified keys — **on by default, for performance.**
 //!
-//! This bounds two things at once: **memory** (at most [`MAX_ENTRIES`] entries,
-//! FIFO-evicted) and **staleness** (each entry expires after [`KeyCache::ttl`], so
-//! a revoked or re-budgeted key is re-verified within the TTL window). Both are
-//! deliberate: the gateway trades a small staleness window for not hitting the
-//! auth backend on every request.
+//! Auth verification is a control-plane round-trip; caching it keeps the gateway
+//! from hammering the proxy's verify endpoint on every request under load — the
+//! same reason the LiteLLM proxy caches key-auth in-process. The TTL is the
+//! perf/freshness knob: a revoked, blocked, or re-budgeted key is re-verified
+//! within the TTL window (a deliberate, bounded staleness, identical in spirit to
+//! the proxy's own ~60s auth cache).
 //!
+//! For **strict per-connection enforcement** on billable routes (zero staleness —
+//! every connection re-verifies, budget/rate-limit checked each time), set
+//! `LITELLM_AUTH_CACHE_TTL_SECS=0` to disable caching.
+//!
+//! Bounds: at most [`MAX_ENTRIES`] entries (FIFO-evicted) plus TTL expiry.
 //! Std-only (no external cache crate): a `Mutex<HashMap>` for lookup plus a
 //! `VecDeque` recording insertion order for FIFO eviction.
 
@@ -18,9 +24,11 @@ use crate::auth::UserApiKeyAuth;
 /// Hard cap on cached entries; the 201st insert evicts the oldest. Keeps memory
 /// bounded regardless of how many distinct keys hit the gateway.
 const MAX_ENTRIES: usize = 200;
-/// Default time-to-live when `LITELLM_AUTH_CACHE_TTL_SECS` is unset/invalid.
+/// Default TTL when `LITELLM_AUTH_CACHE_TTL_SECS` is unset/invalid. On by default
+/// for performance; matches the proxy's own auth-cache window. Set `0` to disable
+/// (strict per-connection verification).
 const DEFAULT_TTL_SECS: u64 = 60;
-/// Env var overriding the entry TTL (seconds).
+/// Env var overriding the entry TTL (seconds). Set `0` to disable caching.
 const TTL_ENV: &str = "LITELLM_AUTH_CACHE_TTL_SECS";
 
 struct Inner {
@@ -61,6 +69,10 @@ impl KeyCache {
     /// Return the cached identity for `hash`, or `None`. A present-but-expired
     /// entry is evicted and treated as a miss, so the caller re-verifies.
     pub fn get(&self, hash: &[u8; 32]) -> Option<UserApiKeyAuth> {
+        // TTL 0 ⇒ caching disabled: always a miss, so every connection re-verifies.
+        if self.ttl.is_zero() {
+            return None;
+        }
         let mut inner = self.inner.lock().expect("auth cache mutex poisoned");
         let expired = match inner.entries.get(hash) {
             Some((_, inserted)) => inserted.elapsed() >= self.ttl,
@@ -78,6 +90,10 @@ impl KeyCache {
 
     /// Insert (or refresh) an entry, evicting the oldest if at capacity.
     pub fn insert(&self, hash: [u8; 32], auth: UserApiKeyAuth) {
+        // TTL 0 ⇒ caching disabled: don't store anything.
+        if self.ttl.is_zero() {
+            return;
+        }
         let mut inner = self.inner.lock().expect("auth cache mutex poisoned");
 
         // Reconcile `order` so it tracks exactly the live entries: drop this key's
@@ -152,6 +168,14 @@ mod tests {
         let cache = KeyCache::with_ttl(Duration::from_millis(10));
         cache.insert(hash(1), UserApiKeyAuth::default());
         std::thread::sleep(Duration::from_millis(25));
+        assert!(cache.get(&hash(1)).is_none());
+    }
+
+    #[test]
+    fn ttl_zero_disables_caching() {
+        // The default: every lookup is a miss, so callers always re-verify.
+        let cache = KeyCache::with_ttl(Duration::from_secs(0));
+        cache.insert(hash(1), UserApiKeyAuth::default());
         assert!(cache.get(&hash(1)).is_none());
     }
 }
