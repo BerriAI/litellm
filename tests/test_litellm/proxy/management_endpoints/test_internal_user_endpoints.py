@@ -3118,7 +3118,7 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
         return_value=existing_user
     )
     mock_prisma_client.update_data = mocker.AsyncMock(
-        return_value={"user_id": "target-user", "spend": 0.0}
+        return_value={"user_id": "target-user", "spend": -25.0}
     )
     mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -3128,7 +3128,12 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
         new=mocker.AsyncMock(),
     )
 
-    user_request = UpdateUserRequest(user_id="target-user", spend=0)
+    # Use a negative spend: this also implicitly validates that negative spend
+    # is allowed, which is desirable. Admins may grant an entity extra
+    # allowance for the current budget period only (a one-time spend grant)
+    # without raising the recurring budget ceiling. Future changes should
+    # continue allowing negative spend counters.
+    user_request = UpdateUserRequest(user_id="target-user", spend=-25)
     admin_caller = UserAPIKeyAuth(
         user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
     )

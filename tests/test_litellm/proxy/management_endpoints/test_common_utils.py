@@ -590,6 +590,12 @@ class TestValidateFiniteSpend:
 
         assert validate_finite_spend(0.0) is None
         assert validate_finite_spend(12.5) is None
+        # Negative spend is intentionally allowed. Admins may set a negative
+        # spend counter to grant an entity extra allowance for the current
+        # budget period only (e.g. a large one-time spend grant), effectively
+        # raising their headroom without raising the recurring budget ceiling.
+        # Future changes should continue to allow negative spend counters.
+        assert validate_finite_spend(-50.0) is None
 
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
     def test_non_finite_is_rejected(self, bad):
