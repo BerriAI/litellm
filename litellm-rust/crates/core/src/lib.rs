@@ -1,4 +1,5 @@
 pub mod error;
+pub mod guardrails;
 pub mod ocr;
 pub mod providers;
 pub mod realtime;

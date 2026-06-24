@@ -14,8 +14,10 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
+aho-corasick = "1"
 axum = "0.7"
 pyo3 = "0.23.5"
+regex = "1"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }

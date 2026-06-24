@@ -8,6 +8,7 @@ use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
+mod guardrails;
 
 fn py_to_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Value> {
     let json = py.import("json")?;
@@ -96,5 +97,6 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 fn litellm_python_bridge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    guardrails::register(module)?;
     Ok(())
 }
