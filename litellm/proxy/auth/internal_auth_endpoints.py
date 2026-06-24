@@ -138,12 +138,18 @@ async def verify_key(body: VerifyKeyRequest) -> dict[str, Any]:
         auth = await user_api_key_auth(request=synthetic_request, api_key=bearer_key)
     except (ProxyException, HTTPException) as exc:
         # Expected auth failures (invalid / expired / over-budget / blocked) → 401
-        # with a minimal body so internals aren't leaked. Unexpected errors (e.g. a
-        # DB outage, misconfigured master key) surface as 5xx rather than
-        # masquerading as "invalid key" — the data plane still fails closed (it
-        # rejects any non-200 from this endpoint).
-        if isinstance(exc, HTTPException) and exc.status_code >= 500:
-            raise  # let 5xx propagate so operators see the real error
+        # with a minimal body so internals aren't leaked. A 5xx (e.g. a DB outage
+        # surfaced as a 500, on either HTTPException.status_code or
+        # ProxyException.code) is NOT masked as "invalid key" — it propagates so
+        # operators see the real error. The data plane still fails closed: it
+        # rejects any non-200 from this endpoint.
+        status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        try:
+            is_server_error = status_code is not None and int(status_code) >= 500
+        except (TypeError, ValueError):
+            is_server_error = False
+        if is_server_error:
+            raise
         raise HTTPException(status_code=401, detail="invalid api key")
 
     return auth.model_dump(exclude_none=True, mode="json")
