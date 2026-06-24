@@ -49,6 +49,13 @@ class _PreparedOCRRequest:
     litellm_logging_obj: LiteLLMLoggingObj
 
 
+@dataclass
+class _PreparedRustOCRCall:
+    api_key: Optional[str]
+    headers: dict[str, object]
+    complete_url: str
+
+
 def _timeout_to_seconds(
     timeout: Optional[Union[float, httpx.Timeout]],
 ) -> Optional[float]:
@@ -166,8 +173,7 @@ def _prepare_ocr_request(
     )
 
 
-def _run_rust_ocr(
-    rust_ocr: RustOcr,
+def _prepare_rust_ocr_call(
     logging_obj: LiteLLMLoggingObj,
     provider_config: BaseOCRConfig,
     resolve_api_key: Callable[[str], Optional[str]],
@@ -175,21 +181,14 @@ def _run_rust_ocr(
     document: dict[str, object],
     api_key: Optional[str],
     api_base: Optional[str],
-    custom_llm_provider: str,
     extra_headers: Optional[dict[str, object]],
     optional_params: dict[str, object],
     litellm_params: dict[str, object],
-    timeout_seconds: Optional[float],
-) -> OCRResponse:
-    """Run the Mistral OCR call through the Rust bridge and wrap the result.
-
-    Resolves the key the same way the Python path does so secret-manager backends
-    (AWS/Azure/GCP/Vault) work; the Rust bridge's own fallback only reads the
-    process environment. The request that Rust actually sends (resolved URL and
-    headers) is mirrored into pre_call so logs match the wire. Dependencies are
-    injected so this stays unit-testable without patching module globals.
-    """
-    resolved_api_key = api_key or resolve_api_key("MISTRAL_API_KEY")
+) -> _PreparedRustOCRCall:
+    api_key_env_var = provider_config.get_api_key_env_var()
+    resolved_api_key = api_key or (
+        resolve_api_key(api_key_env_var) if api_key_env_var is not None else None
+    )
     resolved_headers = provider_config.validate_environment(
         headers=extra_headers or {},
         model=model,
@@ -216,11 +215,53 @@ def _run_rust_ocr(
             "headers": resolved_headers,
         },
     )
+    return _PreparedRustOCRCall(
+        api_key=resolved_api_key,
+        headers=cast(dict[str, object], resolved_headers),
+        complete_url=resolved_complete_url,
+    )
+
+
+def _run_rust_ocr(
+    rust_ocr: RustOcr,
+    logging_obj: LiteLLMLoggingObj,
+    provider_config: BaseOCRConfig,
+    resolve_api_key: Callable[[str], Optional[str]],
+    model: str,
+    document: dict[str, object],
+    api_key: Optional[str],
+    api_base: Optional[str],
+    custom_llm_provider: str,
+    extra_headers: Optional[dict[str, object]],
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+    timeout_seconds: Optional[float],
+) -> OCRResponse:
+    """Run the Mistral OCR call through the Rust bridge and wrap the result.
+
+    Resolves the key the same way the Python path does so secret-manager backends
+    (AWS/Azure/GCP/Vault) work; the Rust bridge's own fallback only reads the
+    process environment. The request that Rust actually sends (resolved URL and
+    headers) is mirrored into pre_call so logs match the wire. Dependencies are
+    injected so this stays unit-testable without patching module globals.
+    """
+    prepared = _prepare_rust_ocr_call(
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        resolve_api_key=resolve_api_key,
+        model=model,
+        document=document,
+        api_key=api_key,
+        api_base=api_base,
+        extra_headers=extra_headers,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+    )
     return OCRResponse.model_validate(
         rust_ocr(
             model=model,
             document=document,
-            api_key=resolved_api_key,
+            api_key=prepared.api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
@@ -245,38 +286,23 @@ async def _run_rust_aocr(
     litellm_params: dict[str, object],
     timeout_seconds: Optional[float],
 ) -> OCRResponse:
-    resolved_api_key = api_key or resolve_api_key("MISTRAL_API_KEY")
-    resolved_headers = provider_config.validate_environment(
-        headers=extra_headers or {},
+    prepared = _prepare_rust_ocr_call(
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        resolve_api_key=resolve_api_key,
         model=model,
-        api_key=resolved_api_key,
+        document=document,
+        api_key=api_key,
         api_base=api_base,
-        litellm_params=litellm_params,
-    )
-    resolved_complete_url = provider_config.get_complete_url(
-        api_base=api_base,
-        model=model,
+        extra_headers=extra_headers,
         optional_params=optional_params,
         litellm_params=litellm_params,
-    )
-    logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=resolved_api_key,
-        additional_args={
-            "complete_input_dict": {
-                "model": model,
-                "document": document,
-                **optional_params,
-            },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
-        },
     )
     return OCRResponse.model_validate(
         await rust_aocr(
             model=model,
             document=document,
-            api_key=resolved_api_key,
+            api_key=prepared.api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,

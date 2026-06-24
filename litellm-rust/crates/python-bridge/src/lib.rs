@@ -36,6 +36,7 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
         CoreError::Auth(message) => PyValueError::new_err(message),
         CoreError::InvalidProvider(_)
         | CoreError::InvalidType { .. }
+        | CoreError::InvalidRequest(_)
         | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }

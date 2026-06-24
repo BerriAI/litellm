@@ -27,7 +27,8 @@ class RustOcr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-    ) -> dict[str, object]: ...
+    ) -> dict[str, object]:
+        raise NotImplementedError
 
 
 class RustAocr(Protocol):
@@ -43,7 +44,8 @@ class RustAocr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]: ...
+    ) -> Awaitable[dict[str, object]]:
+        raise NotImplementedError
 
 
 class _Unset:

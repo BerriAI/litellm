@@ -109,6 +109,12 @@ class RecordingLogging:
 class FakeOCRConfig:
     """A stand-in ``BaseOCRConfig`` that echoes the request it would build."""
 
+    def __init__(self, api_key_env_var="MISTRAL_API_KEY"):
+        self.api_key_env_var = api_key_env_var
+
+    def get_api_key_env_var(self):
+        return self.api_key_env_var
+
     def validate_environment(
         self, *, headers, model, api_key, api_base, litellm_params
     ):
@@ -278,6 +284,34 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     )
 
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
+
+
+def test_run_rust_ocr_uses_provider_api_key_env_var():
+    bridge = RecordingBridge()
+    resolver_calls = []
+
+    def _resolver(name):
+        resolver_calls.append(name)
+        return "sk-provider-env"
+
+    ocr_main._run_rust_ocr(
+        rust_ocr=bridge,
+        logging_obj=RecordingLogging(),
+        provider_config=FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY"),
+        resolve_api_key=_resolver,
+        model="provider-ocr-model",
+        document=DOCUMENT,
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        litellm_params={},
+        timeout_seconds=None,
+    )
+
+    assert resolver_calls == ["PROVIDER_OCR_API_KEY"]
+    assert bridge.calls[0]["api_key"] == "sk-provider-env"
 
 
 def test_run_rust_ocr_prefers_explicit_key_over_resolver():
