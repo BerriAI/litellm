@@ -1,9 +1,8 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
 import litellm
@@ -12,10 +11,14 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm import get_model_info, supports_reasoning
+from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Function,
+    Message,
+    ModelResponse,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -98,12 +101,12 @@ def test_supports_reasoning_effort():
 
     for model in supported_models:
         assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") == True
+            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is True
         ), f"{model} should support reasoning_effort"
 
     for model in unsupported_models:
         assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") == False
+            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is False
         ), f"{model} should not support reasoning_effort"
 
 
@@ -115,11 +118,13 @@ def test_get_supported_openai_params_reasoning_effort():
         "fireworks_ai/accounts/fireworks/models/glm-5p1"
     )
     assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
 
     unsupported_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
     )
     assert "reasoning_effort" not in unsupported_params
+    assert "thinking" not in unsupported_params
 
 
 def test_get_supported_openai_params_parallel_tool_calls():
@@ -179,41 +184,6 @@ def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
     info = config.get_provider_info(model)
 
     assert "supports_reasoning" not in info
-
-
-def test_add_transform_inline_image_block_skips_data_urls():
-    """
-    data: URLs must not have #transform=inline appended — doing so corrupts the
-    base64 payload and raises binascii.Error: Incorrect padding on the Fireworks side.
-    Regression test for https://github.com/BerriAI/litellm/issues/23583
-    """
-    config = FireworksAIConfig()
-    data_url = "data:image/jpeg;base64,/9j/4AAQSkZJRgAB"
-
-    # str branch
-    str_content = {"type": "image_url", "image_url": data_url}
-    result = config._add_transform_inline_image_block(
-        str_content, model="gpt-4", disable_add_transform_inline_image_block=False
-    )
-    assert result["image_url"] == data_url, "data URL must not be modified (str branch)"
-
-    # dict branch
-    dict_content = {"type": "image_url", "image_url": {"url": data_url}}
-    result = config._add_transform_inline_image_block(
-        dict_content, model="gpt-4", disable_add_transform_inline_image_block=False
-    )
-    assert (
-        result["image_url"]["url"] == data_url
-    ), "data URL must not be modified (dict branch)"
-
-    # regular https URL should still get the suffix
-    https_content = {"type": "image_url", "image_url": "https://example.com/image.jpg"}
-    result = config._add_transform_inline_image_block(
-        https_content, model="gpt-4", disable_add_transform_inline_image_block=False
-    )
-    assert result["image_url"].endswith(
-        "#transform=inline"
-    ), "https URL should get #transform=inline"
 
 
 @pytest.mark.parametrize(
@@ -582,3 +552,549 @@ def test_transform_request_routes_short_form_model_to_models_path():
         headers={},
     )
     assert result["model"] == "accounts/fireworks/models/glm-5p2"
+
+
+def _make_fireworks_raw_response(body: dict) -> MagicMock:
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = body
+    mock.text = json.dumps(body)
+    mock.headers = {}
+    return mock
+
+
+_BASE_CHAT_COMPLETION_RESPONSE: dict = {
+    "id": "resp-test",
+    "object": "chat.completion",
+    "created": 1234567890,
+    "model": "glm-5p1",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+}
+
+
+def _run_transform_response(response_body: dict) -> ModelResponse:
+    config = FireworksAIConfig()
+    raw_response = _make_fireworks_raw_response(response_body)
+    logging_obj = MagicMock()
+    return config.transform_response(
+        model="accounts/fireworks/models/glm-5p1",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key="test-key",
+    )
+
+
+_REASONING_MODEL = "fireworks_ai/accounts/fireworks/models/glm-5p1"
+_NON_REASONING_MODEL = "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
+
+
+def test_get_supported_openai_params_includes_all_fireworks_params():
+    config = FireworksAIConfig()
+    params = config.get_supported_openai_params(_REASONING_MODEL)
+
+    required = [
+        "seed",
+        "top_logprobs",
+        "min_p",
+        "typical_p",
+        "repetition_penalty",
+        "mirostat_target",
+        "mirostat_lr",
+        "logit_bias",
+        "echo",
+        "echo_last",
+        "ignore_eos",
+        "prompt_cache_key",
+        "prompt_cache_isolation_key",
+        "raw_output",
+        "perf_metrics_in_response",
+        "return_token_ids",
+        "safe_tokenization",
+        "service_tier",
+        "speculation",
+        "prediction",
+        "stream_options",
+        "sampling_mask",
+        "thinking",
+        "reasoning_history",
+    ]
+    missing = [p for p in required if p not in params]
+    assert missing == [], f"Missing params: {missing}"
+
+
+def test_native_openai_params_flow_end_to_end_with_drop_params_false():
+    """
+    The OpenAI-native params Fireworks supports (seed, top_logprobs, logit_bias,
+    prompt_cache_key, service_tier, prediction) previously hit
+    ``UnsupportedParamsError`` with ``drop_params=False`` because they were absent
+    from ``get_supported_openai_params``. Listing them must let them survive the
+    ``get_optional_params`` gate and reach the request, not just appear in the
+    supported list. Asserting via ``get_optional_params`` (the real gate) rather
+    than ``map_openai_params`` catches a revert of the supported-params additions,
+    which a list-membership check would not.
+    """
+    native = {
+        "seed": 42,
+        "top_logprobs": 3,
+        "logit_bias": {"1": 1},
+        "prompt_cache_key": "cache-key",
+        "service_tier": "auto",
+        "prediction": {"type": "content", "content": "x"},
+    }
+    optional_params = litellm.get_optional_params(
+        model="accounts/fireworks/models/llama-v3-70b-instruct",
+        custom_llm_provider="fireworks_ai",
+        drop_params=False,
+        **native,
+    )
+    for key, value in native.items():
+        assert optional_params.get(key) == value
+
+
+def test_prompt_truncate_len_correct_name():
+    config = FireworksAIConfig()
+    params = config.get_supported_openai_params(_REASONING_MODEL)
+    assert "prompt_truncate_len" in params
+    assert "prompt_truncate_length" not in params
+
+    result = config.map_openai_params(
+        {"prompt_truncate_len": 4096},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result == {"prompt_truncate_len": 4096}
+
+
+def test_stream_options_include_usage_auto_injected():
+    config = FireworksAIConfig()
+    result = config.transform_request(
+        model="accounts/fireworks/models/glm-5p1",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"stream": True},
+        litellm_params={},
+        headers={},
+    )
+    assert result["stream_options"] == {"include_usage": True}
+
+
+def test_stream_options_not_injected_when_not_streaming():
+    config = FireworksAIConfig()
+    result = config.transform_request(
+        model="accounts/fireworks/models/glm-5p1",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "stream_options" not in result
+
+
+def test_stream_options_preserves_user_override():
+    config = FireworksAIConfig()
+    result = config.transform_request(
+        model="accounts/fireworks/models/glm-5p1",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"stream": True, "stream_options": {"include_usage": False}},
+        litellm_params={},
+        headers={},
+    )
+    assert result["stream_options"]["include_usage"] is False
+
+
+def test_reasoning_history_in_supported_params():
+    config = FireworksAIConfig()
+    reasoning_params = config.get_supported_openai_params(_REASONING_MODEL)
+    assert "reasoning_history" in reasoning_params
+
+    non_reasoning_params = config.get_supported_openai_params(_NON_REASONING_MODEL)
+    assert "reasoning_history" not in non_reasoning_params
+
+
+def test_thinking_param_passthrough():
+    config = FireworksAIConfig()
+    thinking = {"type": "disabled"}
+    result = config.map_openai_params(
+        {"thinking": thinking},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result == {"thinking": thinking}
+
+
+def test_thinking_and_reasoning_effort_conflict_rejected():
+    config = FireworksAIConfig()
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="does not support specifying both `thinking` and `reasoning_effort`",
+    ):
+        config.map_openai_params(
+            {
+                "thinking": {"type": "enabled", "budget_tokens": 4096},
+                "reasoning_effort": "medium",
+            },
+            {},
+            _REASONING_MODEL,
+            drop_params=False,
+        )
+
+
+def test_minimax_m3_supports_vision_from_model_map():
+    config = FireworksAIConfig()
+
+    for model in [
+        "fireworks_ai/accounts/fireworks/models/minimax-m3",
+        "fireworks_ai/minimax-m3",
+    ]:
+        assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
+        assert config.get_provider_info(model)["supports_vision"] is True
+
+
+def test_transform_messages_helper_rejects_file_blocks():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQKJSVFT0YK",
+                        "filename": "tiny.pdf",
+                    },
+                },
+                {"type": "text", "text": "Describe this"},
+            ],
+        }
+    ]
+
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="Fireworks AI chat completions does not support file content blocks",
+    ):
+        config._transform_messages_helper(
+            messages, model="accounts/fireworks/models/kimi-k2p6", litellm_params={}
+        )
+
+
+def test_transform_messages_helper_rejects_non_vision_image_inputs():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
+                    },
+                },
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError, match="does not support image inputs"):
+        config._transform_messages_helper(
+            messages, model="accounts/fireworks/models/glm-5p2", litellm_params={}
+        )
+
+
+def test_transform_messages_helper_allows_vision_image_inputs():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
+                    },
+                },
+            ],
+        }
+    ]
+
+    out = config._transform_messages_helper(
+        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+    )
+    assert out == messages
+
+
+def test_image_inputs_not_rejected_for_fuzzy_non_vision_match():
+    """
+    A custom/fine-tuned model id that hyphen-matches a known non-vision model
+    (glm-5p2 has supports_vision=False) must not inherit that False via the
+    substring fallback and hard-reject valid image_url blocks. The capability
+    gate for rejection uses an exact cost-map match; the fuzzy fallback stays a
+    soft signal only, so an unmapped vision-capable deployment is not blocked.
+    """
+    config = FireworksAIConfig()
+    custom_model = "accounts/myorg/models/custom-glm-5p2"
+
+    assert config._get_model_cost_capability(custom_model, "supports_vision") is False
+    assert (
+        config._get_model_cost_capability_exact(custom_model, "supports_vision") is None
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
+                    },
+                },
+            ],
+        }
+    ]
+    out = config._transform_messages_helper(
+        messages, model=custom_model, litellm_params={}
+    )
+    assert out == messages
+
+
+def test_transform_messages_helper_skips_non_dict_content():
+    config = FireworksAIConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": ["just a string", {"type": "text", "text": "hello"}],
+        }
+    ]
+
+    out = config._transform_messages_helper(
+        messages, model="accounts/fireworks/models/glm-5p2", litellm_params={}
+    )
+    assert out == messages
+
+
+def test_transform_messages_helper_no_transform_inline():
+    config = FireworksAIConfig()
+    url = "https://example.com/image.jpg"
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": url}],
+        }
+    ]
+    out = config._transform_messages_helper(
+        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+    )
+    block = out[0]["content"][0]
+    assert block["image_url"] == url
+    assert "#transform=inline" not in block["image_url"]
+
+
+def test_get_provider_info_vision_from_model_cost(monkeypatch):
+    config = FireworksAIConfig()
+
+    vision_model = "fireworks_ai/test-vision-from-cost"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        vision_model,
+        {"supports_vision": True, "supports_pdf_input": True},
+    )
+    info = config.get_provider_info(vision_model)
+    assert info["supports_vision"] is True
+    assert info["supports_pdf_input"] is True
+
+    no_vision_model = "fireworks_ai/test-no-vision-from-cost"
+    monkeypatch.setitem(litellm.model_cost, no_vision_model, {})
+    info_no_vision = config.get_provider_info(no_vision_model)
+    assert info_no_vision.get("supports_vision") is not True
+    assert "supports_pdf_input" not in info_no_vision
+
+
+def test_reasoning_effort_boolean_true_to_medium():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": True},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "medium"
+
+
+def test_reasoning_effort_boolean_false_to_none():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": False},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "none"
+
+
+def test_reasoning_effort_string_passthrough():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": "high"},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "high"
+
+
+def test_reasoning_effort_integer_passthrough():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": 1000},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == 1000
+    assert isinstance(result["reasoning_effort"], int)
+
+
+def test_transform_response_captures_perf_metrics():
+    body = {
+        **_BASE_CHAT_COMPLETION_RESPONSE,
+        "perf_metrics": {"prompt-tokens": 10},
+    }
+    result = _run_transform_response(body)
+    assert result._hidden_params["fireworks_perf_metrics"] == {"prompt-tokens": 10}
+
+
+def test_transform_response_captures_prompt_token_ids():
+    body = {
+        **_BASE_CHAT_COMPLETION_RESPONSE,
+        "prompt_token_ids": [1, 2, 3],
+    }
+    result = _run_transform_response(body)
+    assert result._hidden_params["fireworks_prompt_token_ids"] == [1, 2, 3]
+
+
+def test_transform_response_captures_raw_output():
+    raw_output = {
+        "prompt_fragments": [],
+        "prompt_token_ids": [],
+        "completion": "test",
+    }
+    body = {
+        **_BASE_CHAT_COMPLETION_RESPONSE,
+        "choices": [
+            {
+                **_BASE_CHAT_COMPLETION_RESPONSE["choices"][0],
+                "raw_output": raw_output,
+            }
+        ],
+    }
+    result = _run_transform_response(body)
+    assert result._hidden_params["fireworks_raw_outputs"] == [raw_output]
+
+
+def test_transform_response_captures_token_ids():
+    body = {
+        **_BASE_CHAT_COMPLETION_RESPONSE,
+        "choices": [
+            {
+                **_BASE_CHAT_COMPLETION_RESPONSE["choices"][0],
+                "token_ids": [4, 5, 6],
+            }
+        ],
+    }
+    result = _run_transform_response(body)
+    assert result._hidden_params["fireworks_token_ids"] == [[4, 5, 6]]
+
+
+def test_streaming_surfaces_fireworks_response_fields():
+    """
+    The Fireworks-specific response fields captured into _hidden_params for
+    non-streaming calls must also reach streamed responses. They ride the
+    streamed chunks' provider_specific_fields (litellm rebuilds each streamed
+    chunk, so per-chunk _hidden_params does not survive): per-choice
+    token_ids/raw_output on the content chunk, response-level
+    perf_metrics/prompt_token_ids on the final usage chunk. Driving the real
+    litellm.completion(stream=True) path also covers the get_model_response_iterator
+    wiring; dropping the Fireworks iterator would leave these fields unset.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    model = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+    raw_output = {"completion": "Hi"}
+    sse_lines = [
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hi"},
+                        "token_ids": [123],
+                        "raw_output": raw_output,
+                    }
+                ],
+            }
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 1,
+                    "total_tokens": 6,
+                },
+                "perf_metrics": {"prompt-tokens": 5},
+                "prompt_token_ids": [1, 2, 3],
+            }
+        ),
+        "data: [DONE]",
+    ]
+
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.iter_lines = lambda: iter(sse_lines)
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=raw_response):
+        stream = litellm.completion(
+            model=f"fireworks_ai/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            api_key="fw-test-key",
+            client=client,
+        )
+        surfaced: dict = {}
+        for chunk in stream:
+            fields = getattr(chunk, "provider_specific_fields", None) or {}
+            surfaced.update(
+                {k: v for k, v in fields.items() if k.startswith("fireworks_")}
+            )
+
+    assert surfaced["fireworks_token_ids"] == [[123]]
+    assert surfaced["fireworks_raw_outputs"] == [raw_output]
+    assert surfaced["fireworks_perf_metrics"] == {"prompt-tokens": 5}
+    assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]

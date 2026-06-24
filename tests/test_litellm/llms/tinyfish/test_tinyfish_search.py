@@ -63,23 +63,17 @@ class TestTinyfishSearchConfig:
         assert headers["X-API-Key"] == "sk-tinyfish-test"
         assert headers["Accept"] == "application/json"
 
-    def test_validate_environment_from_env(self):
+    def test_validate_environment_from_env(self, monkeypatch):
+        monkeypatch.setenv("TINYFISH_API_KEY", "sk-from-env")
         config = TinyfishSearchConfig()
-        with patch(
-            "litellm.llms.tinyfish.search.transformation.get_secret_str",
-            return_value="sk-from-env",
-        ):
-            headers = config.validate_environment(headers={})
+        headers = config.validate_environment(headers={})
         assert headers["X-API-Key"] == "sk-from-env"
 
-    def test_validate_environment_missing_key(self):
+    def test_validate_environment_missing_key(self, monkeypatch):
+        monkeypatch.delenv("TINYFISH_API_KEY", raising=False)
         config = TinyfishSearchConfig()
-        with patch(
-            "litellm.llms.tinyfish.search.transformation.get_secret_str",
-            return_value=None,
-        ):
-            with pytest.raises(ValueError, match="TINYFISH_API_KEY"):
-                config.validate_environment(headers={})
+        with pytest.raises(ValueError, match="TINYFISH_API_KEY"):
+            config.validate_environment(headers={})
 
     def test_validate_environment_uses_api_base_kwarg(self):
         config = TinyfishSearchConfig()

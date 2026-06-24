@@ -1195,6 +1195,25 @@ def run_server(
             os.getenv("DATABASE_URL", None) is not None
             or os.getenv("DIRECT_URL", None) is not None
         ):
+            from litellm.proxy.db.db_url_settings import (
+                unsupported_db_scheme,
+                unsupported_db_scheme_message,
+            )
+
+            for _db_env in ("DATABASE_URL", "DIRECT_URL"):
+                _candidate_url = os.getenv(_db_env)
+                if _candidate_url is None:
+                    continue
+                _bad_scheme = unsupported_db_scheme(_candidate_url)
+                if _bad_scheme is not None:
+                    print(
+                        f"\033[1;31mLiteLLM Proxy: "
+                        f"{unsupported_db_scheme_message(_db_env, _bad_scheme)}"
+                        "\033[0m",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    sys.exit(1)
             try:
                 from litellm.secret_managers.main import get_secret
 

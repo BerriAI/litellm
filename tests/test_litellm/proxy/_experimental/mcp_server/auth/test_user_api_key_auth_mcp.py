@@ -15,7 +15,11 @@ from starlette.datastructures import Headers
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy._types import (
+    SpecialHeaders,
+    SpecialMCPServerNames,
+    UserAPIKeyAuth,
+)
 
 
 @pytest.mark.asyncio
@@ -165,6 +169,53 @@ class TestMCPRequestHandler:
                 # Verify the mock functions were called correctly
                 mock_key_servers.assert_called_once_with(user_api_key_auth)
                 mock_team_servers.assert_called_once_with(user_api_key_auth)
+
+    @pytest.mark.parametrize("team_servers", [[], ["team_server1", "team_server2"]])
+    async def test_no_mcp_servers_sentinel_returns_empty(self, team_servers):
+        """A key scoped to the no-mcp-servers sentinel resolves to zero servers,
+        overriding team inheritance and never leaking the sentinel marker."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team"
+        )
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.no_mcp_servers.value
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ), patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=team_servers,
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+
+    async def test_get_allowed_mcp_servers_for_key_returns_sentinel_marker(self):
+        """_get_allowed_mcp_servers_for_key surfaces the sentinel unexpanded so the
+        caller can short-circuit, ignoring any other entries on the key."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.no_mcp_servers.value,
+            "some-other-server",
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth
+            )
+
+        assert result == [SpecialMCPServerNames.no_mcp_servers.value]
 
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""

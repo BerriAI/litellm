@@ -14,6 +14,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
     _resolve_team_allowed_mcp_servers,
+    _rewrite_object_permission_mcp_servers,
     _set_object_permission,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
@@ -109,6 +110,31 @@ def test_extract_requested_mcp_server_ids_combined():
 def test_extract_requested_mcp_server_ids_none():
     assert _extract_requested_mcp_server_ids(None) == set()
     assert _extract_requested_mcp_server_ids({}) == set()
+
+
+def test_extract_requested_mcp_server_ids_excludes_no_mcp_servers_sentinel():
+    obj_perm = {"mcp_servers": ["no-mcp-servers", "server-1"]}
+    assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
+
+
+def test_rewrite_object_permission_mcp_servers_preserves_sentinel():
+    obj_perm = {"mcp_servers": ["no-mcp-servers", "alias-1"]}
+    _rewrite_object_permission_mcp_servers(obj_perm, {"alias-1": {"server-1"}})
+    assert obj_perm["mcp_servers"] == ["no-mcp-servers", "server-1"]
+
+
+@pytest.mark.asyncio
+async def test_validate_no_mcp_servers_sentinel_passes_and_preserved():
+    """A key scoped to no-mcp-servers passes team validation untouched, keeping the
+    sentinel so it is not mistaken for an unknown server and rejected."""
+    team_obj = _make_team_obj(mcp_servers=["server-1"])
+    obj_perm = {"mcp_servers": ["no-mcp-servers"]}
+    result = await validate_key_mcp_servers_against_team(
+        object_permission=obj_perm,
+        team_obj=team_obj,
+    )
+    assert result == obj_perm
+    assert obj_perm["mcp_servers"] == ["no-mcp-servers"]
 
 
 # ---- Tests for _extract_requested_mcp_access_groups ----

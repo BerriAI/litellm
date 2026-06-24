@@ -16,8 +16,6 @@ Pins covered:
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,8 +24,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
+    _format_fallback_metadata_sse_event,
     _format_streaming_sse_chunk,
     _get_client_requested_model_for_streaming,
+    _get_streaming_fallback_metadata,
+    _is_positive_int_like,
     _restamp_streaming_chunk_model,
     _serialize_streaming_chunk,
     async_assistants_data_generator,
@@ -69,6 +70,15 @@ async def _async_iter_raises(exc: Exception):
     # yield once then raise — exercises the mid-stream failure branch
     yield _simple_chunk(content="partial")
     raise exc
+
+
+class _FakeStream:
+    def __init__(self, chunks, hidden_params=None):
+        self._chunks = chunks
+        self._hidden_params = hidden_params or {}
+
+    def __aiter__(self):
+        return _async_iter(self._chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +284,34 @@ def test_restamp_streaming_chunk_model_overrides_model_on_dict():
     assert logged is True
 
 
+def test_restamp_streaming_chunk_model_uses_fallback_model_from_metadata():
+    chunk = _simple_chunk(model="openai/internal-fallback")
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="primary-model",
+        request_data={"litellm_call_id": "id-1"},
+        model_mismatch_logged=False,
+        fallback_was_attempted=True,
+        fallback_model_from_metadata="fallback-model",
+    )
+    assert new_chunk.model == "fallback-model"
+    assert logged is True
+
+
+def test_restamp_streaming_chunk_model_preserves_fallback_model_without_group():
+    chunk = _simple_chunk(model="openai/internal-fallback")
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="primary-model",
+        request_data={},
+        model_mismatch_logged=False,
+        fallback_was_attempted=True,
+        fallback_model_from_metadata=None,
+    )
+    assert new_chunk.model == "openai/internal-fallback"
+    assert logged is False
+
+
 def test_restamp_streaming_chunk_model_invalid_chunk_type_unchanged():
     """For a non-BaseModel, non-dict chunk the helper returns it as-is
     along with the original ``model_mismatch_logged`` flag."""
@@ -286,6 +324,147 @@ def test_restamp_streaming_chunk_model_invalid_chunk_type_unchanged():
     )
     assert new_chunk == "raw string chunk"
     assert logged is False
+
+
+def test_is_positive_int_like_invalid_and_edge_values():
+    assert _is_positive_int_like(None) is False
+    assert _is_positive_int_like("not-a-number") is False
+    assert _is_positive_int_like(0) is False
+    assert _is_positive_int_like(-1) is False
+    assert _is_positive_int_like("1") is True
+    assert _is_positive_int_like(2) is True
+
+
+def test_get_streaming_fallback_metadata_reads_headers():
+    fallback_errors = [
+        {
+            "message": "litellm.RateLimitError: upstream limited request",
+            "type": "RateLimitError",
+            "param": None,
+            "code": "429",
+        }
+    ]
+    stream = _FakeStream(
+        [],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": "1",
+                "x-litellm-model-group": "fallback-model",
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+    assert _get_streaming_fallback_metadata(stream) == (
+        True,
+        "fallback-model",
+        fallback_errors,
+    )
+
+
+def test_get_streaming_fallback_metadata_no_additional_headers():
+    stream = _FakeStream([], hidden_params={})
+    assert _get_streaming_fallback_metadata(stream) == (False, None, [])
+
+
+def test_get_streaming_fallback_metadata_zero_fallback_count():
+    stream = _FakeStream(
+        [],
+        hidden_params={
+            "additional_headers": {"x-litellm-attempted-fallbacks": 0}
+        },
+    )
+    assert _get_streaming_fallback_metadata(stream) == (False, None, [])
+
+
+def test_get_streaming_fallback_metadata_no_model_group_returns_none_model():
+    stream = _FakeStream(
+        [],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+            }
+        },
+    )
+    was_attempted, fallback_model, errors = _get_streaming_fallback_metadata(stream)
+    assert was_attempted is True
+    assert fallback_model is None
+    assert errors == []
+
+
+def test_restamp_streaming_chunk_model_azure_router_preserves_model():
+    chunk = _simple_chunk(model="azure_ai/internal-deployment")
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="azure_ai/model-router",
+        request_data={},
+        model_mismatch_logged=False,
+    )
+    assert new_chunk.model == "azure_ai/internal-deployment"
+    assert logged is False
+
+
+def test_restamp_streaming_chunk_model_fastest_response_preserves_model():
+    chunk = _simple_chunk(model="winning-model")
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="gpt-4,claude-3",
+        request_data={"fastest_response": True},
+        model_mismatch_logged=False,
+    )
+    assert new_chunk.model == "winning-model"
+    assert logged is False
+
+
+def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
+    from pydantic import ConfigDict
+
+    class FrozenChunk(_simple_chunk().__class__):
+        model_config = ConfigDict(frozen=True)
+
+    chunk = FrozenChunk(
+        id="chatcmpl-test",
+        choices=[],
+        created=0,
+        model="openai/internal-x",
+        object="chat.completion.chunk",
+    )
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="gpt-4",
+        request_data={"litellm_call_id": "test-id"},
+        model_mismatch_logged=False,
+    )
+    assert new_chunk.model == "openai/internal-x"
+    assert logged is True
+
+
+def test_format_fallback_metadata_sse_event():
+    fallback_errors = [
+        {
+            "message": "litellm.RateLimitError: upstream limited request",
+            "type": "RateLimitError",
+            "param": None,
+            "code": "429",
+        }
+    ]
+
+    event = _format_fallback_metadata_sse_event(
+        fallback_model="fallback-model",
+        fallback_errors=fallback_errors,
+    )
+
+    assert isinstance(event, str)
+    assert event.startswith("data: ")
+    payload = json.loads(event.removeprefix("data: ").removesuffix("\n\n"))
+    assert payload["choices"] == []
+    assert payload["litellm_fallback"] == {
+        "fallback_model": "fallback-model",
+        "errors": fallback_errors,
+    }
+    assert payload["id"] == "litellm-fallback-metadata"
+    assert payload["object"] == "chat.completion.chunk"
+    assert payload["model"] == "fallback-model"
+    assert isinstance(payload["created"], int)
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +652,7 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
     # First chunk is bytes (fast path) wrapped via _format_streaming_sse_chunk.
     first = out[0]
     assert isinstance(first, bytes)
-    payload = json.loads(first.removeprefix(b"data: ").rstrip(b"\n\n"))
+    payload = json.loads(first.removeprefix(b"data: ").removesuffix(b"\n\n"))
     assert normalize(payload) == {
         "id": "<VOLATILE>",
         "object": "chat.completion.chunk",
@@ -486,6 +665,172 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_uses_response_fallback_metadata(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    response = _FakeStream(
+        [_simple_chunk(model="openai/internal-fallback", content="hello")],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                "x-litellm-model-group": "fallback-model",
+            }
+        },
+    )
+    out = []
+    async for line in async_data_generator(
+        response=response,
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "primary-model", "include_fallback_errors": True},
+    ):
+        out.append(line)
+
+    first = out[0]
+    assert isinstance(first, bytes)
+    payload = json.loads(first.removeprefix(b"data: ").removesuffix(b"\n\n"))
+    assert payload["model"] == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_uses_chunk_fallback_metadata(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    chunk = _simple_chunk(model="openai/internal-fallback", content="hello")
+    chunk._hidden_params = {
+        "additional_headers": {
+            "x-litellm-attempted-fallbacks": 1,
+            "x-litellm-model-group": "fallback-model",
+        }
+    }
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter([chunk]),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "primary-model"},
+    ):
+        out.append(line)
+
+    first = out[0]
+    assert isinstance(first, bytes)
+    payload = json.loads(first.removeprefix(b"data: ").removesuffix(b"\n\n"))
+    assert payload["model"] == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_switches_model_mid_stream_on_fallback(monkeypatch):
+    """Pre-fallback chunks keep the client-requested model; once a chunk carries
+    fallback metadata the model latches to the fallback group for the rest of the
+    stream. This pins the client-visible mid-stream model change."""
+    _patch_logging_flags(monkeypatch)
+
+    primary_chunk = _simple_chunk(model="openai/internal-primary", content="hi")
+    fallback_chunk = _simple_chunk(model="openai/internal-fallback", content="there")
+    fallback_chunk._hidden_params = {
+        "additional_headers": {
+            "x-litellm-attempted-fallbacks": 1,
+            "x-litellm-model-group": "fallback-model",
+        }
+    }
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter([primary_chunk, fallback_chunk]),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "primary-model"},
+    ):
+        out.append(line)
+
+    first_payload = json.loads(out[0].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    second_payload = json.loads(out[1].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    assert first_payload["model"] == "primary-model"
+    assert second_payload["model"] == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_emits_fallback_error_metadata_event(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
+
+    fallback_errors = [
+        {
+            "message": "litellm.RateLimitError: upstream limited request",
+            "type": "RateLimitError",
+            "param": None,
+            "code": "429",
+        }
+    ]
+    response = _FakeStream(
+        [_simple_chunk(model="openai/internal-fallback", content="hello")],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                "x-litellm-model-group": "fallback-model",
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+    out = []
+    async for line in async_data_generator(
+        response=response,
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "primary-model", "include_fallback_errors": True},
+    ):
+        out.append(line)
+
+    assert isinstance(out[0], bytes)
+    chunk_payload = json.loads(out[0].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    assert chunk_payload["model"] == "fallback-model"
+    assert isinstance(out[1], str)
+    assert out[1].startswith("data: ")
+    metadata_payload = json.loads(out[1].removeprefix("data: ").removesuffix("\n\n"))
+    assert metadata_payload["choices"] == []
+    assert metadata_payload["litellm_fallback"] == {
+        "fallback_model": "fallback-model",
+        "errors": fallback_errors,
+    }
+    assert metadata_payload["id"] == "litellm-fallback-metadata"
+    assert metadata_payload["object"] == "chat.completion.chunk"
+    assert metadata_payload["model"] == "fallback-model"
+    assert isinstance(metadata_payload["created"], int)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_skips_fallback_error_event_without_opt_in(
+    monkeypatch,
+):
+    _patch_logging_flags(monkeypatch)
+
+    fallback_errors = [
+        {
+            "message": "litellm.RateLimitError: upstream limited request",
+            "type": "RateLimitError",
+            "param": None,
+            "code": "429",
+        }
+    ]
+    response = _FakeStream(
+        [_simple_chunk(model="openai/internal-fallback", content="hello")],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                "x-litellm-model-group": "fallback-model",
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+    out = []
+    async for line in async_data_generator(
+        response=response,
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "primary-model"},
+    ):
+        out.append(line)
+
+    assert isinstance(out[0], bytes)
+    payload = json.loads(out[0].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    assert payload["model"] == "fallback-model"
 
 
 @pytest.mark.asyncio

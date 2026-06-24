@@ -80,6 +80,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPTransport,
     MCPTransportType,
+    SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -1349,6 +1350,17 @@ class MCPServerManager:
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
         try:
+            # The key explicitly opted out of every MCP server. Return zero before
+            # layering on allow_all_keys servers so the opt-out is absolute.
+            key_object_permission = (
+                user_api_key_auth.object_permission if user_api_key_auth else None
+            )
+            if key_object_permission is not None and (
+                SpecialMCPServerNames.no_mcp_servers.value
+                in (key_object_permission.mcp_servers or [])
+            ):
+                return []
+
             # Check if object_permission.mcp_servers is explicitly set
             has_explicit_object_permission = False
             if user_api_key_auth and user_api_key_auth.object_permission:

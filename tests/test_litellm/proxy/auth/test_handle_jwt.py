@@ -1206,7 +1206,13 @@ async def test_auth_builder_returns_team_membership_object():
             JWTAuthManager,
             "get_objects",
             new_callable=AsyncMock,
-            return_value=(user_object, None, None, mock_team_membership, user_object.user_id),
+            return_value=(
+                user_object,
+                None,
+                None,
+                mock_team_membership,
+                user_object.user_id,
+            ),
         ) as mock_get_objects,
         patch.object(
             JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
@@ -3509,9 +3515,7 @@ def test_canonical_user_id_no_change_when_ids_match():
     user_object = LiteLLM_UserTable(user_id=same, user_email=same)
 
     assert (
-        JWTAuthManager._canonical_user_id_from_db(
-            user_id=same, user_object=user_object
-        )
+        JWTAuthManager._canonical_user_id_from_db(user_id=same, user_object=user_object)
         == same
     )
 
@@ -3802,12 +3806,15 @@ async def test_get_objects_team_membership_uses_rebound_user_id():
         user_id_jwt_field="email", user_id_upsert=True
     )
 
-    with patch(
-        "litellm.proxy.auth.handle_jwt.get_user_object",
-        side_effect=fake_get_user_object,
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.get_team_membership",
-        side_effect=fake_get_team_membership,
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_user_object",
+            side_effect=fake_get_user_object,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            side_effect=fake_get_team_membership,
+        ),
     ):
         (
             user_object,

@@ -115,6 +115,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "darkbloom": {
+    "base_url": "https://api.darkbloom.dev/v1",
+    "api_key_env": "DARKBLOOM_API_KEY",
+    "api_base_env": "DARKBLOOM_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "neosantara": {
     "base_url": "https://api.neosantara.xyz/v1",
     "api_key_env": "NEOSANTARA_API_KEY",

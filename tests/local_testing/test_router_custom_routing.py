@@ -18,6 +18,8 @@ import litellm
 from litellm import Router
 from litellm.router import CustomRoutingStrategyBase
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 
 def _create_router():
     return Router(
@@ -26,7 +28,7 @@ def _create_router():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/very-special-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "very-special-endpoint"},
@@ -35,7 +37,7 @@ def _create_router():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/fast-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "fast-endpoint"},

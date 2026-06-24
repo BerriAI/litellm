@@ -125,6 +125,74 @@ def test_mantle_messages_url_construction():
     assert url == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
 
 
+_VPC_ENDPOINT = "https://vpce-0a1b2c3d.bedrock-mantle.us-gov-west-1.vpce.amazonaws.com"
+
+
+def test_mantle_chat_url_honors_api_base_host():
+    config = AmazonMantleConfig()
+    url = config.get_complete_url(
+        api_base=_VPC_ENDPOINT,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-gov-west-1"},
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+
+
+def test_mantle_chat_url_honors_api_base_full_path_without_duplication():
+    config = AmazonMantleConfig()
+    full = f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+    url = config.get_complete_url(
+        api_base=full,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-gov-west-1"},
+        litellm_params={},
+    )
+    assert url == full
+
+
+def test_mantle_messages_url_honors_api_base_host():
+    config = AmazonMantleMessagesConfig()
+    url = config.get_complete_url(
+        api_base=_VPC_ENDPOINT,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-gov-west-1"},
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+    assert "api.aws" not in url
+
+
+def test_mantle_messages_url_honors_api_base_with_trailing_slash():
+    config = AmazonMantleMessagesConfig()
+    url = config.get_complete_url(
+        api_base=f"{_VPC_ENDPOINT}/",
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-gov-west-1"},
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+
+
+def test_mantle_messages_url_honors_aws_bedrock_runtime_endpoint():
+    config = AmazonMantleMessagesConfig()
+    url = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={
+            "aws_region_name": "us-gov-west-1",
+            "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT,
+        },
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+
+
 def test_mantle_transform_request_strips_prefix_and_adds_model():
     config = AmazonMantleConfig()
     request = config.transform_request(
@@ -247,3 +315,35 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert requests[0]["path"] == "/anthropic/v1/messages"
     assert requests[0]["headers"]["anthropic-workspace"] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in requests[0]["body"]
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_routes_to_vpc_api_base():
+    import litellm
+
+    urls = []
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        urls.append(str(url))
+        return _anthropic_response(str(url))
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-mythos-preview",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                api_base=_VPC_ENDPOINT,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-gov-west-1",
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert len(urls) == 1
+    assert urls[0] == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+    assert "api.aws" not in urls[0]

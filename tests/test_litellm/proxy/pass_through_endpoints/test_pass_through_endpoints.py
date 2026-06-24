@@ -2682,15 +2682,19 @@ async def test_add_litellm_data_to_request_adds_headers_to_metadata():
         version="1.0",
     )
 
-    # Verify headers are added to metadata for guardrails
-    assert "metadata" in result, "metadata should be present in result"
-    assert "headers" in result["metadata"], "headers should be present in metadata"
+    # Verify headers are added to litellm_metadata for guardrails.
+    # Bedrock passthrough uses litellm_metadata to prevent key-level
+    # tags from leaking into the provider payload (GH#30629).
+    assert "litellm_metadata" in result, "litellm_metadata should be present in result"
+    assert (
+        "headers" in result["litellm_metadata"]
+    ), "headers should be present in litellm_metadata"
     assert isinstance(
-        result["metadata"]["headers"], dict
+        result["litellm_metadata"]["headers"], dict
     ), "headers should be a dictionary"
 
     # Verify specific headers are accessible (important for guardrails)
-    headers = result["metadata"]["headers"]
+    headers = result["litellm_metadata"]["headers"]
     assert (
         "user-agent" in headers or "User-Agent" in headers
     ), "User-Agent header should be accessible in metadata"

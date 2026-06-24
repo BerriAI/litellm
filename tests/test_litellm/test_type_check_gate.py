@@ -56,27 +56,56 @@ def test_paths_outside_repo_are_skipped():
 
 def test_at_or_under_ceiling_passes():
     budget = {"no-any-return": {"baseline": 5, "slack": 0}}
-    assert gate.evaluate({"no-any-return": 5}, budget) == []
+    assert gate.evaluate({"no-any-return": 5}, {}, budget) == []
 
 
 def test_one_more_error_than_ceiling_fails():
     budget = {"no-any-return": {"baseline": 5, "slack": 0}}
-    assert gate.evaluate({"no-any-return": 6}, budget) == [
-        gate.Breach("no-any-return", 6, 5)
+    assert gate.evaluate({"no-any-return": 6}, {}, budget) == [
+        gate.Breach("no-any-return", 6, 5, 6)
     ]
 
 
 def test_slack_absorbs_small_increase_then_fails_past_it():
     budget = {"arg-type": {"baseline": 5, "slack": 5}}
-    assert gate.evaluate({"arg-type": 10}, budget) == []
-    assert gate.evaluate({"arg-type": 11}, budget) == [gate.Breach("arg-type", 11, 10)]
+    assert gate.evaluate({"arg-type": 10}, {}, budget) == []
+    assert gate.evaluate({"arg-type": 11}, {}, budget) == [
+        gate.Breach("arg-type", 11, 10, 11)
+    ]
 
 
 def test_unbudgeted_new_code_uses_default_slack():
-    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK}, {}) == []
-    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK + 1}, {}) == [
-        gate.Breach("brand-new", gate.DEFAULT_SLACK + 1, gate.DEFAULT_SLACK)
+    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK}, {}, {}) == []
+    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK + 1}, {}, {}) == [
+        gate.Breach(
+            "brand-new",
+            gate.DEFAULT_SLACK + 1,
+            gate.DEFAULT_SLACK,
+            gate.DEFAULT_SLACK + 1,
+        )
     ]
+
+
+def test_drift_already_over_cap_in_base_is_not_blamed_on_a_flat_change():
+    # The bystander case: a rule sits over its ceiling because two earlier PRs
+    # summed past it. A PR that branches off that base and adds nothing must pass
+    # -- total > cap but total == base, so the `> base` guard spares it.
+    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    assert gate.evaluate({"arg-type": 12}, {"arg-type": 12}, budget) == []
+
+
+def test_change_that_grows_an_over_cap_rule_is_blamed_for_only_what_it_added():
+    # Over cap AND above base: blamed, and `added` is the delta vs base, not the
+    # whole overage, so the message points at this change's contribution.
+    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    assert gate.evaluate({"arg-type": 14}, {"arg-type": 12}, budget) == [
+        gate.Breach("arg-type", 14, 10, 2)
+    ]
+
+
+def test_reducing_an_over_cap_rule_below_base_passes():
+    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    assert gate.evaluate({"arg-type": 11}, {"arg-type": 12}, budget) == []
 
 
 def test_no_output_against_a_nonempty_budget_is_a_vacuous_run():

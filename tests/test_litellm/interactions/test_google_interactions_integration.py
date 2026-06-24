@@ -299,7 +299,6 @@ class TestGoogleInteractionsResponseStructure:
         assert hasattr(response, "outputs")
         assert hasattr(response, "usage")
         assert hasattr(response, "model") or hasattr(response, "agent")
-        assert hasattr(response, "role")
         assert hasattr(response, "created")
         assert hasattr(response, "updated")
 

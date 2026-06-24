@@ -120,6 +120,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/robots.txt",
     # Health (k8s probes)
     "/health",
+    # Plugin system
+    "/api/plugins",
+    "/plugin-proxy/",
 )
 
 BACKEND_EXACT_PATHS: frozenset[str] = frozenset(

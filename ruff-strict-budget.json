@@ -300,7 +300,7 @@
     "slack": 3
   },
   "RET504": {
-    "baseline": 709,
+    "baseline": 702,
     "slack": 20
   },
   "RUF010": {

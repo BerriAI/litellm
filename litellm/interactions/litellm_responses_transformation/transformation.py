@@ -300,9 +300,6 @@ class LiteLLMResponsesInteractionsConfig:
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
             }
 
-        # Add role
-        interactions_response_dict["role"] = "model"
-
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created
 
