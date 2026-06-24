@@ -120,7 +120,25 @@ def test_vertex_session_update_defaults_to_audio_modality():
     assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
-def test_vertex_audio_only_live_model_coerces_text_modality_to_audio():
+_NATIVE_AUDIO_MODEL = "gemini-live-2.5-flash-preview-native-audio-09-2025"
+
+
+@pytest.fixture(autouse=False)
+def patch_native_audio_cost_map_entry(monkeypatch):
+    """Inject gemini_native_audio into the cost map for the test model.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the field may not exist yet. Patch it locally so these unit tests remain
+    self-contained and don't depend on the remote cost map state.
+    """
+    entry = dict(litellm.model_cost.get(_NATIVE_AUDIO_MODEL, {}))
+    entry["gemini_native_audio"] = True
+    monkeypatch.setitem(litellm.model_cost, _NATIVE_AUDIO_MODEL, entry)
+
+
+def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
+    patch_native_audio_cost_map_entry,
+):
     """Regression: TEXT-only responseModalities causes 1007 on native-audio Live models."""
     cfg = VertexAIRealtimeConfig(
         access_token="tok", project="my-proj", location="us-central1"
@@ -135,7 +153,7 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        _NATIVE_AUDIO_MODEL,
         session_configuration_request=None,
     )
 
@@ -143,7 +161,9 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio():
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
-def test_vertex_session_update_normalizes_ga_remapped_fields():
+def test_vertex_session_update_normalizes_ga_remapped_fields(
+    patch_native_audio_cost_map_entry,
+):
     """GA-format clients send ``output_modalities`` and nested
     ``audio.input.transcription`` / ``audio.input.turn_detection``. These must
     be normalised back to the flat beta keys before ``map_openai_params``
@@ -169,7 +189,7 @@ def test_vertex_session_update_normalizes_ga_remapped_fields():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        _NATIVE_AUDIO_MODEL,
         session_configuration_request=None,
     )
     assert len(messages) == 1

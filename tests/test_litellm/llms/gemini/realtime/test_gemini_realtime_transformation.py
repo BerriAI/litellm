@@ -1940,6 +1940,32 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
     assert response_done["response"]["status"] == "completed"
 
 
+@pytest.fixture(autouse=False)
+def patch_gemini_audio_cost_map_entries(monkeypatch):
+    """Inject gemini_native_audio / gemini_audio_only_live into the cost map.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the fields may not exist yet. Patch locally so these tests are
+    self-contained.
+    """
+    native_audio_models = [
+        "gemini-2.5-flash-native-audio-latest",
+        "gemini/gemini-2.5-flash-native-audio-latest",
+    ]
+    flash_live_models = [
+        "gemini-3.1-flash-live-preview",
+        "gemini/gemini-3.1-flash-live-preview",
+    ]
+    for m in native_audio_models:
+        entry = dict(litellm.model_cost.get(m, {}))
+        entry["gemini_native_audio"] = True
+        monkeypatch.setitem(litellm.model_cost, m, entry)
+    for m in flash_live_models:
+        entry = dict(litellm.model_cost.get(m, {}))
+        entry["gemini_audio_only_live"] = True
+        monkeypatch.setitem(litellm.model_cost, m, entry)
+
+
 @pytest.mark.parametrize(
     "model,expected",
     [
@@ -1951,7 +1977,9 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
         ("gemini-2.5-flash", False),
     ],
 )
-def test_is_audio_only_live_model_uses_cost_map(model, expected):
+def test_is_audio_only_live_model_uses_cost_map(
+    model, expected, patch_gemini_audio_cost_map_entries
+):
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
 
 
@@ -1965,7 +1993,9 @@ def test_is_audio_only_live_model_uses_cost_map(model, expected):
         ("gemini-2.0-flash", False),
     ],
 )
-def test_is_native_audio_model_uses_cost_map(model, expected):
+def test_is_native_audio_model_uses_cost_map(
+    model, expected, patch_gemini_audio_cost_map_entries
+):
     assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
 
 
