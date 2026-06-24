@@ -7,7 +7,7 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 import datetime
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -120,12 +120,7 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
     """
     agent_name = "unknown"
 
-    # Try to get agent card from our stored attribute first, then fallback to SDK attribute
-    agent_card = getattr(a2a_client, "_litellm_agent_card", None)
-    if agent_card is None:
-        agent_card = getattr(a2a_client, "agent_card", None)
-    if agent_card is None:
-        agent_card = getattr(a2a_client, "_card", None)
+    agent_card = _get_a2a_client_agent_card(a2a_client)
 
     if agent_card is not None:
         agent_name = getattr(agent_card, "name", "unknown") or "unknown"
@@ -143,6 +138,18 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
 
     return agent_name
+
+
+def _get_a2a_client_agent_card(a2a_client: Any) -> Optional["AgentCard"]:
+    agent_card = cast(
+        Optional["AgentCard"], getattr(a2a_client, "_litellm_agent_card", None)
+    )
+    if agent_card is not None:
+        return agent_card
+    agent_card = cast(Optional["AgentCard"], getattr(a2a_client, "agent_card", None))
+    if agent_card is not None:
+        return agent_card
+    return cast(Optional["AgentCard"], getattr(a2a_client, "_card", None))
 
 
 async def _send_message_via_completion_bridge(
@@ -419,9 +426,7 @@ async def asend_message(
     verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
 
     # Get agent card URL for localhost retry logic
-    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(
-        a2a_client, "agent_card", None
-    )
+    agent_card = _get_a2a_client_agent_card(a2a_client)
     card_url = get_agent_card_url(agent_card) if agent_card else None
 
     a2a_response = await _execute_a2a_send_with_retry(
@@ -656,9 +661,7 @@ async def asend_message_streaming(
         f"A2A send_message_streaming request_id={request.id}, agent={agent_name}"
     )
 
-    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(
-        a2a_client, "agent_card", None
-    )
+    agent_card = _get_a2a_client_agent_card(a2a_client)
     card_url = get_agent_card_url(agent_card) if agent_card else None
 
     stream = _execute_a2a_stream_with_retry(

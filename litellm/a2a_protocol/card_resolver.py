@@ -65,7 +65,6 @@ def set_agent_card_url(agent_card: "AgentCard", url: str) -> None:
     normalized = url.rstrip("/") + "/"
     if hasattr(agent_card, "url"):
         agent_card.url = normalized
-        return
 
     interfaces = getattr(agent_card, "supported_interfaces", None)
     if interfaces:
@@ -93,7 +92,6 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
         # Normalize base_url to ensure it ends with /
         fixed_url = base_url.rstrip("/") + "/"
         agent_card.url = fixed_url
-        return agent_card
 
     interfaces = getattr(agent_card, "supported_interfaces", None)
     if interfaces:

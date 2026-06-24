@@ -1,5 +1,6 @@
 """Tests for litellm/a2a_protocol/exception_mapping_utils.py."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,7 +25,7 @@ async def test_localhost_retry_reuses_stashed_httpx_client():
     stashed_httpx_client = object()
     a2a_client = MagicMock()
     a2a_client._litellm_httpx_client = stashed_httpx_client
-    new_client = object()
+    new_client = MagicMock()
 
     captured = {}
 
@@ -53,6 +54,7 @@ async def test_localhost_retry_reuses_stashed_httpx_client():
     # The exact stashed client is threaded through, not a freshly built one.
     assert captured["httpx_client"] is stashed_httpx_client
     assert captured["streaming"] is True
+    assert new_client._litellm_httpx_client is stashed_httpx_client
     assert mock_create.await_count == 1
 
 
@@ -76,6 +78,15 @@ async def test_localhost_retry_raises_when_no_stashed_client():
             )
 
     mock_create.assert_not_called()
+
+
+def test_get_a2a_client_agent_card_reads_sdk_private_card():
+    from litellm.a2a_protocol.main import _get_a2a_client_agent_card
+
+    sdk_card = SimpleNamespace(name="Test Agent", url="http://localhost:10001/")
+    a2a_client = SimpleNamespace(_card=sdk_card)
+
+    assert _get_a2a_client_agent_card(a2a_client) is sdk_card
 
 
 @pytest.mark.asyncio

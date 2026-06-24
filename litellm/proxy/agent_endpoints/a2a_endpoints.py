@@ -6,6 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -535,11 +536,14 @@ async def get_agent_card(
                 detail=f"Agent '{agent_id}' has no agent card configured",
             )
 
-        # Copy and rewrite URL to point to LiteLLM proxy
-        agent_card = {
-            **agent.agent_card_params,
-            "url": get_custom_url(str(request.base_url), route=f"a2a/{agent_id}"),
-        }
+        proxy_url = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
+        agent_card = deepcopy(agent.agent_card_params)
+        agent_card["url"] = proxy_url
+        interfaces = agent_card.get("supportedInterfaces")
+        if isinstance(interfaces, list) and interfaces:
+            interfaces[0]["url"] = proxy_url
+        served_version = _served_version(agent, request)
+        agent_card = normalize_agent_card(agent_card, served_version)
 
         verbose_proxy_logger.debug(f"Returning agent card for '{agent_id}' with proxy URL: {agent_card['url']}")
         return JSONResponse(content=agent_card)

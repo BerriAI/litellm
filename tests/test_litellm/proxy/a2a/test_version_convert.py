@@ -159,6 +159,16 @@ def test_agent_card_lowered_to_0_3_drops_additional_interfaces():
     assert "http://internal:9999" not in str(out)
 
 
+def test_agent_card_with_0_3_pin_and_supported_interfaces_is_lowered():
+    card = _extended_card_1_0()
+    card["protocolVersion"] = "0.3"
+
+    out = normalize_agent_card(card, "0.3")
+
+    assert out["protocolVersion"] == "0.3"
+    assert "supportedInterfaces" not in out
+
+
 def test_agent_card_same_version_passthrough():
     card = _extended_card_1_0()
     assert normalize_agent_card(card, "1.0") is card

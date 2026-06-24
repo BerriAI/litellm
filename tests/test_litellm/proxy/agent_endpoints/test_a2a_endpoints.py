@@ -974,6 +974,14 @@ async def test_get_agent_card_uses_proxy_base_url_when_set(monkeypatch):
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "1.0"
+    agent.agent_card_params["supportedInterfaces"] = [
+        {
+            "url": "http://old-proxy.example.com/a2a/test-agent",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0",
+        }
+    ]
     mock_request = MagicMock()
     mock_request.base_url = "http://litellm-internal:4000/"
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
@@ -992,6 +1000,45 @@ async def test_get_agent_card_uses_proxy_base_url_when_set(monkeypatch):
 
     body = json.loads(response.body.decode())
     assert body["url"] == "https://litellm.example.com/a2a/test-agent"
+    assert (
+        body["supportedInterfaces"][0]["url"]
+        == "https://litellm.example.com/a2a/test-agent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_agent_card_normalizes_0_3_discovery_card():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "0.3"
+    agent.agent_card_params["supportedInterfaces"] = [
+        {
+            "url": "http://localhost:4000/a2a/test-agent",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "0.3",
+        }
+    ]
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["protocolVersion"] == "0.3"
+    assert body["url"] == "http://localhost:4000/a2a/test-agent"
+    assert "supportedInterfaces" not in body
 
 
 @pytest.mark.asyncio

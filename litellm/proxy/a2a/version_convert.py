@@ -133,7 +133,7 @@ def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
         return card
 
     current = _detect_card_version(card)
-    if current == target:
+    if current == target and not (target == "0.3" and "supportedInterfaces" in card):
         return card
     return _best_effort(
         lambda: _convert_agent_card(card, target), card, label="agent card"
