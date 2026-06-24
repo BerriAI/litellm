@@ -23,6 +23,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
     ) -> bool:
         return custom_llm_provider == LlmProviders.ANTHROPIC.value
 
+    # fmt: off
     async def count_tokens(
         self,
         model_to_use: str,
@@ -35,16 +36,6 @@ class AnthropicTokenCounter(BaseTokenCounter):
     ) -> Optional[TokenCountResponse]:
         """
         Count tokens using Anthropic's CountTokens API.
-
-        Args:
-            model_to_use: The model identifier
-            messages: The messages to count tokens for
-            contents: Alternative content format (not used for Anthropic)
-            deployment: Deployment configuration containing litellm_params
-            request_model: The original request model name
-
-        Returns:
-            TokenCountResponse with token count, or None if counting fails
         """
         from litellm.llms.anthropic.common_utils import AnthropicError
 
@@ -112,3 +103,4 @@ class AnthropicTokenCounter(BaseTokenCounter):
             )
 
         return None
+    # fmt: on
