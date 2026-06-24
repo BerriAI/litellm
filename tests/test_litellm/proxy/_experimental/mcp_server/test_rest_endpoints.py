@@ -1,7 +1,6 @@
 import asyncio
 import json
 from datetime import datetime
-import sys
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,9 +21,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 
-if sys.version_info >= (3, 11):
+try:
     from builtins import BaseExceptionGroup
-else:
+except ImportError:  # pragma: no cover - Python < 3.11 compatibility
     from exceptiongroup import BaseExceptionGroup
 
 
