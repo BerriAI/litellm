@@ -1,21 +1,12 @@
 import sys
 import os
-import traceback
 import asyncio
-from dotenv import load_dotenv
-from fastapi import Request
-from datetime import datetime
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
-import litellm
-from unittest.mock import patch, MagicMock, AsyncMock
-from create_mock_standard_logging_payload import create_standard_logging_payload
-from litellm.types.utils import StandardLoggingPayload
-import unittest
 from pydantic import BaseModel
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 
@@ -23,6 +14,18 @@ from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 class ExampleModel(BaseModel):
     field1: str
     field2: int
+
+
+class RecordingCache:
+    def __init__(self):
+        self.set_calls = []
+        self.async_set_calls = []
+
+    def set_cache(self, key, value, **kwargs):
+        self.set_calls.append({"key": key, "value": value, "kwargs": kwargs})
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self.async_set_calls.append({"key": key, "value": value, "kwargs": kwargs})
 
 
 def test_serialize_pydantic_object():
@@ -281,3 +284,91 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
     assert result[0]["role"] == "system"
     assert result[1]["content"] == "First cached message"
     assert isinstance(result[2]["content"], list)
+
+
+def test_prompt_caching_ttl_uses_default_for_five_minute_cache_control():
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant"},
+        {
+            "role": "user",
+            "content": "Cacheable content",
+            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+        },
+    ]
+
+    assert PromptCachingCache.get_prompt_caching_ttl_seconds(messages) == 300
+
+
+def test_prompt_caching_ttl_uses_one_hour_for_message_level_cache_control():
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant"},
+        {
+            "role": "user",
+            "content": "Long-lived cacheable content",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        },
+    ]
+
+    assert PromptCachingCache.get_prompt_caching_ttl_seconds(messages) == 3600
+
+
+def test_prompt_caching_ttl_uses_one_hour_for_content_block_cache_control():
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Short-lived content",
+                    "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                },
+                {
+                    "type": "text",
+                    "text": "Long-lived content",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                },
+            ],
+        },
+        {"role": "user", "content": "This is outside the cacheable prefix"},
+    ]
+
+    assert PromptCachingCache.get_prompt_caching_ttl_seconds(messages) == 3600
+
+
+def test_add_model_id_writes_prompt_cache_with_effective_ttl():
+    messages = [
+        {
+            "role": "user",
+            "content": "Long-lived cacheable content",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+    recording_cache = RecordingCache()
+
+    PromptCachingCache(cache=recording_cache).add_model_id(
+        model_id="deployment-1",
+        messages=messages,
+        tools=None,
+    )
+
+    assert recording_cache.set_calls[0]["kwargs"]["ttl"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_async_add_model_id_writes_prompt_cache_with_effective_ttl():
+    messages = [
+        {
+            "role": "user",
+            "content": "Long-lived cacheable content",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+    recording_cache = RecordingCache()
+
+    await PromptCachingCache(cache=recording_cache).async_add_model_id(
+        model_id="deployment-1",
+        messages=messages,
+        tools=None,
+    )
+
+    assert recording_cache.async_set_calls[0]["kwargs"]["ttl"] == 3600
