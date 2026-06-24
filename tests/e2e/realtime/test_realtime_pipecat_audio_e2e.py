@@ -56,7 +56,10 @@ from pipecat.processors.aggregators.llm_context import LLMContext  # noqa: E402
 from pipecat.processors.aggregators.llm_response_universal import (  # noqa: E402
     LLMContextAggregatorPair,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor  # noqa: E402
+from pipecat.processors.frame_processor import (
+    FrameDirection,
+    FrameProcessor,
+)  # noqa: E402
 from pipecat.services.llm_service import FunctionCallParams  # noqa: E402
 from pipecat.services.openai.realtime import events as rt_events  # noqa: E402
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService  # noqa: E402
@@ -246,9 +249,7 @@ def test_pipecat_server_vad(
     """Session is configured with server-VAD; bot must respond to a text prompt."""
     skip_if_unconfigured(provider, configured_models)
 
-    tool_called, got_text, _ = asyncio.run(
-        _run_pipeline(scoped_key, provider.model)
-    )
+    tool_called, got_text, _ = asyncio.run(_run_pipeline(scoped_key, provider.model))
 
     assert tool_called, "get_weather tool was not invoked"
     assert got_text, "no assistant text frames produced"
@@ -307,8 +308,13 @@ async def _run_audio_input_pipeline(
 
     No LLMRunFrame is sent — server VAD is expected to detect end-of-speech
     and auto-trigger a response.
+
+    Audio is streamed at real-time pace (20 ms per chunk) after the session is
+    ready.  Pre-queuing all frames at once floods the VAD buffer before the
+    backend is even connected and prevents speech_stopped from firing.
     """
     chunks, sample_rate = _load_wav_chunks(WEATHER_WAV)
+    chunk_duration_s = 0.020  # 20 ms per chunk
 
     # Append silence after speech so VAD has enough quiet to fire.
     silence_frames = sample_rate * _VAD_TAIL_SILENCE_MS // 1000
@@ -345,16 +351,28 @@ async def _run_audio_input_pipeline(
         Pipeline([aggregator.user(), llm, capture, aggregator.assistant()])
     )
 
-    # Queue audio chunks as InputAudioRawFrame — no TranscriptionFrame or
-    # LLMRunFrame; server VAD drives turn detection entirely.
-    audio_frames = [
-        InputAudioRawFrame(audio=chunk, sample_rate=sample_rate, num_channels=1)
-        for chunk in chunks
-    ]
-    await task.queue_frames(audio_frames)
+    async def _stream_audio() -> None:
+        # Wait for the LLM session to be ready before streaming so audio
+        # doesn't arrive before the backend WebSocket is connected.
+        for _ in range(100):
+            if getattr(llm, "_api_session_ready", False):
+                break
+            await asyncio.sleep(0.1)
+
+        for chunk in chunks:
+            await task.queue_frame(
+                InputAudioRawFrame(audio=chunk, sample_rate=sample_rate, num_channels=1)
+            )
+            await asyncio.sleep(chunk_duration_s)
+
+    async def _run() -> None:
+        await asyncio.gather(
+            PipelineRunner().run(task),
+            _stream_audio(),
+        )
 
     try:
-        await asyncio.wait_for(PipelineRunner().run(task), timeout=timeout)
+        await asyncio.wait_for(_run(), timeout=timeout)
     except asyncio.TimeoutError:
         await task.queue_frame(EndFrame())
 

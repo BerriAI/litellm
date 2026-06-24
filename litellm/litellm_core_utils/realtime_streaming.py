@@ -1509,6 +1509,18 @@ class RealTimeStreaming:
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
 
+                    if msg_type == "session.update" and self._event_normalizer:
+                        patch_outgoing_session = getattr(
+                            self._event_normalizer,
+                            "patch_outgoing_session",
+                            None,
+                        )
+                        if callable(patch_outgoing_session):
+                            session = msg_obj.get("session")
+                            if isinstance(session, dict):
+                                msg_obj["session"] = patch_outgoing_session(session)
+                                message = json.dumps(msg_obj)
+
                 except (json.JSONDecodeError, AttributeError):
                     pass
 

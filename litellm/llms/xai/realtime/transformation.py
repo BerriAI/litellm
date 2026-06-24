@@ -77,6 +77,40 @@ class XAIRealtimeNormalizer:
         event = self._normalize_response_usage_event(event, event_type)
         return event
 
+    def patch_outgoing_session(self, session: dict) -> dict:
+        """Patch a client ``session.update`` payload before forwarding to xAI.
+
+        Unlike OpenAI, xAI does not default ``turn_detection.create_response``
+        to ``True`` for ``server_vad``. Clients such as Pipecat omit the field,
+        which leaves VAD detecting speech but never auto-creating a response.
+        Only fill the default when the client did not set ``create_response``.
+        """
+        session = dict(session)
+        self._default_server_vad_create_response(session)
+        return session
+
+    @staticmethod
+    def _default_server_vad_create_response(session: dict) -> None:
+        turn_detection = session.get("turn_detection")
+        if isinstance(turn_detection, dict):
+            XAIRealtimeNormalizer._ensure_server_vad_create_response(turn_detection)
+
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            audio_input = audio.get("input")
+            if isinstance(audio_input, dict):
+                nested_td = audio_input.get("turn_detection")
+                if isinstance(nested_td, dict):
+                    XAIRealtimeNormalizer._ensure_server_vad_create_response(nested_td)
+
+    @staticmethod
+    def _ensure_server_vad_create_response(turn_detection: dict) -> None:
+        if (
+            turn_detection.get("type") == "server_vad"
+            and "create_response" not in turn_detection
+        ):
+            turn_detection["create_response"] = True
+
     # ---------------------------------------------------------------------------
     # Pass 1: content-part caching and back-fill
     # ---------------------------------------------------------------------------

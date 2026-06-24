@@ -227,8 +227,14 @@ def test_xai_normalizer_converts_empty_response_created_usage_to_null():
     n = XAIRealtimeNormalizer()
     event = {
         "type": "response.created",
-        "response": {"id": "r1", "object": "realtime.response", "output": [],
-                     "status": "in_progress", "status_details": None, "usage": {}},
+        "response": {
+            "id": "r1",
+            "object": "realtime.response",
+            "output": [],
+            "status": "in_progress",
+            "status_details": None,
+            "usage": {},
+        },
     }
     assert n.normalize(event)["response"]["usage"] is None
 
@@ -237,8 +243,14 @@ def test_xai_normalizer_converts_empty_response_done_usage_to_defaults():
     n = XAIRealtimeNormalizer()
     event = {
         "type": "response.done",
-        "response": {"id": "r1", "object": "realtime.response", "output": [],
-                     "status": "completed", "status_details": None, "usage": {}},
+        "response": {
+            "id": "r1",
+            "object": "realtime.response",
+            "output": [],
+            "status": "completed",
+            "status_details": None,
+            "usage": {},
+        },
     }
     usage = n.normalize(event)["response"]["usage"]
     assert usage is not None
@@ -250,9 +262,14 @@ def test_xai_normalizer_fills_partial_response_usage():
     n = XAIRealtimeNormalizer()
     event = {
         "type": "response.done",
-        "response": {"id": "r1", "object": "realtime.response", "output": [],
-                     "status": "completed", "status_details": None,
-                     "usage": {"total_tokens": 12, "input_tokens": 5, "output_tokens": 7}},
+        "response": {
+            "id": "r1",
+            "object": "realtime.response",
+            "output": [],
+            "status": "completed",
+            "status_details": None,
+            "usage": {"total_tokens": 12, "input_tokens": 5, "output_tokens": 7},
+        },
     }
     usage = n.normalize(event)["response"]["usage"]
     assert usage["total_tokens"] == 12
@@ -264,20 +281,36 @@ def test_xai_normalizer_injects_missing_content_part_done_part():
     n = XAIRealtimeNormalizer()
     n._update_content_part_field(
         {"response_id": "r1", "item_id": "i1", "content_index": 0, "transcript": "hi"},
-        part_type="audio", field="transcript", value="hi",
+        part_type="audio",
+        field="transcript",
+        value="hi",
     )
-    event = {"type": "response.content_part.done",
-             "response_id": "r1", "item_id": "i1", "content_index": 0, "output_index": 0}
+    event = {
+        "type": "response.content_part.done",
+        "response_id": "r1",
+        "item_id": "i1",
+        "content_index": 0,
+        "output_index": 0,
+    }
     assert n.normalize(event)["part"] == {"type": "audio", "transcript": "hi"}
 
 
 def test_xai_normalizer_conversation_item_tool_role_becomes_assistant():
     n = XAIRealtimeNormalizer()
     event = {
-        "type": "conversation.item.added", "event_id": "e1", "previous_item_id": None,
-        "item": {"id": "i1", "object": "realtime.item", "type": "function_call",
-                 "status": "in_progress", "role": "tool",
-                 "call_id": "c1", "name": "get_weather", "arguments": ""},
+        "type": "conversation.item.added",
+        "event_id": "e1",
+        "previous_item_id": None,
+        "item": {
+            "id": "i1",
+            "object": "realtime.item",
+            "type": "function_call",
+            "status": "in_progress",
+            "role": "tool",
+            "call_id": "c1",
+            "name": "get_weather",
+            "arguments": "",
+        },
     }
     normalized = n.normalize(event)
     assert normalized["item"]["role"] == "assistant"
@@ -286,9 +319,15 @@ def test_xai_normalizer_conversation_item_tool_role_becomes_assistant():
 
 def test_xai_normalizer_injects_output_index_on_function_call_delta():
     n = XAIRealtimeNormalizer()
-    event = {"type": "response.function_call_arguments.delta",
-             "event_id": "e1", "item_id": "i1", "response_id": "r1",
-             "delta": '{"city":"Paris"}', "call_id": "c1", "previous_item_id": None}
+    event = {
+        "type": "response.function_call_arguments.delta",
+        "event_id": "e1",
+        "item_id": "i1",
+        "response_id": "r1",
+        "delta": '{"city":"Paris"}',
+        "call_id": "c1",
+        "previous_item_id": None,
+    }
     normalized = n.normalize(event)
     assert normalized["output_index"] == 0
     assert "content_index" not in normalized
@@ -296,9 +335,13 @@ def test_xai_normalizer_injects_output_index_on_function_call_delta():
 
 def test_xai_normalizer_injects_both_indices_on_content_part_done():
     n = XAIRealtimeNormalizer()
-    event = {"type": "response.content_part.done",
-             "event_id": "e2", "item_id": "i1", "response_id": "r1",
-             "previous_item_id": None}
+    event = {
+        "type": "response.content_part.done",
+        "event_id": "e2",
+        "item_id": "i1",
+        "response_id": "r1",
+        "previous_item_id": None,
+    }
     normalized = n.normalize(event)
     assert normalized["output_index"] == 0
     assert normalized["content_index"] == 0
@@ -306,10 +349,64 @@ def test_xai_normalizer_injects_both_indices_on_content_part_done():
 
 def test_xai_normalizer_preserves_existing_indices():
     n = XAIRealtimeNormalizer()
-    event = {"type": "response.function_call_arguments.done",
-             "event_id": "e3", "item_id": "i1", "response_id": "r1",
-             "output_index": 2, "call_id": "c1", "arguments": '{"city":"Paris"}'}
+    event = {
+        "type": "response.function_call_arguments.done",
+        "event_id": "e3",
+        "item_id": "i1",
+        "response_id": "r1",
+        "output_index": 2,
+        "call_id": "c1",
+        "arguments": '{"city":"Paris"}',
+    }
     assert n.normalize(event)["output_index"] == 2
+
+
+def test_xai_patch_outgoing_session_defaults_create_response_flat():
+    n = XAIRealtimeNormalizer()
+    session = {
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": 0.8,
+            "silence_duration_ms": 700,
+        }
+    }
+    patched = n.patch_outgoing_session(session)
+    assert patched["turn_detection"]["create_response"] is True
+
+
+def test_xai_patch_outgoing_session_defaults_create_response_nested():
+    n = XAIRealtimeNormalizer()
+    session = {
+        "audio": {
+            "input": {
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": 0.8,
+                }
+            }
+        }
+    }
+    patched = n.patch_outgoing_session(session)
+    assert patched["audio"]["input"]["turn_detection"]["create_response"] is True
+
+
+def test_xai_patch_outgoing_session_respects_explicit_create_response_false():
+    n = XAIRealtimeNormalizer()
+    session = {
+        "turn_detection": {
+            "type": "server_vad",
+            "create_response": False,
+        }
+    }
+    patched = n.patch_outgoing_session(session)
+    assert patched["turn_detection"]["create_response"] is False
+
+
+def test_xai_patch_outgoing_session_ignores_non_server_vad():
+    n = XAIRealtimeNormalizer()
+    session = {"turn_detection": {"type": "semantic_vad"}}
+    patched = n.patch_outgoing_session(session)
+    assert "create_response" not in patched["turn_detection"]
 
 
 # ---------------------------------------------------------------------------
@@ -324,8 +421,9 @@ async def test_backend_to_client_drops_ping_events():
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(
         side_effect=[
-            json.dumps({"type": "ping", "event_id": "evt_ping",
-                        "timestamp": 1782214899793}).encode(),
+            json.dumps(
+                {"type": "ping", "event_id": "evt_ping", "timestamp": 1782214899793}
+            ).encode(),
             json.dumps({"type": "session.created", "session": {}}).encode(),
             ConnectionClosed(None, None),
         ]
@@ -349,12 +447,19 @@ async def test_backend_to_client_normalizes_empty_response_usage():
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(
         side_effect=[
-            json.dumps({
-                "type": "response.created",
-                "response": {"id": "r1", "object": "realtime.response", "output": [],
-                             "status": "in_progress", "status_details": "unimplemented",
-                             "usage": {}},
-            }).encode(),
+            json.dumps(
+                {
+                    "type": "response.created",
+                    "response": {
+                        "id": "r1",
+                        "object": "realtime.response",
+                        "output": [],
+                        "status": "in_progress",
+                        "status_details": "unimplemented",
+                        "usage": {},
+                    },
+                }
+            ).encode(),
             ConnectionClosed(None, None),
         ]
     )
