@@ -216,10 +216,15 @@ cases that cannot occur.
 The presigned URL carries the access key id (`X-Amz-Credential`, a public
 identifier), an `X-Amz-Signature` (a non-reversible HMAC scoped to this one GET
 on this one object), and, for STS credentials, `X-Amz-Security-Token` (unusable
-without the secret key). The generic handler logs the URL as `api_base`, and the
-log masker only scrubs `key=`, so the URL can appear in debug logs. The worst
-case is a single-object read within the expiry window; the secret access key is
-never in the URL. `ExpiresIn` is set to 300s to bound that window. This is the
+without the secret key). The generic handler passes the URL as `api_base` to
+`logging_obj.pre_call`, and the log masker only scrubs `key=`. The exposure
+surface is therefore wider than local debug output: when raw-request logging is
+enabled, the full URL also lands in `raw_request_api_base` and the curl-command
+`raw_request` metadata, which flow to the proxy UI logs and to any configured
+external loggers (Langfuse and the like), for the lifetime of the URL. The worst
+case is still a single-object read within the expiry window; the secret access
+key is never in the URL, and the signature is a one-GET, one-object,
+non-reversible HMAC. `ExpiresIn` is set to 300s to bound that window. This is the
 same exposure profile as any presigned-URL flow and is an accepted tradeoff.
 
 ## Tests
