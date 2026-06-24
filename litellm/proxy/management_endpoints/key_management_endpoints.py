@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
@@ -59,6 +60,9 @@ from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_k
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -675,7 +679,7 @@ def _enforce_upperbound_key_params(
                         )
 
 
-async def _common_key_generation_helper(  # noqa: PLR0915
+async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
@@ -1789,7 +1793,8 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                _premium_user_check(k)
+                if v:
+                    _premium_user_check(k)
                 casted_metadata[k] = v
 
     except Exception as e:
@@ -1860,18 +1865,23 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
-    if "budget_limits" in non_default_values and non_default_values["budget_limits"]:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
+    if "budget_limits" in non_default_values:
         raw_windows = non_default_values["budget_limits"]
-        initialized_windows = []
-        for window in raw_windows:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(
-                budget_duration=w["budget_duration"]
-            ).isoformat()
-            initialized_windows.append(w)
-        non_default_values["budget_limits"] = json.dumps(initialized_windows)
+        if raw_windows:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            initialized_windows = []
+            for window in raw_windows:
+                w = window if isinstance(window, dict) else window.model_dump()
+                w["reset_at"] = get_budget_reset_time(
+                    budget_duration=w["budget_duration"]
+                ).isoformat()
+                initialized_windows.append(w)
+            non_default_values["budget_limits"] = json.dumps(initialized_windows)
+        else:
+            # [] / None clears the field; prisma-client-py has no DbNull
+            # sentinel for Json? columns, so store the JSON literal null
+            non_default_values["budget_limits"] = json.dumps(None)
 
     if "object_permission" in non_default_values:
         non_default_values = await _handle_update_object_permission(
@@ -2248,14 +2258,18 @@ async def _validate_update_key_data(
     # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
     #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
     #   / key-owner / team-admin / org-admin of the key).
-    # - max_budget / spend: always require the admin check, even for the
-    #   key owner or a team member (matches the existing admin-only
-    #   budget semantics).
+    # - max_budget / spend / budget_limits: always require the admin
+    #   check, even for the key owner or a team member (matches the
+    #   existing admin-only budget semantics).  budget_limits uses
+    #   model_fields_set because an explicit null/[] clears the field
+    #   and must gate the same as setting or changing it.
     _is_budget_change = (
-        data.max_budget is not None and data.max_budget != existing_key_row.max_budget
-    ) or (
-        data.spend is not None
-        and data.spend != getattr(existing_key_row, "spend", None)
+        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
+        or (
+            data.spend is not None
+            and data.spend != getattr(existing_key_row, "spend", None)
+        )
+        or "budget_limits" in data.model_fields_set
     )
 
     # Personal-key bypass: the caller both created the key AND still owns it
@@ -2419,7 +2433,7 @@ async def _validate_update_key_data(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_key_fn(  # noqa: PLR0915
+async def update_key_fn(
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3216,6 +3230,65 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+async def _get_model_max_budget_current_spend(
+    api_key_hash: str,
+    model: str,
+    budget_config: BudgetConfig,
+    user_api_key_cache: UserApiKeyCache,
+) -> float:
+    virtual_key_model_spend_cache_key = (
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
+        f"{api_key_hash}:{model}:{budget_config.budget_duration}"
+    )
+    current_spend: float | None = await user_api_key_cache.async_get_cache(
+        key=virtual_key_model_spend_cache_key,
+    )
+    if current_spend is None:
+        model_without_prefix = model.split("/")[-1] if "/" in model else model
+        virtual_key_model_spend_cache_key = (
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
+            f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
+        )
+        current_spend = await user_api_key_cache.async_get_cache(
+            key=virtual_key_model_spend_cache_key,
+        )
+    try:
+        return float(current_spend or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def _build_model_max_budget_usage(
+    api_key_hash: str,
+    model_max_budget: Mapping[str, Mapping[str, object]],
+    user_api_key_cache: UserApiKeyCache | None,
+) -> dict[str, dict[str, object]]:
+    if user_api_key_cache is None or not model_max_budget:
+        return {}
+
+    result: dict[str, dict[str, object]] = {}
+    for model, budget_info in model_max_budget.items():
+        try:
+            budget_config = BudgetConfig.model_validate(budget_info)
+            if budget_config.budget_duration is None:
+                continue
+            duration_in_seconds(budget_config.budget_duration)
+        except Exception:  # noqa: BLE001
+            continue
+        spend = await _get_model_max_budget_current_spend(
+            api_key_hash=api_key_hash,
+            model=model,
+            budget_config=budget_config,
+            user_api_key_cache=user_api_key_cache,
+        )
+        result[model] = {
+            "current_spend": round(spend, 4),
+            "budget_limit": budget_config.max_budget,
+            "time_period": budget_config.budget_duration,
+        }
+    return result
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3243,7 +3316,7 @@ async def info_key_fn_v2(
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         if prisma_client is None:
@@ -3289,7 +3362,19 @@ async def info_key_fn_v2(
                 k_dict = k.model_dump()
             except Exception:
                 k_dict = k.dict()
-            k_dict.pop("token", None)
+            k_token_hash = k_dict.pop("token", None)
+
+            model_max_budget = k_dict.get("model_max_budget") or {}
+            budget_table = k_dict.get("litellm_budget_table") or {}
+            if not model_max_budget and isinstance(budget_table, dict):
+                model_max_budget = budget_table.get("model_max_budget") or {}
+            if model_max_budget and k_token_hash:
+                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                    api_key_hash=k_token_hash,
+                    model_max_budget=model_max_budget,
+                    user_api_key_cache=user_api_key_cache,
+                )
+
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -3327,7 +3412,7 @@ async def info_key_fn(
 -H "Authorization: Bearer sk-test-example-key-123"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         if prisma_client is None:
@@ -3368,11 +3453,22 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
-            key_info = key_info.model_dump()  # noqa
+            key_info = key_info.model_dump()
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
-        key_info.pop("token")
+        key_token_hash = key_info.pop("token")
+
+        model_max_budget = key_info.get("model_max_budget") or {}
+        budget_table = key_info.get("litellm_budget_table") or {}
+        if not model_max_budget and isinstance(budget_table, dict):
+            model_max_budget = budget_table.get("model_max_budget") or {}
+        if model_max_budget and key_token_hash:
+            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                api_key_hash=key_token_hash,
+                model_max_budget=model_max_budget,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
@@ -3410,7 +3506,7 @@ def _check_model_access_group(
     return True
 
 
-async def generate_key_helper_fn(  # noqa: PLR0915
+async def generate_key_helper_fn(
     request_type: Literal[
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate
@@ -4061,7 +4157,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key(  # noqa: PLR0915
+async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -4403,7 +4499,7 @@ async def _execute_virtual_key_regeneration(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(  # noqa: PLR0915
+async def regenerate_key_fn(
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -4785,12 +4881,27 @@ async def reset_key_spend_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        try:
-            from litellm.proxy.proxy_server import _invalidate_spend_counter
+        # Set Redis spend counter to the new value so get_current_spend()
+        # returns the correct amount immediately instead of the stale pre-reset value.
+        # We use reset_to (not 0.0) so partial resets are reflected correctly.
+        from litellm.proxy.proxy_server import spend_counter_cache
 
-            await _invalidate_spend_counter(counter_key=f"spend:key:{hashed_api_key}")
-        except Exception:
-            pass
+        _counter_key = f"spend:key:{hashed_api_key}"
+        spend_counter_cache.in_memory_cache.set_cache(
+            key=_counter_key, value=reset_to, ttl=60
+        )
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_set_cache(
+                    key=_counter_key, value=reset_to, ttl=60
+                )
+            except Exception as redis_err:
+                verbose_proxy_logger.warning(
+                    "Failed to update spend counter %s in Redis: %s. "
+                    "Budget checks may use stale value until counter expires.",
+                    _counter_key,
+                    redis_err,
+                )
 
         max_budget = updated_key.max_budget
         budget_reset_at = updated_key.budget_reset_at
@@ -5011,7 +5122,7 @@ async def list_keys(
     size: int = Query(10, description="Page size", ge=1, le=100),
     user_id: Optional[str] = Query(
         None,
-        description="Filter keys by user ID. Supports partial matching (substring, case-insensitive).",
+        description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(
@@ -5020,7 +5131,7 @@ async def list_keys(
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(
         None,
-        description="Filter keys by key alias. Supports partial matching (substring, case-insensitive).",
+        description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
@@ -5043,6 +5154,10 @@ async def list_keys(
     project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
     access_group_id: Optional[str] = Query(
         None, description="Filter keys by access group ID"
+    ),
+    substring_matching: bool = Query(
+        False,
+        description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
     ),
 ) -> KeyListResponseObject:
     """
@@ -5125,12 +5240,21 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        use_substring_matching = user_api_key_dict.user_role in [
+        is_proxy_admin = user_api_key_dict.user_role in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
 
-        if not user_id and not use_substring_matching:
+        # Substring matching is opt-in (admin-only). /key/list matched user_id and
+        # key_alias exactly before substring search was added; auto-applying a
+        # substring match to every admin call broke that contract and let a caller
+        # passing an exact user_id (e.g. an integration scoping to one user with an
+        # admin key) receive other users' keys (user_id="alice" -> "alice2"). Exact
+        # by default restores the prior behavior; the dashboard opts in explicitly.
+        use_substring_matching = substring_matching and is_proxy_admin
+
+        # Admins may omit user_id to list all keys; non-admins are scoped to self.
+        if not user_id and not is_proxy_admin:
             user_id = user_api_key_dict.user_id
 
         response = await _list_key_helper(

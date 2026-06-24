@@ -1475,7 +1475,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def convert_to_gemini_tool_call_result(  # noqa: PLR0915
+def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
     model: Optional[str] = None,
@@ -2227,7 +2227,7 @@ def _sanitize_empty_text_content(
     return message
 
 
-def _add_missing_tool_results(  # noqa: PLR0915
+def _add_missing_tool_results(
     current_message: AllMessageValues,
     messages: List[AllMessageValues],
     current_index: int,
@@ -2484,7 +2484,7 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def anthropic_messages_pt(  # noqa: PLR0915
+def anthropic_messages_pt(
     messages: List[AllMessageValues],
     model: str,
     llm_provider: str,
@@ -3278,7 +3278,7 @@ def convert_to_cohere_tool_invoke(tool_calls: list) -> List[ToolCallObject]:
     return cohere_tool_invoke
 
 
-def cohere_messages_pt_v2(  # noqa: PLR0915
+def cohere_messages_pt_v2(
     messages: List,
     model: str,
     llm_provider: str,
@@ -4703,7 +4703,7 @@ class BedrockConverseMessagesProcessor:
         return messages
 
     @staticmethod
-    async def _bedrock_converse_messages_pt_async(  # noqa: PLR0915
+    async def _bedrock_converse_messages_pt_async(
         messages: List,
         model: str,
         llm_provider: str,
@@ -4740,6 +4740,12 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(
                                     guardContent={"text": {"text": element["text"]}}
                                 )
+                                _parts.append(_part)
+                            elif element["type"] in ("grounding_source", "query"):
+                                # Contextual grounding tags are guardrail metadata; the
+                                # model only needs the underlying text, so render them
+                                # as plain text on the generate path.
+                                _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
@@ -5127,7 +5133,7 @@ class BedrockConverseMessagesProcessor:
         return assistant_parts
 
 
-def _bedrock_converse_messages_pt(  # noqa: PLR0915
+def _bedrock_converse_messages_pt(
     messages: List,
     model: str,
     llm_provider: str,
@@ -5172,6 +5178,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(
                                 guardContent={"text": {"text": element["text"]}}
                             )
+                            _parts.append(_part)
+                        elif element["type"] in ("grounding_source", "query"):
+                            # Contextual grounding tags are guardrail metadata; the
+                            # model only needs the underlying text, so render them as
+                            # plain text on the generate path.
+                            _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
                             format: Optional[str] = None

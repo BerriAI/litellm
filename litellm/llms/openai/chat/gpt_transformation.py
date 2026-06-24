@@ -18,6 +18,9 @@ from typing import (
     overload,
 )
 
+import os
+from urllib.parse import urlparse
+
 import httpx
 
 import litellm
@@ -426,6 +429,32 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 )
         return messages, tools
 
+    def _should_preserve_cache_control_for_endpoint(
+        self,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> bool:
+        """
+        The generic `openai` provider also reaches OpenAI-compatible endpoints
+        (a LiteLLM proxy, vLLM, an Anthropic-compatible gateway) via a custom
+        api_base. Those can understand cache_control, so it must survive there.
+        Real OpenAI cannot, so it is still stripped for an openai.com host.
+        """
+        if custom_llm_provider != "openai":
+            return False
+        resolved_api_base = (
+            api_base
+            or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+        )
+        if not resolved_api_base:
+            return False
+        hostname = urlparse(resolved_api_base).hostname
+        if hostname is None:
+            return False
+        return hostname != "openai.com" and not hostname.endswith(".openai.com")
+
     def transform_request(
         self,
         model: str,
@@ -441,11 +470,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(messages=messages, model=model)
-        messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
-            model=model, messages=messages, tools=optional_params.get("tools", [])
-        )
-        if tools is not None and len(tools) > 0:
-            optional_params["tools"] = tools
+        if not self._should_preserve_cache_control_for_endpoint(
+            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
+        ):
+            messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
+                model=model, messages=messages, tools=optional_params.get("tools", [])
+            )
+            if tools is not None and len(tools) > 0:
+                optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
 
@@ -466,16 +498,19 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
-        (
-            transformed_messages,
-            tools,
-        ) = self.remove_cache_control_flag_from_messages_and_tools(
-            model=model,
-            messages=transformed_messages,
-            tools=optional_params.get("tools", []),
-        )
-        if tools is not None and len(tools) > 0:
-            optional_params["tools"] = tools
+        if not self._should_preserve_cache_control_for_endpoint(
+            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
+        ):
+            (
+                transformed_messages,
+                tools,
+            ) = self.remove_cache_control_flag_from_messages_and_tools(
+                model=model,
+                messages=transformed_messages,
+                tools=optional_params.get("tools", []),
+            )
+            if tools is not None and len(tools) > 0:
+                optional_params["tools"] = tools
         if self.__class__._is_base_class:
             return {
                 "model": model,

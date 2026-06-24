@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import smtplib
+import ssl
 import sys
 import threading
 import time
@@ -45,6 +46,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
@@ -137,6 +139,9 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
@@ -187,7 +192,7 @@ def print_verbose(print_statement):
 
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa
+        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():
@@ -1167,6 +1172,8 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+            callback.mark_pre_call_hook_ran(data)
+
         except SensitiveDataRouteException:
             status = "intervened"
             raise
@@ -2082,7 +2089,7 @@ class ProxyLogging:
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, HTTPException
+            original_exception, (HTTPException, ProxyException)
         ):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
@@ -2121,11 +2128,20 @@ class ProxyLogging:
         # compute preprocessing latency after the logging object is popped.
         _logging_obj = request_data.get("litellm_logging_obj")
         if _logging_obj is not None:
-            _first_handoff = getattr(_logging_obj, "model_call_details", {}).get(
-                "first_api_call_start_time"
-            )
+            _model_call_details = getattr(_logging_obj, "model_call_details", {})
+            _first_handoff = _model_call_details.get("first_api_call_start_time")
             if _first_handoff is not None:
                 request_data["first_api_call_start_time"] = _first_handoff
+
+            # A stream that broke mid-flight still billed the provider for the
+            # chunks already delivered; the streaming handler stashes that
+            # recovered usage and cost here. Lift them onto request_data so the
+            # failure-path spend callbacks (which run after the logging object
+            # is popped) record the real partial spend instead of zero.
+            _recovered_usage = _model_call_details.get("combined_usage_object")
+            if _recovered_usage is not None:
+                request_data["combined_usage_object"] = _recovered_usage
+                request_data["response_cost"] = _model_call_details.get("response_cost")
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
@@ -2186,6 +2202,7 @@ class ProxyLogging:
         e.g should only return True for:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
+            - ProxyException (guardrail blocks, budget / rate-limit errors)
         """
 
         #########################################################
@@ -2202,7 +2219,7 @@ class ProxyLogging:
         ):
             return False
 
-        return isinstance(original_exception, HTTPException) or (
+        return isinstance(original_exception, (HTTPException, ProxyException)) or (
             error_type == ProxyErrorTypes.auth_error
         )
 
@@ -2687,6 +2704,42 @@ class ProxyLogging:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
+
+    def _release_max_parallel_requests_on_disconnect(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Release the api-key max_parallel_requests slot when a streaming
+        response is cancelled mid-flight (client disconnect). Neither the
+        success nor failure logging callback fires on the resulting
+        CancelledError / GeneratorExit, so the pre-call +1 would otherwise
+        leak.
+
+        Must be called from the outermost streaming generator (the one
+        Starlette drives and closes on disconnect). A nested iterator-hook
+        generator only receives GeneratorExit when it is garbage collected,
+        which is non-deterministic, so the refund cannot live there.
+
+        Scheduled fire-and-forget (no await) because awaiting is not
+        permitted while unwinding a GeneratorExit.
+        """
+        limiter = self.get_proxy_hook("parallel_request_limiter")
+        if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+            return
+        try:
+            asyncio.create_task(
+                limiter.async_release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+            )
+        except RuntimeError:
+            # No running event loop (e.g. interpreter/loop shutdown); the
+            # counter's window TTL will reclaim the slot.
+            verbose_proxy_logger.warning(
+                "parallel_request_limiter_v3: could not schedule "
+                "max_parallel_requests release on disconnect; no running "
+                "event loop. Slot will be reclaimed when its window TTL expires"
+            )
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -3305,7 +3358,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     @log_db_metrics
-    async def get_data(  # noqa: PLR0915
+    async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
@@ -3388,6 +3441,7 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and team_id is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
@@ -3653,7 +3707,10 @@ class PrismaClient:
                             db=self.db, hashed_token=hashed_token
                         )
                         if active_token_id:
-                            response = await self.get_data(
+                            # The recursive call returns a finished
+                            # LiteLLM_VerificationTokenView; the dict
+                            # normalization below would crash subscripting it.
+                            deprecated_response = await self.get_data(
                                 token=active_token_id,
                                 table_name="combined_view",
                                 query_type="find_unique",
@@ -3661,10 +3718,11 @@ class PrismaClient:
                                 proxy_logging_obj=proxy_logging_obj,
                                 check_deprecated=False,
                             )
-                            if response is not None:
+                            if deprecated_response is not None:
                                 verbose_proxy_logger.debug(
                                     "Deprecated key used during grace period"
                                 )
+                            return deprecated_response
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -3734,6 +3792,10 @@ class PrismaClient:
             db_data["members_with_roles"], list
         ):
             db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
+        if db_data.get("budget_limits", None) is not None and isinstance(
+            db_data["budget_limits"], list
+        ):
+            db_data["budget_limits"] = json.dumps(db_data["budget_limits"])
         return db_data
 
     # Define a retrying strategy with exponential backoff
@@ -3744,7 +3806,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(  # noqa: PLR0915
+    async def insert_data(
         self,
         data: dict,
         table_name: Literal[
@@ -3894,7 +3956,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def update_data(  # noqa: PLR0915
+    async def update_data(
         self,
         token: Optional[str] = None,
         data: dict = {},
@@ -4404,6 +4466,14 @@ class PrismaClient:
                 "prisma-query-engine PID %s already dead at watch start.",
                 pid,
             )
+            if self._consume_expected_death(pid):
+                verbose_proxy_logger.info(
+                    "PID %s death was planned (engine already replaced); "
+                    "not reconnecting.",
+                    pid,
+                )
+                self._cleanup_engine_watcher()
+                return True
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
             self._cleanup_engine_watcher()
@@ -4448,11 +4518,38 @@ class PrismaClient:
         except RuntimeError:
             pass
 
+    def _consume_expected_death(self, pid: int) -> bool:
+        """True iff ``pid`` was killed on purpose by a planned recreate.
+
+        `PrismaWrapper.recreate_prisma_client` records the old engine PID in
+        `_expected_engine_deaths` before SIGTERM-ing it (IAM token refresh,
+        guarded reconnect). When the watcher then sees that PID die, this lets
+        it recognize the death as planned and skip its own reconnect, which
+        would otherwise kill the engine the recreate just spawned (#29176).
+
+        Consumes (removes) the PID so a later real crash of a reused PID is
+        still handled. Tolerant of `self.db` stand-ins (tests / older clients)
+        that don't expose a real set.
+        """
+        expected = getattr(self.db, "_expected_engine_deaths", None)
+        if isinstance(expected, set) and pid in expected:
+            expected.discard(pid)
+            return True
+        return False
+
     def _on_engine_death_from_thread(self, dead_pid: int) -> None:
         """Called on the event loop thread when the waitpid thread detects engine death."""
         if self._engine_confirmed_dead:
             return
         if dead_pid != self._engine_pid:
+            return
+        if self._consume_expected_death(dead_pid):
+            verbose_proxy_logger.info(
+                "prisma-query-engine PID %s exited as part of a planned restart; "
+                "not reconnecting (engine already replaced).",
+                dead_pid,
+            )
+            self._cleanup_engine_watcher()
             return
         verbose_proxy_logger.error(
             "prisma-query-engine PID %s exited (waitpid thread); triggering reconnect.",
@@ -4508,6 +4605,14 @@ class PrismaClient:
                 self._engine_pidfd = -1
             return
         dead_pid = self._engine_pid
+        if self._consume_expected_death(dead_pid):
+            verbose_proxy_logger.info(
+                "prisma-query-engine PID %s exited (pidfd event) as part of a "
+                "planned restart; not reconnecting (engine already replaced).",
+                dead_pid,
+            )
+            self._cleanup_engine_watcher()
+            return
         verbose_proxy_logger.error(
             "prisma-query-engine PID %s exited (pidfd event); triggering reconnect.",
             dead_pid,
@@ -4531,9 +4636,18 @@ class PrismaClient:
             try:
                 os.kill(self._engine_pid, 0)
             except ProcessLookupError:
+                dead_pid = self._engine_pid
+                if self._consume_expected_death(dead_pid):
+                    verbose_proxy_logger.info(
+                        "prisma-query-engine PID %s gone as part of a planned "
+                        "restart; not reconnecting (engine already replaced).",
+                        dead_pid,
+                    )
+                    self._cleanup_engine_watcher()
+                    return
                 verbose_proxy_logger.error(
                     "prisma-query-engine PID %s gone; triggering reconnect.",
-                    self._engine_pid,
+                    dead_pid,
                 )
                 self._engine_confirmed_dead = True
                 self._reap_all_zombies()
@@ -4620,6 +4734,22 @@ class PrismaClient:
         self._engine_confirmed_dead = False
         verbose_proxy_logger.debug("Stopped engine process watcher.")
 
+    def _handle_writer_engine_replaced(self) -> None:
+        """Re-arm the engine watcher after a planned writer-engine restart.
+
+        Wired as `PrismaWrapper.on_engine_replaced` and invoked from inside
+        `recreate_prisma_client` once the new engine is connected (IAM token
+        refresh, guarded reconnect). The old watcher was tracking the engine
+        we just intentionally killed, so we tear it down and re-arm on the new
+        PID. Scheduling `_start_engine_watcher` as a task (rather than awaiting)
+        keeps us from blocking the recreate while it still holds the wrapper's
+        reconnection lock. Without this re-arm, a planned restart would leave
+        the proxy with no engine-death detection until the next reconnect.
+        """
+        self._engine_confirmed_dead = False
+        self._cleanup_engine_watcher()
+        asyncio.create_task(self._start_engine_watcher())
+
     async def _run_reconnect_cycle(
         self, timeout_seconds: Optional[float] = None
     ) -> None:
@@ -4639,6 +4769,17 @@ class PrismaClient:
             if timeout_seconds is not None
             else self._db_watchdog_reconnect_timeout_seconds
         )
+
+        # Snapshot the writer's engine generation BEFORE any await. Both
+        # reconnect branches forward it to recreate_prisma_client as an
+        # optimistic-lock token: if a concurrent IAM token refresh replaces the
+        # engine after this point, the generation moves and the recreate becomes
+        # a no-op instead of killing the engine the refresh just spawned
+        # (#29176). Captured here — atomically with the dead-engine decision
+        # below — rather than inside the reconnect closures, because those run
+        # after an `asyncio.wait_for(...)` yield during which a refresh could
+        # otherwise slip in and bump the very generation the closure then reads.
+        expected_generation = getattr(self.writer_db, "_engine_generation", None)
 
         engine_is_dead = self._engine_confirmed_dead or (
             self._engine_pid > 0 and not self._is_engine_alive()
@@ -4660,7 +4801,16 @@ class PrismaClient:
                         "DATABASE_URL not set; cannot recreate Prisma client."
                     )
                     raise RuntimeError("DATABASE_URL not set")
-                await self.db.recreate_prisma_client(db_url)
+                # Forward the entry-snapshot generation. The engine was
+                # confirmed dead, but a concurrent IAM refresh may have already
+                # respawned it; the guard makes this recreate a no-op in that
+                # case rather than killing the fresh engine (#29176). Unlike the
+                # direct path there is no SELECT 1 probe here, so the generation
+                # guard is the only thing standing between a crash-reconnect and
+                # a refresh that raced it.
+                await self.db.recreate_prisma_client(
+                    db_url, expected_generation=expected_generation
+                )
                 await self._start_engine_watcher()
 
             await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
@@ -4682,13 +4832,36 @@ class PrismaClient:
                         "DATABASE_URL not set; cannot reconnect Prisma client."
                     )
                     raise RuntimeError("DATABASE_URL not set")
+                # Probe the writer BEFORE recreating. A concurrent IAM token
+                # refresh may have just replaced the engine (issue #29176); if
+                # the writer answers SELECT 1 the connection is already healthy
+                # and recreating would needlessly kill that fresh engine. If we
+                # do recreate, the entry-snapshot generation lets the wrapper
+                # detect a refresh that landed since cycle entry and skip the
+                # redundant restart.
+                writer = self.writer_db
+                try:
+                    await writer.query_raw("SELECT 1")
+                    verbose_proxy_logger.info(
+                        "Writer healthy on probe; skipping recreate (engine "
+                        "likely already replaced by a token refresh)."
+                    )
+                    await self._start_engine_watcher()
+                    return
+                except Exception as probe_err:
+                    verbose_proxy_logger.warning(
+                        "Writer probe failed (%s); recreating Prisma client.",
+                        probe_err,
+                    )
                 # Fresh Prisma client + new engine subprocess. The previous
                 # "lightweight" path called `disconnect()` which blocks the
                 # event loop on `subprocess.Popen.wait()`; since that call
                 # ends up killing the engine anyway, we do it non-blockingly
                 # via `_kill_engine_process` inside `recreate_prisma_client`.
                 self._cleanup_engine_watcher()
-                await self.db.recreate_prisma_client(db_url)
+                await self.db.recreate_prisma_client(
+                    db_url, expected_generation=expected_generation
+                )
                 await self._start_engine_watcher()
                 # Smoke-test the writer specifically; query_raw on the routing
                 # wrapper sends to the reader, which would not validate the
@@ -4849,6 +5022,11 @@ class PrismaClient:
             return
         if self._db_health_watchdog_task is not None:
             return
+        # Let planned writer-engine restarts (IAM token refresh, guarded
+        # reconnect) re-arm the watcher on the new PID instead of being
+        # mistaken for a crash (issue #29176). Set on the writer wrapper since
+        # the watcher tracks the writer engine.
+        self.writer_db.on_engine_replaced = self._handle_writer_engine_replaced
         self._db_health_watchdog_task = asyncio.create_task(
             self._db_health_watchdog_loop()
         )
@@ -5134,6 +5312,23 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     return
 
 
+def _should_use_smtp_ssl(smtp_port: int) -> bool:
+    """
+    Port 465 expects an immediate TLS handshake (implicit SSL), so a plain
+    smtplib.SMTP connection hangs waiting for an SMTP banner. Use SMTP_SSL
+    there, or when SMTP_USE_SSL is explicitly enabled.
+    """
+    return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
+
+
+def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+    if _should_use_smtp_ssl(smtp_port=smtp_port):
+        return smtplib.SMTP_SSL(
+            host=smtp_host, port=smtp_port, context=ssl.create_default_context()
+        )
+    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+
+
 async def send_email(
     receiver_email: Optional[str] = None,
     subject: Optional[str] = None,
@@ -5179,13 +5374,13 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(
-            host=smtp_host,
-            port=smtp_port,
+        using_ssl = _should_use_smtp_ssl(smtp_port=smtp_port)
+        with _create_smtp_connection(
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
         ) as server:
-            if os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls()
+            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+                server.starttls(context=ssl.create_default_context())
 
             # Login to your email account only if smtp_username and smtp_password are provided
             if smtp_username and smtp_password:
@@ -5453,7 +5648,7 @@ class ProxyUpdateSpend:
         return False
 
 
-async def update_spend(  # noqa: PLR0915
+async def update_spend(
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,
@@ -6247,56 +6442,61 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
-) -> dict:
+) -> ModelInfoResponse:
     """
-    Create a standardized model info response.
+    Create a standardized OpenAI-compatible model object.
 
-    Args:
-        model_id: The model ID
-        provider: The model provider
-        include_metadata: Whether to include metadata
-        fallback_type: Type of fallbacks to include
-        llm_router: LiteLLM router instance
-
-    Returns:
-        Dictionary containing model information
+    When include_metadata is true, attaches the model's configured fallbacks
+    (resolved via the router under fallback_type, defaulting to "general").
+    Raises HTTPException(400) for an unknown fallback_type.
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    model_info = {
+    base: ModelInfoResponse = {
         "id": model_id,
         "object": "model",
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
 
-    # Add metadata if requested
-    if include_metadata:
-        metadata = {}
-
-        # Default fallback_type to "general" if include_metadata is true
-        effective_fallback_type = (
-            fallback_type if fallback_type is not None else "general"
-        )
-
-        # Validate fallback_type
-        valid_fallback_types = ["general", "context_window", "content_policy"]
-        if effective_fallback_type not in valid_fallback_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
+    # Surface context-window limits for OpenAI-compatible discovery clients.
+    # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    # Limits are best-effort enrichment, so a single malformed deployment degrades
+    # to the base response rather than 500-ing the whole listing.
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model_id)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "create_model_info_response: get_model_group_info failed for %s: %s",
+                model_id,
+                e,
             )
+            model_group_info = None
+        if model_group_info is not None:
+            if model_group_info.max_input_tokens is not None:
+                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
+            if model_group_info.max_output_tokens is not None:
+                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
 
-        fallbacks = get_all_fallbacks(
-            model=model_id,
-            llm_router=llm_router,
-            fallback_type=effective_fallback_type,
+    if not include_metadata:
+        return base
+
+    effective_fallback_type = fallback_type if fallback_type is not None else "general"
+
+    valid_fallback_types = ["general", "context_window", "content_policy"]
+    if effective_fallback_type not in valid_fallback_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
         )
-        metadata["fallbacks"] = fallbacks
 
-        model_info["metadata"] = metadata
-
-    return model_info
+    fallbacks = get_all_fallbacks(
+        model=model_id,
+        llm_router=llm_router,
+        fallback_type=effective_fallback_type,
+    )
+    return {**base, "metadata": {"fallbacks": fallbacks}}
 
 
 def validate_model_access(

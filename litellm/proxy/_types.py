@@ -361,6 +361,16 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        # realtime (GA WebRTC HTTP routes)
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
         # responses API
         "/responses",
         "/v1/responses",
@@ -373,6 +383,8 @@ class LiteLLMRoutes(enum.Enum):
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
+        "/vector_stores/{vector_store_id}",
+        "/v1/vector_stores/{vector_store_id}",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
         "/vector_stores/{vector_store_id}/files",
@@ -449,6 +461,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
+        "/v1/mcp/tools",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -1856,6 +1869,10 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
 
+class BlockModelRequest(LiteLLMPydanticObjectBase):
+    model_id: str  # required
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
@@ -2045,6 +2062,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
+    timeout: Optional[float] = Field(
+        default=None,
+        description="Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).",
+    )
     auth: bool = Field(
         default=True,
         description="Whether authentication is required for the pass-through endpoint. Defaults to True so a pass-through silently created without an explicit value still requires a valid LiteLLM API key — set to False only if the endpoint is meant to be a public forwarder (e.g. an unauthenticated webhook target).",
@@ -2122,6 +2143,20 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
 UserMCPManagementMode = Literal["restricted", "view_all"]
 
 
+class PluginConfig(LiteLLMPydanticObjectBase):
+    """A single external service registered as an embeddable UI plugin."""
+
+    name: str = Field(description="unique plugin identifier (kebab-case)")
+    display_name: str | None = Field(
+        None, description="human-readable label shown in the UI view switcher"
+    )
+    url: str = Field(description="base URL of the plugin service")
+    plugin_key: str | None = Field(
+        None,
+        description="plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls",
+    )
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2129,6 +2164,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
 
     completion_model: Optional[str] = Field(
         None, description="proxy level default model for all chat completion calls"
+    )
+    plugins: list[PluginConfig] | None = Field(
+        None, description="external services registered as embeddable UI plugins"
     )
     key_management_system: Optional[KeyManagementSystem] = Field(
         None, description="key manager to load keys from / decrypt keys with"
@@ -2141,6 +2179,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     master_key: Optional[str] = Field(
         None, description="require a key for all calls to proxy"
+    )
+    allow_cli_sso_verification_uri_complete: bool | None = Field(
+        None,
+        description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
     )
     database_url: Optional[str] = Field(
         None,
@@ -2218,6 +2260,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
+    cancel_on_disconnect: Optional[bool] = Field(
+        None,
+        description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
+    )
     infer_model_from_keys: Optional[bool] = Field(
         None,
         description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)",
@@ -2231,8 +2277,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_concurrency: Optional[int] = Field(
         None,
         description=(
-            "limit concurrent health checks per cycle; when unset, "
-            "health checks run without a concurrency cap"
+            "limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap"
         ),
     )
     health_check_skip_disabled_background_models: bool = Field(
@@ -2274,6 +2319,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     enable_public_model_hub: bool = Field(
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
+    )
+    pass_through_request_timeout: Optional[float] = Field(
+        default=None,
+        description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
     )
     pass_through_endpoints: Optional[List[PassThroughGenericEndpoint]] = Field(
         default=None,
@@ -2929,6 +2978,10 @@ class SpecialModelNames(enum.Enum):
     no_default_models = "no-default-models"
 
 
+class SpecialMCPServerNames(enum.Enum):
+    no_mcp_servers = "no-mcp-servers"
+
+
 class SpecialProxyStrings(enum.Enum):
     default_user_id = "default_user_id"  # global proxy admin
 
@@ -3092,6 +3145,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "GALILEO_PASSWORD",
         ],
         ui_callback_name="Galileo",
+    )
+
+    newrelic: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="newrelic",
+        ui_callback_name="New Relic",
+        litellm_callback_params=[
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
     )
 
 
@@ -3297,7 +3358,9 @@ class ProxyException(Exception):
 
 class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = (
-        "DB not connected. See https://docs.litellm.ai/docs/proxy/virtual_keys"
+        "DB not connected. This endpoint needs a database; set DATABASE_URL to a "
+        "PostgreSQL connection string (postgresql://...) to enable it. "
+        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
@@ -3768,6 +3831,28 @@ class SpecialHeaders(enum.Enum):
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
     mcp_access_groups = "x-mcp-access-groups"
+
+    @classmethod
+    def litellm_credential_header_names(cls) -> "frozenset[str]":
+        """Lowercased header names user_api_key_auth accepts as a litellm key.
+
+        Every header here authenticates the caller, so any code that forwards a
+        request onward (e.g. the plugin reverse proxy) must strip all of them to
+        avoid leaking the caller's litellm credential downstream. The static
+        custom-key header (general_settings.litellm_key_header_name) is runtime
+        config and must be added on top of this set by the caller.
+        """
+        return frozenset(
+            header.value.lower()
+            for header in (
+                cls.openai_authorization,
+                cls.azure_authorization,
+                cls.anthropic_authorization,
+                cls.google_ai_studio_authorization,
+                cls.azure_apim_authorization,
+                cls.custom_litellm_api_key,
+            )
+        )
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
