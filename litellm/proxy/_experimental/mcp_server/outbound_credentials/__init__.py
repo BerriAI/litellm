@@ -4,8 +4,9 @@ This subpackage houses the typed credential vocabulary and the ``resolve_credent
 dispatch. A server declares one per-mode config from the ``AuthConfig`` discriminated union;
 ``UpstreamCredentialProvider.resolve_credentials`` selects one arm and returns an ``httpx.Auth``
 or a typed ``CredError``. Failures are modeled as values via :mod:`.result` (``Result[T,
-CredError]``) rather than raised, so every seam is total. Nothing here is wired onto a live
-request path yet.
+CredError]``) rather than raised, so every seam is total. The ``none`` and shared-key
+``api_key`` modes are wired onto the live request path through ``_create_mcp_client``; the
+remaining modes are not migrated yet and defer to v1.
 """
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
