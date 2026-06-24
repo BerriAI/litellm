@@ -26,6 +26,7 @@ union (see `result.py`), not `expression.Result`.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Literal, Mapping, Optional
 
@@ -60,14 +61,14 @@ class AuthSpecKind(str, Enum):
     aws_sigv4 = "aws_sigv4"  # AWS SigV4 per-request signing (e.g. Bedrock AgentCore)
 
 
-class Unauthorized(BaseModel):
+@dataclass(frozen=True, slots=True)
+class Unauthorized:
     """A 401 plus the optional challenge a client needs to recover.
 
     ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
     challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
     """
 
-    model_config = ConfigDict(frozen=True)
     detail: str
     www_authenticate: Optional[str] = None
     body: Optional[Mapping[str, str]] = None
