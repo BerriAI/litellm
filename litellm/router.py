@@ -4766,8 +4766,6 @@ class Router:
             )
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
-
-            return response
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(

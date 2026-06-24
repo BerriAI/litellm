@@ -386,14 +386,6 @@ class SagemakerLLM(BaseAWSLLM):
 
             return completion_stream
 
-            # LOGGING
-            logging_obj.post_call(
-                input=[],
-                api_key="",
-                original_response="first stream response received",
-                additional_args={"complete_input_dict": data},
-            )
-
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise SagemakerError(status_code=error_code, message=err.response.text)

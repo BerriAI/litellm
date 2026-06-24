@@ -2487,8 +2487,6 @@ async def view_spend_logs(
             )
             return data
 
-        return None
-
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(

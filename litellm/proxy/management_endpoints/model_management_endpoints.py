@@ -1115,8 +1115,6 @@ class ModelManagementAuthChecks:
         else:
             return True
 
-        return True
-
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(

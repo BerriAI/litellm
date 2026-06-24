@@ -7,6 +7,7 @@
 	info lint lint-dev format \
 	lint-basedpyright lint-basedpyright-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
+	lint-deadcode lint-deadcode-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -31,6 +32,8 @@ help:
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
 	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
+	@echo "  make lint-deadcode      - Find dead Python code (unreachable branches, unused symbols) with vulture"
+	@echo "  make lint-deadcode-update - Re-capture the vulture allowlist baseline (.vulture_allowlist.py)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -147,6 +150,16 @@ lint-ruff-budget-update: install-dev
 
 # Ratchet all budgets in one shot (ruff strict + basedpyright)
 lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update
+
+# Dead-code detection (the Python analogue of the frontend's knip).
+# Surfaces unreachable code, dead branches, and unused symbols. Config and the
+# accepted-findings baseline live in pyproject.toml [tool.vulture] and
+# .vulture_allowlist.py. On-demand, not wired into `make lint`.
+lint-deadcode: install-dev
+	$(UV_RUN) vulture
+
+lint-deadcode-update: install-dev
+	$(UV_RUN) python scripts/vulture_allowlist_update.py
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
