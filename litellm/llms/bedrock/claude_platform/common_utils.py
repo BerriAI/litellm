@@ -1,14 +1,9 @@
-from typing import Literal, Optional, Protocol, Tuple
+from typing import Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
-
-
-class _SupportsGet(Protocol):
-    def get(self, key: str, default: object = None) -> object: ...
-
 
 CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
     "aws-external-anthropic"
@@ -80,15 +75,21 @@ def filter_claude_platform_request_body(
 
 
 def resolve_unsupported_override(
-    litellm_params: _SupportsGet,
+    litellm_params: object,
 ) -> Optional[frozenset[str]]:
     """Read ``claude_platform_unsupported_params`` from litellm_params.
 
     Returns None (use default set) when the key is absent. Returns a
     frozenset when present, allowing operators to override or clear the
     unsupported-param list via proxy config without a code change.
+
+    Accepts both plain dicts and Pydantic models (GenericLiteLLMParams)
+    since both expose a .get() method.
     """
-    raw = litellm_params.get("claude_platform_unsupported_params")
+    get = getattr(litellm_params, "get", None)
+    if get is None:
+        return None
+    raw = get("claude_platform_unsupported_params")
     if raw is None:
         return None
     if isinstance(raw, (list, set, frozenset, tuple)):
