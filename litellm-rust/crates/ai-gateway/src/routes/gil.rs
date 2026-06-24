@@ -1,19 +1,26 @@
-use axum::Json;
+//! `GET /health/gil` — poll to confirm Python is only touched at load time.
+//! Simple-route template: a `router()` plus its handler, in one file.
+
+use axum::routing::get;
+use axum::{Json, Router};
 use serde::Serialize;
 
 use crate::gil;
+use crate::state::AppState;
 
-/// Pollable GIL-activity status. `gil_acquired_last_30s` should be `false` during
-/// steady realtime traffic — the GIL is only taken at load time (config read).
-#[derive(Debug, Serialize)]
-pub struct GilStatusResponse {
-    pub gil_acquired_last_30s: bool,
-    pub total_acquisitions: u64,
-    pub seconds_since_last: Option<u64>,
+/// This route's contribution to the app router.
+pub fn router() -> Router<AppState> {
+    Router::new().route("/health/gil", get(status))
 }
 
-/// `GET /health/gil` — report recent GIL activity for polling.
-pub async fn status() -> Json<GilStatusResponse> {
+#[derive(Debug, Serialize)]
+struct GilStatusResponse {
+    gil_acquired_last_30s: bool,
+    total_acquisitions: u64,
+    seconds_since_last: Option<u64>,
+}
+
+async fn status() -> Json<GilStatusResponse> {
     let snapshot = gil::snapshot();
     Json(GilStatusResponse {
         gil_acquired_last_30s: snapshot.acquired_last_30s,
