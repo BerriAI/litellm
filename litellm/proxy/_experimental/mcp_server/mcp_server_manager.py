@@ -57,6 +57,7 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+    CachedByokStore,
     Error,
     Ok,
     UpstreamCredentialProvider,
@@ -65,6 +66,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     raise_public,
     to_server_spec,
     to_subject,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.stores import (
+    DbBackedByokStore,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -522,7 +526,10 @@ class MCPServerManager:
         return None
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
-        self._cred_provider = cred_provider or UpstreamCredentialProvider()
+        # BYOK reads the per-user key through the DB store, cached for parity with v1's 60s TTL.
+        self._cred_provider = cred_provider or UpstreamCredentialProvider(
+            byok_store=CachedByokStore(DbBackedByokStore(), ttl_seconds=60)
+        )
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
         """

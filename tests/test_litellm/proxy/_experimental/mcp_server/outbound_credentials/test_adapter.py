@@ -18,6 +18,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
+    Byok,
     CredError,
     NoneConfig,
     SharedKey,
@@ -93,22 +94,33 @@ def test_unmigrated_modes_defer_to_v1(server):
 
 
 @pytest.mark.parametrize(
-    "server",
+    "auth_type, header_name, value_prefix, encode",
     [
-        _server(auth_type=MCPAuth.api_key, is_byok=True),
-        # BYOK rides on auth_type, so it must defer for every scheme, not just api_key. A stray
-        # static token must not route a BYOK server to a v2 shared-key spec with the wrong value.
-        _server(auth_type=MCPAuth.bearer_token, is_byok=True, authentication_token="x"),
-        _server(auth_type=MCPAuth.basic, is_byok=True, authentication_token="x"),
-        _server(
-            auth_type=MCPAuth.authorization, is_byok=True, authentication_token="x"
-        ),
-        _server(auth_type=MCPAuth.token, is_byok=True, authentication_token="x"),
-        _server(auth_type=None, is_byok=True),
+        (MCPAuth.api_key, "X-API-Key", "", False),
+        (MCPAuth.bearer_token, "Authorization", "Bearer", False),
+        (MCPAuth.token, "Authorization", "token", False),
+        (MCPAuth.authorization, "Authorization", "", False),
+        (MCPAuth.basic, "Authorization", "Basic", True),
     ],
 )
-def test_byok_defers_regardless_of_auth_type(server):
-    assert to_server_spec(server) is None
+def test_byok_maps_to_byok_source_for_each_scheme(
+    auth_type, header_name, value_prefix, encode
+):
+    # BYOK reuses the per-scheme placement but with the Byok source. A stray config token must
+    # be ignored: the per-user key is pulled at resolve time, not read here.
+    spec = to_server_spec(
+        _server(auth_type=auth_type, is_byok=True, authentication_token="ignored")
+    )
+    assert spec is not None and isinstance(spec.config, ApiKeyConfig)
+    assert isinstance(spec.config.key_source, Byok)
+    assert spec.config.header_name == header_name
+    assert spec.config.value_prefix == value_prefix
+    assert spec.config.encode_base64 is encode
+
+
+def test_byok_with_none_auth_type_defers():
+    # BYOK needs a header scheme; auth_type=none has none, so defer to v1.
+    assert to_server_spec(_server(auth_type=None, is_byok=True)) is None
 
 
 def test_to_subject_unauthenticated_is_empty_with_inbound_token():

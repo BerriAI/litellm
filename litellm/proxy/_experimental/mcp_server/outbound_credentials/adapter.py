@@ -19,6 +19,8 @@ from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
+    ApiKeySource,
+    Byok,
     CredError,
     NoneConfig,
     ServerSpec,
@@ -53,39 +55,34 @@ def to_subject(
 def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     """Map a v1 server onto a ServerSpec for a migrated mode, or None to defer to v1.
 
-    BYOK is the per-user source of the ``api_key`` mode; its scheme rides on ``auth_type`` just
-    like a shared key, but the value is per-user and not migrated yet, so a BYOK server defers
-    to v1 regardless of ``auth_type`` (this guard is the seam the BYOK arm replaces later).
-
     Dispatches on the declared ``auth_type``. The match is exhaustive over ``MCPAuthType`` with
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none`` and the static-header family (``api_key`` plus the Authorization schemes),
-    all shared-key; every other mode returns None and stays on v1.
+    each with either a shared key (from config) or a per-user BYOK key (``server.is_byok``);
+    every other mode returns None and stays on v1.
     """
-    if server.is_byok:
-        return (
-            None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
-        )
     resource = server.url or server.server_id
     auth_type = server.auth_type
     match auth_type:
         case None | MCPAuth.none:
-            if server.is_oauth_passthrough:
-                return None  # passthrough is not migrated yet -> defer to v1
+            if server.is_byok or server.is_oauth_passthrough:
+                return (
+                    None  # BYOK needs a scheme; passthrough not migrated -> defer to v1
+                )
             return ServerSpec(
                 server_id=server.server_id, resource=resource, config=NoneConfig()
             )
         case MCPAuth.api_key:
-            return _shared_key_spec(server, resource, "X-API-Key", "")
+            return _api_key_spec(server, resource, "X-API-Key", "")
         case MCPAuth.bearer_token:
-            return _shared_key_spec(server, resource, "Authorization", "Bearer")
+            return _api_key_spec(server, resource, "Authorization", "Bearer")
         case MCPAuth.token:
-            return _shared_key_spec(server, resource, "Authorization", "token")
+            return _api_key_spec(server, resource, "Authorization", "token")
         case MCPAuth.authorization:
-            return _shared_key_spec(server, resource, "Authorization", "")
+            return _api_key_spec(server, resource, "Authorization", "")
         case MCPAuth.basic:
-            return _shared_key_spec(
+            return _api_key_spec(
                 server, resource, "Authorization", "Basic", encode=True
             )
         case MCPAuth.oauth2 | MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
@@ -93,7 +90,7 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     assert_never(auth_type)
 
 
-def _shared_key_spec(
+def _api_key_spec(
     server: MCPServer,
     resource: str,
     header_name: str,
@@ -101,14 +98,21 @@ def _shared_key_spec(
     *,
     encode: bool = False,
 ) -> Optional[ServerSpec]:
-    """Build an api_key spec from the server's static token, or defer (None) if it is absent.
+    """Build an api_key spec for the static-header family, choosing the key source.
 
-    Covers the whole shared-key static-header family: ``api_key`` on ``X-API-Key`` and the
-    Authorization schemes (bearer / token / authorization sent verbatim, basic base64-encoded).
+    A BYOK server (``server.is_byok``) uses the ``Byok`` source: the per-user key is pulled
+    from the credential store at resolve time, so no token is read here. Otherwise the shared
+    key comes from the config, or the spec defers (None) when it is absent. Both sources ride
+    the same ``(header_name, value_prefix, encode)`` placement, so every scheme works for BYOK
+    exactly as it does for a shared key (basic base64-encodes at write time).
     """
-    token = server.authentication_token
-    if not token:
-        return None  # no key configured -> defer to v1 (parity-safe)
+    if server.is_byok:
+        key_source: ApiKeySource = Byok()
+    else:
+        token = server.authentication_token
+        if not token:
+            return None  # no key configured -> defer to v1 (parity-safe)
+        key_source = SharedKey(value=SecretStr(token))
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
@@ -116,7 +120,7 @@ def _shared_key_spec(
             header_name=header_name,
             value_prefix=value_prefix,
             encode_base64=encode,
-            key_source=SharedKey(value=SecretStr(token)),
+            key_source=key_source,
         ),
     )
 

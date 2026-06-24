@@ -4735,6 +4735,51 @@ class TestCreateMcpClientV2Graft:
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
 
+    async def test_byok_server_resolves_per_user_key_via_graft(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+            UpstreamCredentialProvider,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _Store:
+            async def fetch(self, user_id, server_id):
+                return "k-alice" if user_id == "alice" else None
+
+        manager = MCPServerManager(
+            cred_provider=UpstreamCredentialProvider(byok_store=_Store())
+        )
+        client = await manager._create_mcp_client(
+            self._http_server(auth_type=MCPAuth.api_key, is_byok=True),
+            user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
+        )
+
+        assert isinstance(client._resolved_auth, StaticHeaderAuth)
+        assert client._resolved_auth.header_name == "X-API-Key"
+        assert client._resolved_auth._header_value.get_secret_value() == "k-alice"
+
+    async def test_byok_server_without_provisioned_key_raises_401(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+            UpstreamCredentialProvider,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _EmptyStore:
+            async def fetch(self, user_id, server_id):
+                return None
+
+        manager = MCPServerManager(
+            cred_provider=UpstreamCredentialProvider(byok_store=_EmptyStore())
+        )
+        with pytest.raises(HTTPException) as exc:
+            await manager._create_mcp_client(
+                self._http_server(auth_type=MCPAuth.api_key, is_byok=True),
+                user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
+            )
+        assert exc.value.status_code == 401
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
