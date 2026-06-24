@@ -63,9 +63,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
             verbose_logger.warning("No Anthropic API key found for token counting")
             return None
 
-        # Resolve custom api_base using the unified model info helper to support secret managers and alternative env vars
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
+        # Resolve custom api_base using unified model info helper
         api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or None
 
         try:
