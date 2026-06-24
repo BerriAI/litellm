@@ -524,7 +524,7 @@ def test_gemini_session_update_defaults_to_audio_modality():
         "gemini/gemini-3.1-flash-live-preview",
     ],
 )
-def test_gemini_audio_only_live_models_coerce_text_modality_to_audio(model):
+def test_gemini_audio_only_live_models_coerce_text_modality_to_audio(model, patch_gemini_audio_cost_map_entries):
     """Regression: TEXT-only responseModalities causes 1007 on audio-only Live models."""
     config = GeminiRealtimeConfig()
     session_update = {
@@ -1268,7 +1268,7 @@ def test_gemini_subsequent_session_update_forwards_tools_merged_with_original_se
     assert follow_up["inputAudioTranscription"] == {}
 
 
-def test_gemini_realtime_pipecat_ga_session_voice_and_tools():
+def test_gemini_realtime_pipecat_ga_session_voice_and_tools(patch_gemini_audio_cost_map_entries):
     """Pipecat OpenAIRealtimeSessionProperties: output_modalities, nested tools,
     and audio.output.voice (e.g. Kore) must map into Gemini setup."""
     config = GeminiRealtimeConfig()
@@ -1949,6 +1949,7 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
     self-contained.
     """
     native_audio_models = [
+        "gemini-2.5-flash-native-audio",
         "gemini-2.5-flash-native-audio-latest",
         "gemini/gemini-2.5-flash-native-audio-latest",
     ]
