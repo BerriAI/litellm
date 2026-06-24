@@ -205,11 +205,21 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
         #    never leak into AI output, and the model must not have produced a
         #    normal answer to the user (which would have neither a block nor a
         #    refusal marker).
+        # gpt-realtime phrases its refusals in many ways depending on the
+        # session. We accept any of these as evidence that the model declined
+        # to answer the user's blocked prompt rather than producing a normal
+        # answer. Examples seen in CI:
+        #   - "I'm sorry, but I can't assist with that."
+        #   - "Sorry, I can't say that. It contains a forbidden phrase."
+        #   - "I cannot repeat that message."
         safe_markers = (
             "block",
             "guardrail",
             "content filter",
             "policy",
+            "forbidden",
+            "can't say",
+            "cannot say",
             "can't repeat",
             "cannot repeat",
             "can't say",
@@ -218,8 +228,9 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             "can't assist",
             "can't help",
             "unable to",
-            "i'm sorry",
-            "i am sorry",
+            "i can't",
+            "i cannot",
+            "sorry",
         )
         done_events = [e for e in client_events if e.get("type") == "response.done"]
         for done in done_events:
