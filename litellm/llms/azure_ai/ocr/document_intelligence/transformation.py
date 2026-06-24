@@ -228,6 +228,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             f"?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
         )
 
+        # outputContentFormat=markdown is only supported by prebuilt-layout
+        if model_id == "prebuilt-layout":
+            url += "&outputContentFormat=markdown"
+
         # Azure DI accepts `pages` as a query param (1-based, e.g. "1-3,5").
         # `optional_params` has already been normalized in `map_ocr_params`.
         pages = optional_params.get("pages") if optional_params else None
@@ -332,26 +336,50 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
         return OCRRequestData(data=data, files=None)
 
-    def _extract_page_markdown(self, page_data: Dict[str, Any]) -> str:
+    def _extract_page_markdown(
+        self, page_data: Dict[str, Any], full_content: Optional[str] = None
+    ) -> str:
         """
-        Extract text from Azure DI page and format as markdown.
+        Extract markdown text for a single page from Azure DI response.
 
-        Azure DI provides text in 'lines' array. We concatenate them with newlines.
+        When ``outputContentFormat=markdown`` is used, Azure DI returns the
+        full structured markdown in ``analyzeResult.content`` and each page
+        carries ``spans`` that index into that string.  If *full_content* is
+        supplied we slice it using those spans; otherwise we fall back to the
+        legacy ``lines``-based concatenation.
 
         Args:
             page_data: Azure DI page object
+            full_content: The full ``analyzeResult.content`` string (markdown)
 
         Returns:
-            Markdown-formatted text
+            Markdown-formatted text for the page
         """
+        # Prefer spans into full_content (available with outputContentFormat=markdown)
+        if full_content is not None:
+            spans = page_data.get("spans", [])
+            if spans:
+                parts = []
+                # Azure DI span offsets are UTF-16 code-unit offsets, not
+                # Python (Unicode code-point) indices.  We encode the full
+                # content as UTF-16-LE (2 bytes per code unit) so we can
+                # slice correctly, then decode back to str.
+                content_u16 = full_content.encode("utf-16-le")
+                for span in spans:
+                    offset = span.get("offset", 0)
+                    length = span.get("length", 0)
+                    byte_start = offset * 2
+                    byte_end = (offset + length) * 2
+                    parts.append(
+                        content_u16[byte_start:byte_end].decode("utf-16-le")
+                    )
+                return "".join(parts)
+
+        # Fallback: concatenate lines
         lines = page_data.get("lines", [])
         if not lines:
             return ""
-
-        # Extract text content from each line
         text_lines = [line.get("content", "") for line in lines]
-
-        # Join with newlines to preserve structure
         return "\n".join(text_lines)
 
     def _convert_dimensions(
@@ -646,6 +674,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             # Extract analyze result
             analyze_result = response_json.get("analyzeResult", {})
             azure_pages = analyze_result.get("pages", [])
+            full_content = analyze_result.get("content")
 
             # Transform pages to Mistral format
             mistral_pages = []
@@ -654,7 +683,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 index = page_number - 1  # Convert to 0-based index
 
                 # Extract markdown text
-                markdown = self._extract_page_markdown(azure_page)
+                markdown = self._extract_page_markdown(
+                    azure_page, full_content=full_content
+                )
 
                 # Convert dimensions
                 width = azure_page.get("width", 8.5)
@@ -766,6 +797,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             # Extract analyze result
             analyze_result = response_json.get("analyzeResult", {})
             azure_pages = analyze_result.get("pages", [])
+            full_content = analyze_result.get("content")
 
             # Transform pages to Mistral format
             mistral_pages = []
@@ -774,7 +806,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 index = page_number - 1  # Convert to 0-based index
 
                 # Extract markdown text
-                markdown = self._extract_page_markdown(azure_page)
+                markdown = self._extract_page_markdown(
+                    azure_page, full_content=full_content
+                )
 
                 # Convert dimensions
                 width = azure_page.get("width", 8.5)
