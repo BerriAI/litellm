@@ -80,6 +80,7 @@ from litellm.constants import (
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
+    request_timeout_explicitly_set as request_timeout_explicitly_set,
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
@@ -674,6 +675,7 @@ elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
+darkbloom_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -928,6 +930,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
             publicai_models.add(key)
+        elif value.get("litellm_provider") == "darkbloom":
+            darkbloom_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1076,6 +1080,7 @@ model_list = list(
     | dashscope_models
     | moonshot_models
     | publicai_models
+    | darkbloom_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1180,6 +1185,7 @@ models_by_provider: dict = {
     "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
+    "darkbloom": darkbloom_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
@@ -1401,6 +1407,7 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .ocr.rust_bridge import use_litellm_rust
 from .rag.main import *
 from .sandbox.main import *
 from .search.main import *
@@ -1922,9 +1929,6 @@ if TYPE_CHECKING:
     )
     from .llms.fireworks_ai.completion.transformation import (
         FireworksAITextCompletionConfig as FireworksAITextCompletionConfig,
-    )
-    from .llms.fireworks_ai.audio_transcription.transformation import (
-        FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig,
     )
     from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
         FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig,

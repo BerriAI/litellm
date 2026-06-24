@@ -7,11 +7,6 @@ on:
       - litellm_internal_staging
       - litellm_oss_branch
       - "litellm_**"
-    paths:
-      - uv.lock
-      - ui/litellm-dashboard/package-lock.json
-      - osv-scanner.toml
-      - .github/workflows/osv-scan.yml
   schedule:
     - cron: "23 6 * * *"
   workflow_dispatch:
