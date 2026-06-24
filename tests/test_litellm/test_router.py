@@ -4976,6 +4976,52 @@ async def test_router_ttft_timeout_returns_non_streaming_response():
 
 
 @pytest.mark.asyncio
+async def test_router_ttft_timeout_reconstruction_runs_off_event_loop_thread():
+    """Final stream reconstruction is CPU-bound, so it must not pin the event loop."""
+    import threading
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+    reconstructed = MagicMock(spec=ModelResponse)
+    event_loop_thread_id = threading.get_ident()
+    builder_thread_id: dict[str, int] = {}
+
+    def _fake_stream_chunk_builder(*args, **kwargs):
+        builder_thread_id["value"] = threading.get_ident()
+        return reconstructed
+
+    with patch(
+        "litellm.main.stream_chunk_builder", side_effect=_fake_stream_chunk_builder
+    ):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+        )
+
+    assert result is reconstructed
+    assert builder_thread_id["value"] != event_loop_thread_id
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_router_ttft_timeout_raises_on_hung_provider():
     """Router raises litellm.Timeout when provider never sends a first token."""
     import asyncio

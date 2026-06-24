@@ -3028,7 +3028,11 @@ class Router:
         finally:
             await response.aclose()
 
-        result = stream_chunk_builder(chunks, messages=messages)
+        # stream_chunk_builder is CPU-bound and can briefly hold the GIL on large
+        # streams; keep that reconstruction work off the async router event loop.
+        result = await asyncio.to_thread(
+            stream_chunk_builder, chunks, messages=messages
+        )
         if result is None:
             raise litellm.APIError(
                 status_code=500,
