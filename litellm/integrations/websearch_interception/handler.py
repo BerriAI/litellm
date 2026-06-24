@@ -1016,12 +1016,24 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
         )
 
+        # Force the synthesis call to answer from the search results instead of
+        # searching again. A client may pin tool_choice to the web_search tool
+        # for its dedicated search sub-request (Claude Code does this); left
+        # as-is the model emits another tool_use on the follow-up and the
+        # response comes back with no answer text. Relaxing it to "auto" is not
+        # enough — with the web_search tool still advertised the model often
+        # re-searches on its own, and this loop is single-shot so that second
+        # tool_use is passed through unanswered. tool_choice="none" keeps the
+        # tool definitions valid for strict backends while compelling the model
+        # to synthesize a textual reply.
         optional_params_without_max_tokens = {
             k: v
             for k, v in anthropic_messages_optional_request_params.items()
             if k != "max_tokens"
         }
+        optional_params_without_max_tokens["tool_choice"] = {"type": "none"}
         kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
+        kwargs_for_followup.pop("tool_choice", None)
 
         if logging_obj is not None:
             agentic_params = logging_obj.model_call_details.get(
