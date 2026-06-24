@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use litellm_core::guardrails::{
-    GenericApiConfig, LocalPiiConfig, OpenaiModerationConfig, PiiAction, PresidioConfig,
-    ProviderConfig, UnreachableFallback,
+    AzurePromptShieldConfig, AzureTextModerationConfig, GenericApiConfig, LocalPiiConfig,
+    OpenaiModerationConfig, PiiAction, PresidioConfig, ProviderConfig, UnreachableFallback,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -47,6 +47,12 @@ pub fn build_config(guardrail_type: &str, params: &Value) -> Result<ProviderConf
     match guardrail_type {
         "generic_guardrail_api" => Ok(ProviderConfig::GenericGuardrailApi(generic(params)?)),
         "openai_moderation" => Ok(ProviderConfig::OpenaiModeration(openai_moderation(params)?)),
+        "azure/prompt_shield" => Ok(ProviderConfig::AzurePromptShield(azure_prompt_shield(
+            params,
+        )?)),
+        "azure/text_moderations" => Ok(ProviderConfig::AzureTextModeration(azure_text_moderation(
+            params,
+        )?)),
         "presidio" => Ok(ProviderConfig::Presidio(presidio(params)?)),
         "local_pii" => Ok(ProviderConfig::LocalPii(local_pii(params)?)),
         other => Err(unsupported(format!(
@@ -108,6 +114,66 @@ fn openai_moderation(params: &Value) -> Result<OpenaiModerationConfig, Unsupport
 
 fn local_pii(params: &Value) -> Result<LocalPiiConfig, Unsupported> {
     parse_params(params)
+}
+
+#[derive(Deserialize, Default)]
+struct AzurePromptShieldParams {
+    #[serde(default)]
+    api_base: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    api_version: Option<String>,
+}
+
+fn azure_prompt_shield(params: &Value) -> Result<AzurePromptShieldConfig, Unsupported> {
+    let raw: AzurePromptShieldParams = parse_params(params)?;
+    let api_base = resolve_secret(raw.api_base.as_deref())
+        .ok_or_else(|| unsupported("azure/prompt_shield requires api_base"))?;
+    Ok(AzurePromptShieldConfig {
+        api_base,
+        api_key: resolve_secret(raw.api_key.as_deref()),
+        api_version: raw.api_version,
+    })
+}
+
+#[derive(Deserialize, Default)]
+struct AzureTextModerationParams {
+    #[serde(default)]
+    api_base: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    api_version: Option<String>,
+    #[serde(default)]
+    severity_threshold: Option<u8>,
+    #[serde(default)]
+    severity_threshold_by_category: HashMap<String, u8>,
+    #[serde(default)]
+    categories: Option<Vec<String>>,
+    #[serde(default, rename = "blocklistNames")]
+    blocklist_names: Vec<String>,
+    #[serde(default, rename = "haltOnBlocklistHit")]
+    halt_on_blocklist_hit: bool,
+    #[serde(default, rename = "outputType")]
+    output_type: Option<String>,
+}
+
+fn azure_text_moderation(params: &Value) -> Result<AzureTextModerationConfig, Unsupported> {
+    let raw: AzureTextModerationParams = parse_params(params)?;
+    let api_base = resolve_secret(raw.api_base.as_deref())
+        .ok_or_else(|| unsupported("azure/text_moderations requires api_base"))?;
+    Ok(AzureTextModerationConfig {
+        api_base,
+        api_key: resolve_secret(raw.api_key.as_deref()),
+        api_version: raw.api_version,
+        severity_threshold: raw.severity_threshold,
+        severity_threshold_by_category: raw.severity_threshold_by_category,
+        categories: raw.categories,
+        blocklist_names: raw.blocklist_names,
+        halt_on_blocklist_hit: raw.halt_on_blocklist_hit,
+        output_type: raw.output_type,
+    })
 }
 
 #[derive(Deserialize, Default)]

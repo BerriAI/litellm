@@ -1,10 +1,12 @@
 //! Network-backed guardrail providers and the dispatch that builds them.
 
+mod azure;
 mod generic;
 mod local_pii;
 mod openai_moderation;
 mod presidio;
 
+pub use azure::{AzurePromptShield, AzureTextModeration};
 pub use generic::GenericGuardrailApi;
 pub use local_pii::LocalPii;
 pub use openai_moderation::OpenaiModeration;
@@ -71,6 +73,14 @@ pub fn build(config: ProviderConfig) -> Result<Box<dyn Guardrail>, ProviderError
                 validate_url(base)?;
             }
             Ok(Box::new(OpenaiModeration::new(cfg)))
+        }
+        ProviderConfig::AzurePromptShield(cfg) => {
+            validate_url(&cfg.api_base)?;
+            Ok(Box::new(AzurePromptShield::new(cfg)))
+        }
+        ProviderConfig::AzureTextModeration(cfg) => {
+            validate_url(&cfg.api_base)?;
+            Ok(Box::new(AzureTextModeration::new(cfg)))
         }
         ProviderConfig::Presidio(cfg) => Ok(Box::new(Presidio::new(cfg))),
         ProviderConfig::LocalPii(cfg) => Ok(Box::new(LocalPii::new(cfg))),
