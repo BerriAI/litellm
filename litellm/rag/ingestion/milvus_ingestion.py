@@ -219,9 +219,9 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         self,
         file_content: bytes | None,
         filename: str | None,
-        content_type: str | None,
         chunks: list[str],
         embeddings: list[list[float]] | None,
+        **_: object,  # absorbs content_type and any extra base-class params
     ) -> tuple[str | None, str | None]:
         """
         Insert chunks + embeddings into a Milvus collection.

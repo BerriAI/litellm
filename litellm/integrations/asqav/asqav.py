@@ -277,8 +277,7 @@ class AsqavLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: object,
-        start_time: datetime | None,
-        end_time: datetime | None,
+        timing: tuple[datetime | None, datetime | None],
         status: str,
     ) -> None:
         """Build one audit record and append it to the JSONL log.
@@ -286,6 +285,7 @@ class AsqavLogger(CustomLogger):
         seq/prev_hash assignment and the file write happen under _lock so the
         on-disk order always matches the chain order.
         """
+        start_time, end_time = timing
         try:
             loggable = _extract_loggable(
                 kwargs, response_obj, start_time, end_time, status
@@ -376,7 +376,7 @@ class AsqavLogger(CustomLogger):
         start_time: datetime | None,
         end_time: datetime | None,
     ) -> None:
-        self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
+        self._build_and_append(kwargs, response_obj, (start_time, end_time), "success")
 
     def log_failure_event(
         self,
@@ -385,7 +385,7 @@ class AsqavLogger(CustomLogger):
         start_time: datetime | None,
         end_time: datetime | None,
     ) -> None:
-        self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
+        self._build_and_append(kwargs, response_obj, (start_time, end_time), "failure")
 
     async def async_log_success_event(
         self,
@@ -398,8 +398,7 @@ class AsqavLogger(CustomLogger):
             self._build_and_append,
             kwargs,
             response_obj,
-            start_time,
-            end_time,
+            (start_time, end_time),
             "success",
         )
 
@@ -414,8 +413,7 @@ class AsqavLogger(CustomLogger):
             self._build_and_append,
             kwargs,
             response_obj,
-            start_time,
-            end_time,
+            (start_time, end_time),
             "failure",
         )
 

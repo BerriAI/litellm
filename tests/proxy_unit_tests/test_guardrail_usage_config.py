@@ -30,7 +30,6 @@ def _metric(
     requests_evaluated: int = 10,
     passed_count: int = 8,
     blocked_count: int = 2,
-    flagged_count: int = 0,
 ):
     return SimpleNamespace(
         guardrail_id=guardrail_id,
@@ -38,7 +37,7 @@ def _metric(
         requests_evaluated=requests_evaluated,
         passed_count=passed_count,
         blocked_count=blocked_count,
-        flagged_count=flagged_count,
+        flagged_count=0,
     )
 
 
