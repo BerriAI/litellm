@@ -100,6 +100,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         optional_rerank_params = {}
         if non_default_params is not None:

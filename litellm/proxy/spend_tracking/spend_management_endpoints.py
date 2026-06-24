@@ -3,7 +3,17 @@ import collections
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Union,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -29,6 +39,7 @@ from litellm.repositories.verification_token_repository import (
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 else:
     PrismaClient = Any
 
@@ -2175,6 +2186,89 @@ async def ui_view_spend_logs(
         raise handle_exception_on_proxy(e)
 
 
+class RequestResponsePayload(NamedTuple):
+    messages: Union[str, list, dict] | None
+    response: Union[str, list, dict] | None
+    proxy_server_request: Union[str, dict] | None
+
+
+_EMPTY_SPEND_LOG_VALUES = frozenset({"", "{}", "[]", "null"})
+
+
+def _spend_log_field_has_content(value: Union[str, list, dict] | None) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() not in _EMPTY_SPEND_LOG_VALUES
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    return True
+
+
+def _cold_storage_object_key_from_metadata(
+    metadata: Union[str, dict] | None,
+) -> str | None:
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(metadata, dict):
+        return None
+    object_key = metadata.get("cold_storage_object_key")
+    return object_key if isinstance(object_key, str) and object_key else None
+
+
+async def _resolve_request_response_payload(
+    row: Mapping[str, Any],
+    cold_storage_handler: "ColdStorageHandler",
+) -> RequestResponsePayload:
+    """
+    Decide where the prompt/response come from for a single spend-log row.
+
+    PG holds the content when ``store_prompts_in_spend_logs`` is on; otherwise it
+    holds ``"{}"`` placeholders and the real payload lives in cold storage keyed
+    by ``metadata.cold_storage_object_key``. The choice is made on actual row
+    content, not config flags, so historical and mixed-storage rows both resolve
+    correctly.
+    """
+    messages = row.get("messages")
+    response = row.get("response")
+    proxy_server_request = row.get("proxy_server_request")
+
+    pg_payload = RequestResponsePayload(messages, response, proxy_server_request)
+    if (
+        _spend_log_field_has_content(messages)
+        or _spend_log_field_has_content(response)
+        or _spend_log_field_has_content(proxy_server_request)
+    ):
+        return pg_payload
+
+    object_key = _cold_storage_object_key_from_metadata(row.get("metadata"))
+    if object_key is None:
+        return pg_payload
+
+    try:
+        payload = await cold_storage_handler.get_proxy_server_request_from_cold_storage_with_object_key(
+            object_key=object_key
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Failed to fetch cold storage payload for key %s; falling back to DB values",
+            object_key,
+            exc_info=True,
+        )
+        return pg_payload
+    if payload is None:
+        return pg_payload
+
+    return RequestResponsePayload(
+        messages=payload.get("messages"),
+        response=payload.get("response"),
+        proxy_server_request=payload.get("proxy_server_request"),
+    )
+
+
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
@@ -2241,26 +2335,27 @@ async def ui_view_request_response_for_request_id(
         if payload is not None:
             return payload
 
-    # Fallback: fetch heavy columns directly from the database.
-    # The list endpoint (/spend/logs/ui) intentionally excludes messages,
-    # response, and proxy_server_request for performance. When no custom
-    # logger (S3, GCS, etc.) is configured, we still need to serve these
-    # fields from the DB for the detail/drawer view.
+    # Fallback: the list endpoint omits the heavy columns for performance, so
+    # serve them here. When prompts were offloaded to cold storage the DB holds
+    # only placeholders, so _resolve_request_response_payload fetches the real
+    # payload from the configured cold storage backend by object key.
     if prisma_client is not None:
+        from litellm.proxy.spend_tracking.cold_storage_handler import (
+            ColdStorageHandler,
+        )
+
         sql_query = """
-            SELECT messages, response, proxy_server_request
+            SELECT messages, response, proxy_server_request, metadata
             FROM "LiteLLM_SpendLogs"
             WHERE request_id = $1
             LIMIT 1
         """
         db_result = await prisma_client.db.query_raw(sql_query, request_id)
         if db_result and len(db_result) > 0:
-            row = db_result[0]
-            return {
-                "messages": row.get("messages"),
-                "response": row.get("response"),
-                "proxy_server_request": row.get("proxy_server_request"),
-            }
+            resolved = await _resolve_request_response_payload(
+                db_result[0], cold_storage_handler=ColdStorageHandler()
+            )
+            return resolved._asdict()
 
     return None
 

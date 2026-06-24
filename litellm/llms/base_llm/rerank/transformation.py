@@ -85,6 +85,7 @@ class BaseRerankConfig(ABC):
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         pass
 

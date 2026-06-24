@@ -15,6 +15,7 @@ def get_optional_rerank_params(
     return_documents: bool | None = True,
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
+    instruction: str | None = None,
     non_default_params: dict | None = None,
 ) -> Dict:
     all_non_default_params = non_default_params or {}
@@ -30,6 +31,11 @@ def get_optional_rerank_params(
         all_non_default_params["max_chunks_per_doc"] = max_chunks_per_doc
     if max_tokens_per_doc is not None:
         all_non_default_params["max_tokens_per_doc"] = max_tokens_per_doc
+    if instruction is not None:
+        # Also surfaced in non_default_params so providers that read it from
+        # there (e.g. DeepInfra) keep working now that `rerank()` consumes
+        # `instruction` as a named param instead of leaving it in **kwargs.
+        all_non_default_params["instruction"] = instruction
     return rerank_provider_config.map_cohere_rerank_params(
         model=model,
         drop_params=drop_params,
@@ -41,5 +47,6 @@ def get_optional_rerank_params(
         return_documents=return_documents,
         max_chunks_per_doc=max_chunks_per_doc,
         max_tokens_per_doc=max_tokens_per_doc,
+        instruction=instruction,
         non_default_params=all_non_default_params,
     )

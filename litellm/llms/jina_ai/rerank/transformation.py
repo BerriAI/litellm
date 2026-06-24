@@ -45,6 +45,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         optional_params = {}
         supported_params = self.get_supported_cohere_rerank_params(model)

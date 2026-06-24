@@ -242,6 +242,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         """
         Map Cohere rerank params to Vertex AI format

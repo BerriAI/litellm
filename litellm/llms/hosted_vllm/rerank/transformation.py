@@ -61,6 +61,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             "top_n",
             "rank_fields",
             "return_documents",
+            "instruction",
         ]
 
     def map_cohere_rerank_params(
@@ -76,6 +77,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         """
         Map parameters for Hosted VLLM rerank
@@ -83,15 +85,21 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if max_chunks_per_doc is not None:
             raise ValueError("Hosted VLLM does not support max_chunks_per_doc")
 
-        return dict(
-            OptionalRerankParams(
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                rank_fields=rank_fields,
-                return_documents=return_documents,
-            )
+        mapped_params = OptionalRerankParams(
+            query=query,
+            documents=documents,
+            top_n=top_n,
+            rank_fields=rank_fields,
+            return_documents=return_documents,
         )
+
+        # `instruction` is a vLLM-supported passthrough (folded into the model's
+        # chat_template_kwargs). Only forward it when explicitly set so omitting
+        # it leaves the request unchanged.
+        if instruction is not None:
+            mapped_params["instruction"] = instruction
+
+        return dict(mapped_params)
 
     def validate_environment(
         self,
@@ -135,6 +143,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             top_n=optional_rerank_params.get("top_n", None),
             rank_fields=optional_rerank_params.get("rank_fields", None),
             return_documents=optional_rerank_params.get("return_documents", None),
+            instruction=optional_rerank_params.get("instruction", None),
         )
         return rerank_request.model_dump(exclude_none=True)
 

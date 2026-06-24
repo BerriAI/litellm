@@ -104,6 +104,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         # Start with the basic parameters
         optional_rerank_params = {}

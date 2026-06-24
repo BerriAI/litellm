@@ -238,11 +238,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
         """
-        messages.append(
+        optional_params.pop("tool_choice")
+        return [
+            *messages,
             {
                 "role": "user",
                 "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
-            }
-        )
-        optional_params.pop("tool_choice")
-        return messages
+            },
+        ]
