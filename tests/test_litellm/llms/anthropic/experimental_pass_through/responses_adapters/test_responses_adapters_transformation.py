@@ -394,20 +394,72 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
-    def test_assistant_thinking_block_becomes_output_text(self):
-        """Assistant thinking block text is included as output_text."""
+    def test_assistant_thinking_block_is_not_sent_as_output_text(self):
+        """Assistant thinking blocks are hidden reasoning state, not visible output."""
         messages = [
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "thinking", "thinking": "Let me reason step by step."}
+                    {
+                        "type": "thinking",
+                        "thinking": "Let me reason step by step.",
+                        "signature": "sig_abc",
+                    },
+                    {"type": "text", "text": "Here is the answer."},
                 ],
             }
         ]
         result = _translate_messages(messages)
         assert result[0]["content"] == [
-            {"type": "output_text", "text": "Let me reason step by step."}
+            {"type": "output_text", "text": "Here is the answer."}
         ]
+
+    def test_assistant_thinking_with_tool_use_keeps_function_call(self):
+        """Thinking is dropped while adjacent tool_use blocks are still replayed."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "I should call the weather tool.",
+                        "signature": "sig_abc",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_03",
+                        "name": "get_weather",
+                        "input": {"location": "Paris"},
+                    },
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_03",
+                "name": "get_weather",
+                "arguments": json.dumps({"location": "Paris"}),
+            }
+        ]
+
+    def test_assistant_only_thinking_block_skipped(self):
+        """Assistant messages with only thinking blocks are omitted on replay."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Hidden reasoning",
+                        "signature": "sig_abc",
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == []
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -419,6 +471,22 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert result == []
+
+    def test_assistant_redacted_thinking_block_skipped(self):
+        """Redacted thinking blocks should not be replayed as visible text."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "encrypted-state"},
+                    {"type": "text", "text": "Visible answer."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["content"] == [
+            {"type": "output_text", "text": "Visible answer."}
+        ]
 
     def test_mixed_messages_ordering(self):
         """Full multi-turn conversation is converted in order."""
