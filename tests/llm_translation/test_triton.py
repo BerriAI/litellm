@@ -401,6 +401,26 @@ def test_triton_generate_request_serializes_dict_params():
     }
 
 
+def test_triton_generate_request_serializes_tuple_params():
+    """Tuples must be JSON-encoded too, not just dict/list (Triton only accepts int/bool/string)."""
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    data_for_triton = config.transform_request(
+        model="triton/qwen3.6-27b",
+        messages=[{"role": "user", "content": "test?"}],
+        optional_params={
+            "max_tokens": 10,
+            "stop_sequences": ("foo", "bar"),
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert isinstance(data_for_triton["parameters"]["stop_sequences"], str)
+    assert json.loads(data_for_triton["parameters"]["stop_sequences"]) == ["foo", "bar"]
+
+
 def test_triton_generate_raw_request():
     from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
