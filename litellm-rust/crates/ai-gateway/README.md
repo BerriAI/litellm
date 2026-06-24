@@ -19,7 +19,7 @@ Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
 - **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
-- **Request logs:** POSTed to a LiteLLM proxy at `/v1/callbacks/logs` (see [Request logging](#request-logging))
+- **Request logs:** POSTed to a LiteLLM proxy at `/v1/rust_control_plane/logs` (see [Request logging](#request-logging))
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to
 > read the config once at boot. The realtime hot path never touches Python.
@@ -88,7 +88,7 @@ stand-in only for the leanest possible build.
 ## Request logging
 
 The gateway runs no spend logic. When a session ends it builds one
-`StandardLoggingPayload` and POSTs it to `{LITELLM_PROXY_BASE_URL}/v1/callbacks/logs`
+`StandardLoggingPayload` and POSTs it to `{LITELLM_PROXY_BASE_URL}/v1/rust_control_plane/logs`
 (admin-only, bearer = `LITELLM_MASTER_KEY`), and the proxy replays it through its
 normal callbacks (spend logs, Langfuse, etc.). The POST is non-blocking: a bounded
 channel drained by a background worker, dropping with a counter if the proxy is
