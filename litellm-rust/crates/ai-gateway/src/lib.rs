@@ -24,5 +24,15 @@ pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
 
+// Realtime request logging. Only the server serves realtime, so these are
+// `server`-gated; `io::realtime` exposes the generic `observe` hook while the
+// collector and callback fan-out live here.
+#[cfg(feature = "server")]
+mod constants;
+#[cfg(feature = "server")]
+pub mod integrations;
+#[cfg(feature = "server")]
+mod realtime;
+
 #[cfg(feature = "python-config")]
 pub mod python;
