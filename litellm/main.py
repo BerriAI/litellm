@@ -5610,6 +5610,15 @@ def completion(  # type: ignore
                 optional_params
             )
 
+        OpenAIGPT5Config._check_responses_api_bridge_requirement(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            responses_api_model_info=responses_api_model_info,
+            tools=tools,
+            reasoning_effort=reasoning_effort,
+            optional_params=optional_params,
+        )
+
         _dispatch_ctx = _CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,
             acompletion=acompletion,

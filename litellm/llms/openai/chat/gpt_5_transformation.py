@@ -102,17 +102,45 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return model_name.startswith("gpt-5.4")
 
     @classmethod
-    def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
-        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
-        model_name = model.split("/")[-1]
-        if not model_name.startswith("gpt-5."):
-            return False
-        try:
-            version_str = model_name.replace("gpt-5.", "").split("-")[0]
-            major = version_str.split(".")[0]
-            return int(major) >= 4
-        except (ValueError, IndexError):
-            return False
+    def _check_responses_api_bridge_requirement(
+        cls,
+        model: str,
+        custom_llm_provider: str,
+        responses_api_model_info: dict,
+        tools: Optional[List[Any]],
+        reasoning_effort: Optional[Any],
+        optional_params: dict,
+    ) -> None:
+        import litellm
+        from litellm.utils import get_model_info
+
+        # Allow global override
+        if litellm.force_responses_api_bridge_check is True:
+            return
+
+        # Get model info for explicit capability check
+        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider) or {}
+        if not model_info.get("requires_responses_api_bridge_for_tools_and_reasoning", False):
+            return
+
+        # If responses API mode is already active, no need to raise an error
+        if responses_api_model_info.get("mode") == "responses":
+            return
+
+        # Check for tools and reasoning_effort
+        _effort = reasoning_effort if reasoning_effort is not None else optional_params.get("reasoning_effort")
+        if tools and _effort is not None:
+            raise litellm.BadRequestError(
+                message=(
+                    f"Function tools with reasoning_effort are not supported "
+                    f"for {model} in /v1/chat/completions. "
+                    f"Use a provider that supports the /v1/responses bridge "
+                    f"(openai, azure), or remove one of the incompatible parameters. "
+                    f"See: https://github.com/BerriAI/litellm/issues/23156"
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
     @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
