@@ -34,7 +34,13 @@ pub enum AuthError {
 #[axum::async_trait]
 pub trait KeyAuthenticator: Send + Sync {
     /// Resolve `key` for the given `route` (the gateway's own request path, e.g.
-    /// `/v1/realtime`). The route is forwarded so route/model restrictions on the
-    /// key are evaluated against the route it's actually being used on.
-    async fn verify(&self, key: &str, route: &str) -> Result<UserApiKeyAuth, AuthError>;
+    /// `/v1/realtime`) and the requested `model` (if any). Both are forwarded so
+    /// the backend enforces the key/team's route AND model permissions against
+    /// what's actually being requested — not just that the key exists.
+    async fn verify(
+        &self,
+        key: &str,
+        route: &str,
+        model: Option<&str>,
+    ) -> Result<UserApiKeyAuth, AuthError>;
 }
