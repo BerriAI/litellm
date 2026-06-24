@@ -175,3 +175,21 @@ async def test_one_bad_record_does_not_sink_the_batch(monkeypatch):
         body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     )
     assert resp.processed == 1 and resp.failed == 1
+    # The failed record is reported back by index + error, not silently dropped.
+    assert len(resp.failures) == 1
+    assert resp.failures[0].index == 0
+    assert "boom on first record" in resp.failures[0].error
+
+
+def test_batch_over_limit_is_rejected():
+    from litellm.constants import MAX_CALLBACK_LOG_RECORDS
+    from pydantic import ValidationError
+
+    # One over the cap must fail validation (422 at the API boundary), bounding
+    # the callback/DB fan-out a single POST can trigger.
+    too_many = [
+        CallbackLogRecord(status="success", standard_logging_payload=_sample_payload())
+        for _ in range(MAX_CALLBACK_LOG_RECORDS + 1)
+    ]
+    with pytest.raises(ValidationError):
+        CallbackLogsRequest(records=too_many)

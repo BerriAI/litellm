@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.callback_logs_endpoints import (
+    CallbackLogFailure,
     CallbackLogRecord,
     CallbackLogsRequest,
     CallbackLogsResponse,
@@ -154,24 +155,29 @@ class CallbackLogsReplayer:
     async def replay_batch(
         self, records: list[CallbackLogRecord]
     ) -> CallbackLogsResponse:
-        """Replay a batch; a single bad record never sinks the rest."""
+        """Replay a batch; a single bad record never sinks the rest. Each failure
+        is reported back with its batch index so the caller can retry/triage it."""
         processed = 0
-        failed = 0
-        for record in records:
+        failures: list[CallbackLogFailure] = []
+        for index, record in enumerate(records):
             try:
                 await self.replay(record)
                 processed += 1
             except Exception as e:
-                failed += 1
+                failures.append(CallbackLogFailure(index=index, error=str(e)))
                 verbose_proxy_logger.exception(
-                    "CallbackLogsReplayer: failed to replay a record: %s", str(e)
+                    "CallbackLogsReplayer: failed to replay record %s: %s",
+                    index,
+                    str(e),
                 )
         verbose_proxy_logger.debug(
             "CallbackLogsReplayer: batch done processed=%s failed=%s",
             processed,
-            failed,
+            len(failures),
         )
-        return CallbackLogsResponse(processed=processed, failed=failed)
+        return CallbackLogsResponse(
+            processed=processed, failed=len(failures), failures=failures
+        )
 
 
 @router.post(
