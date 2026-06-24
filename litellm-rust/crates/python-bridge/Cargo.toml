@@ -13,4 +13,6 @@ crate-type = ["cdylib"]
 litellm-core.workspace = true
 litellm-providers.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
+pyo3-async-runtimes.workspace = true
 serde_json.workspace = true
+tokio.workspace = true

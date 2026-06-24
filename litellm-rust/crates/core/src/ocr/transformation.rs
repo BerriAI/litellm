@@ -4,7 +4,7 @@ use crate::CoreResult;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
-pub trait OcrProviderConfig {
+pub trait OcrProviderConfig: Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
     fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {

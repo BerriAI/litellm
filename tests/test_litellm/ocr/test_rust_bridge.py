@@ -35,7 +35,15 @@ class RecordingBridge:
         self.calls = []
 
     def __call__(
-        self, model, document, api_key, api_base, optional_params, timeout_seconds
+        self,
+        model,
+        document,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        optional_params,
+        timeout_seconds,
     ):
         self.calls.append(
             {
@@ -43,6 +51,40 @@ class RecordingBridge:
                 "document": document,
                 "api_key": api_key,
                 "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+                "optional_params": optional_params,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return dict(FAKE_OCR_RESPONSE)
+
+
+class RecordingAsyncBridge:
+    """A fake async ``RustAocr`` callable that records the args it was handed."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(
+        self,
+        model,
+        document,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        optional_params,
+        timeout_seconds,
+    ):
+        self.calls.append(
+            {
+                "model": model,
+                "document": document,
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
                 "optional_params": optional_params,
                 "timeout_seconds": timeout_seconds,
             }
@@ -70,7 +112,7 @@ class FakeOCRConfig:
     def validate_environment(
         self, *, headers, model, api_key, api_base, litellm_params
     ):
-        return {"authorization": f"Bearer {api_key}"}
+        return {"Authorization": f"Bearer {api_key}", **headers}
 
     def get_complete_url(self, *, api_base, model, optional_params, litellm_params):
         return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
@@ -79,9 +121,9 @@ class FakeOCRConfig:
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge.use_litellm_rust(False, ocr=None)
+    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
     yield
-    rust_bridge.use_litellm_rust(False, ocr=None)
+    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
 
 
 @pytest.fixture
@@ -89,6 +131,14 @@ def fake_bridge():
     """Enable the Rust path with an injected recording bridge (no native wheel)."""
     bridge = RecordingBridge()
     litellm.use_litellm_rust(True, ocr=bridge)
+    return bridge
+
+
+@pytest.fixture
+def fake_async_bridge():
+    """Enable the async Rust path with an injected recording bridge."""
+    bridge = RecordingAsyncBridge()
+    litellm.use_litellm_rust(True, aocr=bridge)
     return bridge
 
 
@@ -106,6 +156,12 @@ def test_load_rust_ocr_returns_injected_impl():
     assert rust_bridge.load_rust_ocr() is bridge
 
 
+def test_load_rust_aocr_returns_injected_impl():
+    bridge = RecordingAsyncBridge()
+    litellm.use_litellm_rust(True, aocr=bridge)
+    assert rust_bridge.load_rust_aocr() is bridge
+
+
 def test_toggle_without_ocr_arg_preserves_injected_impl():
     """Regression: routine enable/disable calls must not clobber a prior injection.
 
@@ -114,20 +170,25 @@ def test_toggle_without_ocr_arg_preserves_injected_impl():
     a caller toggled the flag without re-passing ``ocr=``.
     """
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    async_bridge = RecordingAsyncBridge()
+    litellm.use_litellm_rust(True, ocr=bridge, aocr=async_bridge)
 
     litellm.use_litellm_rust(False)
     assert rust_bridge.load_rust_ocr() is bridge
+    assert rust_bridge.load_rust_aocr() is async_bridge
     litellm.use_litellm_rust(True)
     assert rust_bridge.load_rust_ocr() is bridge
+    assert rust_bridge.load_rust_aocr() is async_bridge
 
 
 def test_explicit_ocr_none_clears_injected_impl():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    async_bridge = RecordingAsyncBridge()
+    litellm.use_litellm_rust(True, ocr=bridge, aocr=async_bridge)
 
-    litellm.use_litellm_rust(True, ocr=None)
+    litellm.use_litellm_rust(True, ocr=None, aocr=None)
     assert rust_bridge.load_rust_ocr() is None
+    assert rust_bridge.load_rust_aocr() is None
 
 
 def test_load_rust_ocr_none_when_extension_absent():
@@ -135,6 +196,7 @@ def test_load_rust_ocr_none_when_extension_absent():
     caller degrades to the Python path instead of raising ImportError."""
     litellm.use_litellm_rust(True)  # no impl injected; extension isn't built in CI
     assert rust_bridge.load_rust_ocr() is None
+    assert rust_bridge.load_rust_aocr() is None
 
 
 def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
@@ -143,10 +205,12 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     built in CI, so stand in a fake module via ``sys.modules``."""
     fake_module = types.ModuleType("litellm_python_bridge")
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
+    fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "litellm_python_bridge", fake_module)
 
     litellm.use_litellm_rust(True)  # enabled, no impl injected -> import the extension
     assert rust_bridge.load_rust_ocr() is fake_module.ocr
+    assert rust_bridge.load_rust_aocr() is fake_module.aocr
 
 
 def test_timeout_to_seconds_handles_float_timeout_and_none():
@@ -168,6 +232,8 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         document=DOCUMENT,
         api_key="sk-test",
         api_base="https://proxy.internal",
+        custom_llm_provider="mistral",
+        extra_headers={"x-trace-id": "trace-1"},
         optional_params={"include_image_base64": True},
         litellm_params={},
         timeout_seconds=12.5,
@@ -181,6 +247,8 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         "document": DOCUMENT,
         "api_key": "sk-test",
         "api_base": "https://proxy.internal",
+        "custom_llm_provider": "mistral",
+        "extra_headers": {"x-trace-id": "trace-1"},
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
     }
@@ -202,6 +270,8 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
         document=DOCUMENT,
         api_key=None,
         api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
         optional_params={},
         litellm_params={},
         timeout_seconds=None,
@@ -227,6 +297,8 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
         document=DOCUMENT,
         api_key="sk-explicit",
         api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
         optional_params={},
         litellm_params={},
         timeout_seconds=None,
@@ -249,6 +321,8 @@ def test_run_rust_ocr_runs_pre_call_logging():
         document=DOCUMENT,
         api_key="sk-test",
         api_base="https://api.mistral.ai/v1",
+        custom_llm_provider="mistral",
+        extra_headers={"x-trace-id": "trace-1"},
         optional_params={"include_image_base64": True},
         litellm_params={},
         timeout_seconds=None,
@@ -262,7 +336,10 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert complete_input["include_image_base64"] is True
     # The logged request mirrors what Rust sends: resolved URL + headers.
     assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
-    assert additional_args["headers"] == {"authorization": "Bearer sk-test"}
+    assert additional_args["headers"] == {
+        "Authorization": "Bearer sk-test",
+        "x-trace-id": "trace-1",
+    }
 
 
 def test_ocr_routes_to_rust_when_enabled(fake_bridge):
@@ -270,6 +347,7 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
         model=MODEL,
         document=DOCUMENT,
         api_key="sk-test",
+        extra_headers={"x-trace-id": "trace-1"},
         include_image_base64=True,
     )
 
@@ -281,7 +359,31 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     assert call["model"] == "mistral-ocr-latest"
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
+    assert call["custom_llm_provider"] == "mistral"
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     # Raw OCR params ride along in optional_params; Rust filters to supported keys.
+    assert call["optional_params"].get("include_image_base64") is True
+
+
+@pytest.mark.asyncio
+async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
+    response = await litellm.aocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        extra_headers={"x-trace-id": "trace-1"},
+        include_image_base64=True,
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert response.pages[0].markdown == "hello world"
+    assert len(fake_async_bridge.calls) == 1
+    call = fake_async_bridge.calls[0]
+    assert call["model"] == "mistral-ocr-latest"
+    assert call["document"] == DOCUMENT
+    assert call["api_key"] == "sk-test"
+    assert call["custom_llm_provider"] == "mistral"
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     assert call["optional_params"].get("include_image_base64") is True
 
 
