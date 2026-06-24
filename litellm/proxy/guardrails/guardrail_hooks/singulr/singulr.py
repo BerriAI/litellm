@@ -113,7 +113,7 @@ class SingulrGuardrail(CustomGuardrail):
             ]
             indirect_texts = [
                 json.dumps(request_data[k])
-                for k in ("tools", "functions")
+                for k in ("tools", "functions", "response_format")
                 if request_data.get(k)
             ]
 
