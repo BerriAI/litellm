@@ -1097,3 +1097,102 @@ def test_post_not_called_while_lock_held(tmp_path, _cloud_env, _patch_httpx) -> 
     assert lock_held_during_post[0] is False, (
         "lock must NOT be held when client.post() runs"
     )
+
+
+def test_chain_tail_survives_large_record_plus_sidecar(
+    tmp_path, _cloud_env, _patch_httpx
+) -> None:
+    """_load_chain_tail must find the last main record even when it exceeds
+    the initial 4KB tail window and is followed by a small sidecar line.
+
+    Before the fix, the list comprehension in _load_chain_tail raised
+    JSONDecodeError on the partial leading fragment of the large record, the
+    bare except swallowed it, and chain state reset to GENESIS/seq=0. The next
+    append produced a duplicate seq=0 and verify_chain reported a chain break.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    resp = _FakeResponse(201, {"signature_id": "sig-large", "mode": "hash"})
+    _patch_httpx(_FakeHttpxClient(response=resp))
+
+    # Use ASQAV_REDACT_CONTENT=false so the message body enters the record,
+    # making the JSON line exceed 4096 bytes.
+    logger = AsqavLogger(log_path=path, redact_content=False)
+    big_content = "x" * 6000
+    start, end = _make_times()
+    logger.log_success_event(
+        kwargs=_make_kwargs(content=big_content),
+        response_obj=_make_response(content="small"),
+        start_time=start,
+        end_time=end,
+    )
+
+    # Confirm the main record is large and a sidecar is present.
+    raw_lines = [
+        ln for ln in open(path, encoding="utf-8").read().splitlines() if ln.strip()
+    ]
+    assert len(raw_lines) == 2
+    assert len(raw_lines[0].encode()) > 4096, "main record must exceed 4KB"
+
+    # Simulate process restart by building a fresh logger from the same file.
+    logger2 = AsqavLogger(log_path=path, redact_content=False)
+    assert logger2._call_count == 1, (
+        f"expected seq=1 after restart, got {logger2._call_count}"
+    )
+
+    # Append a second record; it must chain onto seq=1, not reset to seq=0.
+    logger2.log_success_event(
+        kwargs=_make_kwargs(content="after restart"),
+        response_obj=_make_response(content="ok"),
+        start_time=start,
+        end_time=end,
+    )
+
+    ok, msg = logger2.verify_chain(path)
+    assert ok is True, msg
+
+    records = _read_records(path)
+    assert len(records) == 2
+    assert records[1]["seq"] == 1, f"second record must have seq=1, got {records[1]['seq']}"
+
+
+def test_verify_chain_handles_inline_receipt(tmp_path) -> None:
+    """verify_chain passes when asqav_cloud is present inline on a main record.
+
+    After the decouple, record_hash is computed WITHOUT asqav_cloud and the
+    receipt is normally a sidecar line. But if a reader merges them back onto
+    the main record (as _read_records does), verify_chain must still pass
+    because it excludes asqav_cloud from the recompute. This test fails if the
+    asqav_cloud exclusion in verify_chain is removed.
+    """
+    path = str(tmp_path / "inline.jsonl")
+    # Build a record exactly as the new code does: record_hash excludes asqav_cloud.
+    content = {
+        "seq": 0,
+        "ts": "2026-01-01T00:00:00+00:00",
+        "prev_hash": _GENESIS_HASH,
+        "call_id": "c1",
+        "model": "gpt-4o",
+        "status": "success",
+        "latency_ms": 100,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "finish_reason": "stop",
+        "provider_request_id": None,
+        "messages_digest": None,
+        "response_content_digest": None,
+        "metadata": {},
+    }
+    record_hash = _sha256_hex(_canonical_bytes(content))
+    # Embed asqav_cloud inline (as a reader-merged record would look).
+    record = {
+        **content,
+        "asqav_cloud": {"signature_id": "sig-inline", "mode": "hash"},
+        "record_hash": record_hash,
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+    logger = AsqavLogger(log_path=path)
+    ok, msg = logger.verify_chain(path)
+    assert ok is True, msg

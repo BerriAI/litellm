@@ -309,7 +309,13 @@ class AsqavLogger(CustomLogger):
     # ------------------------------------------------------------------
 
     def _load_chain_tail(self) -> None:
-        """Read the last line of an existing log file to resume the chain."""
+        """Seed chain state from the last main record in an existing log file.
+
+        Scans backward through the file, widening the read window until a
+        complete main record (one with "ts") is found. Sidecar lines and
+        partial leading fragments from the window boundary are skipped rather
+        than aborting the whole scan.
+        """
         try:
             if not os.path.exists(self._log_path):
                 return
@@ -318,16 +324,29 @@ class AsqavLogger(CustomLogger):
                 size = fh.tell()
                 if size == 0:
                     return
-                tail = _read_tail(fh, size)
-            parsed = [
-                json.loads(ln.decode("utf-8")) for ln in tail.split(b"\n") if ln.strip()
-            ]
-            main_records = [r for r in parsed if "ts" in r]
-            if not main_records:
+                chunk_size = 4096
+                while True:
+                    read_size = min(chunk_size, size)
+                    fh.seek(size - read_size)
+                    window = fh.read(read_size)
+                    last_main: dict[str, Any] | None = None
+                    for raw_line in reversed(window.split(b"\n")):
+                        if not raw_line.strip():
+                            continue
+                        try:
+                            rec = json.loads(raw_line.decode("utf-8"))
+                        except (ValueError, UnicodeDecodeError):
+                            continue
+                        if "ts" in rec:
+                            last_main = rec
+                            break
+                    if last_main is not None or read_size == size:
+                        break
+                    chunk_size *= 2
+            if last_main is None:
                 return
-            last_record = main_records[-1]
-            self._prev_hash = last_record.get("record_hash", _GENESIS_HASH)
-            self._call_count = last_record.get("seq", -1) + 1
+            self._prev_hash = last_main.get("record_hash", _GENESIS_HASH)
+            self._call_count = last_main.get("seq", -1) + 1
         except Exception:
             verbose_logger.debug(
                 f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}"
