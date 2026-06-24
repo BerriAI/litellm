@@ -12,10 +12,12 @@ from typing import Optional
 
 
 class V1BackedByokStore:
-    """``ByokCredentialStore`` backed by v1's persisted per-user credential lookup.
+    """``ByokCredentialStore`` *source* backed by v1's persisted per-user credential lookup.
 
-    Reads the stored key through v1's ``get_user_credential``. Per-request caching is owned by
-    the v2-native store (step 1b), not this lean delegating adapter.
+    Reads the stored key through v1's ``get_user_credential`` and nothing more. Caching is a
+    separate concern layered by ``CachedByokStore``, which wraps this. Step 1b swaps this for a
+    v2-native source (reading v2-owned storage) behind the same seam, leaving the cache wrapper
+    unchanged.
     """
 
     async def fetch(self, user_id: str, server_id: str) -> Optional[str]:
