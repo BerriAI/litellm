@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/providers",
+    "crates/python-bridge",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/BerriAI/litellm"
+
+[workspace.dependencies]
+litellm-core = { path = "crates/core" }
+litellm-providers = { path = "crates/providers" }
+pyo3 = "0.23.5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

@@ -201,6 +201,18 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
 
 # Provider-specific API base URLs
 XAI_API_BASE = "https://api.x.ai/v1"
+OPEN_SANDBOX_API_BASE_ENV_VAR = "OPEN_SANDBOX_API_BASE"
+OPEN_SANDBOX_API_KEY_ENV_VAR = "OPEN_SANDBOX_API_KEY"
+OPEN_SANDBOX_DEFAULT_TEMPLATE = "opensandbox/code-interpreter:v1.1.0"
+_OPEN_SANDBOX_FALLBACK_ENTRYPOINT = "/opt/code-interpreter/code-interpreter.sh"
+OPEN_SANDBOX_DEFAULT_ENTRYPOINT = (_OPEN_SANDBOX_FALLBACK_ENTRYPOINT,)
+OPEN_SANDBOX_DEFAULT_LANGUAGE = "python"
+OPEN_SANDBOX_DEFAULT_CPU_LIMIT = "1"
+OPEN_SANDBOX_DEFAULT_MEMORY_LIMIT = "2Gi"
+OPEN_SANDBOX_EXECD_PORT = 44772
+OPEN_SANDBOX_DEFAULT_TIMEOUT = 300
+OPEN_SANDBOX_READY_TIMEOUT = 30.0
+OPEN_SANDBOX_POLL_INTERVAL = 0.2
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
@@ -456,6 +468,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
 request_timeout: float = float(
     os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
 )
+request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
@@ -867,6 +880,7 @@ openai_compatible_providers: List = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "darkbloom",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
