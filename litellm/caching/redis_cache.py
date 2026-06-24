@@ -1270,6 +1270,8 @@ class RedisCache(BaseCache):
         self.redis_client.flushall()
 
     async def disconnect(self):
+        if self.async_redis_conn_pool is None:
+            return
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
         try:
             self.redis_client.close()

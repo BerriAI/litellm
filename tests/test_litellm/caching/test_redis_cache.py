@@ -853,3 +853,14 @@ def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_
     redis_cache.redis_client = mock_client
     redis_cache.delete_cache(key="k")
     mock_client.delete.assert_called_once_with(expected)
+
+@pytest.mark.asyncio
+async def test_disconnect_with_none_conn_pool():
+    """Regression test: disconnect() must not raise AttributeError when async_redis_conn_pool is None (cluster mode)."""
+    with patch("asyncio.get_running_loop", side_effect=RuntimeError):
+        cache = RedisCache(host="localhost", port=6379, password="x")
+
+    cache.async_redis_conn_pool = None
+
+    # Should return without raising
+    await cache.disconnect()
