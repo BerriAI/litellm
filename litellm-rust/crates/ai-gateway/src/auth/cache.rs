@@ -1,19 +1,20 @@
-//! A bounded, in-memory cache of verified keys — **on by default, for performance.**
+//! A bounded, in-memory cache of verified keys — **off by default (strict).**
 //!
-//! Auth verification is a control-plane round-trip; caching it keeps the gateway
-//! from hammering the proxy's verify endpoint on every request under load — the
-//! same reason the LiteLLM proxy caches key-auth in-process. The TTL is the
-//! perf/freshness knob: a revoked, blocked, or re-budgeted key is re-verified
-//! within the TTL window (a deliberate, bounded staleness, identical in spirit to
-//! the proxy's own ~60s auth cache).
+//! The control-plane verifier is where per-request budget, block, and rate-limit
+//! checks run, so caching its result lets a caller reuse a cached identity for the
+//! cache window without those checks — a budget/rate-limit bypass on billable
+//! connections. The current route (realtime) authenticates **once per long-lived
+//! connection**, not per request, so re-verifying every connection is cheap (one
+//! call per voice session, nowhere near a per-request 10k-RPS load). So the default
+//! is strict: every connection re-verifies.
 //!
-//! For **strict per-connection enforcement** on billable routes (zero staleness —
-//! every connection re-verifies, budget/rate-limit checked each time), set
-//! `LITELLM_AUTH_CACHE_TTL_SECS=0` to disable caching.
+//! Caching is **opt-in** via `LITELLM_AUTH_CACHE_TTL_SECS > 0`, for future
+//! high-RPS *per-request* routes where the verify endpoint would otherwise be a
+//! bottleneck. Enabling it trades budget/rate-limit freshness (bounded by the TTL)
+//! for fewer control-plane calls — like the proxy's own ~60s auth cache.
 //!
-//! Bounds: at most [`MAX_ENTRIES`] entries (FIFO-evicted) plus TTL expiry.
-//! Std-only (no external cache crate): a `Mutex<HashMap>` for lookup plus a
-//! `VecDeque` recording insertion order for FIFO eviction.
+//! Bounds when enabled: at most [`MAX_ENTRIES`] entries (FIFO-evicted) plus TTL
+//! expiry. Std-only: a `Mutex<HashMap>` for lookup plus a `VecDeque` for FIFO order.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -24,11 +25,11 @@ use crate::auth::UserApiKeyAuth;
 /// Hard cap on cached entries; the 201st insert evicts the oldest. Keeps memory
 /// bounded regardless of how many distinct keys hit the gateway.
 const MAX_ENTRIES: usize = 200;
-/// Default TTL when `LITELLM_AUTH_CACHE_TTL_SECS` is unset/invalid. On by default
-/// for performance; matches the proxy's own auth-cache window. Set `0` to disable
-/// (strict per-connection verification).
-const DEFAULT_TTL_SECS: u64 = 60;
-/// Env var overriding the entry TTL (seconds). Set `0` to disable caching.
+/// Default TTL when `LITELLM_AUTH_CACHE_TTL_SECS` is unset/invalid. **0 = caching
+/// off** → every connection re-verifies (budget/block/rate-limit enforced each
+/// time). Opt into caching by setting this `> 0` for high-RPS per-request routes.
+const DEFAULT_TTL_SECS: u64 = 0;
+/// Env var overriding the entry TTL (seconds). Set `> 0` to enable caching.
 const TTL_ENV: &str = "LITELLM_AUTH_CACHE_TTL_SECS";
 
 struct Inner {
