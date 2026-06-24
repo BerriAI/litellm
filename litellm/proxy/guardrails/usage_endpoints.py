@@ -101,7 +101,9 @@ def _trend_from_comparison(current_fail: float, previous_fail: float) -> str:
     return "stable"
 
 
-def _aggregate_daily_metrics(metrics: Any, id_attr: str) -> Dict[str, Dict[str, Any]]:
+def _aggregate_daily_metrics(
+    metrics: object, id_attr: str
+) -> Dict[str, Dict[str, Any]]:
     agg: Dict[str, Dict[str, Any]] = {}
     for m in metrics:
         gid = getattr(m, id_attr)
@@ -114,7 +116,7 @@ def _aggregate_daily_metrics(metrics: Any, id_attr: str) -> Dict[str, Dict[str, 
     return agg
 
 
-def _prev_fail_rates(metrics_prev: Any, id_attr: str) -> Dict[str, float]:
+def _prev_fail_rates(metrics_prev: object, id_attr: str) -> Dict[str, float]:
     prev_agg_raw: Dict[str, Dict[str, int]] = {}
     for m in metrics_prev:
         gid = getattr(m, id_attr)
@@ -126,7 +128,7 @@ def _prev_fail_rates(metrics_prev: Any, id_attr: str) -> Dict[str, float]:
     return {gid: (100.0 * v["blocked"] / v["req"]) if v["req"] else 0.0 for gid, v in prev_agg_raw.items()}
 
 
-def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
+def _chart_from_metrics(metrics: object) -> List[Dict[str, Any]]:
     chart_by_date: Dict[str, Dict[str, int]] = {}
     for m in metrics:
         d = m.date
@@ -137,20 +139,20 @@ def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
     return [{"date": d, "passed": v["passed"], "blocked": v["blocked"]} for d, v in sorted(chart_by_date.items())]
 
 
-def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
+def _get_guardrail_attrs(g: object) -> tuple[object, str]:
     """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
     gid = getattr(g, "guardrail_id", None) or (g.get("guardrail_id") if isinstance(g, dict) else None)
     name = getattr(g, "guardrail_name", None) or (g.get("guardrail_name") if isinstance(g, dict) else None)
     return gid, (name or gid or "")
 
 
-def _get_guardrail_dict_field(g: Any, field_name: str) -> Any:  # noqa: ANN401
+def _get_guardrail_dict_field(g: object, field_name: str) -> object:
     if isinstance(g, dict):
         return g.get(field_name)
     return getattr(g, field_name, None)
 
 
-def _get_guardrail_litellm_params(g: Any) -> dict[str, Any]:  # noqa: ANN401
+def _get_guardrail_litellm_params(g: object) -> dict[str, Any]:
     litellm_params = _get_guardrail_dict_field(g, "litellm_params")
     if isinstance(litellm_params, dict):
         return litellm_params
@@ -159,7 +161,7 @@ def _get_guardrail_litellm_params(g: Any) -> dict[str, Any]:  # noqa: ANN401
     return {}
 
 
-def _get_guardrail_info(g: Any) -> dict[str, Any]:  # noqa: ANN401
+def _get_guardrail_info(g: object) -> dict[str, Any]:
     guardrail_info = _get_guardrail_dict_field(g, "guardrail_info")
     return guardrail_info if isinstance(guardrail_info, dict) else {}
 
@@ -177,7 +179,7 @@ def _get_config_loaded_guardrails() -> list[Any]:
 
 def _find_config_loaded_guardrail(
     guardrail_id_or_name: str,
-) -> Optional[Any]:  # noqa: ANN401
+) -> Optional[object]:
     for guardrail in _get_config_loaded_guardrails():
         gid, display_name = _get_guardrail_attrs(guardrail)
         if guardrail_id_or_name in (gid, display_name):
@@ -185,7 +187,7 @@ def _find_config_loaded_guardrail(
     return None
 
 
-def _merge_config_loaded_guardrails(db_guardrails: Any) -> list[Any]:  # noqa: ANN401
+def _merge_config_loaded_guardrails(db_guardrails: object) -> list[object]:
     guardrails = list(db_guardrails)
     seen_keys: set[str] = set()
     for guardrail in guardrails:
@@ -203,7 +205,7 @@ def _merge_config_loaded_guardrails(db_guardrails: Any) -> list[Any]:  # noqa: A
 
 
 def _guardrail_overview_rows(
-    guardrails: Any,
+    guardrails: object,
     agg: Dict[str, Dict[str, Any]],
     prev_agg: Dict[str, float],
 ) -> List[UsageOverviewRow]:
@@ -271,7 +273,7 @@ def _guardrail_overview_rows(
 
 
 def _policy_overview_rows(
-    policies: Any,
+    policies: object,
     agg: Dict[str, Dict[str, Any]],
     prev_agg: Dict[str, float],
 ) -> List[UsageOverviewRow]:
@@ -476,7 +478,9 @@ def _build_usage_logs_where(
     return where
 
 
-def _usage_log_entry_from_row(r: Any, sl: Any, action_filter: Optional[str]) -> Optional[UsageLogEntry]:
+def _usage_log_entry_from_row(
+    r: object, sl: object, action_filter: Optional[str]
+) -> Optional[UsageLogEntry]:
     meta = sl.metadata
     if isinstance(meta, str):
         try:
@@ -526,7 +530,7 @@ def _usage_log_entry_from_row(r: Any, sl: Any, action_filter: Optional[str]) -> 
     )
 
 
-def _snippet(text: Any, max_len: int = 200) -> Optional[str]:
+def _snippet(text: object, max_len: int = 200) -> Optional[str]:
     if text is None:
         return None
     if isinstance(text, str):
@@ -548,7 +552,7 @@ def _snippet(text: Any, max_len: int = 200) -> Optional[str]:
     return result
 
 
-def _input_snippet_for_log(sl: Any) -> Optional[str]:
+def _input_snippet_for_log(sl: object) -> Optional[str]:
     """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
     out = _snippet(sl.messages)
     if out:

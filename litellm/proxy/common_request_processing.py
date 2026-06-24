@@ -2437,7 +2437,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _bill_partial_stream_on_disconnect(
-        response: Any, request_data: dict  # noqa: ANN401
+        response: object, request_data: dict
     ) -> None:
         """Record SpendLogs for tokens already produced when a stream is cut off.
 

@@ -63,7 +63,7 @@ def _read_tail(fh: BinaryIO, size: int) -> bytes:
         chunk_size *= 2
 
 
-def _content_digest(value: Any) -> Optional[str]:  # noqa: ANN401
+def _content_digest(value: object) -> Optional[str]:
     """Return a SHA-256 hex digest of a content value, or None if empty."""
     if value is None:
         return None
@@ -73,9 +73,9 @@ def _content_digest(value: Any) -> Optional[str]:  # noqa: ANN401
 
 def _extract_loggable(
     kwargs: dict[str, Any],
-    response_obj: Any,  # noqa: ANN401
-    start_time: Any,  # noqa: ANN401
-    end_time: Any,  # noqa: ANN401
+    response_obj: object,
+    start_time: Optional[datetime],
+    end_time: Optional[datetime],
     status: str,
 ) -> dict[str, Any]:
     """Pull metadata + digests out of a callback invocation.
@@ -276,9 +276,9 @@ class AsqavLogger(CustomLogger):
     def _build_and_append(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,  # noqa: ANN401
-        start_time: Any,  # noqa: ANN401
-        end_time: Any,  # noqa: ANN401
+        response_obj: object,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
         status: str,
     ) -> None:
         """Build one audit record and append it to the JSONL log.
@@ -372,27 +372,27 @@ class AsqavLogger(CustomLogger):
     def log_success_event(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,  # noqa: ANN401
+        response_obj: object,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
     def log_failure_event(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,  # noqa: ANN401
+        response_obj: object,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,  # noqa: ANN401
+        response_obj: object,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -406,9 +406,9 @@ class AsqavLogger(CustomLogger):
     async def async_log_failure_event(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,  # noqa: ANN401
+        response_obj: object,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,

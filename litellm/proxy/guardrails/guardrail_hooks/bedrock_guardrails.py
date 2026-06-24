@@ -184,7 +184,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrailIdentifier: Optional[str] = None,
         guardrailVersion: Optional[str] = None,
         disable_exception_on_block: Optional[bool] = False,
-        checks: Any | None = None,  # noqa: ANN401
+        checks: dict | object | None = None,
         content_filter_threshold: float | None = 0.5,
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
@@ -253,7 +253,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     @staticmethod
-    def _normalize_checks(checks: Any | None) -> dict[str, Any] | None:  # noqa: ANN401
+    def _normalize_checks(checks: object | None) -> dict[str, Any] | None:
         """Normalize the configured `checks` into a plain dict for the API body.
 
         Accepts a pydantic ``BedrockChecksConfigModel`` or a raw dict; drops empty /
@@ -729,7 +729,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
-        response: Any | litellm.ModelResponse | None = None,  # noqa: ANN401
+        response: litellm.ModelResponse | None = None,
         request_data: dict | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
@@ -760,13 +760,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
-        response: Any | litellm.ModelResponse | None = None,  # noqa: ANN401
+        response: litellm.ModelResponse | None = None,
         request_data: dict | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
-        from datetime import datetime
+        from datetime import datetime, timezone
 
-        start_time = datetime.now()
+        start_time = datetime.now(timezone.utc)
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
@@ -828,8 +828,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             request_data=request_data or {},
             guardrail_status=self._get_bedrock_guardrail_response_status(response=httpx_response),
             start_time=start_time.timestamp(),
-            end_time=datetime.now().timestamp(),  # noqa: DTZ005
-            duration=(datetime.now() - start_time).total_seconds(),  # noqa: DTZ005
+            end_time=datetime.now(timezone.utc).timestamp(),
+            duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
             event_type=event_type,
             tracing_detail=tracing_detail or None,
         )
@@ -856,7 +856,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def _sign_and_post(
         self,
-        prepared_request: Any,  # noqa: ANN401
+        prepared_request: object,
         request_data: dict | None,
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -868,7 +868,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         success (including non-2xx that httpx did not raise on); the 200-path logging,
         status and tracing stay with each caller because the two APIs report differently.
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         try:
             return await self.async_handler.post(
@@ -895,8 +895,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         request_data=request_data or {},
                         guardrail_status="guardrail_failed_to_respond",
                         start_time=start_time.timestamp(),
-                        end_time=datetime.now().timestamp(),
-                        duration=(datetime.now() - start_time).total_seconds(),
+                        end_time=datetime.now(timezone.utc).timestamp(),
+                        duration=(
+                            datetime.now(timezone.utc) - start_time
+                        ).total_seconds(),
                         event_type=event_type,
                     )
                     raise HTTPException(
@@ -914,8 +916,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data or {},
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
+                end_time=datetime.now(timezone.utc).timestamp(),
+                duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
                 event_type=event_type,
             )
             raise
@@ -945,7 +947,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
-        response: Any | litellm.ModelResponse | None = None,  # noqa: ANN401
+        response: litellm.ModelResponse | None = None,
     ) -> list[BedrockChecksMessage]:
         """Build the role-tagged `messages` array for InvokeGuardrailChecks.
 
@@ -985,7 +987,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
-        response: Any | litellm.ModelResponse | None = None,  # noqa: ANN401
+        response: litellm.ModelResponse | None = None,
         request_data: dict | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
@@ -995,9 +997,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         to a block decision via the configured thresholds. On a pass we return an
         empty ``BedrockGuardrailResponse`` (downstream masking treats it as a no-op).
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
 
-        start_time = datetime.now()  # noqa: DTZ005
+        start_time = datetime.now(timezone.utc)
 
         checks_messages = self._build_invoke_guardrail_checks_messages(
             source=source, messages=messages, response=response
@@ -1050,8 +1052,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data or {},
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),  # noqa: DTZ005
-                duration=(datetime.now() - start_time).total_seconds(),  # noqa: DTZ005
+                end_time=datetime.now(timezone.utc).timestamp(),
+                duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
                 event_type=event_type,
             )
             raise HTTPException(status_code=status_code, detail=detail_message)
@@ -1071,8 +1073,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             request_data=request_data or {},
             guardrail_status=self._get_invoke_checks_status(bool(violations)),
             start_time=start_time.timestamp(),
-            end_time=datetime.now().timestamp(),  # noqa: DTZ005
-            duration=(datetime.now() - start_time).total_seconds(),  # noqa: DTZ005
+            end_time=datetime.now(timezone.utc).timestamp(),
+            duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
             event_type=event_type,
             tracing_detail=self._build_invoke_checks_tracing_detail(violations) or None,
         )
