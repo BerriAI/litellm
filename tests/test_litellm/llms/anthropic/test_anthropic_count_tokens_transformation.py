@@ -93,3 +93,50 @@ def test_transform_no_system_no_tools():
 
     assert "system" not in result
     assert "tools" not in result
+
+
+def test_build_count_tokens_url_no_base():
+    """No custom base -> default Anthropic endpoint."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config._build_count_tokens_url(None)
+        == "https://api.anthropic.com/v1/messages/count_tokens"
+    )
+
+
+def test_build_count_tokens_url_bare_base():
+    """Plain domain base gets full path appended."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config._build_count_tokens_url("https://my-proxy.example.com")
+        == "https://my-proxy.example.com/v1/messages/count_tokens"
+    )
+
+
+def test_build_count_tokens_url_base_with_v1_messages():
+    """Base already ending in /v1/messages gets only /count_tokens."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config._build_count_tokens_url("https://my-proxy.example.com/v1/messages")
+        == "https://my-proxy.example.com/v1/messages/count_tokens"
+    )
+
+
+def test_build_count_tokens_url_already_full():
+    """Base already containing the full path is returned as-is."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config._build_count_tokens_url(
+            "https://my-proxy.example.com/v1/messages/count_tokens"
+        )
+        == "https://my-proxy.example.com/v1/messages/count_tokens"
+    )
+
+
+def test_build_count_tokens_url_trailing_slash_stripped():
+    """Trailing slash on the base is ignored."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config._build_count_tokens_url("https://my-proxy.example.com/")
+        == "https://my-proxy.example.com/v1/messages/count_tokens"
+    )
