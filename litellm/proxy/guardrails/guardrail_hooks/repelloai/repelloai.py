@@ -439,13 +439,13 @@ class RepelloAIGuardrail(CustomGuardrail):
         return data
 
     def _build_post_call_text(self, data: dict[str, object], response_text: str) -> str:
-        # Prepend conversation history (all roles) so Argus can evaluate the
-        # response in context — e.g. detect system-prompt leakage or
-        # multi-turn policy violations.
-        history_parts = self._extract_prompt_message_text(data)
-        if history_parts:
-            return "\n".join(history_parts) + "\n" + response_text
-        return response_text
+        messages = build_inspection_messages(data)
+        if not messages:
+            return response_text
+        history = "\n".join(
+            f"{msg['role']}: {msg['content']}" for msg in messages
+        )
+        return history + "\n" + response_text
 
     async def async_post_call_success_hook(
         self,
