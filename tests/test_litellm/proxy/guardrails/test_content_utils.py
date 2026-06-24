@@ -90,6 +90,19 @@ def test_iter_message_text_responses_api_input_text_in_role_messages():
     assert list(iter_message_text(data)) == ["alpha", "beta"]
 
 
+def test_iter_message_text_responses_mixed_message_and_tool_items():
+    """veria-ai: a Responses ``input`` array mixing a role message with a
+    non-message item (e.g. function_call_output) must still surface the
+    message's text — the old all-or-nothing role check dropped it."""
+    data = {
+        "input": [
+            {"role": "user", "content": "card 4111-1111-1111-1111"},
+            {"type": "function_call_output", "call_id": "c1", "output": "done"},
+        ]
+    }
+    assert list(iter_message_text(data)) == ["card 4111-1111-1111-1111"]
+
+
 def test_iter_message_text_responses_api_list_input_mixed_dicts_and_strings():
     """Greptile P2: mixed-list ``input`` with content-part dicts AND bare
     strings must yield every text fragment — read helpers used to truncate
@@ -218,6 +231,25 @@ def test_walk_user_text_redacts_input_text_and_output_text_in_role_messages():
     assert data["input"][1]["content"][0] == {
         "type": "output_text",
         "text": "saw [REDACTED]",
+    }
+
+
+def test_walk_user_text_redacts_mixed_message_and_tool_items():
+    """veria-ai: in a mixed Responses ``input`` array the role message's
+    content is masked in place while non-message items stay untouched."""
+    data = {
+        "input": [
+            {"role": "user", "content": "card 4111-1111-1111-1111"},
+            {"type": "function_call_output", "call_id": "c1", "output": "done"},
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("4111-1111-1111-1111", "[CARD]"))
+    assert visited == 1
+    assert data["input"][0]["content"] == "card [CARD]"
+    assert data["input"][1] == {
+        "type": "function_call_output",
+        "call_id": "c1",
+        "output": "done",
     }
 
 

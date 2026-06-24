@@ -73,14 +73,25 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
     if isinstance(input_value, list):
-        if input_value and all(
-            isinstance(item, dict) and "role" in item for item in input_value
-        ):
-            return list(input_value)
-        # Mixed lists (content-part dicts + bare strings) and pure
-        # string/dict lists all become a single user message; the content
-        # iterator below handles each element type uniformly.
-        return [{"role": "user", "content": input_value}]
+        # Responses ``input`` is a heterogeneous item array: message items
+        # (with ``role``), loose content-part dicts / bare strings, and
+        # non-message items (function_call, function_call_output, reasoning, …).
+        # Handle each independently — an ``all(role)`` check would misclassify a
+        # message item the moment a tool item is mixed in, wrapping the whole
+        # list as one message's content and dropping the real message's text.
+        messages: List[Dict[str, Any]] = []
+        loose_parts: List[Any] = []
+        for item in input_value:
+            if isinstance(item, dict) and "role" in item:
+                messages.append(item)
+            elif isinstance(item, str) or (
+                isinstance(item, dict) and item.get("type") in TEXT_CONTENT_PART_TYPES
+            ):
+                loose_parts.append(item)
+            # else: non-message input item carries no user/assistant prose.
+        if loose_parts:
+            messages.append({"role": "user", "content": loose_parts})
+        return messages
     return []
 
 
@@ -152,27 +163,25 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
             data["input"] = visit(input_value)
         return visited
     if isinstance(input_value, list):
-        # List of full messages: rewrite each message's content.
-        if input_value and all(
-            isinstance(item, dict) and "role" in item for item in input_value
-        ):
-            for item in input_value:
-                if "content" in item:
-                    item["content"] = _rewrite_content(item["content"])
-            return visited
-        # List of content parts and/or bare strings: rewrite in place.
+        # Heterogeneous Responses item array — rewrite each item independently:
+        # message items (with ``role``) have their ``content`` rewritten, loose
+        # content-part dicts / bare strings are rewritten in place, and
+        # non-message items (function_call_output, …) are left untouched. A
+        # message item mixed with tool items must not be skipped.
         for idx, item in enumerate(input_value):
             if isinstance(item, str) and item:
                 visited += 1
                 input_value[idx] = visit(item)
-            elif (
-                isinstance(item, dict)
-                and item.get("type") in TEXT_CONTENT_PART_TYPES
-                and isinstance(item.get("text"), str)
-                and item["text"]
-            ):
-                visited += 1
-                input_value[idx] = {**item, "text": visit(item["text"])}
+            elif isinstance(item, dict):
+                if "role" in item and "content" in item:
+                    item["content"] = _rewrite_content(item["content"])
+                elif (
+                    item.get("type") in TEXT_CONTENT_PART_TYPES
+                    and isinstance(item.get("text"), str)
+                    and item["text"]
+                ):
+                    visited += 1
+                    input_value[idx] = {**item, "text": visit(item["text"])}
         return visited
 
     return visited

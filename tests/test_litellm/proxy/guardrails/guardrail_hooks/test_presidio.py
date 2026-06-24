@@ -567,6 +567,40 @@ async def test_responses_api_input_text_content_parts_are_masked(
 
 
 @pytest.mark.asyncio
+async def test_responses_api_mixed_input_items_are_masked(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """Responses `input` can mix a role message with non-message items (e.g.
+    function_call_output) for tool use. The message's PII must still be masked
+    while the tool item is left untouched (issue #30728 / veria-ai review)."""
+    test_data = {
+        "input": [
+            {"role": "user", "content": "my card is 4111-1111-1111-1111"},
+            {"type": "function_call_output", "call_id": "c1", "output": "done"},
+        ],
+        "model": "gpt-4o",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="aresponses",
+    )
+    assert result["input"][0]["content"] == "my card is [CREDIT_CARD]"
+    assert result["input"][1] == {
+        "type": "function_call_output",
+        "call_id": "c1",
+        "output": "done",
+    }
+    assert "4111-1111-1111-1111" not in str(result["input"])
+
+
+@pytest.mark.asyncio
 async def test_both_messages_and_input_are_masked(
     presidio_guardrail, mock_user_api_key, mock_cache
 ):
