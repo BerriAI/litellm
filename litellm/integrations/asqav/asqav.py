@@ -370,17 +370,29 @@ class AsqavLogger(CustomLogger):
     # ------------------------------------------------------------------
 
     def log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,  # noqa: ANN401
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
     def log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,  # noqa: ANN401
     ) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,  # noqa: ANN401
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -392,7 +404,11 @@ class AsqavLogger(CustomLogger):
         )
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any  # noqa: ANN401
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,  # noqa: ANN401
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,

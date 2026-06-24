@@ -175,7 +175,9 @@ def _get_config_loaded_guardrails() -> list[Any]:
     ]
 
 
-def _find_config_loaded_guardrail(guardrail_id_or_name: str) -> Optional[Any]:  # noqa: ANN401
+def _find_config_loaded_guardrail(
+    guardrail_id_or_name: str,
+) -> Optional[Any]:  # noqa: ANN401
     for guardrail in _get_config_loaded_guardrails():
         gid, display_name = _get_guardrail_attrs(guardrail)
         if guardrail_id_or_name in (gid, display_name):
