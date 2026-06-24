@@ -24,9 +24,12 @@ const DEFAULT_PORT: u16 = 4001;
 
 #[tokio::main]
 async fn main() {
+    // Trim before storing so it matches the trimmed bearer token in `authorize`
+    // (avoids a silent auth failure when the env var has surrounding whitespace).
     let gateway_key: Option<Arc<str>> = std::env::var("LITELLM_GATEWAY_KEY")
         .ok()
-        .filter(|key| !key.trim().is_empty())
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
         .map(Arc::from);
     if gateway_key.is_none() {
         eprintln!(
