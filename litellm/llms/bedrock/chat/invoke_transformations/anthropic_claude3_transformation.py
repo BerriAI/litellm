@@ -95,8 +95,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     # Remove from this set as AWS adds support — empirically verified Jun 2026.
     _BEDROCK_INVOKE_NATIVE_OUTPUT_FORMAT_EXCLUSIONS = frozenset(
         {
-            "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
-            "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
+            "opus-4-7",
+            "opus_4_7",
+            "opus-4.7",
+            "opus_4.7",
+            "opus-4-8",
+            "opus_4_8",
+            "opus-4.8",
+            "opus_4.8",
         }
     )
 
