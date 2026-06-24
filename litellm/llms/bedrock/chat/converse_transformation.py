@@ -43,6 +43,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -190,6 +191,62 @@ class AmazonConverseConfig(BaseConfig):
                 ]
 
         return messages_copy
+
+    @staticmethod
+    def _has_orphaned_tool_blocks(messages: List[AllMessageValues]) -> bool:
+        return any(
+            (m.get("role") == "assistant" and m.get("tool_calls"))
+            or m.get("role") in ("tool", "function")
+            for m in messages
+        )
+
+    @staticmethod
+    def _neutralize_orphaned_tool_blocks(
+        messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
+        if optional_params.get(
+            "tools"
+        ) or not AmazonConverseConfig._has_orphaned_tool_blocks(messages):
+            return messages
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_content_list_to_str,
+        )
+
+        def _tool_call_text(tool_call: ChatCompletionAssistantToolCall) -> str:
+            function = tool_call.get("function") or {}
+            name = function.get("name") or "unknown_tool"
+            arguments = function.get("arguments") or ""
+            return f"[tool call: {name}({arguments})]"
+
+        def _result_text(message: AllMessageValues) -> str:
+            rendered = convert_content_list_to_str(message).strip()
+            return rendered or "<non-text tool result omitted>"
+
+        def _rewrite(message: AllMessageValues) -> AllMessageValues:
+            role = message.get("role")
+            if role == "assistant" and message.get("tool_calls"):
+                base_text = convert_content_list_to_str(message)
+                call_texts = [_tool_call_text(call) for call in message["tool_calls"]]
+                text = "\n".join(filter(None, [base_text, *call_texts]))
+                return ChatCompletionAssistantMessage(role="assistant", content=text)
+            if role in ("tool", "function"):
+                tool_call_id = message.get("tool_call_id")
+                name = message.get("name")
+                label = f"tool result for {tool_call_id or name or 'unknown'}"
+                return ChatCompletionUserMessage(
+                    role="user",
+                    content=f"[{label}: {_result_text(message)}]",
+                )
+            return message
+
+        verbose_logger.warning(
+            "litellm.bedrock: request has tool blocks in message history but no "
+            "`tools=` param; neutralizing orphaned tool blocks to text so Bedrock "
+            "accepts the request without a toolConfig. Non-text tool-result "
+            "payloads are dropped. Pass `tools=` to preserve structured tool calling."
+        )
+        return [_rewrite(message) for message in messages]
 
     @classmethod
     def get_config(cls):
