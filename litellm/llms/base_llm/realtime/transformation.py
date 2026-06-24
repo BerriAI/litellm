@@ -60,6 +60,12 @@ class BaseRealtimeConfig(ABC):
     ) -> List[str]:
         pass
 
+    def is_setup_message(self, msg_obj: dict) -> bool:
+        return False
+
+    def is_content_message(self, msg_obj: dict) -> bool:
+        return False
+
     def requires_session_configuration(
         self,
     ) -> bool:  # initial configuration message sent to setup the realtime session

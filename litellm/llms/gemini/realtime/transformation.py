@@ -95,6 +95,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: Optional[dict] = None
 
+    def is_setup_message(self, msg_obj: dict) -> bool:
+        return "setup" in msg_obj
+
+    def is_content_message(self, msg_obj: dict) -> bool:
+        return any(k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse"))
+
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
@@ -410,11 +416,24 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     @staticmethod
     def _is_audio_only_live_model(model: str) -> bool:
         """True for Gemini Live models that reject TEXT-only responseModalities."""
+        try:
+            model_info = litellm.get_model_info(model)
+            if model_info.get("gemini_native_audio") or model_info.get("gemini_audio_only_live"):
+                return True
+        except Exception:
+            pass
         model_lower = model.lower()
-        return (
-            _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model_lower
-            or _GEMINI_FLASH_LIVE_MODEL_MARKER in model_lower
-        )
+        return _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model_lower or _GEMINI_FLASH_LIVE_MODEL_MARKER in model_lower
+
+    @staticmethod
+    def _is_native_audio_model(model: str) -> bool:
+        """True for native-audio models that also reject speechConfig on setup."""
+        try:
+            if litellm.get_model_info(model).get("gemini_native_audio"):
+                return True
+        except Exception:
+            pass
+        return _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model.lower()
 
     @staticmethod
     def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
@@ -442,7 +461,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 generation_config["responseModalities"] = (
                     GeminiRealtimeConfig._coerce_response_modalities(model, modalities)
                 )
-            if _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model.lower():
+            if GeminiRealtimeConfig._is_native_audio_model(model):
                 generation_config.pop("speechConfig", None)
         return setup
 

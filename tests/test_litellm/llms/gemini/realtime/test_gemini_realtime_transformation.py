@@ -1938,3 +1938,42 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
         if event["type"] == "response.done"
     )
     assert response_done["response"]["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("gemini-3.1-flash-live-preview", True),
+        ("gemini/gemini-3.1-flash-live-preview", True),
+        ("gemini-2.5-flash-native-audio-latest", True),
+        ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-2.0-flash", False),
+        ("gemini-2.5-flash", False),
+    ],
+)
+def test_is_audio_only_live_model_uses_cost_map(model, expected):
+    assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("gemini-2.5-flash-native-audio-latest", True),
+        ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-3.1-flash-live-preview", False),
+        ("gemini/gemini-3.1-flash-live-preview", False),
+        ("gemini-2.0-flash", False),
+    ],
+)
+def test_is_native_audio_model_uses_cost_map(model, expected):
+    assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
+
+
+def test_is_setup_message_and_is_content_message():
+    config = GeminiRealtimeConfig()
+    assert config.is_setup_message({"setup": {}}) is True
+    assert config.is_setup_message({"realtimeInput": {}}) is False
+    assert config.is_content_message({"realtimeInput": {}}) is True
+    assert config.is_content_message({"clientContent": {}}) is True
+    assert config.is_content_message({"toolResponse": {}}) is True
+    assert config.is_content_message({"setup": {}}) is False

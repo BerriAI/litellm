@@ -16584,7 +16584,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "gemini_native_audio": true
     },
     "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -16635,7 +16636,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "gemini_native_audio": true
     },
     "gemini-2.5-flash-lite-preview-06-17": {
         "deprecation_date": "2025-11-18",
@@ -42128,7 +42130,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "gemini_native_audio": true
     },
     "gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -42152,7 +42155,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "gemini_native_audio": true
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -42176,7 +42180,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "gemini_native_audio": true
     },
     "gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -42208,7 +42213,8 @@
         "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "gemini_audio_only_live": true
     },
     "gemini/gemini-2.5-flash-native-audio-latest": {
         "input_cost_per_audio_token": 1e-06,
@@ -42234,7 +42240,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "gemini_native_audio": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -42260,7 +42267,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "gemini_native_audio": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -42286,7 +42294,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "gemini_native_audio": true
     },
     "gemini/gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -42320,7 +42329,8 @@
         "supports_vision": true,
         "supports_web_search": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "gemini_audio_only_live": true
     },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
