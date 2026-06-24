@@ -75,4 +75,12 @@ COPY litellm-rust/crates/ai-gateway/config.yaml /app/config.yaml
 ENV HOST=0.0.0.0 \
     LITELLM_CONFIG_PATH=/app/config.yaml
 
+# Drop to a non-root user. The realtime hot path needs no root privileges, so
+# running unprivileged limits blast radius if the process is ever compromised.
+# The binary in /usr/local/bin is world-executable (COPY default mode 755); we
+# only need /app (and the config.yaml it reads) owned by the unprivileged user.
+RUN useradd --system --no-create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 ENTRYPOINT ["/usr/local/bin/litellm-ai-gateway"]
