@@ -30,6 +30,38 @@ print(response)
 
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
 
+## Balanced smart routing
+
+Set `router_settings.routing_strategy: balanced-smart` in proxy config to route
+by active requests, observed tokens per second, request latency, bounded queue
+TTL, and recent failures.
+
+```yaml
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+
+router_settings:
+  routing_strategy: balanced-smart
+  routing_strategy_args:
+    max_concurrent_requests: 10
+    max_queue_ttl_s: 1
+    queue_poll_s: 0.01
+    default_tokens_per_second: 50
+    active_request_weight: 10
+    tokens_per_second_weight: 1
+    ttft_weight: 1
+    failure_penalty: 5
+    failure_cooldown_s: 5
+    ewma_alpha: 0.2
+```
+
+Use a shared Redis cache for multi-pod deployments so concurrency and metrics
+are shared across LiteLLM pods. If multiple model entries target the same
+physical backend, set the same `model_info.balanced_smart_backend_id` on those
+entries so they share one capacity pool.
+
 
 ---
 

@@ -136,6 +136,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.router_strategy.balanced_smart import BalancedSmartRoutingHandler
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -320,6 +321,7 @@ class Router:
             "latency-based-routing",
             "cost-based-routing",
             "usage-based-routing-v2",
+            "balanced-smart",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -364,7 +366,7 @@ class Router:
             retry_after (int): Minimum time to wait before retrying a failed request. Defaults to 0.
             allowed_fails (Optional[int]): Number of allowed fails before adding to cooldown. Defaults to None.
             cooldown_time (float): Time to cooldown a deployment after failure in seconds. Defaults to 1.
-            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy used for the implicit "default" group (any model not claimed by an entry in `routing_groups`). Defaults to "simple-shuffle".
+            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "usage-based-routing-v2", "latency-based-routing", "cost-based-routing", "balanced-smart"]): Routing strategy used for the implicit "default" group (any model not claimed by an entry in `routing_groups`). Defaults to "simple-shuffle".
             routing_strategy_args (dict): Additional args for the default group's routing strategy (e.g. latency window). Defaults to {}.
             routing_groups (Optional[List[RoutingGroup]]): Named subsets of `model_name`s that use a per-group routing strategy and args. Each model belongs to at most one explicit group; everything else lands in the implicit "default" group driven by `routing_strategy` / `routing_strategy_args`. Defaults to None.
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
@@ -855,6 +857,7 @@ class Router:
         "usage-based-routing-v2": "lowesttpm_logger_v2",
         "latency-based-routing": "lowestlatency_logger",
         "cost-based-routing": "lowestcost_logger",
+        "balanced-smart": "balanced_smart_logger",
     }
 
     @staticmethod
@@ -927,6 +930,11 @@ class Router:
                     router_cache=self.cache,
                     routing_args={},
                 )
+            case RoutingStrategy.BALANCED_SMART.value:
+                selector = BalancedSmartRoutingHandler(
+                    router_cache=self.cache,
+                    routing_args=routing_strategy_args,
+                )
 
         if (
             selector is not None
@@ -974,6 +982,7 @@ class Router:
         self.lowesttpm_logger_v2: Optional[LowestTPMLoggingHandler_v2] = None
         self.lowestlatency_logger: Optional[LowestLatencyLoggingHandler] = None
         self.lowestcost_logger: Optional[LowestCostLoggingHandler] = None
+        self.balanced_smart_logger: Optional[BalancedSmartRoutingHandler] = None
 
         selector = self._build_strategy_selector(
             strategy=routing_strategy,
@@ -1148,6 +1157,14 @@ class Router:
                     input=input,
                     request_kwargs=request_kwargs,
                 )
+            case "balanced-smart":
+                return await selector.async_get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
             case _:
                 return None
 
@@ -1186,6 +1203,14 @@ class Router:
                     input=input,
                 )
             case "latency-based-routing":
+                return selector.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
+            case "balanced-smart":
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
@@ -11312,6 +11337,7 @@ class Router:
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
+            and self.routing_strategy != "balanced-smart"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,

@@ -71,6 +71,51 @@ proxy_config:
         api_key: eXaMpLeOnLy
 ```
 
+#### Example `balanced-smart` routing strategy
+
+`balanced-smart` is a built-in router strategy for deployments that need bounded
+load balancing. It routes by per-backend active request count, observed tokens
+per second, observed request latency, and recent failures. When all healthy
+deployments are at `max_concurrent_requests`, the request waits for up to
+`max_queue_ttl_s`; after that the router returns no deployment and normal
+LiteLLM retry/fallback handling can take over.
+
+```yaml
+replicaCount: 2
+
+proxy_config:
+  litellm_settings:
+    cache: true
+    cache_params:
+      type: redis
+  router_settings:
+    routing_strategy: balanced-smart
+    routing_strategy_args:
+      max_concurrent_requests: 10
+      max_queue_ttl_s: 1
+      queue_poll_s: 0.01
+      default_tokens_per_second: 50
+      active_request_weight: 10
+      tokens_per_second_weight: 1
+      ttft_weight: 1
+      failure_penalty: 5
+      failure_cooldown_s: 5
+      ewma_alpha: 0.2
+  model_list:
+    - model_name: gpt-4o
+      litellm_params:
+        model: openai/gpt-4o
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        balanced_smart_backend_id: openai-primary
+```
+
+For multiple LiteLLM pods, configure a shared Redis cache as shown above. Redis
+is used for the atomic active-request counter and metric state, so
+`max_concurrent_requests` is enforced across pods instead of per process. Use
+`model_info.balanced_smart_backend_id` when several LiteLLM model entries point
+to the same physical backend and should share one capacity pool.
+
 #### Example using existing `proxyConfigMap` instead of creating it:
 
 ```

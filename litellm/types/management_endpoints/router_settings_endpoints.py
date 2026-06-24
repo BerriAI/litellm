@@ -90,6 +90,7 @@ ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
     "cost-based-routing": "Routes to the deployment with the lowest cost per token.",
     "usage-based-routing": "Routes to the deployment with the lowest TPM (Tokens Per Minute) usage. (deprecated)",
     "usage-based-routing-v2": "Improved version of usage-based routing with better tracking.",
+    "balanced-smart": "Routes by backend concurrency, observed throughput, latency, bounded queueing, and recent failures.",
 }
 
 

@@ -77,6 +77,7 @@ class RouterConfig(BaseModel):
         "least-busy",
         "usage-based-routing",
         "latency-based-routing",
+        "balanced-smart",
     ] = "simple-shuffle"
     routing_groups: Optional[List[RoutingGroup]] = None
 
@@ -757,6 +758,7 @@ class RoutingStrategy(enum.Enum):
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
+    BALANCED_SMART = "balanced-smart"
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 

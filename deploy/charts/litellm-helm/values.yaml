@@ -164,6 +164,14 @@ proxy_config:
         api_base: https://exampleopenaiendpoint-production.up.railway.app/
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
+  # router_settings:
+  #   routing_strategy: balanced-smart
+  #   routing_strategy_args:
+  #     max_concurrent_requests: 10
+  #     max_queue_ttl_s: 1
+  #     queue_poll_s: 0.01
+  #     default_tokens_per_second: 50
+  #     failure_cooldown_s: 5
 
 resources:
   {}
