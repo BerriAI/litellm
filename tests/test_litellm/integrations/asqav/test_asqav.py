@@ -160,13 +160,25 @@ def _append_n(logger: AsqavLogger, n: int) -> None:
 
 
 def _read_records(path: str) -> list:
-    records = []
+    """Read all records from a JSONL log, merging sidecar receipt lines."""
+    main: list = []
+    by_key: dict = {}
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+            if not line:
+                continue
+            rec = json.loads(line)
+            if "ts" not in rec:
+                key = (rec.get("seq"), rec.get("record_hash"))
+                by_key[key] = rec.get("asqav_cloud")
+            else:
+                main.append(rec)
+    for rec in main:
+        key = (rec.get("seq"), rec.get("record_hash"))
+        if key in by_key:
+            rec["asqav_cloud"] = by_key[key]
+    return main
 
 
 # ---------------------------------------------------------------------------
@@ -998,3 +1010,90 @@ def test_default_off_is_byte_identical_without_key(
         "record_hash",
     }
     assert len(client.calls) == 0
+
+
+def test_cloud_sign_chain_intact_after_decouple(
+    tmp_path, _cloud_env, _patch_httpx
+) -> None:
+    """verify_chain passes for >=5 records written with cloud signing on.
+
+    After the decouple, record_hash = pre_receipt_hash (no asqav_cloud in the
+    hash) and the receipt lands as a sidecar line.  The chain must be unbroken
+    end-to-end: every record's prev_hash links to the previous record_hash and
+    every hash recomputation matches the stored value.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    resp = _FakeResponse(
+        201,
+        {
+            "signature_id": "sig-chain",
+            "verification_url": "https://api.asqav.com/v/sig-chain",
+            "action_id": "act-chain",
+            "mode": "hash",
+        },
+    )
+    _patch_httpx(_FakeHttpxClient(response=resp))
+
+    logger = _cloud_logger(path)
+    start, end = _make_times()
+    for i in range(5):
+        logger.log_success_event(
+            kwargs=_make_kwargs(content=f"cloud-chain-{i}"),
+            response_obj=_make_response(content=f"resp-{i}"),
+            start_time=start,
+            end_time=end,
+        )
+
+    ok, msg = logger.verify_chain(path)
+    assert ok is True, msg
+
+    records = _read_records(path)
+    assert len(records) == 5
+    for rec in records:
+        assert "asqav_cloud" in rec, "receipt must be merged back onto the record"
+        assert rec["asqav_cloud"]["signature_id"] == "sig-chain"
+
+
+def test_post_not_called_while_lock_held(tmp_path, _cloud_env, _patch_httpx) -> None:
+    """The sync POST must not execute while _lock is held.
+
+    A fake client inspects the lock state at the moment post() is invoked.
+    If the lock is acquired at that point, the test fails. Against the pre-decouple
+    code (POST inside the lock) this test always fails.
+    """
+    path = str(tmp_path / "audit.jsonl")
+    logger = _cloud_logger(path)
+
+    lock_held_during_post: list[bool] = []
+
+    class _LockInspectingClient:
+        def post(self, url, json=None, headers=None, timeout=None):
+            lock_held_during_post.append(logger._lock.locked())
+            return _FakeResponse(
+                201,
+                {
+                    "signature_id": "sig-x",
+                    "mode": "hash",
+                },
+            )
+
+    import sys as _sys
+
+    mod = _sys.modules["litellm.llms.custom_httpx.http_handler"]
+    import unittest.mock as _mock
+
+    with _mock.patch.object(
+        mod, "_get_httpx_client", return_value=_LockInspectingClient()
+    ):
+        start, end = _make_times()
+        logger.log_success_event(
+            kwargs=_make_kwargs(),
+            response_obj=_make_response(),
+            start_time=start,
+            end_time=end,
+        )
+
+    assert len(lock_held_during_post) == 1
+    assert lock_held_during_post[0] is False, (
+        "lock must NOT be held when client.post() runs"
+    )

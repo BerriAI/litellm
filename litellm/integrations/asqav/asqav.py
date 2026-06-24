@@ -319,10 +319,13 @@ class AsqavLogger(CustomLogger):
                 if size == 0:
                     return
                 tail = _read_tail(fh, size)
-            lines = [ln for ln in tail.split(b"\n") if ln.strip()]
-            if not lines:
+            parsed = [
+                json.loads(ln.decode("utf-8")) for ln in tail.split(b"\n") if ln.strip()
+            ]
+            main_records = [r for r in parsed if "ts" in r]
+            if not main_records:
                 return
-            last_record = json.loads(lines[-1].decode("utf-8"))
+            last_record = main_records[-1]
             self._prev_hash = last_record.get("record_hash", _GENESIS_HASH)
             self._call_count = last_record.get("seq", -1) + 1
         except Exception:
@@ -363,39 +366,14 @@ class AsqavLogger(CustomLogger):
                 except Exception:
                     pass
 
-            # The file write happens under the same lock that assigns seq and
-            # prev_hash, so records always land on disk in chain order even
-            # when callbacks fire concurrently.  Chain state only advances
-            # after a successful write; a failed write drops the record and
-            # the chain continues from the last record actually on disk.
             with self._lock:
                 seq = self._call_count
-
-                # The fields that enter the hash are fixed and canonical so that
-                # an auditor can reproduce the digest from the log alone.
                 hashable: dict[str, Any] = {
                     "seq": seq,
                     "ts": datetime.now(tz=timezone.utc).isoformat(),
                     "prev_hash": self._prev_hash,
                     **loggable,
                 }
-
-                # Pre-receipt hash over the record content (no cloud receipt).
-                # The cloud signs this so the signature binds to the exact
-                # canonical fields. Computed under the lock, no network here.
-                pre_receipt_hash = _sha256_hex(_canonical_bytes(hashable))
-
-                # Opt-in cloud signing binds into the chain: the returned
-                # receipt is part of the hashed record, so verify_chain still
-                # passes and the signature cannot be swapped after the fact.
-                cloud = self._maybe_cloud_sign(hashable, pre_receipt_hash)
-                if cloud is not None:
-                    hashable["asqav_cloud"] = cloud
-
-                # Final hash additionally commits asqav_cloud, so it legitimately
-                # differs from pre_receipt_hash. An auditor re-derives the
-                # pre-receipt hash by canonicalizing the record minus record_hash
-                # and asqav_cloud.
                 record_hash = _sha256_hex(_canonical_bytes(hashable))
 
                 if not self._write_record({**hashable, "record_hash": record_hash}):
@@ -403,6 +381,12 @@ class AsqavLogger(CustomLogger):
 
                 self._prev_hash = record_hash
                 self._call_count += 1
+
+            cloud = self._maybe_cloud_sign(hashable, record_hash)
+            if cloud is not None:
+                self._write_record(
+                    {"seq": seq, "record_hash": record_hash, "asqav_cloud": cloud}
+                )
 
         except Exception:
             verbose_logger.debug(
@@ -555,9 +539,16 @@ class AsqavLogger(CustomLogger):
                         continue
                     record = json.loads(line)
 
+                    # Sidecar lines carry only seq/record_hash/asqav_cloud; skip.
+                    if "ts" not in record:
+                        continue
+
                     stored_hash = record.get("record_hash", "")
-                    # Recompute hash over all fields except record_hash itself.
-                    hashable = {k: v for k, v in record.items() if k != "record_hash"}
+                    hashable = {
+                        k: v
+                        for k, v in record.items()
+                        if k not in ("record_hash", "asqav_cloud")
+                    }
                     computed_hash = _sha256_hex(_canonical_bytes(hashable))
 
                     if computed_hash != stored_hash:
