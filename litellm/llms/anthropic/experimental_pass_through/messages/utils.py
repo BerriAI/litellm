@@ -26,6 +26,7 @@ class AnthropicMessagesRequestUtils:
         *,
         model: str | None = None,
         drop_params: bool = False,
+        custom_llm_provider: str | None = None,
     ) -> AnthropicMessagesRequestOptionalParams:
         """
         Filter parameters to only include those defined in AnthropicMessagesRequestOptionalParams.
@@ -34,6 +35,7 @@ class AnthropicMessagesRequestUtils:
             params: Dictionary of parameters to filter
             model: Resolved model id; when set, unsupported params may be dropped
             drop_params: Per-request drop_params flag (also respects litellm.drop_params)
+            custom_llm_provider: Routed provider; fast mode is gated to direct Anthropic
 
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
@@ -49,6 +51,7 @@ class AnthropicMessagesRequestUtils:
                 model=model,
                 optional_params=filtered_params,
                 drop_params=drop_params,
+                custom_llm_provider=custom_llm_provider,
             )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 

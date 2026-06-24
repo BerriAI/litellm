@@ -1915,6 +1915,60 @@ def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(mode
     assert AnthropicConfig._model_supports_speed_param(model) is False
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "azure_ai", "bedrock"])
+def test_anthropic_model_supports_speed_param_rejects_non_anthropic_providers(
+    custom_llm_provider,
+):
+    """Fast mode is direct-Anthropic-only. Vertex/Azure/Bedrock strip their prefix
+    before the shared transform runs, so the bare Opus id must still be rejected."""
+    assert (
+        AnthropicConfig._model_supports_speed_param(
+            "claude-opus-4-8", custom_llm_provider
+        )
+        is False
+    )
+    assert (
+        AnthropicConfig._model_supports_speed_param("claude-opus-4-8", "anthropic")
+        is True
+    )
+
+
+def test_vertex_anthropic_drops_speed_for_opus_with_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus must drop ``speed`` even though the prefix-stripped
+    ``claude-opus-4-8`` maps to a fast-mode-capable direct-Anthropic entry."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"speed": "fast", "max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "speed" not in result
+
+
+def test_vertex_anthropic_raises_on_speed_without_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus raises rather than forwarding an unsupported
+    ``speed`` when neither global nor per-request drop_params is set."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        VertexAIAnthropicConfig().map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
+
+
 def test_translate_system_message_skips_empty_string_content():
     """
     Test that translate_system_message skips system messages with empty string content.

@@ -510,6 +510,7 @@ def anthropic_messages_handler(
             params=local_vars,
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
+            custom_llm_provider=custom_llm_provider,
         )
     )
     if is_reasoning_auto_summary_enabled():
