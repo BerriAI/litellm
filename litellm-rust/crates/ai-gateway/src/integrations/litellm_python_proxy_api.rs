@@ -16,16 +16,17 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
 use crate::constants::{
-    CALLBACK_LOGS_PATH, DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
-    DEFAULT_PROXY_BASE_URL,
+    CALLBACK_LOGS_PATH, DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS,
+    DEFAULT_MAX_BATCH_SIZE, DEFAULT_PROXY_BASE_URL,
 };
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::{
     CallbackLogsRequest, LogError, LogRecord, LoggingError, StandardLoggingPayload,
 };
 
-/// Egress worker tunables. Each field defaults to the `DEFAULT_*` const above and
-/// is overridable via an env var (read once at logger construction).
+/// Egress worker tunables. Each field defaults to the matching `DEFAULT_*` const
+/// in `crate::constants` and is overridable via an env var (read once at logger
+/// construction).
 struct EgressTunables {
     channel_capacity: usize,
     max_batch_size: usize,
