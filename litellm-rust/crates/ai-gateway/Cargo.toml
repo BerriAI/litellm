@@ -15,10 +15,14 @@ required-features = ["server"]
 
 [dependencies]
 litellm-core.workspace = true
+# aws-sigv4 signs Bedrock guardrail requests synchronously (static creds only).
 aws-credential-types = "1"
 aws-sigv4 = "1"
+# reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
+# Python proxy callbacks API.
 reqwest.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+# `sync` powers the bounded mpsc channel the realtime logger drains.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
 serde.workspace = true
@@ -26,11 +30,16 @@ serde_json.workspace = true
 url = "2"
 axum = { workspace = true, features = ["ws"], optional = true }
 subtle = { workspace = true, optional = true }
+# sha2 hashes the master key into user_api_key_hash (matches the proxy's
+# SHA-256 hash_token) so the plaintext credential never enters a log payload.
+sha2 = { workspace = true, optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [features]
 default = []
-server = ["dep:axum", "dep:subtle"]
+# serde is a non-optional dependency (io/guardrails needs it always), so it is
+# not feature-gated here.
+server = ["dep:axum", "dep:subtle", "dep:sha2"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
 python-config = ["dep:pyo3"]

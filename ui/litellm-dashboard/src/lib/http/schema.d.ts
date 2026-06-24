@@ -17236,6 +17236,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/rust_control_plane/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Callback Logs
+         * @description Replay a batch of finished logging payloads through the callback fan-out.
+         *
+         *     Admin-only: the payloads write spend logs and trigger every callback, so this
+         *     is a trusted internal route, not a public surface.
+         */
+        post: operations["ingest_callback_logs_v1_rust_control_plane_logs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/search": {
         parameters: {
             query?: never;
@@ -21511,6 +21534,54 @@ export interface components {
         CallbackDelete: {
             /** Callback Name */
             callback_name: string;
+        };
+        /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
+         * CallbackLogRecord
+         * @description A single finished logging event to replay through the callbacks.
+         */
+        CallbackLogRecord: {
+            /** Error */
+            error?: string | null;
+            /** Standard Logging Payload */
+            standard_logging_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+        };
+        /**
+         * CallbackLogsRequest
+         * @description A batch of logging events posted by an external producer.
+         */
+        CallbackLogsRequest: {
+            /** Records */
+            records: components["schemas"]["CallbackLogRecord"][];
+        };
+        /**
+         * CallbackLogsResponse
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
+         */
+        CallbackLogsResponse: {
+            /** Failed */
+            failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
+            /** Processed */
+            processed: number;
         };
         /** CallbacksByType */
         CallbacksByType: {
@@ -54673,6 +54744,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_callback_logs_v1_rust_control_plane_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallbackLogsResponse"];
                 };
             };
             /** @description Validation Error */

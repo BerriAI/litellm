@@ -126,6 +126,9 @@ pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> CoreResult<Realt
 /// `session.created` here; the fresh-dial path passes `None` and lets the upstream
 /// deliver it). Then a single select loop forwards both directions through the
 /// transforms until either side closes or the idle timeout fires.
+/// `observe` is invoked on **upstream→client** events only (the trusted side that
+/// carries `session.created` and `response.done` usage) — never on client events,
+/// so a client cannot fabricate usage into its own logs.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn splice<In, Out>(
     model: &str,
@@ -133,6 +136,7 @@ pub(crate) async fn splice<In, Out>(
     mut upstream_rx: UpstreamRx,
     prelude: Option<RealtimeEvent>,
     idle_timeout: Option<Duration>,
+    mut observe: impl FnMut(&RealtimeEvent) + Send,
     mut client_in: In,
     mut client_out: Out,
 ) -> CoreResult<()>
@@ -165,6 +169,10 @@ where
             // client -> upstream
             client_event = client_in.next() => {
                 let Some(event) = client_event else { break }; // client disconnected
+                // NOTE: do NOT observe client events. session.created / response.done
+                // (carrying usage) are server→client events; observing the client arm
+                // would let an authenticated client POST a fabricated response.done and
+                // inflate its own spend log. Logging observes upstream events only.
                 for outbound in config.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
@@ -181,6 +189,7 @@ where
                     Message::Text(text) => {
                         let event: RealtimeEvent = serde_json::from_str(&text)
                             .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                        observe(&event);
                         for outbound in config.transform_realtime_response(&event, model)?.events {
                             client_out
                                 .send(outbound)
@@ -207,11 +216,13 @@ where
 /// framework-agnostic; the gateway adapts its axum socket to these. This is the
 /// fresh-dial path: dial, then splice. The pool's warm-handoff path skips the dial
 /// and calls [`splice`] directly with a buffered `session.created`.
+#[allow(clippy::too_many_arguments)]
 pub async fn realtime<In, Out>(
     model: &str,
     api_key: Option<&str>,
     api_base: Option<&str>,
     idle_timeout: Option<Duration>,
+    observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
 ) -> CoreResult<()>
@@ -229,6 +240,7 @@ where
         upstream_rx,
         None,
         idle_timeout,
+        observe,
         client_in,
         client_out,
     )
@@ -238,10 +250,12 @@ where
 /// Splice a pre-warmed upstream (taken from [`crate::io::realtime_pool`]) to the
 /// client. Relays the buffered `session.created` first, then splices exactly like
 /// the fresh-dial path — so a warm session is indistinguishable from a fresh one.
+#[allow(clippy::too_many_arguments)]
 pub async fn realtime_warm<In, Out>(
     model: &str,
     handoff: crate::io::realtime_pool::WarmHandoff,
     idle_timeout: Option<Duration>,
+    observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
 ) -> CoreResult<()>
@@ -256,6 +270,7 @@ where
         handoff.rx,
         Some(handoff.session_created),
         idle_timeout,
+        observe,
         client_in,
         client_out,
     )
@@ -303,6 +318,7 @@ mod tests {
                 Some(&key_owned),
                 None,
                 None,
+                |_| {},
                 client_in,
                 client_out,
             )
