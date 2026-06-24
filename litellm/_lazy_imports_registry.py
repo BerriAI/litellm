@@ -260,7 +260,6 @@ LLM_CONFIG_NAMES = (
     "SambaNovaEmbeddingConfig",
     "FireworksAIConfig",
     "FireworksAITextCompletionConfig",
-    "FireworksAIAudioTranscriptionConfig",
     "FireworksAIEmbeddingConfig",
     "FriendliaiChatConfig",
     "JinaAIEmbeddingConfig",
@@ -1026,10 +1025,6 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "FireworksAITextCompletionConfig": (
         ".llms.fireworks_ai.completion.transformation",
         "FireworksAITextCompletionConfig",
-    ),
-    "FireworksAIAudioTranscriptionConfig": (
-        ".llms.fireworks_ai.audio_transcription.transformation",
-        "FireworksAIAudioTranscriptionConfig",
     ),
     "FireworksAIEmbeddingConfig": (
         ".llms.fireworks_ai.embed.fireworks_ai_transformation",
