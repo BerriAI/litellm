@@ -36,12 +36,12 @@ struct EgressTunables {
 impl EgressTunables {
     fn from_env() -> Self {
         Self {
-            channel_capacity: env_positive_usize(
+            channel_capacity: env_positive(
                 "LITELLM_LOG_CHANNEL_CAPACITY",
                 DEFAULT_CHANNEL_CAPACITY,
             ),
-            max_batch_size: env_positive_usize("LITELLM_LOG_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE),
-            flush_interval: Duration::from_millis(env_positive_u64(
+            max_batch_size: env_positive("LITELLM_LOG_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE),
+            flush_interval: Duration::from_millis(env_positive(
                 "LITELLM_LOG_FLUSH_INTERVAL_MS",
                 DEFAULT_FLUSH_INTERVAL_MS,
             )),
@@ -49,23 +49,18 @@ impl EgressTunables {
     }
 }
 
-/// Parse a positive `usize` env var, falling back to `default` on missing,
-/// unparseable, or non-positive values.
-fn env_positive_usize(name: &str, default: usize) -> usize {
+/// Parse a positive integer env var, falling back to `default` on missing,
+/// unparseable, or non-positive values. Generic over the integer type so one
+/// helper serves both the `usize` capacities and the `u64` interval.
+fn env_positive<T>(name: &str, default: T) -> T
+where
+    T: std::str::FromStr + PartialOrd + From<u8>,
+{
+    let zero = T::from(0u8);
     std::env::var(name)
         .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(default)
-}
-
-/// Parse a positive `u64` env var, falling back to `default` on missing,
-/// unparseable, or non-positive values.
-fn env_positive_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|&n| n > 0)
+        .and_then(|value| value.trim().parse::<T>().ok())
+        .filter(|n| *n > zero)
         .unwrap_or(default)
 }
 
@@ -99,6 +94,12 @@ impl LiteLLMPythonProxyAPILogger {
 
     /// Build a logger from the environment: `LITELLM_PROXY_BASE_URL` (default
     /// `http://localhost:4000`) and `LITELLM_MASTER_KEY`.
+    ///
+    /// `LITELLM_PROXY_BASE_URL` is treated as the full base and the route is
+    /// appended verbatim, so if the proxy runs under a `SERVER_ROOT_PATH`
+    /// (e.g. served at `https://host/litellm`), include it in the base
+    /// (`LITELLM_PROXY_BASE_URL=https://host/litellm`) and the POST lands at
+    /// `https://host/litellm/v1/rust_control_plane/logs`.
     pub fn from_env() -> Arc<Self> {
         let base = std::env::var("LITELLM_PROXY_BASE_URL")
             .ok()
