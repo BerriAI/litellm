@@ -31324,16 +31324,16 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/DeepSeek-V3.2": {
-    "max_tokens": 32768,
-    "max_input_tokens": 32768,
-    "max_output_tokens": 32768,
-    "input_cost_per_token": 3e-06,
-    "output_cost_per_token": 4.5e-06,
-    "litellm_provider": "sambanova",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_tool_choice": true,
-    "source": "https://cloud.sambanova.ai/plans/pricing"
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 4.5e-06,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/gemma-3-12b-it": {
         "max_tokens": 131072,
