@@ -1482,10 +1482,7 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         if getattr(response, "usage", None) is not None:
             litellm_usage_chunk: Optional[Usage] = response.usage  # type: ignore
-        elif (
-            hasattr(response, "_hidden_params")
-            and "usage" in response._hidden_params
-        ):
+        elif hasattr(response, "_hidden_params") and "usage" in response._hidden_params:
             litellm_usage_chunk = response._hidden_params["usage"]
         else:
             litellm_usage_chunk = None
@@ -1495,9 +1492,7 @@ class LiteLLMAnthropicMessagesAdapter:
         has_finish_reason = (
             bool(response.choices) and response.choices[0].finish_reason is not None
         )
-        has_usage_only_chunk = (
-            not response.choices and litellm_usage_chunk is not None
-        )
+        has_usage_only_chunk = not response.choices and litellm_usage_chunk is not None
         if has_finish_reason or has_usage_only_chunk:
             stop_reason = (
                 self._translate_openai_finish_reason_to_anthropic(
