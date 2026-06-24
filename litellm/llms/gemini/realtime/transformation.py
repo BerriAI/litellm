@@ -99,7 +99,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return "setup" in msg_obj
 
     def is_content_message(self, msg_obj: dict) -> bool:
-        return any(k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse"))
+        return any(
+            k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse")
+        )
 
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
@@ -418,12 +420,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """True for Gemini Live models that reject TEXT-only responseModalities."""
         try:
             model_info = litellm.get_model_info(model)
-            if model_info.get("gemini_native_audio") or model_info.get("gemini_audio_only_live"):
+            if model_info.get("gemini_native_audio") or model_info.get(
+                "gemini_audio_only_live"
+            ):
                 return True
         except Exception:
             pass
         model_lower = model.lower()
-        return _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model_lower or _GEMINI_FLASH_LIVE_MODEL_MARKER in model_lower
+        return (
+            _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model_lower
+            or _GEMINI_FLASH_LIVE_MODEL_MARKER in model_lower
+        )
 
     @staticmethod
     def _is_native_audio_model(model: str) -> bool:

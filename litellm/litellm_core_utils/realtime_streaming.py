@@ -361,7 +361,9 @@ class RealTimeStreaming:
                     msg_obj = json.loads(msg)
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
-                if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
+                if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(
+                    msg_obj
+                ):
                     if self._content_sent_after_setup:
                         verbose_logger.debug(
                             "Dropping follow-up setup after content was already sent to backend"
@@ -371,7 +373,9 @@ class RealTimeStreaming:
                     self._cache_session_configuration_request(msg)
                     sent = True
                 else:
-                    if isinstance(msg_obj, dict) and self.provider_config.is_content_message(msg_obj):
+                    if isinstance(
+                        msg_obj, dict
+                    ) and self.provider_config.is_content_message(msg_obj):
                         self._content_sent_after_setup = True
                     # Send first; only cache the setup payload once the backend
                     # has actually accepted it. Caching before send would leave
