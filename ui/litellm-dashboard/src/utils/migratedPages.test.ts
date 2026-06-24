@@ -41,6 +41,14 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
   });
 
+  it("maps the api-keys landing id to its route and builds its redirect href", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, migratedHref } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["api-keys"]).toBe("api-keys");
+    expect(migratedHref(MIGRATED_PAGES["api-keys"])).toBe("/ui/api-keys");
+  });
+
   it("maps the llm-playground sidebar id to the playground route", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");

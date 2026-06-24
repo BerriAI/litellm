@@ -1348,6 +1348,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     non_admin = MagicMock(spec=UserAPIKeyAuth)
     non_admin.user_role = LitellmUserRoles.INTERNAL_USER
     non_admin.user_id = "user-mine"
+    non_admin.team_id = None
 
     filtered, total_count = await _apply_search_filter_to_models(
         all_models=[caller_team_byok, other_team_byok, public_model],
@@ -1381,6 +1382,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     admin = MagicMock(spec=UserAPIKeyAuth)
     admin.user_role = LitellmUserRoles.PROXY_ADMIN
     admin.user_id = "admin-1"
+    admin.team_id = None
 
     filtered_admin, _ = await _apply_search_filter_to_models(
         all_models=[caller_team_byok, other_team_byok, public_model],
@@ -8324,5 +8326,127 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "cancel_on_disconnect" in fields
         assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preserve_redacted_plugin_keys_keeps_stored_credential():
+    """A redacted or blank plugin_key on update must not overwrite the real key."""
+    from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
+
+    existing = [{"name": "p1", "url": "https://p1", "plugin_key": "sk-real-1"}]
+
+    redacted = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1-new", "plugin_key": "***"}], existing
+    )
+    assert redacted == [
+        {"name": "p1", "url": "https://p1-new", "plugin_key": "sk-real-1"}
+    ]
+
+    blanked = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1", "plugin_key": ""}], existing
+    )
+    assert blanked[0]["plugin_key"] == "sk-real-1"
+
+
+def test_preserve_redacted_plugin_keys_sets_new_and_drops_orphan_placeholder():
+    """A real new key replaces; a placeholder with no stored key is dropped, never persisted."""
+    from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
+
+    existing = [{"name": "p1", "url": "https://p1", "plugin_key": "sk-real-1"}]
+
+    rotated = _preserve_redacted_plugin_keys(
+        [{"name": "p1", "url": "https://p1", "plugin_key": "sk-new"}], existing
+    )
+    assert rotated[0]["plugin_key"] == "sk-new"
+
+    new_plugin = _preserve_redacted_plugin_keys(
+        [{"name": "p2", "url": "https://p2", "plugin_key": "***"}], existing
+    )
+    assert "plugin_key" not in new_plugin[0]
+
+
+def _config_field_info_client(monkeypatch, user_role):
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    db_record = types.SimpleNamespace(
+        param_value={
+            "master_key": "sk-super-secret-master",
+            "database_url": "postgresql://user:p4ssw0rd@db:5432/litellm",
+            "pass_through_endpoints": [
+                {
+                    "path": "/upstream",
+                    "target": "https://upstream.example.com",
+                    "headers": {"Authorization": "Bearer sk-upstream-secret"},
+                }
+            ],
+            "max_parallel_requests": 100,
+        }
+    )
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=db_record)
+    mock_prisma = MagicMock()
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="u", user_role=user_role
+    )
+    return TestClient(app)
+
+
+def test_config_field_info_redacts_secrets_for_view_only_admin(monkeypatch):
+    """/config/field/info gates on _user_has_admin_view, which also grants
+    PROXY_ADMIN_VIEW_ONLY. A view-only admin reading master_key/database_url verbatim is
+    effectively a full admin. Secret-bearing fields must come back REDACTED for anyone who
+    is not a FULL PROXY_ADMIN, while non-secret fields stay readable."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    client = _config_field_info_client(
+        monkeypatch, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+    try:
+        for secret_field in ("master_key", "database_url", "pass_through_endpoints"):
+            resp = client.get("/config/field/info", params={"field_name": secret_field})
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["field_value"] == "REDACTED"
+            assert "secret" not in str(body["field_value"])
+            assert "p4ssw0rd" not in str(body["field_value"])
+
+        resp = client.get(
+            "/config/field/info", params={"field_name": "max_parallel_requests"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["field_value"] == 100
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_config_field_info_returns_raw_secrets_for_full_admin(monkeypatch):
+    """the redaction must not over-apply. A FULL PROXY_ADMIN still
+    needs the real master_key value to populate the admin edit form."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    client = _config_field_info_client(monkeypatch, LitellmUserRoles.PROXY_ADMIN)
+    try:
+        resp = client.get("/config/field/info", params={"field_name": "master_key"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["field_value"] == "sk-super-secret-master"
+
+        resp = client.get(
+            "/config/field/info", params={"field_name": "pass_through_endpoints"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert (
+            resp.json()["field_value"][0]["headers"]["Authorization"]
+            == "Bearer sk-upstream-secret"
+        )
     finally:
         app.dependency_overrides.clear()

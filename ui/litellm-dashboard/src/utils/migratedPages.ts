@@ -9,6 +9,7 @@ import { serverRootPath } from "@/components/networking";
  * legacy `?page=` URL; remove it to roll back.
  */
 export const MIGRATED_PAGES: Record<string, string> = {
+  "api-keys": "api-keys",
   models: "models-and-endpoints",
   api_ref: "api-reference",
   // Legacy alias: older bookmarks used the hyphenated ?page=api-reference form.
