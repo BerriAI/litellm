@@ -6,6 +6,8 @@ stubs over one config each also guards reachability: a dropped `case` would hit 
 and raise instead of returning the stub.
 """
 
+import base64
+
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -84,8 +86,90 @@ async def test_api_key_shared_honors_authorization_scheme():
     assert _emitted(result.ok)["Authorization"] == "Bearer tok"
 
 
+class _FakeByokStore:
+    """A ByokCredentialStore returning a canned per-user key (None == unprovisioned)."""
+
+    def __init__(self, by_user: dict) -> None:
+        self._by_user = by_user
+
+    async def fetch(self, user_id: str, server_id: str):
+        return self._by_user.get(user_id)
+
+
+def _byok_spec(header_name="X-API-Key", value_prefix="", encode_base64=False):
+    return _spec(
+        ApiKeyConfig(
+            header_name=header_name,
+            value_prefix=value_prefix,
+            encode_base64=encode_base64,
+            key_source=Byok(),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_api_key_byok_emits_the_per_user_key():
+    provider = UpstreamCredentialProvider(
+        byok_store=_FakeByokStore({"alice": "k-alice"})
+    )
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _byok_spec()
+    )
+    assert isinstance(result, Ok)
+    assert _emitted(result.ok)["X-API-Key"] == "k-alice"
+
+
+@pytest.mark.asyncio
+async def test_api_key_byok_honors_the_configured_scheme():
+    provider = UpstreamCredentialProvider(
+        byok_store=_FakeByokStore({"alice": "user:pass"})
+    )
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"),
+        _byok_spec(
+            header_name="Authorization", value_prefix="Basic", encode_base64=True
+        ),
+    )
+    assert isinstance(result, Ok)
+    expected = base64.b64encode(b"user:pass").decode()
+    assert _emitted(result.ok)["Authorization"] == f"Basic {expected}"
+
+
+@pytest.mark.asyncio
+async def test_api_key_byok_missing_credential_is_unauthorized():
+    provider = UpstreamCredentialProvider(byok_store=_FakeByokStore({}))
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _byok_spec()
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_api_key_byok_isolates_by_subject():
+    provider = UpstreamCredentialProvider(
+        byok_store=_FakeByokStore({"alice": "k-alice"})
+    )
+    alice = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _byok_spec()
+    )
+    bob = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="bob"), _byok_spec()
+    )
+    assert isinstance(alice, Ok) and _emitted(alice.ok)["X-API-Key"] == "k-alice"
+    assert isinstance(bob, Error) and bob.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_api_key_byok_with_no_store_wired_is_unauthorized():
+    result = await UpstreamCredentialProvider().resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _byok_spec()
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
 _STUBBED = [
-    ("api_key_byok", ApiKeyConfig(key_source=Byok())),
     ("passthrough", PassthroughConfig()),
     ("client_credentials", ClientCredentialsConfig()),
     ("token_exchange", TokenExchangeConfig()),

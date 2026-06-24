@@ -7,12 +7,15 @@ no precedence cascade. It is wildcard-free with an `assert_never` tail, so addin
 an arm fails the type gate (basedpyright `reportMatchNotExhaustive`); a bypassed gate fails loudly
 at runtime instead of returning `None`.
 
-`none` and `api_key` (shared-key source) are live; the remaining arms are `not_implemented`
-stubs that each land in a follow-up PR with their injected seam. The self-contained arms read
-straight from the config and need no collaborator. Pure v2: no imports from v1.
+`none` and `api_key` are live: the shared-key source reads from the config, the BYOK source
+pulls the per-user key from the injected `ByokCredentialStore`. The remaining arms are
+`not_implemented` stubs that each land in a follow-up PR with their injected seam. Pure v2:
+no imports from v1.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 import httpx
 from typing_extensions import assert_never
@@ -25,6 +28,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
     Result,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
+    ByokCredentialStore,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
@@ -43,12 +49,23 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 )
 
 
+class _NullByokStore:
+    """Fail-closed default: with no BYOK store wired, every user reads as unprovisioned."""
+
+    async def fetch(self, user_id: str, server_id: str) -> Optional[str]:
+        return None
+
+
 class UpstreamCredentialProvider:
     """Produces the one `httpx.Auth` for a `(subject, upstream)` pair, per declared mode.
 
     Collaborators (the per-mode credential stores and token fetchers) are injected as each arm
-    is built; the live `none` and `api_key`-shared arms read from the config and need none.
+    is built; the live `none` and shared-key `api_key` arms read from the config and need none,
+    while the `api_key` BYOK source pulls the per-user key from the injected `ByokCredentialStore`.
     """
+
+    def __init__(self, byok_store: Optional[ByokCredentialStore] = None) -> None:
+        self._byok_store: ByokCredentialStore = byok_store or _NullByokStore()
 
     async def resolve_credentials(
         self, subject: Subject, server: ServerSpec
@@ -57,7 +74,7 @@ class UpstreamCredentialProvider:
             case NoneConfig():
                 return Ok(NoOpAuth())
             case ApiKeyConfig() as config:
-                return self._api_key(config)
+                return await self._api_key(config, subject, server)
             case PassthroughConfig():
                 return _not_implemented(AuthSpecKind.passthrough)
             case ClientCredentialsConfig():
@@ -70,7 +87,9 @@ class UpstreamCredentialProvider:
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
 
-    def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
+    async def _api_key(
+        self, config: ApiKeyConfig, subject: Subject, server: ServerSpec
+    ) -> Result[httpx.Auth, CredError]:
         match config.key_source:
             case SharedKey() as source:
                 header_name, header_value = config.header(
@@ -78,12 +97,15 @@ class UpstreamCredentialProvider:
                 )
                 return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Byok():
-                # Per-user key pulled from the credential store; lands with that seam.
-                return Error(
-                    CredError.of_not_implemented(
-                        "api_key BYOK source not implemented yet"
+                key = await self._byok_store.fetch(subject.subject_id, server.server_id)
+                if not key:
+                    return Error(
+                        CredError.of_unauthorized(
+                            "BYOK credential not provisioned for this user"
+                        )
                     )
-                )
+                header_name, header_value = config.header(key)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
         assert_never(config.key_source)
 
 
