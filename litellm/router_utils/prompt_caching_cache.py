@@ -28,6 +28,17 @@ class PromptCachingCacheValue(TypedDict):
     model_id: str
 
 
+# Default affinity TTL (in seconds) - matches Anthropic's 5-minute ephemeral cache.
+DEFAULT_PROMPT_CACHING_AFFINITY_TTL = 300
+
+# Maps the `cache_control.ttl` values supported by providers (Anthropic / Bedrock)
+# to the affinity TTL the router should hold the deployment binding for.
+CACHE_CONTROL_TTL_TO_SECONDS = {
+    "5m": 300,
+    "1h": 3600,
+}
+
+
 class PromptCachingCache:
     def __init__(self, cache: DualCache):
         self.cache = cache
@@ -142,6 +153,65 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def get_cache_control_ttl(
+        messages: Optional[List[AllMessageValues]],
+        tools: Optional[List[ChatCompletionToolParam]],
+    ) -> int:
+        """
+        Determine the affinity TTL (in seconds) from the request's cache_control.
+
+        Providers (Anthropic / Bedrock) support a `ttl` sub-field on the
+        ephemeral cache_control block ("5m" or "1h"). The deployment affinity
+        should live for as long as the provider keeps the prefix warm, so the
+        longest declared ttl in the cacheable prefix wins. Falls back to the
+        default 5-minute TTL when no (or an unrecognized) ttl is declared.
+        """
+        affinity_ttl = DEFAULT_PROMPT_CACHING_AFFINITY_TTL
+
+        if messages:
+            cacheable_messages = PromptCachingCache.extract_cacheable_prefix(messages)
+            for message in cacheable_messages:
+                affinity_ttl = max(
+                    affinity_ttl,
+                    PromptCachingCache._cache_control_ttl_from_value(
+                        message.get("cache_control")
+                    ),
+                )
+                content = message.get("content")
+                if isinstance(content, list):
+                    for content_block in content:
+                        if isinstance(content_block, dict):
+                            affinity_ttl = max(
+                                affinity_ttl,
+                                PromptCachingCache._cache_control_ttl_from_value(
+                                    content_block.get("cache_control")
+                                ),
+                            )
+
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict):
+                    affinity_ttl = max(
+                        affinity_ttl,
+                        PromptCachingCache._cache_control_ttl_from_value(
+                            tool.get("cache_control")
+                        ),
+                    )
+
+        return affinity_ttl
+
+    @staticmethod
+    def _cache_control_ttl_from_value(cache_control: Any) -> int:
+        """Map a single cache_control block to its affinity TTL in seconds."""
+        if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral":
+            ttl = cache_control.get("ttl")
+            if isinstance(ttl, str):
+                return CACHE_CONTROL_TTL_TO_SECONDS.get(
+                    ttl, DEFAULT_PROMPT_CACHING_AFFINITY_TTL
+                )
+        return DEFAULT_PROMPT_CACHING_AFFINITY_TTL
+
+    @staticmethod
     def get_prompt_caching_cache_key(
         messages: Optional[List[AllMessageValues]],
         tools: Optional[List[ChatCompletionToolParam]],
@@ -193,8 +263,9 @@ class PromptCachingCache:
         if cache_key is None:
             return None
 
+        ttl = PromptCachingCache.get_cache_control_ttl(messages, tools)
         self.cache.set_cache(
-            cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300
+            cache_key, PromptCachingCacheValue(model_id=model_id), ttl=ttl
         )
         return None
 
@@ -212,10 +283,13 @@ class PromptCachingCache:
         if cache_key is None:
             return None
 
+        # Store for as long as the provider keeps the prefix warm (5m default, 1h
+        # when the request marks the cacheable prefix with ttl="1h").
+        ttl = PromptCachingCache.get_cache_control_ttl(messages, tools)
         await self.cache.async_set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=300,  # store for 5 minutes
+            ttl=ttl,
         )
         return None
 
