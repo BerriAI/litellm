@@ -885,13 +885,19 @@ async def invoke_agent_a2a(
             result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
             if method == "agent/getAuthenticatedExtendedCard":
                 if isinstance(result.get("result"), dict):
-                    if "url" in result["result"]:
-                        result["result"]["url"] = get_custom_url(
-                            str(request.base_url), route=f"a2a/{agent_id}"
-                        )
-                    result["result"] = normalize_agent_card(
-                        result["result"], served_version
+                    card = result["result"]
+                    proxy_url = get_custom_url(
+                        str(request.base_url), route=f"a2a/{agent_id}"
                     )
+                    # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
+                    # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
+                    # downstream clients never see the upstream internal address.
+                    if "url" in card:
+                        card["url"] = proxy_url
+                    interfaces = card.get("supportedInterfaces")
+                    if isinstance(interfaces, list) and interfaces:
+                        interfaces[0]["url"] = proxy_url
+                    result["result"] = normalize_agent_card(card, served_version)
             else:
                 result = normalize_jsonrpc_response(
                     result, served_version, method=method
