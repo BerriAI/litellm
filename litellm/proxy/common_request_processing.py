@@ -521,7 +521,8 @@ def _override_openai_response_model(
     We log mismatches as debug (and then restamp to the client-requested value) so these paths stay
     observable for maintainers without breaking client compatibility or alarming operators.
 
-    Responses that omit an OpenAI-style `model` field are left unchanged (silent return).
+    Responses that omit an OpenAI-style `model` field are left unchanged (silent return),
+    including dict responses with no `model` key.
 
     Exceptions:
     1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
@@ -577,6 +578,8 @@ def _override_openai_response_model(
         return
 
     if isinstance(response_obj, dict):
+        if "model" not in response_obj:
+            return
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
             verbose_proxy_logger.debug(
