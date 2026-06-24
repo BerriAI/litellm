@@ -121,6 +121,7 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Optional[Callable] = None,
         _response_headers: Optional[dict] = None,
+        max_streaming_duration: Optional[float] = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -130,6 +131,7 @@ class CustomStreamWrapper:
         self.sent_first_chunk = False
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
+        self._max_streaming_duration: Optional[float] = max_streaming_duration
 
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
             **self.logging_obj.model_call_details.get("litellm_params", {})
@@ -222,15 +224,29 @@ class CustomStreamWrapper:
         self._post_streaming_hooks: Optional[List] = None
 
     def _check_max_streaming_duration(self) -> None:
-        """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
+        """Raise litellm.Timeout if the stream has exceeded its duration cap.
+
+        The cap is resolved in priority order:
+        1. ``max_streaming_duration`` passed to the constructor (set from the
+           Router's per-deployment / per-request ``stream_timeout``).
+        2. The global ``LITELLM_MAX_STREAMING_DURATION_SECONDS`` env-var
+           constant (applies when no per-request cap is configured).
+
+        This covers the case where a provider returns HTTP 200 and begins
+        streaming but then stalls mid-stream — the httpx read timeout is
+        satisfied by each chunk individually and would not fire, but this
+        wall-clock guard fires on the next ``__anext__`` call after the cap
+        is exceeded.
+        """
         from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS
 
-        if LITELLM_MAX_STREAMING_DURATION_SECONDS is None:
+        cap = self._max_streaming_duration or LITELLM_MAX_STREAMING_DURATION_SECONDS
+        if cap is None:
             return
         elapsed = time.time() - self._stream_created_time
-        if elapsed > LITELLM_MAX_STREAMING_DURATION_SECONDS:
+        if elapsed > cap:
             raise litellm.Timeout(
-                message=f"Stream exceeded max streaming duration of {LITELLM_MAX_STREAMING_DURATION_SECONDS}s (elapsed {elapsed:.1f}s)",
+                message=f"Stream exceeded max streaming duration of {cap}s (elapsed {elapsed:.1f}s)",
                 model=self.model or "",
                 llm_provider=self.custom_llm_provider or "",
             )

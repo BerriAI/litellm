@@ -77,6 +77,66 @@ class TestCustomStreamWrapperMaxDuration:
                 await wrapper.__anext__()
 
 
+class TestCustomStreamWrapperPerRequestMaxDuration:
+    """Per-request max_streaming_duration passed to constructor takes priority over the
+    global LITELLM_MAX_STREAMING_DURATION_SECONDS env-var constant."""
+
+    def test_per_request_cap_raises_when_exceeded(self):
+        """Constructor max_streaming_duration fires independently of global constant."""
+        wrapper = CustomStreamWrapper(
+            completion_stream=None,
+            model="test-model",
+            logging_obj=MagicMock(),
+            custom_llm_provider="vertex_ai",
+            max_streaming_duration=5.0,
+        )
+        wrapper._stream_created_time = time.time() - 10  # simulate 10s elapsed
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", None):
+            with pytest.raises(litellm.Timeout, match="5.0s"):
+                wrapper._check_max_streaming_duration()
+
+    def test_per_request_cap_does_not_raise_when_under_limit(self):
+        """No error when elapsed time is within the per-request cap."""
+        wrapper = CustomStreamWrapper(
+            completion_stream=None,
+            model="test-model",
+            logging_obj=MagicMock(),
+            custom_llm_provider="bedrock",
+            max_streaming_duration=60.0,
+        )
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", None):
+            wrapper._check_max_streaming_duration()  # should not raise
+
+    def test_per_request_cap_wins_over_larger_global(self):
+        """Per-request cap (20s) fires before larger global cap (120s)."""
+        wrapper = CustomStreamWrapper(
+            completion_stream=None,
+            model="test-model",
+            logging_obj=MagicMock(),
+            custom_llm_provider="vertex_ai",
+            max_streaming_duration=20.0,
+        )
+        wrapper._stream_created_time = time.time() - 30  # 30s elapsed
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 120.0):
+            with pytest.raises(litellm.Timeout, match="20.0s"):
+                wrapper._check_max_streaming_duration()
+
+    def test_global_cap_applies_when_no_per_request_cap(self):
+        """Falls back to global constant when max_streaming_duration is None."""
+        wrapper = _make_custom_stream_wrapper()
+        wrapper._stream_created_time = time.time() - 30
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0):
+            with pytest.raises(litellm.Timeout, match="10.0s"):
+                wrapper._check_max_streaming_duration()
+
+    def test_no_cap_set_does_not_raise(self):
+        """Neither per-request nor global cap → no error regardless of elapsed time."""
+        wrapper = _make_custom_stream_wrapper()
+        wrapper._stream_created_time = time.time() - 9999
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", None):
+            wrapper._check_max_streaming_duration()  # should not raise
+
+
 # ---------------------------------------------------------------------------
 # BaseResponsesAPIStreamingIterator (responses)
 # ---------------------------------------------------------------------------
