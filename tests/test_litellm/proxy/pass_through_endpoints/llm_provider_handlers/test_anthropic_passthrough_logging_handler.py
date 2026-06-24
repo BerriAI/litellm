@@ -752,6 +752,8 @@ class TestBuildCompleteStreamingResponseRobustness:
         result = self._build(chunks)
         assert result is not None
         assert result.choices[0].message.content == "The stream ends with [DONE]"
+
+
 class TestInterruptedStreamOutputTokenRecovery:
     """
     When an Anthropic pass-through stream is interrupted (client disconnect)
@@ -891,7 +893,6 @@ class TestInterruptedStreamOutputTokenRecovery:
         # Terminal message_delta present: recovery must not fire; the authoritative
         # provider count is preserved verbatim.
         assert usage.completion_tokens == final
-
 
 
 class TestStreamFalseDeduplication:

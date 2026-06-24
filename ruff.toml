@@ -19,3 +19,5 @@ exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_conf
 "litellm/responses/streaming_iterator.py" = ["PLR0915"]
 "litellm/files/main.py" = ["PLR0915"]
 "litellm/llms/litellm_proxy/skills/sandbox_executor.py" = ["PLR0915"]
+"litellm/proxy/hooks/proxy_track_cost_callback.py" = ["PLR0915"]
+"litellm/proxy/pass_through_endpoints/llm_provider_handlers/anthropic_passthrough_logging_handler.py" = ["PLR0915"]
