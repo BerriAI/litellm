@@ -12,6 +12,7 @@ from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     ApiKeyConfig,
+    AuthSpecKind,
     AuthorizationCodeConfig,
     AwsSigV4Config,
     Byok,
@@ -102,3 +103,19 @@ async def test_unbuilt_arms_fail_closed_with_not_implemented(label, config):
     )
     assert isinstance(result, Error)
     assert result.error.tag == "not_implemented"
+
+
+def test_every_auth_spec_kind_is_exercised():
+    """A new AuthSpecKind that ships without a resolver test fails here.
+
+    The resolver's match over the config union is exhaustive at the type level (assert_never), so
+    a missing arm fails basedpyright; this guards the parallel gap the type checker cannot see, a
+    new mode that ships without a test exercising its arm. The two live arms cover `none` and the
+    shared-key `api_key`; `_STUBBED` covers the BYOK `api_key` source and every remaining mode.
+    """
+    live_kinds = {
+        NoneConfig().kind,
+        ApiKeyConfig(key_source=SharedKey(value=SecretStr("k"))).kind,
+    }
+    stubbed_kinds = {config.kind for _, config in _STUBBED}
+    assert live_kinds | stubbed_kinds == set(AuthSpecKind)
