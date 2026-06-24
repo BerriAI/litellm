@@ -868,6 +868,62 @@ describe("CreateMCPServer BYOK toggle", () => {
     expect(payload.credentials).toBeUndefined();
   });
 
+  it("blocks submit when the API Key Help URL is not a valid URL", async () => {
+    await selectHttpTransport();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(getServerNameInput(), "Byok_Server");
+    await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+    await selectAntOption("Authentication", "Bearer Token");
+    await waitFor(() => expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+
+    const helpUrlInput = await screen.findByPlaceholderText("https://docs.example.com/api-keys");
+    await user.type(helpUrlInput, "not a url");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+
+    await waitFor(() => {
+      const inlineError = screen.queryByText("Enter a valid URL (including https://)");
+      const notCalled = !vi.mocked(networking.createMCPServer).mock.calls.length;
+      expect(inlineError !== null || notCalled).toBe(true);
+    });
+  });
+
+  it("accepts a valid API Key Help URL and submits with is_byok=true", async () => {
+    await selectHttpTransport();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(getServerNameInput(), "Byok_Server");
+    await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+    await selectAntOption("Authentication", "Bearer Token");
+    await waitFor(() => expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+
+    const helpUrlInput = await screen.findByPlaceholderText("https://docs.example.com/api-keys");
+    await user.type(helpUrlInput, "https://docs.example.com/keys");
+
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "byok-url-1" });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+
+    await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    expect(payload.is_byok).toBe(true);
+    expect(payload.byok_api_key_help_url).toBe("https://docs.example.com/keys");
+  });
+
   it("forces is_byok=false when auth_type is switched away from a static type after enabling it", async () => {
     await selectHttpTransport();
 

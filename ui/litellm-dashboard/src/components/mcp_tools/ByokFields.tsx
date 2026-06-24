@@ -78,6 +78,7 @@ const ByokFields: React.FC<ByokFieldsProps> = ({ form }) => {
               </span>
             }
             name="byok_api_key_help_url"
+            rules={[{ type: "url", message: "Enter a valid URL (including https://)" }]}
           >
             <Input placeholder="https://docs.example.com/api-keys" />
           </Form.Item>
