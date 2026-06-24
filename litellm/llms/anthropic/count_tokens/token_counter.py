@@ -65,7 +65,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        # Resolve custom api_base using unified model info helper
+        # Resolve custom api_base using the unified model info helper to support secret managers and alternative env vars
         api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or None
 
         try:
