@@ -129,6 +129,17 @@ class MuAPIImageConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        # Prevent the server-configured key from being forwarded to an arbitrary
+        # caller-controlled host.  If api_base is set to a non-MuAPI host, the
+        # caller must supply their own api_key; otherwise we'd leak the server key.
+        muapi_host = "https://api.muapi.ai"
+        custom_base = api_base and not (api_base or "").rstrip("/").startswith(muapi_host)
+        if custom_base and not api_key:
+            raise ValueError(
+                "A custom api_base was provided that does not match the MuAPI host "
+                f"({muapi_host}). Supply an explicit api_key when using a custom "
+                "api_base to avoid leaking the server-configured MUAPI_API_KEY."
+            )
         final_key = api_key or get_secret_str("MUAPI_API_KEY")
         if not final_key:
             raise ValueError(
