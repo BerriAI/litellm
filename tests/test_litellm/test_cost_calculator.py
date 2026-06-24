@@ -118,6 +118,75 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+def test_litellm_proxy_custom_pricing_overrides_response_cost_header():
+    model_id = "proxy-zero-cost-deployment"
+    original_model_cost = litellm.model_cost.get(model_id)
+    litellm.register_model(
+        model_cost={
+            model_id: {
+                "litellm_provider": "litellm_proxy",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        }
+    )
+
+    try:
+        response = ModelResponse(
+            model="hosted_vllm/glm-4.7-fp8",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        response._hidden_params = {
+            "additional_headers": {"llm_provider-x-litellm-response-cost": "0.123"},
+            "custom_llm_provider": "litellm_proxy",
+        }
+
+        result = response_cost_calculator(
+            response_object=response,
+            model="glm-4.7",
+            custom_llm_provider="litellm_proxy",
+            call_type="completion",
+            optional_params={},
+            cache_hit=None,
+            base_model=None,
+            custom_pricing=True,
+            router_model_id=model_id,
+        )
+
+        assert result == 0.0
+    finally:
+        if original_model_cost is None:
+            litellm.model_cost.pop(model_id, None)
+        else:
+            litellm.model_cost[model_id] = original_model_cost
+
+
+def test_litellm_proxy_uses_response_cost_header_without_custom_pricing():
+    response = ModelResponse(
+        model="hosted_vllm/glm-4.7-fp8",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    response._hidden_params = {
+        "additional_headers": {"llm_provider-x-litellm-response-cost": "0.123"},
+        "custom_llm_provider": "litellm_proxy",
+    }
+
+    result = response_cost_calculator(
+        response_object=response,
+        model="glm-4.7",
+        custom_llm_provider="litellm_proxy",
+        call_type="completion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+        custom_pricing=False,
+    )
+
+    assert result == 0.123
+
+
 def test_baseten_model_api_pricing_entries():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

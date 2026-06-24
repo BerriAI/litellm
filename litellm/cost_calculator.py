@@ -1841,6 +1841,36 @@ def get_response_cost_from_hidden_params(
     return None
 
 
+def _should_use_provider_response_cost(
+    provider_response_cost: Optional[float],
+    model: str,
+    custom_llm_provider: Optional[str],
+    custom_pricing: Optional[bool],
+    hidden_params: Union[dict, BaseModel],
+) -> bool:
+    if provider_response_cost is None:
+        return False
+
+    if custom_pricing is not True:
+        return True
+
+    if isinstance(hidden_params, BaseModel):
+        hidden_params_dict = cast(BaseModel, hidden_params).model_dump()
+    else:
+        hidden_params_dict = hidden_params
+
+    hidden_custom_llm_provider = hidden_params_dict.get("custom_llm_provider")
+    is_litellm_proxy_request = (
+        custom_llm_provider == "litellm_proxy"
+        or hidden_custom_llm_provider == "litellm_proxy"
+        or model.startswith("litellm_proxy/")
+    )
+    if is_litellm_proxy_request:
+        return False
+
+    return True
+
+
 def response_cost_calculator(
     response_object: Union[
         ModelResponse,
@@ -1903,14 +1933,22 @@ def response_cost_calculator(
         if cache_hit is not None and cache_hit is True:
             response_cost = 0.0
         else:
-            if isinstance(response_object, BaseModel):
-                if hasattr(response_object, "_hidden_params"):
-                    response_object._hidden_params["optional_params"] = optional_params
-                    provider_response_cost = get_response_cost_from_hidden_params(
-                        response_object._hidden_params
-                    )
-                    if provider_response_cost is not None:
-                        return provider_response_cost
+            if hasattr(response_object, "_hidden_params"):
+                hidden_params = response_object._hidden_params
+                if isinstance(hidden_params, dict):
+                    hidden_params["optional_params"] = optional_params
+                provider_response_cost = get_response_cost_from_hidden_params(
+                    hidden_params
+                )
+                if _should_use_provider_response_cost(
+                    provider_response_cost=provider_response_cost,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    custom_pricing=custom_pricing,
+                    hidden_params=hidden_params,
+                ):
+                    assert provider_response_cost is not None
+                    return provider_response_cost
 
             response_cost = completion_cost(
                 completion_response=response_object,
