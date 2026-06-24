@@ -63,11 +63,14 @@ def test_init_normalizes_checks_and_drops_unknown_keys():
     g = BedrockGuardrail(
         checks={
             "contentFilter": {"categories": [{"category": "VIOLENCE"}]},
-            "unknownCheck": {"foo": "bar"},
-            "promptAttack": {},  # empty -> dropped
+            "unknownCheck": {"foo": "bar"},  # unknown key -> dropped
+            "promptAttack": {},  # empty known check -> kept (enable with defaults)
         }
     )
-    assert g.checks == {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}}
+    assert g.checks == {
+        "contentFilter": {"categories": [{"category": "VIOLENCE"}]},
+        "promptAttack": {},
+    }
 
 
 def test_init_empty_checks_falls_back_to_apply_mode():
