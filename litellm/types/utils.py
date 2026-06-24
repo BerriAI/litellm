@@ -3473,6 +3473,7 @@ class LlmProviders(str, Enum):
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
+    NANOBRIDGE = "nanobridge"
     POE = "poe"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
