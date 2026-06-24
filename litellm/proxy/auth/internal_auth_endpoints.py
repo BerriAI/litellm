@@ -19,7 +19,7 @@ Security model:
 import hmac
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -77,7 +77,7 @@ def _synthetic_request(route: str, api_key: str, model: Optional[str]) -> Reques
     """
     body = json.dumps({"model": model} if model is not None else {}).encode()
 
-    async def receive() -> Dict[str, Any]:
+    async def receive() -> dict[str, Any]:
         return {"type": "http.request", "body": body, "more_body": False}
 
     scope = {
@@ -103,8 +103,11 @@ router = APIRouter()
 @router.post(
     "/internal/v1/auth/verify",
     dependencies=[Depends(require_data_plane_key)],
+    # Internal data-plane route: keep it out of the public OpenAPI spec / docs
+    # (and the generated UI schema.d.ts). It's not a client- or UI-facing API.
+    include_in_schema=False,
 )
-async def verify_key(body: VerifyKeyRequest) -> Dict[str, Any]:
+async def verify_key(body: VerifyKeyRequest) -> dict[str, Any]:
     """
     Verify a virtual key on behalf of the Rust ai-gateway (data plane).
 
