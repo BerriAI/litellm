@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 
 def to_subject(
-    user_api_key_auth: Optional["UserAPIKeyAuth"], subject_token: Optional[str]
+    user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]
 ) -> Subject:
     """Map v1's authenticated principal onto the resolver's Subject.
 
@@ -51,7 +51,7 @@ def to_subject(
     )
 
 
-def to_server_spec(server: "MCPServer") -> Optional[ServerSpec]:
+def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     """Map a v1 server onto a ServerSpec for a migrated mode, or None to defer to v1.
 
     BYOK is the per-user source of the ``api_key`` mode; its scheme rides on ``auth_type`` just
@@ -95,7 +95,7 @@ def to_server_spec(server: "MCPServer") -> Optional[ServerSpec]:
 
 
 def _shared_key_spec(
-    server: "MCPServer",
+    server: MCPServer,
     resource: str,
     header_name: str,
     value_prefix: str,
