@@ -229,6 +229,11 @@ DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
     "Sonnet 4.6+, and Mythos Preview."
 )
 
+DROP_UNSUPPORTED_SPEED_WARNING = (
+    "Dropping unsupported `speed` for model=%s "
+    "(drop_params=True). Fast mode is only supported on select Opus models."
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -373,6 +378,51 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicConfig._supports_effort_level(model, level)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
         )
+
+    @staticmethod
+    def _model_supports_speed_param(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """Whether the model accepts Anthropic's ``speed`` parameter (fast mode).
+
+        Fast mode is direct Anthropic API-only (not Bedrock, Vertex, or Azure).
+        Those providers strip their prefix before this shared transform runs, so a
+        bare ``claude-opus-4-8`` would otherwise resolve to the direct-API entry;
+        the routed provider is checked explicitly to keep them out.
+        """
+        if custom_llm_provider is not None and custom_llm_provider != "anthropic":
+            return False
+        return (
+            AnthropicModelInfo._get_exact_model_capability(model, "supports_speed")
+            is True
+        )
+
+    @staticmethod
+    def _maybe_drop_speed_param(
+        model: str,
+        optional_params: dict,
+        drop_params: bool,
+        custom_llm_provider: Optional[str] = None,
+    ) -> None:
+        if "speed" not in optional_params:
+            return
+        if AnthropicConfig._model_supports_speed_param(model, custom_llm_provider):
+            return
+        if not (litellm.drop_params or drop_params):
+            speed_value = optional_params.get("speed")
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support speed={speed_value!r}. "
+                    "To drop unsupported params, set "
+                    "`litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(
+            DROP_UNSUPPORTED_SPEED_WARNING,
+            model,
+        )
+        optional_params.pop("speed", None)
 
     @staticmethod
     def _raise_invalid_reasoning_effort(
@@ -605,7 +655,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(  # noqa: PLR0915
+    def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
@@ -1399,7 +1449,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return None
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
@@ -1569,8 +1619,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_context_management
                         )
             elif param == "speed" and isinstance(value, str):
-                # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
+                AnthropicConfig._maybe_drop_speed_param(
+                    model=model,
+                    optional_params=optional_params,
+                    drop_params=drop_params,
+                    custom_llm_provider=self.custom_llm_provider,
+                )
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
@@ -1874,6 +1929,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        AnthropicConfig._maybe_drop_speed_param(
+            model=model,
+            optional_params=optional_params,
+            drop_params=litellm.drop_params
+            or litellm_params.get("drop_params") is True,
+            custom_llm_provider=self.custom_llm_provider,
+        )
 
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params
@@ -2213,19 +2276,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         inference_geo: Optional[str] = None
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
+        service_tier = cast(
+            str | None,
+            _usage.get("service_tier"),
+        )
 
-        if (
-            "cache_creation_input_tokens" in _usage
-            and _usage["cache_creation_input_tokens"] is not None
-        ):
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if (
-            "cache_read_input_tokens" in _usage
-            and _usage["cache_read_input_tokens"] is not None
-        ):
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
+        iterations: Optional[List[Any]] = _usage.get("iterations")
+        if iterations:
+            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
+            completion_tokens = sum(
+                it.get("output_tokens", 0) or 0 for it in iterations
+            )
+            cache_creation_input_tokens = sum(
+                it.get("cache_creation_input_tokens", 0) or 0 for it in iterations
+            )
+            cache_read_input_tokens = sum(
+                it.get("cache_read_input_tokens", 0) or 0 for it in iterations
+            )
+            prompt_tokens += cache_creation_input_tokens + cache_read_input_tokens
+
+        if not iterations:
+            if (
+                "cache_creation_input_tokens" in _usage
+                and _usage["cache_creation_input_tokens"] is not None
+            ):
+                cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+                prompt_tokens += cache_creation_input_tokens
+            if (
+                "cache_read_input_tokens" in _usage
+                and _usage["cache_read_input_tokens"] is not None
+            ):
+                cache_read_input_tokens = _usage["cache_read_input_tokens"]
+                prompt_tokens += cache_read_input_tokens
         if "server_tool_use" in _usage and _usage["server_tool_use"] is not None:
             if (
                 "web_search_requests" in _usage["server_tool_use"]
@@ -2264,7 +2346,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
-        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
+        raw_input_tokens = (
+            prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
@@ -2296,6 +2380,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
+            iterations=iterations,
             server_tool_use=(
                 ServerToolUse(
                     web_search_requests=web_search_requests,
@@ -2306,6 +2391,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            service_tier=service_tier,
         )
         return usage
 

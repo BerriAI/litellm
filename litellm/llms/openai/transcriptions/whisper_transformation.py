@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional, Union
 
 from httpx import Headers, Response
@@ -107,9 +108,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         data = {"model": model, "file": audio_file, **optional_params}
 
-        if "response_format" not in data or (
-            data["response_format"] == "text" or data["response_format"] == "json"
-        ):
+        if "response_format" not in data:
             data["response_format"] = (
                 "verbose_json"  # ensures 'duration' is received - used for cost calculation
             )
@@ -133,10 +132,11 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> TranscriptionResponse:
         try:
             raw_response_json = raw_response.json()
-        except Exception as e:
-            raise ValueError(
-                f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}"
-            )
+        except json.JSONDecodeError:
+            content_type = raw_response.headers.get("content-type", "").lower()
+            if "application/json" in content_type:
+                raise
+            return TranscriptionResponse(text=raw_response.text)
 
         if any(
             key in raw_response_json

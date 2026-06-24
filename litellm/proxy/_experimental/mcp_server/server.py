@@ -63,7 +63,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    ProxyException,
+    SpecialMCPServerNames,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -229,6 +233,28 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     return False
 
 
+def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
+    """Map a ``ProxyException`` to an ``HTTPException`` that preserves its real
+    status code and headers.
+
+    ``user_api_key_auth`` raises ``ProxyException`` (not ``HTTPException``) on
+    auth failures. The MCP ASGI handlers re-raise ``HTTPException`` to keep the
+    status and any ``WWW-Authenticate`` challenge, but a ``ProxyException`` would
+    otherwise fall through to their generic handler and be flattened to a 500 —
+    dropping the 401 + challenge an OAuth client needs to re-authenticate, so the
+    tool call surfaces as a cancelled/terminated session instead.
+    """
+    try:
+        status_code = int(exc.code)
+    except (TypeError, ValueError):
+        status_code = 500
+    return HTTPException(
+        status_code=status_code,
+        detail=exc.message,
+        headers=exc.headers or None,
+    )
+
+
 if MCP_AVAILABLE:
     from mcp.server import Server
     from mcp.server.lowlevel.server import NotificationOptions
@@ -270,6 +296,9 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
+        MCP_TOOL_PREFIX_SEPARATOR,
+        is_tool_name_prefixed,
+        normalize_server_name,
         split_server_prefix_from_name,
     )
 
@@ -614,7 +643,7 @@ if MCP_AVAILABLE:
                 active_mcp_session_var.reset(_session_reset_token)
 
     @server.call_tool()
-    async def mcp_server_tool_call(  # noqa: PLR0915
+    async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
     ) -> CallToolResult:
         """
@@ -1033,7 +1062,14 @@ if MCP_AVAILABLE:
         allowed_mcp_servers: List[MCPServer],
     ) -> List[MCPServer]:
         """
-        Get the filtered MCP servers from the MCP server names
+        Get the filtered MCP servers from the MCP server names.
+
+        Fails closed when ``mcp_servers`` is explicitly provided (path- or
+        header-derived) but none of the names resolve to a server alias or
+        access group the caller can access. The previous behavior returned
+        the full ``allowed_mcp_servers`` set, which silently widened scope
+        when a client targeted ``/mcp/<unknown>/`` and made URL/header
+        namespacing appear to work when it did not.
         """
 
         filtered_server: dict[str, MCPServer] = {}
@@ -1072,6 +1108,17 @@ if MCP_AVAILABLE:
 
         if filtered_server:
             return list(filtered_server.values())
+
+        if mcp_servers is not None:
+            # Caller asked for a specific scope but nothing resolved. Fail
+            # closed so URL/header namespacing cannot silently fall back to
+            # the caller's full allowed-server set.
+            verbose_logger.debug(
+                "MCP scope filter resolved to no servers for requested names %s; "
+                "returning empty list (fail-closed).",
+                mcp_servers,
+            )
+            return []
 
         return allowed_mcp_servers
 
@@ -1588,7 +1635,7 @@ if MCP_AVAILABLE:
             _mcp_gateway_initialize_instructions.reset(instructions_token)
             _mcp_gateway_server_name.reset(server_name_token)
 
-    async def _get_tools_from_mcp_servers(  # noqa: PLR0915
+    async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
@@ -2432,7 +2479,7 @@ if MCP_AVAILABLE:
                 },
             )
 
-    async def execute_mcp_tool(  # noqa: PLR0915
+    async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
         allowed_mcp_servers: List[MCPServer],
@@ -2483,47 +2530,60 @@ if MCP_AVAILABLE:
                 None,
             )
 
-        # Resolve the actual MCP server up-front so the permission check uses
-        # the canonical server.name even when the tool name is prefixed with a
-        # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
-        # server's display name directly.
-        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-        if mcp_server is None and requested_server is not None:
-            # REST callers may pass the raw tool name (no prefix) plus a
-            # ``requested_server_id``. The mapping might only contain the
-            # prefixed form, so retry the lookup with every known prefix of
-            # the requested server before treating the tool as unresolved —
-            # otherwise the tool_server_mismatch guard below is silently
-            # bypassed.
-            for known_prefix in iter_known_server_prefixes(requested_server):
-                candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
-                    add_server_prefix_to_name(name, known_prefix)
-                )
-                if candidate is not None:
-                    mcp_server = candidate
-                    break
-        if mcp_server is not None:
-            server_name = mcp_server.name
+        name_is_prefixed = False
+        if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
+            all_registry_prefixes: Set[str] = set()
+            for registry_server in global_mcp_server_manager.get_registry().values():
+                for known_prefix in iter_known_server_prefixes(registry_server):
+                    all_registry_prefixes.add(normalize_server_name(known_prefix))
+            name_is_prefixed = is_tool_name_prefixed(
+                name, known_server_prefixes=all_registry_prefixes
+            )
 
-        # REST /mcp-rest/tools/call passes server_id — tool must belong to that server
-        if requested_server is not None:
-            if (
-                mcp_server is not None
-                and mcp_server.server_id != requested_server.server_id
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "tool_server_mismatch",
-                        "message": (
-                            f"Tool '{name}' belongs to MCP server '{mcp_server.name}' "
-                            f"but request specified server_id for '{requested_server.name}'."
-                        ),
-                    },
-                )
-            if mcp_server is None:
-                mcp_server = requested_server
-                server_name = requested_server.name
+        if requested_server is not None and not name_is_prefixed:
+            # REST callers may pass server_id with the upstream tool name (no
+            # LiteLLM prefix). The first segment is not a registered server
+            # prefix, so the whole string is the upstream tool name and may
+            # legitimately contain the separator (e.g. "text-to-speech").
+            # server_id is authoritative for routing and auth.
+            mcp_server = requested_server
+            server_name = requested_server.name
+            original_tool_name = name
+        else:
+            # Resolve from tool name (MCP JSON-RPC or prefixed REST tool names).
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if mcp_server is None and requested_server is not None:
+                for known_prefix in iter_known_server_prefixes(requested_server):
+                    candidate = (
+                        global_mcp_server_manager._get_mcp_server_from_tool_name(
+                            add_server_prefix_to_name(name, known_prefix)
+                        )
+                    )
+                    if candidate is not None:
+                        mcp_server = candidate
+                        break
+            if mcp_server is not None:
+                server_name = mcp_server.name
+
+            if requested_server is not None:
+                if (
+                    mcp_server is not None
+                    and mcp_server.server_id != requested_server.server_id
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "tool_server_mismatch",
+                            "message": (
+                                f"Tool '{name}' belongs to MCP server "
+                                f"'{mcp_server.name}' but request specified "
+                                f"server_id for '{requested_server.name}'."
+                            ),
+                        },
+                    )
+                if mcp_server is None:
+                    mcp_server = requested_server
+                    server_name = requested_server.name
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
@@ -2552,6 +2612,7 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model = f"MCP: {name}"
+            litellm_logging_obj.model_call_details["model"] = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
@@ -3317,6 +3378,19 @@ if MCP_AVAILABLE:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
+        # A key scoped to no MCP servers opts out of every MCP path. Enforce it
+        # here too, since toolset scoping replaces mcp_servers and would otherwise
+        # drop the sentinel. Checked before the admin branch, mirroring
+        # get_allowed_mcp_servers.
+        original_op = user_api_key_auth.object_permission
+        if original_op is not None and SpecialMCPServerNames.no_mcp_servers.value in (
+            original_op.mcp_servers or []
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="API key is scoped to no MCP servers; toolset access is denied.",
+            )
+
         # Access control: non-admin keys must have this toolset in their grant list.
         # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
         is_admin = _user_has_admin_view(user_api_key_auth)
@@ -3425,6 +3499,8 @@ if MCP_AVAILABLE:
                         user_api_key_auth=user_api_key_auth,
                     )
                     if stored_oauth_headers:
+                        continue
+                    if getattr(server, "delegate_auth_to_upstream", False) is True:
                         continue
 
                 request = StarletteRequest(scope)
@@ -3623,7 +3699,7 @@ if MCP_AVAILABLE:
                     detail="Forbidden",
                 )
 
-    async def handle_streamable_http_mcp(  # noqa: PLR0915
+    async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
@@ -3960,7 +4036,7 @@ if MCP_AVAILABLE:
                     ):
                         _stateful_session_locks.pop(active_request_session_id, None)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
@@ -3969,6 +4045,12 @@ if MCP_AVAILABLE:
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
+        except ProxyException as e:
+            # Auth failures from user_api_key_auth arrive as ProxyException, not
+            # HTTPException. Preserve the real status (e.g. 401 + WWW-Authenticate)
+            # so OAuth clients can re-authenticate instead of receiving a generic
+            # 500 that surfaces as a cancelled tool call.
+            raise _proxy_exception_to_http_exception(e)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
@@ -4076,7 +4158,7 @@ if MCP_AVAILABLE:
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
@@ -4086,6 +4168,12 @@ if MCP_AVAILABLE:
             # Re-raise HTTP exceptions to preserve status codes and details
             # (e.g. 401 + WWW-Authenticate challenges from OAuth pass-through).
             raise
+        except ProxyException as e:
+            # Auth failures from user_api_key_auth arrive as ProxyException, not
+            # HTTPException. Preserve the real status (e.g. 401 + WWW-Authenticate)
+            # so OAuth clients can re-authenticate instead of receiving a generic
+            # 500 that surfaces as a cancelled tool call.
+            raise _proxy_exception_to_http_exception(e)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions

@@ -18,17 +18,6 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
-export const getInProductNudgesCall = async (accessToken: string) => {
-  /**
-   * Get in-product nudges configuration.
-   */
-  try {
-    return await apiClient.get(`/in_product_nudges`, { accessToken });
-  } catch (error) {
-    console.error("Failed to get in-product nudges:", error);
-    throw error;
-  }
-};
 /**
  * Helper file for calls being made to proxy
  */
@@ -285,6 +274,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
 }
@@ -2452,6 +2442,9 @@ export const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // /key/list is exact by default; opt in so the key-list search box keeps
+        // matching partial user_id/key_alias.
+        substring_matching: "true",
       },
     });
   } catch (error) {

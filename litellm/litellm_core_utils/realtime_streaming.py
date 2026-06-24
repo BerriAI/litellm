@@ -47,6 +47,7 @@ class RealTimeStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
+        force_transcription_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -100,6 +101,11 @@ class RealTimeStreaming:
         self._flushing_pending_messages_until_setup: bool = False
         self._pending_messages_until_setup: List[str] = []
         self._pending_messages_byte_total: int = 0
+        # Whether this is a transcription-only session (session.type == "transcription",
+        # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
+        # their input_audio_transcription.completed usage drives duration-based cost.
+        self._force_transcription_model = force_transcription_model
+        self._is_transcription_session: bool = force_transcription_model is not None
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -111,7 +117,11 @@ class RealTimeStreaming:
             "input_audio_buffer.append",
             "input_audio_buffer.commit",
             "input_audio_buffer.clear",
+            "input_audio_buffer.end",
         ]
+    )
+    _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(
+        ["input_audio_buffer.commit", "input_audio_buffer.end"]
     )
     _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
@@ -207,6 +217,8 @@ class RealTimeStreaming:
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug(f"Realtime session.type: {session.get('type')}")
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -220,6 +232,55 @@ class RealTimeStreaming:
                 transcript = cast(str, event_obj.get("transcript", ""))
                 if transcript:
                     self.input_messages.append({"role": "user", "content": transcript})
+        except (AttributeError, TypeError):
+            pass
+
+    def _detect_transcription_session_from_backend(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """Flag transcription-only sessions from backend session events."""
+        try:
+            event_type = event_obj.get("type", "")
+            if event_type in (
+                "transcription_session.created",
+                "transcription_session.updated",
+            ):
+                self._is_transcription_session = True
+            elif event_type in ("session.created", "session.updated"):
+                session = cast(dict, event_obj).get("session", {}) or {}
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
+        except (AttributeError, TypeError):
+            pass
+
+    def _capture_transcription_usage(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """
+        Append a usage-only transcription completed event to the logged results so
+        the cost calculator can bill it by audio duration. The default logged event
+        types exclude this event, so it is captured here directly for transcription
+        sessions rather than widening logging for every realtime session. Only the
+        type and usage are kept — the transcript is already captured separately in
+        input_messages, so it is not duplicated into the response log here.
+        """
+        try:
+            usage = event_obj.get("usage")
+            if usage is None:
+                return
+            # If this event type is already captured by store_message (e.g. the user
+            # logs all realtime events), don't append a second copy.
+            if self._should_store_message(event_obj):
+                return
+            self.messages.append(
+                cast(
+                    OpenAIRealtimeEvents,
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "usage": usage,
+                    },
+                )
+            )
         except (AttributeError, TypeError):
             pass
 
@@ -283,6 +344,7 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
+        message = self._enforce_transcription_session_model(message)
         if self.provider_config:
             transformed = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
@@ -302,11 +364,127 @@ class RealTimeStreaming:
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
         return True
 
+    def _enforce_transcription_session_model(self, message: str) -> str:
+        """Force client transcription session updates to the authorized model.
+
+        `/v1/realtime?intent=transcription` may intentionally omit `model` from
+        the upstream URL for Azure compatibility, but the proxy still authorizes
+        a resolved LiteLLM model before opening the backend websocket. If a
+        client later sends a transcription `session.update`, any model embedded
+        in that update must be rewritten to the same authorized model instead of
+        allowing a post-auth model/deployment switch.
+
+        Normal realtime sessions keep their independent nested transcription
+        model behavior because `_force_transcription_model` is only set for
+        transcription-intent websocket routes.
+        """
+        if self._force_transcription_model is None:
+            return message
+
+        try:
+            message_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return message
+
+        session = message_obj.get("session")
+        if not isinstance(session, dict):
+            return message
+
+        if session.get("type") == "transcription":
+            self._is_transcription_session = True
+
+        authorized_model = self._force_transcription_model
+        changed = False
+
+        transcription = session.get("input_audio_transcription")
+        if (
+            isinstance(transcription, dict)
+            and transcription.get("model") != authorized_model
+        ):
+            session["input_audio_transcription"] = {
+                **transcription,
+                "model": authorized_model,
+            }
+            changed = True
+
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            audio_input = audio.get("input")
+            if isinstance(audio_input, dict):
+                nested_transcription = audio_input.get("transcription")
+                if (
+                    isinstance(nested_transcription, dict)
+                    and nested_transcription.get("model") != authorized_model
+                ):
+                    session["audio"] = {
+                        **audio,
+                        "input": {
+                            **audio_input,
+                            "transcription": {
+                                **nested_transcription,
+                                "model": authorized_model,
+                            },
+                        },
+                    }
+                    changed = True
+
+        if not changed:
+            return message
+        return json.dumps(message_obj)
+
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
         if self.provider_config is None:
             return False
         return not self.provider_config.requires_session_configuration()
+
+    @staticmethod
+    def _collapse_buffered_audio_messages(messages: List[str]) -> List[str]:
+        """Apply ``input_audio_buffer.clear`` semantics before replaying buffered frames.
+
+        During deferred Gemini Live setup, ``clear`` is buffered alongside appends.
+        On flush each append becomes a provider ``realtimeInput``; ``clear`` must
+        drop preceding uncommitted appends instead of being forwarded as a no-op.
+        """
+        collapsed: List[str] = []
+        pending_appends: List[str] = []
+
+        for message in messages:
+            try:
+                msg_type = json.loads(message).get("type")
+            except (json.JSONDecodeError, TypeError):
+                collapsed.extend(pending_appends)
+                pending_appends = []
+                collapsed.append(message)
+                continue
+
+            if msg_type == "input_audio_buffer.append":
+                pending_appends.append(message)
+            elif msg_type == "input_audio_buffer.clear":
+                pending_appends = []
+            elif msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_COMMIT_TYPES:
+                collapsed.extend(pending_appends)
+                pending_appends = []
+                collapsed.append(message)
+            else:
+                collapsed.extend(pending_appends)
+                pending_appends = []
+                collapsed.append(message)
+
+        collapsed.extend(pending_appends)
+        return collapsed
+
+    def _sync_pending_messages_byte_total(self) -> None:
+        self._pending_messages_byte_total = sum(
+            len(message.encode("utf-8"))
+            for message in self._pending_messages_until_setup
+        )
 
     def _should_buffer_client_message_until_setup(self, message: str) -> bool:
         if not self._uses_deferred_backend_setup():
@@ -323,6 +501,18 @@ class RealTimeStreaming:
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
+        try:
+            msg_type = json.loads(message).get("type")
+        except (json.JSONDecodeError, TypeError):
+            msg_type = None
+
+        if msg_type == "input_audio_buffer.clear":
+            self._pending_messages_until_setup = self._collapse_buffered_audio_messages(
+                self._pending_messages_until_setup + [message]
+            )
+            self._sync_pending_messages_byte_total()
+            return
+
         msg_bytes = len(message.encode("utf-8"))
         if (
             len(self._pending_messages_until_setup)
@@ -340,7 +530,9 @@ class RealTimeStreaming:
             )
 
     async def _flush_pending_messages_until_setup(self) -> bool:
-        pending = self._pending_messages_until_setup
+        pending = self._collapse_buffered_audio_messages(
+            self._pending_messages_until_setup
+        )
         self._pending_messages_until_setup = []
         self._pending_messages_byte_total = 0
         for idx, message in enumerate(pending):
@@ -425,16 +617,13 @@ class RealTimeStreaming:
         if sent:
             self._guardrail_turn_detection_update_sent = True
 
-    def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime guardrail event types."""
+    def _has_realtime_guardrails_for_event_hooks(
+        self,
+        event_hooks: List[Any],
+    ) -> bool:
+        """Return True if any callback would run for one of ``event_hooks``."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
-        from litellm.types.guardrails import GuardrailEventHooks
 
-        _realtime_event_types = [
-            GuardrailEventHooks.realtime_input_transcription,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
         return any(
             isinstance(cb, CustomGuardrail)
             and any(
@@ -442,31 +631,45 @@ class RealTimeStreaming:
                     data=self.request_data,
                     event_type=et,
                 )
-                for et in _realtime_event_types
+                for et in event_hooks
             )
             for cb in litellm.callbacks
         )
 
+    def _has_realtime_guardrails(self) -> bool:
+        """Return True if any callback is registered for realtime guardrail event types."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return self._has_realtime_guardrails_for_event_hooks(
+            [
+                GuardrailEventHooks.realtime_input_transcription,
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+            ]
+        )
+
     def _has_audio_transcription_guardrails(self) -> bool:
-        """Return True if any callback needs to run on audio transcriptions (VAD path).
+        """Return True when a guardrail is configured for the audio/VAD transcript path.
 
-        When this returns True, we inject a session.update to disable the LLM's
-        auto-response so the guardrail can gate it first.
-
-        Must match the same hook criteria as run_realtime_guardrails() so that
-        any guardrail that would actually check the transcript also disables
-        auto-response before the transcript arrives.
+        Only ``realtime_input_transcription`` hooks disable ``server_vad`` auto-response.
+        ``pre_call`` / ``post_call`` guardrails (e.g. Model Armor on chat completions)
+        must not override ``turn_detection.create_response`` on realtime sessions.
         """
-        return self._has_realtime_guardrails()
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return self._has_realtime_guardrails_for_event_hooks(
+            [GuardrailEventHooks.realtime_input_transcription]
+        )
 
     async def run_realtime_guardrails(
         self,
         transcript: str,
         item_id: Optional[str] = None,
         pre_block_backend_message: Optional[str] = None,
+        event_hooks: Optional[List[Any]] = None,
     ) -> bool:
         """
-        Run registered guardrails on a completed speech transcription.
+        Run registered guardrails on realtime text (transcript, user message, tool output).
 
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
@@ -477,15 +680,17 @@ class RealTimeStreaming:
         specific message to be sent first — e.g. Gemini Live requires a
         matching ``toolResponse`` immediately after a ``toolCall`` before any
         other client messages can be accepted.
+
+        ``event_hooks`` selects which guardrail modes to evaluate. Audio/VAD
+        transcript completion uses ``realtime_input_transcription`` only;
+        typed user messages and tool outputs use ``pre_call``.
         """
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
-        _realtime_event_types = [
-            GuardrailEventHooks.realtime_input_transcription,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
+        if event_hooks is None:
+            event_hooks = [GuardrailEventHooks.realtime_input_transcription]
+        _realtime_event_types = event_hooks
         _check_data = {**self.request_data, "transcript": transcript}
         _already_run: set = set()
 
@@ -719,6 +924,8 @@ class RealTimeStreaming:
         """
         event_type = event_obj.get("type")
 
+        self._detect_transcription_session_from_backend(event_obj)
+
         # Send session.created to the client FIRST so it stays in sync, then inject
         # the disable-auto-response session.update; otherwise a backend error could
         # reach the client before it sees session.created.
@@ -736,6 +943,14 @@ class RealTimeStreaming:
             self._collect_user_input_from_backend_event(event_obj)
             self.store_message(event_obj)
             await self.websocket.send_text(raw_response)
+
+            # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
+            # assistant turn: capture audio-duration usage for cost and never
+            # trigger response.create.
+            if self._is_transcription_session:
+                self._capture_transcription_usage(event_obj)
+                return True
+
             blocked = await self.run_realtime_guardrails(
                 transcript,
                 item_id=event_obj.get("item_id"),
@@ -983,7 +1198,7 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
-    async def client_ack_messages(self):  # noqa: PLR0915
+    async def client_ack_messages(self):
         try:
             while True:
                 message = await self.websocket.receive_text()
@@ -992,6 +1207,8 @@ class RealTimeStreaming:
                 guardrail_turn_detection_injected = False
                 msg_type: Optional[str] = None
                 try:
+                    from litellm.types.guardrails import GuardrailEventHooks
+
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
 
@@ -1044,6 +1261,7 @@ class RealTimeStreaming:
                                 blocked = await self.run_realtime_guardrails(
                                     output_text,
                                     pre_block_backend_message=sanitized_msg,
+                                    event_hooks=[GuardrailEventHooks.pre_call],
                                 )
                                 if blocked:
                                     # ``_pending_guardrail_message`` is
@@ -1069,7 +1287,8 @@ class RealTimeStreaming:
                             combined_text = " ".join(texts)
                             if combined_text:
                                 blocked = await self.run_realtime_guardrails(
-                                    combined_text
+                                    combined_text,
+                                    event_hooks=[GuardrailEventHooks.pre_call],
                                 )
                                 if blocked:
                                     # Store the guardrail reason so the next response.create

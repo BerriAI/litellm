@@ -452,6 +452,430 @@ async def test_semantic_filter_hook_skips_no_tools():
     print("✅ Hook correctly skips requests without tools")
 
 
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_native_tools():
+    """
+    Regression test: mixed MCP + native tools.
+
+    Given: 5 MCP tools (registered in _tool_map) + 2 native OpenAI-format
+           function tools (not in _tool_map)
+    When:  The hook filters tools
+    Then:  The native tools must survive unconditionally, and only MCP
+           tools go through the semantic filter.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # --- MCP tools (registered in the semantic router) ---
+    mcp_tools = [
+        MCPTool(
+            name=f"mcp_tool_{i}",
+            description=f"MCP tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(mcp_tools)
+
+    # --- Native OpenAI-format function tools (NOT in _tool_map) ---
+    native_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search the web",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+
+    # Combine: MCP tools + native tools
+    all_tools = list(mcp_tools) + native_tools
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "What is the weather?"}],
+        "tools": all_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # Native tools must survive
+    native_in_result = [
+        t for t in filtered if isinstance(t, dict) and t.get("type") == "function"
+    ]
+    assert (
+        len(native_in_result) == 2
+    ), f"Both native tools must survive, got {len(native_in_result)}"
+
+    # MCP tools should be filtered (top_k=2)
+    mcp_in_result = [t for t in filtered if not isinstance(t, dict)]
+    assert (
+        len(mcp_in_result) <= 2
+    ), f"MCP tools should be filtered to top_k=2, got {len(mcp_in_result)}"
+
+    # Total should be native + filtered MCP
+    assert len(filtered) <= 4, f"Expected at most 4 tools, got {len(filtered)}"
+
+    # Filter stats should be emitted (MCP tools were present)
+    assert "litellm_semantic_filter_stats" in result["metadata"]
+
+    # Stats should report MCP-only counts, not inflated with native tools
+    stats = result["metadata"]["litellm_semantic_filter_stats"]
+    mcp_before, mcp_after = stats.split("->")
+    assert (
+        int(mcp_before) == 5
+    ), f"Stats 'from' should be MCP count (5), got {mcp_before}"
+    assert int(mcp_after) == len(
+        mcp_in_result
+    ), f"Stats 'to' should match filtered MCP count, got {mcp_after}"
+
+    print(
+        f"✅ Hook preserves native tools: {len(all_tools)} -> {len(filtered)} "
+        f"({len(native_in_result)} native + {len(mcp_in_result)} MCP), "
+        f"stats={stats}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_all_native_tools():
+    """
+    Regression test: all-native request.
+
+    Given: Only native OpenAI-format function tools (none registered in
+           the MCP semantic router)
+    When:  The hook processes the request
+    Then:  All tools pass through, and NO spurious semantic filter response
+           headers are emitted (no litellm_semantic_filter_stats in metadata).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Build router with some MCP tools (so tool_router is not None)
+    mcp_tools = [
+        MCPTool(
+            name="some_mcp_tool",
+            description="An MCP tool",
+            inputSchema={"type": "object"},
+        )
+    ]
+
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance._build_router(mcp_tools)
+
+    # --- Only native tools in the request ---
+    native_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"native_func_{i}",
+                "description": f"Native function {i}",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for i in range(3)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "tools": native_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # All native tools must pass through
+    assert (
+        len(filtered) == 3
+    ), f"All 3 native tools must pass through, got {len(filtered)}"
+
+    # No spurious semantic filter stats (P2 fix)
+    assert (
+        "litellm_semantic_filter_stats" not in result["metadata"]
+    ), "Should NOT emit semantic filter stats for all-native-tool requests"
+
+    print(
+        f"✅ Hook passes through all {len(filtered)} native tools, "
+        f"no spurious filter headers emitted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_responses_api_name_collision():
+    """
+    Regression test: Responses API native tool with MCP-matching name.
+
+    Given: A Responses-API native tool whose top-level ``name`` collides
+           with an MCP canonical name in ``_tool_map``
+    When:  The hook classifies tools
+    Then:  The native tool must NOT be sent to the semantic filter, even
+           though its name matches an MCP canonical.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Register an MCP tool with name "github-search"
+    mcp_tools = [
+        MCPTool(
+            name="github-search",
+            description="Search GitHub repos",
+            inputSchema={"type": "object"},
+        )
+    ]
+    filter_instance._build_router(mcp_tools)
+
+    # Responses API native tool with SAME name as MCP canonical
+    responses_api_tool = {
+        "type": "function",
+        "name": "github-search",
+        "description": "Caller-owned search tool",
+        "parameters": {"type": "object"},
+    }
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    # Verify classification: should be native, not MCP
+    assert not hook._is_mcp_tool(responses_api_tool), (
+        "Responses API tool with type=function + top-level name "
+        "should be classified as native, not MCP"
+    )
+
+    # Full hook test: all-native request should preserve tools
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub"}],
+        "tools": [responses_api_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    # All tools are native → hook returns data with all tools preserved
+    filtered = (result or data)["tools"]
+    assert len(filtered) == 1, f"Native tool must survive, got {len(filtered)}"
+    assert filtered[0]["name"] == "github-search"
+
+    print("✅ Responses API tool with MCP-matching name correctly classified as native")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_tool_order():
+    """
+    Regression test: tool ordering preservation.
+
+    Given: An interleaved request [mcp_tool_A, native_tool, mcp_tool_B]
+    When:  The hook filters tools (all MCP tools survive)
+    Then:  The output order must match the original request order,
+           NOT native-first.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Register MCP tools
+    mcp_tool_a = MCPTool(
+        name="github-search",
+        description="Search GitHub",
+        inputSchema={"type": "object"},
+    )
+    mcp_tool_b = MCPTool(
+        name="github-issue",
+        description="Create GitHub issue",
+        inputSchema={"type": "object"},
+    )
+    filter_instance._build_router([mcp_tool_a, mcp_tool_b])
+
+    # Mock filter_tools to return both MCP tools (deterministic)
+    filter_instance.filter_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=[mcp_tool_a, mcp_tool_b]
+    )
+
+    # Native tool (interleaved between MCP tools)
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    # Original order: [mcp_A, native, mcp_B]
+    original_tools = [mcp_tool_a, native_tool, mcp_tool_b]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub and check weather"}],
+        "tools": original_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # All tools should survive
+    assert len(filtered) == 3, f"Expected 3 tools, got {len(filtered)}"
+
+    # Order must be preserved: [mcp_A, native, mcp_B]
+    assert filtered[0] is mcp_tool_a, "First tool should be mcp_tool_a"
+    assert filtered[1] is native_tool, "Second tool should be native_tool"
+    assert filtered[2] is mcp_tool_b, "Third tool should be mcp_tool_b"
+
+    print(
+        "✅ Tool ordering preserved: [mcp_A, native, mcp_B] maintained after filtering"
+    )
+
+
 class TestGetToolsByNames:
     """
     Regression coverage for SemanticMCPToolFilter._get_tools_by_names
@@ -489,9 +913,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +925,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +936,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +968,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,9 +981,7 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
         matched = filter_instance._get_tools_by_names(
             ["fs-read_file", "api-fs-read_file"], available_tools
@@ -590,9 +1002,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical
