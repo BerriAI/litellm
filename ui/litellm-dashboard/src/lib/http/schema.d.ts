@@ -17236,6 +17236,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/rust_control_plane/authentication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Key
+         * @description Verify a virtual key on behalf of the Rust ai-gateway (data plane).
+         *
+         *     The Rust gateway forwards the client's virtual key here; this delegates to
+         *     the proxy's existing ``user_api_key_auth`` validation and returns the
+         *     resolved ``UserAPIKeyAuth`` as JSON so the data plane can enforce the same
+         *     limits the control plane would.
+         *
+         *     Gated by ``require_data_plane_key`` (the dedicated data-plane secret, not
+         *     the master key).
+         *
+         *     On any auth failure the response is a 401 with a minimal body so internals
+         *     are not leaked to the caller.
+         */
+        post: operations["verify_key_v1_rust_control_plane_authentication_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/rust_control_plane/logs": {
         parameters: {
             query?: never;
@@ -32762,6 +32793,15 @@ export interface components {
             } | null;
             /** Vector Store Name */
             vector_store_name?: string | null;
+        };
+        /** VerifyKeyRequest */
+        VerifyKeyRequest: {
+            /** Api Key */
+            api_key: string;
+            /** Model */
+            model?: string | null;
+            /** Route */
+            route: string;
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -54744,6 +54784,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_key_v1_rust_control_plane_authentication_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

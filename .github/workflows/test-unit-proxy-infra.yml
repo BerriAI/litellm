@@ -26,6 +26,7 @@ jobs:
         tests/test_litellm/proxy/middleware
         tests/test_litellm/proxy/spend_tracking
         tests/test_litellm/proxy/pass_through_endpoints
+        tests/test_litellm/proxy/rust_control_plane
         tests/test_litellm/proxy/_experimental
         tests/test_litellm/proxy/experimental
         tests/test_litellm/proxy/common_utils
