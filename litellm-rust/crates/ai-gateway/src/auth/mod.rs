@@ -1,9 +1,10 @@
 //! Gateway authentication, as an axum **extractor** (the idiomatic pattern —
 //! keeps handlers clean and auth testable).
 //!
-//! For now this is a single **master key**: any caller presenting it as
-//! `Authorization: Bearer <key>` may invoke the gateway. Per-key auth, budgets,
-//! and rate limits are delegated to the Python proxy in a later phase.
+//! For now this supports both the local **master key** and virtual keys resolved
+//! through the Python control plane. Individual routes can still narrow the
+//! accepted identities. For example, realtime rejects non-admin virtual keys
+//! until realtime usage is reported back to the proxy for spend attribution.
 //!
 //! A handler opts in by adding [`RequireMasterKey`] to its arguments; auth then
 //! runs during extraction, before the handler body. Routes never re-implement it.

@@ -1,8 +1,7 @@
 //! `GET /v1/realtime` (WebSocket).
 //!
 //! This file is the **axum surface**: `router()`, the handler, and the small
-//! socket↔events adapter. The pure logic (no axum) lives in [`service`]. Auth is
-//! the `RequireMasterKey` extractor, so the handler stays thin.
+//! socket↔events adapter. The pure logic (no axum) lives in [`service`].
 
 mod service;
 
@@ -33,16 +32,31 @@ struct RealtimeQuery {
     model: String,
 }
 
+fn require_realtime_billing_safe_auth(auth: &UserApiKeyAuth) -> Result<(), (StatusCode, String)> {
+    if auth.is_proxy_admin() {
+        return Ok(());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        "non-admin virtual-key realtime is disabled until realtime usage is reported to the control plane".to_string(),
+    ))
+}
+
 /// Auth runs via the `UserApiKeyAuth` extractor (master key → admin, otherwise
-/// cache then the swappable authenticator). We validate the model BEFORE the
-/// upgrade so failures are clean HTTP (400/404), not a socket that opens then
-/// closes, then hand the socket to `bridge`.
+/// cache then the swappable authenticator). Non-admin virtual keys are rejected
+/// until realtime usage is reported back to the proxy; otherwise callers could
+/// consume upstream realtime spend without that spend being charged to their key
+/// or team. We validate the model BEFORE the upgrade so failures are clean HTTP
+/// (400/404), not a socket that opens then closes, then hand the socket to
+/// `bridge`.
 async fn handle(
-    _auth: UserApiKeyAuth,
+    auth: UserApiKeyAuth,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Query(query): Query<RealtimeQuery>,
 ) -> Result<Response, (StatusCode, String)> {
+    require_realtime_billing_safe_auth(&auth)?;
+
     if query.model.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -86,4 +100,26 @@ async fn bridge(
 
     futures_util::pin_mut!(client_in, client_out);
     let _ = service::run(&router, &pool, &model, None, client_in, client_out).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realtime_allows_proxy_admin_identity() {
+        assert!(require_realtime_billing_safe_auth(&UserApiKeyAuth::admin()).is_ok());
+    }
+
+    #[test]
+    fn realtime_rejects_non_admin_virtual_keys_until_spend_is_reported() {
+        let err = require_realtime_billing_safe_auth(&UserApiKeyAuth {
+            user_role: Some("internal_user".to_string()),
+            ..UserApiKeyAuth::default()
+        })
+        .unwrap_err();
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert!(err.1.contains("usage is reported"));
+    }
 }

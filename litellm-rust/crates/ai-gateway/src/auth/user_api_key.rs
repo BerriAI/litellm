@@ -52,6 +52,10 @@ impl UserApiKeyAuth {
             ..Self::default()
         }
     }
+
+    pub fn is_proxy_admin(&self) -> bool {
+        self.user_role.as_deref() == Some("proxy_admin")
+    }
 }
 
 /// SHA-256 over `(route, model, key)`, used as the cache key. Hashing keeps
@@ -79,15 +83,25 @@ fn bearer_token(parts: &Parts) -> Option<&str> {
         .filter(|token| !token.is_empty())
 }
 
-/// Pull a query parameter's value out of a raw query string, e.g. `model` from
-/// `model=gpt-realtime&foo=bar`. Returns the raw (un-percent-decoded) value;
-/// model names use only query-safe characters (alphanumerics, `-`, `_`, `.`, `/`),
-/// so no decoding is needed for the values we authorize on.
-fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
-    query?.split('&').find_map(|pair| {
-        let (k, v) = pair.split_once('=')?;
-        (k == name).then_some(v)
-    })
+#[derive(serde::Deserialize)]
+struct RequestedModelQuery {
+    model: Option<String>,
+}
+
+/// Decode the requested model with the same query parser Axum's `Query` extractor
+/// uses later in the realtime handler. This keeps auth and serving aligned: an
+/// encoded key like `mo%64el=restricted` is still treated as `model=restricted`
+/// during authorization.
+fn requested_model(query: Option<&str>) -> Result<Option<String>, String> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    let parsed: RequestedModelQuery =
+        serde_urlencoded::from_str(query).map_err(|err| format!("invalid query string: {err}"))?;
+    Ok(parsed
+        .model
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty()))
 }
 
 #[axum::async_trait]
@@ -115,7 +129,9 @@ impl FromRequestParts<AppState> for UserApiKeyAuth {
         // the key's route/model restrictions for what's actually being requested
         // (not just that the key exists — closes the model-authorization bypass).
         let route = parts.uri.path();
-        let model = query_param(parts.uri.query(), "model");
+        let model = requested_model(parts.uri.query())
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+        let model = model.as_deref();
 
         // Virtual key: serve from cache, else verify via the (swappable) backend
         // and cache the result keyed by (route, model, key) hash.
@@ -303,9 +319,19 @@ mod tests {
 
     #[test]
     fn admin_is_proxy_admin() {
-        assert_eq!(
-            UserApiKeyAuth::admin().user_role.as_deref(),
-            Some("proxy_admin")
-        );
+        assert!(UserApiKeyAuth::admin().is_proxy_admin());
+        assert!(!UserApiKeyAuth::default().is_proxy_admin());
+    }
+
+    #[test]
+    fn requested_model_decodes_query_parameter_names_like_axum() {
+        let model = requested_model(Some("mo%64el=gpt-realtime&foo=bar")).unwrap();
+        assert_eq!(model.as_deref(), Some("gpt-realtime"));
+    }
+
+    #[test]
+    fn requested_model_trims_empty_values() {
+        let model = requested_model(Some("model=%20%20%20")).unwrap();
+        assert_eq!(model, None);
     }
 }

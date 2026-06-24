@@ -17,7 +17,7 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
-- **Auth:** `Authorization: Bearer <key>` — the master key (admin) or a virtual key validated by the LiteLLM proxy (see below). Fails closed.
+- **Auth:** `Authorization: Bearer <key>` — proxy-admin only for realtime serving today. Non-admin virtual keys are verified but rejected until realtime usage is reported back to the LiteLLM proxy. Fails closed.
 - **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to
@@ -42,7 +42,9 @@ route/model permissions are enforced in exactly one place. A client presents
   load. A bounded ≤200-entry cache is available for future high-RPS *per-request*
   routes via `LITELLM_AUTH_CACHE_TTL_SECS > 0`, which trades budget/rate-limit
   freshness (bounded by the TTL) for fewer control-plane calls — like the proxy's
-  own ~60s auth cache.
+  own ~60s auth cache. Non-admin virtual-key identities are rejected on the
+  realtime route until realtime usage is reported back to the proxy, so callers
+  cannot consume upstream usage without key/team spend attribution.
 
 Data plane → control plane is itself authenticated with a **dedicated data-plane key**
 (NOT the master key — least privilege): the gateway sends
@@ -73,9 +75,12 @@ export LITELLM_AUTH_VERIFY_URL=https://<proxy-host>/v1/rust_control_plane/authen
 ```
 
 Fails closed: a missing/wrong data-plane key, an unreachable proxy, or a rejected key
-all yield `401`. Revocation and budget changes take effect within the cache TTL
-(if caching is enabled via `LITELLM_AUTH_CACHE_TTL_SECS`; off by default → every connection re-verifies). Keep the proxy on a private network —
-the verify endpoint is internal-only and excluded from the public OpenAPI spec.
+all yield `401`; a valid non-admin virtual key currently yields `403` on
+`/v1/realtime` until realtime spend reporting is available. Revocation and budget
+changes take effect within the cache TTL (if caching is enabled via
+`LITELLM_AUTH_CACHE_TTL_SECS`; off by default → every connection re-verifies).
+Keep the proxy on a private network — the verify endpoint is internal-only and
+excluded from the public OpenAPI spec.
 
 ## Configuration (config.yaml)
 
@@ -117,7 +122,7 @@ overridden at deploy time (e.g. a Render secret file mounted at the same path).
 | `LITELLM_CONFIG_PATH` | yes (config mode) | — | Path to the config.yaml the gateway loads its `model_list` from. The Docker image defaults this to `/app/config.yaml`. |
 | `LITELLM_MASTER_KEY` | yes | — | Admin bearer token (checked locally, no proxy call). Unset ⇒ the master-key path is disabled. |
 | `LITELLM_DATA_PLANE_KEY` | for virtual keys | — | Dedicated secret the gateway sends as `X-LiteLLM-Data-Plane-Key` to authenticate itself to the proxy's verify endpoint. **Must match the proxy's `LITELLM_DATA_PLANE_KEY`.** Not the master key. |
-| `LITELLM_AUTH_VERIFY_URL` | for virtual keys | `http://localhost:4000/v1/rust_control_plane/authentication` | The proxy's verify endpoint the gateway delegates virtual-key auth to. |
+| `LITELLM_AUTH_VERIFY_URL` | for virtual keys | `http://localhost:4000/v1/rust_control_plane/authentication` | The proxy's verify endpoint the gateway delegates virtual-key auth to. Non-admin virtual keys are still rejected by `/v1/realtime` until realtime spend reporting is wired. |
 | `LITELLM_AUTH_CACHE_TTL_SECS` | no | `0` | Verified-key cache TTL. **`0` = off (default)** → every connection re-verifies (budget/rate-limit enforced each time); cheap for realtime since auth is per-connection. Set `> 0` only for high-RPS per-request routes, trading budget/rate-limit freshness for fewer proxy calls. |
 | `OPENAI_API_KEY` | yes | — | Upstream OpenAI key. Referenced by config.yaml as `os.environ/OPENAI_API_KEY` for the gateway→OpenAI dial. |
 | `HOST` | no | `127.0.0.1` | **Set to `0.0.0.0` in any container/deploy** or external traffic is refused. |
