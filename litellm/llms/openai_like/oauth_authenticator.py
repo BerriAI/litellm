@@ -97,7 +97,7 @@ def get_client_credentials_token(
 
     try:
         parsed = _TokenResponse.model_validate(response.json())
-    except ValidationError as e:
+    except (ValidationError, ValueError) as e:
         raise OAuthClientCredentialsError(
             status_code=500,
             message=f"custom_oauth token response missing a valid access_token: {e}",

@@ -131,6 +131,26 @@ class TestClientCredentialsTokenFetch:
                 http_client=client,
             )
 
+    def test_non_json_200_body_maps_to_oauth_error(self):
+        # Regression: a 200 with a non-JSON body (e.g. an HTML login page from an
+        # intermediate proxy) makes response.json() raise JSONDecodeError (a
+        # ValueError subclass, not a ValidationError). It must surface as the
+        # documented OAuthClientCredentialsError, not a raw JSONDecodeError.
+        request = httpx.Request("POST", "https://idp.test")
+        response = httpx.Response(200, text="<html>login</html>", request=request)
+        client = MagicMock()
+        client.post.return_value = response
+
+        with pytest.raises(OAuthClientCredentialsError) as exc_info:
+            get_client_credentials_token(
+                token_url="https://idp.test",
+                client_id="c",
+                client_secret="s",
+                http_client=client,
+            )
+        assert exc_info.value.status_code == 500
+        assert "access_token" in exc_info.value.message
+
     def test_none_response_raises(self):
         client = MagicMock()
         client.post.return_value = None
