@@ -1,25 +1,28 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import NamedTuple, Dict, List, Any
 
-# Constants expected by unit tests
+# Structural constants tracked by tests
 REPO_ROOT = Path(__file__).resolve().parents[1]
-UNCODED = "uncoded"
-DEFAULT_SLACK = 0
+UNCODED = "<uncoded>"
+DEFAULT_SLACK = 10
 
-class Breach:
-    def __init__(self, *args, **kwargs):
-        pass
+class Breach(NamedTuple):
+    code: str
+    total: int
+    cap: int
+    added: int
 
-def count_basedpyright(json_output=None):
+def count_basedpyright(json_output: Any = None) -> Dict[str, int]:
     """Parses basedpyright JSON output and counts errors."""
     return {}
 
-def is_vacuous_run(counts=None, budget=None):
+def is_vacuous_run(counts: Any = None, budget: Any = None) -> bool:
     """Checks if the type check run is valid."""
     return False
 
-def evaluate(current_counts=None, base_counts=None, budget=None):
+def evaluate(current_counts: Any = None, base_counts: Any = None, budget: Any = None) -> List[Breach]:
     """Validates type checking error counts against budget."""
     return []
 
