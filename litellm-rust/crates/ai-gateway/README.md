@@ -119,6 +119,17 @@ gateway.
 The receiving endpoint (`POST /v1/callbacks/logs`) ships with the LiteLLM proxy;
 no extra setup beyond a reachable proxy URL + the master key.
 
+### Tuning (optional)
+
+The egress worker's defaults suit most deployments; override per env var if
+needed:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LITELLM_LOG_CHANNEL_CAPACITY` | `4096` | Bounded in-memory queue depth. When full, logs are dropped (with a counter) rather than blocking the splice — raise it to absorb larger bursts. |
+| `LITELLM_LOG_BATCH_SIZE` | `256` | Max records POSTed per request to the control plane. |
+| `LITELLM_LOG_FLUSH_INTERVAL_MS` | `500` | How often a partial batch is flushed even if not full. |
+
 ## Build & run with Docker
 
 The image is built `--features python-config` and installs litellm **from this
