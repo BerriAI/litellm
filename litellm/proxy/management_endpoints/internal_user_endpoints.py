@@ -279,7 +279,7 @@ async def _add_user_to_team(
             )
         else:
             verbose_proxy_logger.debug(
-                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occurred - {}".format(
                     str(e)
                 )
             )
@@ -539,7 +539,7 @@ async def new_user(
         return new_user_response
     except Exception as e:
         verbose_proxy_logger.exception(
-            "/user/new: Exception occured - {}".format(str(e))
+            "/user/new: Exception occurred - {}".format(str(e))
         )
         raise handle_exception_on_proxy(e)
 
@@ -848,7 +848,7 @@ async def user_info(
         return response_data
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.user_info(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1008,7 +1008,7 @@ async def user_info_v2(
         )
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_info_v2(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.user_info_v2(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1478,7 +1478,7 @@ async def user_update(
         return response
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_update(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.user_update(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -2747,7 +2747,7 @@ async def get_user_daily_activity(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "/spend/daily/analytics: Exception occured - {}".format(str(e))
+            "/spend/daily/analytics: Exception occurred - {}".format(str(e))
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2843,7 +2843,7 @@ async def get_user_daily_activity_aggregated(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))
+            "/user/daily/activity/aggregated: Exception occurred - {}".format(str(e))
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
