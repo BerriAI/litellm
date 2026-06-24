@@ -306,7 +306,7 @@ def test_function_response_message_transformation():
     # Check tool message
     tool_msg = messages[1]
     assert tool_msg["role"] == "tool"
-    assert "call_get_weather" in tool_msg["tool_call_id"]
+    assert tool_msg["tool_call_id"].startswith("call_")
 
     # Verify function response content
     response_content = json.loads(tool_msg["content"])

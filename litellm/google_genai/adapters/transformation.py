@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
 from litellm import verbose_logger
@@ -380,123 +381,142 @@ class GoogleGenAIAdapter:
                     )
                 )
 
+        # Track tool_call_ids assigned by model-role functionCall parts so that
+        # user-role functionResponse parts can reference the correct id.
+        # Key: function name, Value: list of assigned ids (FIFO consumed).
+        pending_tool_call_ids: Dict[str, List[str]] = {}
+
         for content in contents:
             role = content.get("role", "user")
             parts = content.get("parts", [])
 
             if role == "user":
-                # Handle user messages with potential function responses
-                content_parts: List[
-                    Union[ChatCompletionTextObject, ChatCompletionImageObject]
-                ] = []
-                tool_messages: List[ChatCompletionToolMessage] = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            content_parts.append(
-                                cast(
-                                    ChatCompletionTextObject,
-                                    {"type": "text", "text": part["text"]},
-                                )
-                            )
-                        elif "inline_data" in part:
-                            # Handle Base64 image data
-                            inline_data = part["inline_data"]
-                            mime_type = inline_data.get("mime_type", "image/jpeg")
-                            data = inline_data.get("data", "")
-                            content_parts.append(
-                                cast(
-                                    ChatCompletionImageObject,
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:{mime_type};base64,{data}"
-                                        },
-                                    },
-                                )
-                            )
-                        elif "functionResponse" in part:
-                            # Transform function response to tool message
-                            func_response = part["functionResponse"]
-                            tool_message = ChatCompletionToolMessage(
-                                role="tool",
-                                tool_call_id=f"call_{func_response.get('name', 'unknown')}",
-                                content=json.dumps(func_response.get("response", {})),
-                            )
-                            tool_messages.append(tool_message)
-                    elif isinstance(part, str):
-                        content_parts.append(
-                            cast(
-                                ChatCompletionTextObject, {"type": "text", "text": part}
-                            )
-                        )
-
-                # Add user message if there's content
-                if content_parts:
-                    # If only one text part, use simple string format for backward compatibility
-                    if (
-                        len(content_parts) == 1
-                        and isinstance(content_parts[0], dict)
-                        and content_parts[0].get("type") == "text"
-                    ):
-                        text_part = cast(ChatCompletionTextObject, content_parts[0])
-                        messages.append(
-                            ChatCompletionUserMessage(
-                                role="user", content=text_part["text"]
-                            )
-                        )
-                    else:
-                        # Use multimodal format (array of content parts)
-                        messages.append(
-                            ChatCompletionUserMessage(
-                                role="user", content=content_parts
-                            )
-                        )
-
-                # Add tool messages
-                messages.extend(tool_messages)
-
+                self._transform_user_parts(parts, messages, pending_tool_call_ids)
             elif role == "model":
-                # Handle assistant messages with potential function calls
-                combined_text = ""
-                tool_calls: List[ChatCompletionAssistantToolCall] = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            combined_text += part["text"]
-                        elif "functionCall" in part:
-                            # Transform function call to tool call
-                            func_call = part["functionCall"]
-                            tool_call = ChatCompletionAssistantToolCall(
-                                id=f"call_{func_call.get('name', 'unknown')}",
-                                type="function",
-                                function=ChatCompletionToolCallFunctionChunk(
-                                    name=func_call.get("name", ""),
-                                    arguments=json.dumps(func_call.get("args", {})),
-                                ),
-                            )
-                            tool_calls.append(tool_call)
-                    elif isinstance(part, str):
-                        combined_text += part
-
-                # Create assistant message
-                if tool_calls:
-                    assistant_message = ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text if combined_text else None,
-                        tool_calls=tool_calls,
-                    )
-                else:
-                    assistant_message = ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text if combined_text else None,
-                    )
-
-                messages.append(assistant_message)
+                self._transform_model_parts(parts, messages, pending_tool_call_ids)
 
         return messages
+
+    def _transform_user_parts(
+        self,
+        parts: List[Any],
+        messages: List[AllMessageValues],
+        pending_tool_call_ids: Dict[str, List[str]],
+    ) -> None:
+        """Transform user-role parts including functionResponse matching."""
+        content_parts: List[
+            Union[ChatCompletionTextObject, ChatCompletionImageObject]
+        ] = []
+        tool_messages: List[ChatCompletionToolMessage] = []
+
+        for part in parts:
+            if isinstance(part, dict):
+                if "text" in part:
+                    content_parts.append(
+                        cast(
+                            ChatCompletionTextObject,
+                            {"type": "text", "text": part["text"]},
+                        )
+                    )
+                elif "inline_data" in part:
+                    inline_data = part["inline_data"]
+                    mime_type = inline_data.get("mime_type", "image/jpeg")
+                    data = inline_data.get("data", "")
+                    content_parts.append(
+                        cast(
+                            ChatCompletionImageObject,
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{data}"},
+                            },
+                        )
+                    )
+                elif "functionResponse" in part:
+                    # Match the tool_call_id from the preceding model
+                    # turn's functionCall with the same name (FIFO).
+                    func_response = part["functionResponse"]
+                    func_name = func_response.get("name", "unknown")
+                    pending_ids = pending_tool_call_ids.get(func_name, [])
+                    if pending_ids:
+                        matched_id = pending_ids.pop(0)
+                    else:
+                        matched_id = f"call_{uuid.uuid4().hex[:24]}"
+                    tool_messages.append(
+                        ChatCompletionToolMessage(
+                            role="tool",
+                            tool_call_id=matched_id,
+                            content=json.dumps(func_response.get("response", {})),
+                        )
+                    )
+            elif isinstance(part, str):
+                content_parts.append(
+                    cast(ChatCompletionTextObject, {"type": "text", "text": part})
+                )
+
+        if content_parts:
+            if (
+                len(content_parts) == 1
+                and isinstance(content_parts[0], dict)
+                and content_parts[0].get("type") == "text"
+            ):
+                text_part = cast(ChatCompletionTextObject, content_parts[0])
+                messages.append(
+                    ChatCompletionUserMessage(role="user", content=text_part["text"])
+                )
+            else:
+                messages.append(
+                    ChatCompletionUserMessage(role="user", content=content_parts)
+                )
+
+        messages.extend(tool_messages)
+
+    def _transform_model_parts(
+        self,
+        parts: List[Any],
+        messages: List[AllMessageValues],
+        pending_tool_call_ids: Dict[str, List[str]],
+    ) -> None:
+        """Transform model-role parts including unique functionCall id generation."""
+        combined_text = ""
+        tool_calls: List[ChatCompletionAssistantToolCall] = []
+
+        for part in parts:
+            if isinstance(part, dict):
+                if "text" in part:
+                    combined_text += part["text"]
+                elif "functionCall" in part:
+                    func_call = part["functionCall"]
+                    func_name = func_call.get("name", "unknown")
+                    call_id = f"call_{uuid.uuid4().hex[:24]}"
+                    pending_tool_call_ids.setdefault(func_name, []).append(call_id)
+                    tool_calls.append(
+                        ChatCompletionAssistantToolCall(
+                            id=call_id,
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=func_name,
+                                arguments=json.dumps(func_call.get("args", {})),
+                            ),
+                        )
+                    )
+            elif isinstance(part, str):
+                combined_text += part
+
+        if tool_calls:
+            messages.append(
+                ChatCompletionAssistantMessage(
+                    role="assistant",
+                    content=combined_text if combined_text else None,
+                    tool_calls=tool_calls,
+                )
+            )
+        else:
+            messages.append(
+                ChatCompletionAssistantMessage(
+                    role="assistant",
+                    content=combined_text if combined_text else None,
+                )
+            )
 
     def translate_completion_to_generate_content(
         self,
