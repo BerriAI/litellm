@@ -35,18 +35,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
     ) -> Optional[TokenCountResponse]:
         """
         Count tokens using Anthropic's CountTokens API.
-
-        Args:
-            model_to_use: The model identifier
-            messages: The messages to count tokens for
-            contents: Alternative content format (not used for Anthropic)
-            deployment: Deployment configuration containing litellm_params
-            request_model: The original request model name
-
-        Returns:
-            TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError
+        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 
         if not messages:
             return None
@@ -63,9 +53,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             verbose_logger.warning("No Anthropic API key found for token counting")
             return None
 
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        # Resolve custom api_base using the unified model info helper to support secret managers and alternative env vars
+        # Resolve custom api_base using unified model info helper
         api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or None
 
         try:
