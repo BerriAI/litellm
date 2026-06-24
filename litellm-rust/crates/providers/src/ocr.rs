@@ -53,11 +53,21 @@ fn ocr_config_for(provider: LlmProvider) -> Option<&'static dyn OcrProviderConfi
     }
 }
 
-fn string_headers(extra_headers: Option<Map<String, Value>>) -> Vec<(String, String)> {
+fn string_headers(extra_headers: Option<Map<String, Value>>) -> CoreResult<Vec<(String, String)>> {
     extra_headers
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_string())))
+        .map(|(key, value)| {
+            value
+                .as_str()
+                .map(|value| (key.clone(), value.to_string()))
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "OCR extra_headers.{key} must be a string, got {}",
+                        litellm_core::error::json_type_name(&value)
+                    ))
+                })
+        })
         .collect()
 }
 
@@ -93,7 +103,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         .data;
 
     let mut request_builder = http_client().post(&url).bearer_auth(&api_key).json(&body);
-    for (key, value) in string_headers(request.extra_headers) {
+    for (key, value) in string_headers(request.extra_headers)? {
         request_builder = request_builder.header(&key, value);
     }
     if let Some(duration) = request.timeout {
@@ -165,19 +175,35 @@ mod tests {
     }
 
     #[test]
-    fn string_headers_keeps_only_string_values() {
+    fn string_headers_accepts_string_values() {
         let headers = json!({
-            "x-trace-id": "trace-1",
-            "x-number": 42,
-            "x-bool": true
+            "x-trace-id": "trace-1"
         })
         .as_object()
         .unwrap()
         .clone();
 
         assert_eq!(
-            string_headers(Some(headers)),
+            string_headers(Some(headers)).expect("string headers accepted"),
             vec![("x-trace-id".to_string(), "trace-1".to_string())]
+        );
+    }
+
+    #[test]
+    fn string_headers_rejects_non_string_values() {
+        let headers = json!({
+            "x-retry-count": 3
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let err = string_headers(Some(headers)).expect_err("non-string header rejected");
+        assert_eq!(
+            err,
+            CoreError::InvalidRequest(
+                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
+            )
         );
     }
 }
