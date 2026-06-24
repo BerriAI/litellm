@@ -681,6 +681,45 @@ async def test_response_stream_closes_response_on_generator_exit():
 
 
 @pytest.mark.asyncio
+async def test_bulk_abnormal_terminations_all_release_response():
+    """
+    Fast supplementary regression test for #30192 / PR #30271.
+
+    Fire a batch of mid-stream timeouts (the most common abnormal exit path in
+    production) and assert that every one of them ran the ``finally`` block.
+    This is the mock-only counterpart to
+    ``test_cancelled_streams_do_not_exhaust_connector_pool`` below: it covers
+    the same invariant ("no abnormal exit may skip cleanup") in <1 ms with no
+    network, and catches regressions where, e.g., the ``finally`` becomes
+    conditional on the exception type.
+    """
+    batch_size = 8
+    responses = [
+        MockAiohttpResponse(
+            content_chunks=[b"a", b"b"],
+            exception_to_raise=aiohttp.ServerTimeoutError("read timeout"),
+            exception_at_chunk=1,
+        )
+        for _ in range(batch_size)
+    ]
+
+    for mock_response in responses:
+        stream = AiohttpResponseStream(mock_response)  # type: ignore
+        with pytest.raises(httpx.TimeoutException):
+            async for _ in stream:
+                pass
+
+    unreleased = [i for i, r in enumerate(responses) if not r.closed]
+    assert unreleased == [], (
+        f"PR #30271 regression: {len(unreleased)} of {batch_size} aiohttp "
+        f"responses were not closed after a mid-stream timeout. In production "
+        f"each one of these leaks a TCPConnector slot permanently and the "
+        f"proxy starts returning 408 ConnectTimeout once the pool is full "
+        f"(see issue #30192)."
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancelled_streams_do_not_exhaust_connector_pool():
     """
     End-to-end regression test for #30192 / PR #30271.
@@ -749,7 +788,17 @@ async def test_cancelled_streams_do_not_exhaust_connector_pool():
 
         probe = httpx.Request("GET", url)
         probe.extensions["timeout"] = {"connect": 1.0, "read": 1.0, "pool": 1.0}
-        resp = await transport.handle_async_request(probe)
+        try:
+            resp = await transport.handle_async_request(probe)
+        except httpx.ConnectTimeout as exc:
+            raise AssertionError(
+                "PR #30271 regression: pool of size "
+                f"{pool_limit} exhausted after {pool_limit} cancelled streams. "
+                "Recovery probe failed with ConnectTimeout, which is the exact "
+                "408 Stuck symptom reported in issue #30192. The `finally` "
+                "block in AiohttpResponseStream.__aiter__ is no longer "
+                "releasing connector slots on abnormal exit."
+            ) from exc
         assert resp.status_code == 200
         await resp.aclose()
     finally:
