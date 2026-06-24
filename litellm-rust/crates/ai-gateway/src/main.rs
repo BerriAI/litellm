@@ -4,7 +4,7 @@
 //! (simple-shuffle) → `providers::realtime::realtime()` invokes OpenAI. The
 //! server owns transport + config; routing lives in the `router` crate.
 
-mod dispatch;
+mod auth;
 mod gil;
 #[cfg(feature = "python-config")]
 mod python;
@@ -24,22 +24,22 @@ const DEFAULT_PORT: u16 = 4001;
 
 #[tokio::main]
 async fn main() {
-    // Trim before storing so it matches the trimmed bearer token in `authorize`
+    // Trim before storing so it matches the trimmed bearer token in `auth`
     // (avoids a silent auth failure when the env var has surrounding whitespace).
-    let gateway_key: Option<Arc<str>> = std::env::var("LITELLM_GATEWAY_KEY")
+    let master_key: Option<Arc<str>> = std::env::var("LITELLM_MASTER_KEY")
         .ok()
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
         .map(Arc::from);
-    if gateway_key.is_none() {
+    if master_key.is_none() {
         eprintln!(
-            "warning: LITELLM_GATEWAY_KEY is not set; /v1/realtime will reject all requests (fail closed)"
+            "warning: LITELLM_MASTER_KEY is not set; /v1/realtime will reject all requests (fail closed)"
         );
     }
 
     let state = AppState {
         router: Arc::new(build_router()),
-        gateway_key,
+        master_key,
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
