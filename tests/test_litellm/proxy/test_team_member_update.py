@@ -157,6 +157,77 @@ async def test_team_member_update_omits_unset_fields_from_patch(happy_path_upser
     assert happy_path_upsert.await_args.kwargs["budget_patch"] == {}
 
 
+@pytest.mark.asyncio
+async def test_team_member_update_spend_writes_membership_and_invalidates(
+    happy_path_upsert, monkeypatch
+):
+    """A `spend` value resets LiteLLM_TeamMembership.spend (upsert, since the
+    row may not exist) and invalidates the cross-pod team-member counter."""
+    prisma_client = proxy_server.prisma_client
+    membership_upsert = AsyncMock()
+    prisma_client.db.litellm_teammembership.upsert = membership_upsert
+    invalidate = AsyncMock()
+    monkeypatch.setattr(proxy_server, "_invalidate_spend_counter", invalidate)
+
+    data, request, auth = _member_update_request(spend=0.0)
+
+    response = await team_member_update(data, request, auth)
+
+    membership_upsert.assert_awaited_once()
+    kwargs = membership_upsert.await_args.kwargs
+    assert kwargs["where"] == {
+        "user_id_team_id": {"user_id": "user-1", "team_id": "team-1234"}
+    }
+    assert kwargs["data"]["update"] == {"spend": 0.0}
+    assert kwargs["data"]["create"]["spend"] == 0.0
+    invalidate.assert_awaited_once_with(
+        counter_key="spend:team_member:user-1:team-1234"
+    )
+    assert response.spend == 0.0
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_rejects_non_finite_spend(
+    happy_path_upsert, monkeypatch
+):
+    """NaN/inf spend is rejected with 400 before any membership write or
+    counter invalidation."""
+    prisma_client = proxy_server.prisma_client
+    membership_upsert = AsyncMock()
+    prisma_client.db.litellm_teammembership.upsert = membership_upsert
+    invalidate = AsyncMock()
+    monkeypatch.setattr(proxy_server, "_invalidate_spend_counter", invalidate)
+
+    data, request, auth = _member_update_request(spend=float("inf"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await team_member_update(data, request, auth)
+
+    assert exc_info.value.status_code == 400
+    membership_upsert.assert_not_called()
+    invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_without_spend_skips_membership_write(
+    happy_path_upsert, monkeypatch
+):
+    """A budget-only update must not touch the membership spend row or the
+    counter."""
+    prisma_client = proxy_server.prisma_client
+    membership_upsert = AsyncMock()
+    prisma_client.db.litellm_teammembership.upsert = membership_upsert
+    invalidate = AsyncMock()
+    monkeypatch.setattr(proxy_server, "_invalidate_spend_counter", invalidate)
+
+    data, request, auth = _member_update_request(max_budget_in_team=10.0)
+
+    await team_member_update(data, request, auth)
+
+    membership_upsert.assert_not_called()
+    invalidate.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "bad_duration",
     [
