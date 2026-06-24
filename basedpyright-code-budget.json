@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "baseline": 25403,
+    "baseline": 24989,
     "slack": 2500
   },
   "reportArgumentType": {
@@ -8,23 +8,23 @@
     "slack": 180
   },
   "reportAssignmentType": {
-    "baseline": 216,
+    "baseline": 220,
     "slack": 22
   },
   "reportAttributeAccessIssue": {
-    "baseline": 340,
+    "baseline": 346,
     "slack": 35
   },
   "reportCallIssue": {
-    "baseline": 82,
+    "baseline": 87,
     "slack": 10
   },
   "reportConstantRedefinition": {
-    "baseline": 40,
+    "baseline": 39,
     "slack": 4
   },
   "reportDeprecated": {
-    "baseline": 128,
+    "baseline": 217,
     "slack": 22
   },
   "reportDuplicateImport": {
@@ -32,19 +32,19 @@
     "slack": 3
   },
   "reportExplicitAny": {
-    "baseline": 7045,
+    "baseline": 6931,
     "slack": 700
   },
   "reportFunctionMemberAccess": {
-    "baseline": 11,
+    "baseline": 7,
     "slack": 3
   },
   "reportGeneralTypeIssues": {
-    "baseline": 152,
+    "baseline": 151,
     "slack": 15
   },
   "reportIncompatibleMethodOverride": {
-    "baseline": 53,
+    "baseline": 52,
     "slack": 5
   },
   "reportIncompatibleVariableOverride": {
@@ -60,7 +60,7 @@
     "slack": 3
   },
   "reportInvalidTypeForm": {
-    "baseline": 36,
+    "baseline": 23,
     "slack": 3
   },
   "reportInvalidTypeVarUse": {
@@ -72,15 +72,15 @@
     "slack": 3
   },
   "reportMissingParameterType": {
-    "baseline": 3958,
+    "baseline": 3933,
     "slack": 390
   },
   "reportMissingTypeArgument": {
-    "baseline": 10694,
+    "baseline": 10612,
     "slack": 1000
   },
   "reportMissingTypeStubs": {
-    "baseline": 7,
+    "baseline": 27,
     "slack": 10
   },
   "reportOperatorIssue": {
@@ -88,7 +88,7 @@
     "slack": 3
   },
   "reportOptionalCall": {
-    "baseline": 5,
+    "baseline": 4,
     "slack": 3
   },
   "reportOptionalIterable": {
@@ -96,7 +96,7 @@
     "slack": 3
   },
   "reportOptionalMemberAccess": {
-    "baseline": 735,
+    "baseline": 724,
     "slack": 72
   },
   "reportOptionalOperand": {
@@ -108,11 +108,11 @@
     "slack": 3
   },
   "reportPossiblyUnboundVariable": {
-    "baseline": 53,
+    "baseline": 52,
     "slack": 10
   },
   "reportPrivateUsage": {
-    "baseline": 1680,
+    "baseline": 1625,
     "slack": 160
   },
   "reportRedeclaration": {
@@ -120,7 +120,7 @@
     "slack": 3
   },
   "reportReturnType": {
-    "baseline": 131,
+    "baseline": 126,
     "slack": 100
   },
   "reportTypedDictNotRequiredAccess": {
@@ -132,31 +132,31 @@
     "slack": 3
   },
   "reportUnknownArgumentType": {
-    "baseline": 34986,
+    "baseline": 30603,
     "slack": 3000
   },
   "reportUnknownLambdaType": {
-    "baseline": 81,
+    "baseline": 75,
     "slack": 10
   },
   "reportUnknownMemberType": {
-    "baseline": 32278,
+    "baseline": 27037,
     "slack": 2500
   },
   "reportUnknownParameterType": {
-    "baseline": 14892,
+    "baseline": 13612,
     "slack": 1000
   },
   "reportUnknownVariableType": {
-    "baseline": 25327,
+    "baseline": 21445,
     "slack": 2000
   },
   "reportUnnecessaryCast": {
-    "baseline": 122,
+    "baseline": 118,
     "slack": 10
   },
   "reportUnnecessaryComparison": {
-    "baseline": 686,
+    "baseline": 683,
     "slack": 100
   },
   "reportUnnecessaryContains": {
@@ -164,35 +164,31 @@
     "slack": 3
   },
   "reportUnnecessaryIsInstance": {
-    "baseline": 811,
+    "baseline": 808,
     "slack": 80
   },
   "reportUntypedBaseClass": {
-    "baseline": 118,
+    "baseline": 110,
     "slack": 11
   },
-  "reportUntypedClassDecorator": {
-    "baseline": 3,
-    "slack": 3
-  },
   "reportUntypedFunctionDecorator": {
-    "baseline": 689,
+    "baseline": 22,
     "slack": 3
   },
   "reportUnusedClass": {
-    "baseline": 23,
+    "baseline": 22,
     "slack": 3
   },
   "reportUnusedFunction": {
-    "baseline": 133,
+    "baseline": 137,
     "slack": 10
   },
   "reportUnusedImport": {
-    "baseline": 595,
+    "baseline": 670,
     "slack": 50
   },
   "reportUnusedVariable": {
-    "baseline": 147,
+    "baseline": 865,
     "slack": 50
   }
 }
