@@ -177,10 +177,10 @@ class IPAddressUtils:
         Security: X-Forwarded-For is trusted only when use_x_forwarded_for is
         enabled and the direct connection is a legitimate proxy, established by
         either the direct peer falling inside mcp_trusted_proxy_ranges, or, when
-        no ranges are configured, the direct peer being a private address (a
-        reverse proxy in front of the gateway). A public, out-of-range, or
-        unknown direct peer is classified by its own address so a forged header
-        cannot grant internal access.
+        no ranges are configured, the direct peer being internal under
+        mcp_internal_ip_ranges (a reverse proxy in front of the gateway). A
+        public, out-of-range, or unknown direct peer is classified by its own
+        address so a forged header cannot grant internal access.
 
         Args:
             request: FastAPI request object
@@ -219,11 +219,17 @@ class IPAddressUtils:
                 # None "no filtering" result. The private-proxy carve-out is what
                 # stops internal-only servers 404ing behind a load balancer
                 # (LIT-3964); set mcp_trusted_proxy_ranges to validate the proxy
-                # explicitly instead of relying on it.
+                # explicitly instead of relying on it. "Internal" here uses the
+                # same mcp_internal_ip_ranges the access-control gate uses, so a
+                # proxy internal under custom CIDRs cannot have its forwarded
+                # client silently inherit its internal classification.
+                internal_networks = IPAddressUtils.parse_internal_networks(
+                    general_settings.get("mcp_internal_ip_ranges")
+                )
                 peer_is_private_proxy = (
                     direct_ip is not None
                     and not general_settings.get("mcp_trusted_proxy_ranges")
-                    and IPAddressUtils.is_internal_ip(direct_ip)
+                    and IPAddressUtils.is_internal_ip(direct_ip, internal_networks)
                 )
                 if not peer_is_private_proxy:
                     verbose_proxy_logger.warning(

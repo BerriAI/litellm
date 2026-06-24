@@ -135,6 +135,29 @@ class TestMCPClientIPExtraction:
         assert result is not None
         assert IPAddressUtils.is_internal_ip(result) is False
 
+    def test_xff_honoured_when_peer_internal_under_custom_ranges(self):
+        # The private-proxy carve-out must use the same internal-range
+        # definition as the access-control gate (mcp_internal_ip_ranges), not
+        # only the RFC1918 defaults. A reverse proxy internal under a custom
+        # CIDR (100.64.0.0/10, outside the defaults) is a private proxy, so its
+        # forwarded client IP must be honoured. Classifying it by defaults would
+        # drop the XFF and return the proxy's own custom-internal IP, letting a
+        # public forwarded client inherit internal access.
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "100.64.0.5"
+        request.headers = {"x-forwarded-for": "8.8.8.8"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_internal_ip_ranges": ["100.64.0.0/10"],
+            },
+        )
+
+        assert result == "8.8.8.8"
+
     def test_honours_xff_from_trusted_proxy(self):
         request = MagicMock(spec=Request)
         request.client = MagicMock()
@@ -247,6 +270,41 @@ class TestMCPServerIPFiltering:
         client_ip = IPAddressUtils.get_mcp_client_ip(
             request,
             general_settings={"use_x_forwarded_for": True},
+        )
+
+        result = manager.filter_server_ids_by_ip(["priv"], client_ip=client_ip)
+        assert result == []
+
+    @patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "use_x_forwarded_for": True,
+            "mcp_internal_ip_ranges": ["100.64.0.0/10"],
+        },
+    )
+    @patch("litellm.public_mcp_servers", [])
+    def test_public_client_via_custom_internal_proxy_cannot_reach_internal_only_server(
+        self,
+    ):
+        # Security: with custom mcp_internal_ip_ranges, a public client forwarded
+        # by a proxy that is internal only under those custom ranges must still
+        # be blocked from internal-only servers. get_mcp_client_ip recognises the
+        # proxy as private and honours the public XFF, and the filter then drops
+        # the internal-only server. Classifying the peer by RFC1918 defaults
+        # would return the proxy's own IP and leak the server to the caller.
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([priv])
+
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "100.64.0.5"
+        request.headers = {"x-forwarded-for": "8.8.8.8"}
+        client_ip = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_internal_ip_ranges": ["100.64.0.0/10"],
+            },
         )
 
         result = manager.filter_server_ids_by_ip(["priv"], client_ip=client_ip)
