@@ -23,18 +23,63 @@ use crate::integrations::types::{
 /// Default proxy base URL when `LITELLM_PROXY_BASE_URL` is unset.
 const DEFAULT_PROXY_BASE_URL: &str = "http://localhost:4000";
 
-/// The logs ingest path appended to the proxy base.
+/// The logs ingest path appended to the proxy base. Not a tunable — it is the
+/// proxy's API contract.
 const CALLBACK_LOGS_PATH: &str = "/v1/callbacks/logs";
 
-/// Bounded channel depth. Beyond this, `try_send` fails fast (we drop + count
-/// rather than block the realtime splice).
-const CHANNEL_CAPACITY: usize = 4096;
+/// Default bounded channel depth. Beyond this, `try_send` fails fast (we drop +
+/// count rather than block the realtime splice). Override: `LITELLM_LOG_CHANNEL_CAPACITY`.
+const DEFAULT_CHANNEL_CAPACITY: usize = 4096;
 
-/// Max records flushed in one POST.
-const MAX_BATCH_SIZE: usize = 256;
+/// Default max records flushed in one POST. Override: `LITELLM_LOG_BATCH_SIZE`.
+const DEFAULT_MAX_BATCH_SIZE: usize = 256;
 
-/// How often the worker flushes a partial batch even if it has not filled.
-const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
+/// Default partial-batch flush cadence, in ms. Override: `LITELLM_LOG_FLUSH_INTERVAL_MS`.
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
+
+/// Egress worker tunables. Each field defaults to the `DEFAULT_*` const above and
+/// is overridable via an env var (read once at logger construction).
+struct EgressTunables {
+    channel_capacity: usize,
+    max_batch_size: usize,
+    flush_interval: Duration,
+}
+
+impl EgressTunables {
+    fn from_env() -> Self {
+        Self {
+            channel_capacity: env_positive_usize(
+                "LITELLM_LOG_CHANNEL_CAPACITY",
+                DEFAULT_CHANNEL_CAPACITY,
+            ),
+            max_batch_size: env_positive_usize("LITELLM_LOG_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE),
+            flush_interval: Duration::from_millis(env_positive_u64(
+                "LITELLM_LOG_FLUSH_INTERVAL_MS",
+                DEFAULT_FLUSH_INTERVAL_MS,
+            )),
+        }
+    }
+}
+
+/// Parse a positive `usize` env var, falling back to `default` on missing,
+/// unparseable, or non-positive values.
+fn env_positive_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
+}
+
+/// Parse a positive `u64` env var, falling back to `default` on missing,
+/// unparseable, or non-positive values.
+fn env_positive_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
+}
 
 /// Ships realtime logging events to the LiteLLM Python proxy.
 pub struct LiteLLMPythonProxyAPILogger {
@@ -45,10 +90,18 @@ impl LiteLLMPythonProxyAPILogger {
     /// Spawn the background worker and return a logger handle. `base` is the
     /// proxy base URL (no trailing path); `master_key` is sent as a bearer token.
     pub fn start(base: String, master_key: String) -> Arc<Self> {
-        let (sink, receiver) = mpsc::channel::<LogRecord>(CHANNEL_CAPACITY);
+        let tunables = EgressTunables::from_env();
+        let (sink, receiver) = mpsc::channel::<LogRecord>(tunables.channel_capacity);
         let url = format!("{}{}", base.trim_end_matches('/'), CALLBACK_LOGS_PATH);
         let client = Client::new();
-        tokio::spawn(worker_loop(receiver, client, url, master_key));
+        tokio::spawn(worker_loop(
+            receiver,
+            client,
+            url,
+            master_key,
+            tunables.max_batch_size,
+            tunables.flush_interval,
+        ));
         Arc::new(Self { sink })
     }
 
@@ -100,9 +153,11 @@ async fn worker_loop(
     client: Client,
     url: String,
     master_key: String,
+    max_batch_size: usize,
+    flush_interval: Duration,
 ) {
-    let mut ticker = interval(FLUSH_INTERVAL);
-    let mut batch: Vec<LogRecord> = Vec::with_capacity(MAX_BATCH_SIZE);
+    let mut ticker = interval(flush_interval);
+    let mut batch: Vec<LogRecord> = Vec::with_capacity(max_batch_size);
 
     loop {
         tokio::select! {
@@ -110,7 +165,7 @@ async fn worker_loop(
                 match maybe_record {
                     Some(record) => {
                         batch.push(record);
-                        if batch.len() >= MAX_BATCH_SIZE {
+                        if batch.len() >= max_batch_size {
                             flush(&client, &url, &master_key, &mut batch).await;
                         }
                     }
