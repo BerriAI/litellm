@@ -152,12 +152,13 @@ class IPAddressUtils:
             if not _warned_xff_without_trusted_ranges:
                 verbose_proxy_logger.warning(
                     "use_x_forwarded_for is enabled but mcp_trusted_proxy_ranges "
-                    "is not configured. X-Forwarded-* headers will NOT be "
-                    "trusted, so MCP OAuth discovery URLs and access-control "
-                    "client IPs will use the proxy's literal request values. "
-                    "Set mcp_trusted_proxy_ranges in "
-                    "general_settings to your reverse-proxy CIDR(s) to allow "
-                    "X-Forwarded-* through."
+                    "is not configured. X-Forwarded-* headers are not validated "
+                    "against a trusted proxy, so MCP OAuth discovery URLs fall "
+                    "back to the proxy's literal request values and MCP "
+                    "access-control honours X-Forwarded-For only when the direct "
+                    "peer is an internal address. Set mcp_trusted_proxy_ranges in "
+                    "general_settings to your reverse-proxy CIDR(s) to validate "
+                    "the proxy explicitly."
                 )
                 _warned_xff_without_trusted_ranges = True
             return False
