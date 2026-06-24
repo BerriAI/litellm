@@ -54,7 +54,9 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             # Validate the request
             self.validate_request(model, messages)
 
-            verbose_logger.debug(f"Processing Anthropic CountTokens request for model: {model}")
+            verbose_logger.debug(
+                f"Processing Anthropic CountTokens request for model: {model}"
+            )
 
             # Transform request to Anthropic format
             request_body = self.transform_request_to_count_tokens(
@@ -66,18 +68,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             verbose_logger.debug(f"Transformed request: {request_body}")
 
-            # Construct clean endpoint URL handling custom proxy destinations without redundant blocks
-            if api_base:
-                if api_base.endswith("/messages/count_tokens"):
-                    endpoint_url = api_base
-                elif api_base.endswith("/v1/messages"):
-                    endpoint_url = f"{api_base.rstrip('/')}/count_tokens"
-                elif api_base.endswith("/v1"):
-                    endpoint_url = f"{api_base.rstrip('/')}/messages/count_tokens"
-                else:
-                    endpoint_url = f"{api_base.rstrip('/')}/v1/messages/count_tokens"
-            else:
-                endpoint_url = self.get_anthropic_count_tokens_endpoint()
+            # Get endpoint URL
+            endpoint_url = api_base or self.get_anthropic_count_tokens_endpoint()
 
             verbose_logger.debug(f"Making request to: {endpoint_url}")
 
@@ -85,10 +77,14 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             headers = self.get_required_headers(api_key)
 
             # Use LiteLLM's async httpx client
-            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+            async_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC
+            )
 
             # Use provided timeout or fall back to litellm.request_timeout
-            request_timeout = timeout if timeout is not None else litellm.request_timeout
+            request_timeout = (
+                timeout if timeout is not None else litellm.request_timeout
+            )
 
             response = await async_client.post(
                 endpoint_url,
