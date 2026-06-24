@@ -15,6 +15,8 @@ required-features = ["server"]
 
 [dependencies]
 litellm-core.workspace = true
+aws-credential-types = "1"
+aws-sigv4 = "1"
 reqwest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 tokio-tungstenite.workspace = true

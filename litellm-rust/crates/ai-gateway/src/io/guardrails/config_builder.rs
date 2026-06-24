@@ -7,8 +7,9 @@
 use std::collections::HashMap;
 
 use litellm_core::guardrails::{
-    AzurePromptShieldConfig, AzureTextModerationConfig, GenericApiConfig, LocalPiiConfig,
-    OpenaiModerationConfig, PiiAction, PresidioConfig, ProviderConfig, UnreachableFallback,
+    AzurePromptShieldConfig, AzureTextModerationConfig, BedrockConfig, GenericApiConfig,
+    LakeraV2Config, LocalPiiConfig, OnFlagged, OpenaiModerationConfig, PiiAction, PresidioConfig,
+    ProviderConfig, UnreachableFallback,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -54,6 +55,8 @@ pub fn build_config(guardrail_type: &str, params: &Value) -> Result<ProviderConf
             params,
         )?)),
         "presidio" => Ok(ProviderConfig::Presidio(presidio(params)?)),
+        "lakera_v2" => Ok(ProviderConfig::LakeraV2(lakera_v2(params)?)),
+        "bedrock" => Ok(ProviderConfig::Bedrock(bedrock(params)?)),
         "local_pii" => Ok(ProviderConfig::LocalPii(local_pii(params)?)),
         other => Err(unsupported(format!(
             "guardrail type not supported by the Rust engine: {other}"
@@ -114,6 +117,121 @@ fn openai_moderation(params: &Value) -> Result<OpenaiModerationConfig, Unsupport
 
 fn local_pii(params: &Value) -> Result<LocalPiiConfig, Unsupported> {
     parse_params(params)
+}
+
+#[derive(Deserialize, Default)]
+struct BedrockParams {
+    #[serde(default, rename = "guardrailIdentifier")]
+    guardrail_identifier: Option<String>,
+    #[serde(default, rename = "guardrailVersion")]
+    guardrail_version: Option<String>,
+    #[serde(default)]
+    disable_exception_on_block: Option<bool>,
+    #[serde(default)]
+    aws_role_name: Option<String>,
+    #[serde(default)]
+    aws_profile_name: Option<String>,
+    #[serde(default)]
+    aws_web_identity_token: Option<String>,
+    #[serde(default)]
+    aws_region_name: Option<String>,
+    #[serde(default)]
+    aws_access_key_id: Option<String>,
+    #[serde(default)]
+    aws_secret_access_key: Option<String>,
+    #[serde(default)]
+    aws_session_token: Option<String>,
+    #[serde(default)]
+    aws_bedrock_runtime_endpoint: Option<String>,
+}
+
+fn bedrock(params: &Value) -> Result<BedrockConfig, Unsupported> {
+    let raw: BedrockParams = parse_params(params)?;
+
+    // Role/profile/web-identity credential flows and the exception-suppression
+    // option are Python-only; fall back so those paths keep working.
+    if raw.aws_role_name.is_some()
+        || raw.aws_profile_name.is_some()
+        || raw.aws_web_identity_token.is_some()
+        || raw.disable_exception_on_block.unwrap_or(false)
+    {
+        return Err(unsupported(
+            "bedrock role/profile/web-identity/disable_exception",
+        ));
+    }
+
+    let guardrail_identifier = raw
+        .guardrail_identifier
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| unsupported("bedrock requires guardrailIdentifier"))?;
+    let guardrail_version = raw
+        .guardrail_version
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| unsupported("bedrock requires guardrailVersion"))?;
+
+    // Only static credentials are supported on the Rust path; without them fall
+    // back to Python's credential chain (instance roles, SSO, etc.).
+    let aws_access_key_id = resolve_secret(raw.aws_access_key_id.as_deref())
+        .or_else(|| env_var("AWS_ACCESS_KEY_ID"))
+        .ok_or_else(|| unsupported("bedrock requires static aws_access_key_id"))?;
+    let aws_secret_access_key = resolve_secret(raw.aws_secret_access_key.as_deref())
+        .or_else(|| env_var("AWS_SECRET_ACCESS_KEY"))
+        .ok_or_else(|| unsupported("bedrock requires static aws_secret_access_key"))?;
+    let aws_session_token =
+        resolve_secret(raw.aws_session_token.as_deref()).or_else(|| env_var("AWS_SESSION_TOKEN"));
+
+    let aws_region_name = raw
+        .aws_region_name
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| env_var("AWS_REGION"))
+        .or_else(|| env_var("AWS_DEFAULT_REGION"))
+        .ok_or_else(|| unsupported("bedrock requires aws_region_name or AWS_REGION"))?;
+
+    Ok(BedrockConfig {
+        guardrail_identifier,
+        guardrail_version,
+        disable_exception_on_block: false,
+        aws_region_name: Some(aws_region_name),
+        aws_access_key_id: Some(aws_access_key_id),
+        aws_secret_access_key: Some(aws_secret_access_key),
+        aws_session_token,
+        aws_bedrock_runtime_endpoint: raw.aws_bedrock_runtime_endpoint,
+    })
+}
+
+#[derive(Deserialize, Default)]
+struct LakeraParams {
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    api_base: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    payload: Option<bool>,
+    #[serde(default)]
+    breakdown: Option<bool>,
+    #[serde(default)]
+    metadata: Value,
+    #[serde(default)]
+    dev_info: Option<bool>,
+    #[serde(default)]
+    on_flagged: Option<OnFlagged>,
+}
+
+fn lakera_v2(params: &Value) -> Result<LakeraV2Config, Unsupported> {
+    let raw: LakeraParams = parse_params(params)?;
+    let api_key = resolve_secret(raw.api_key.as_deref()).or_else(|| env_var("LAKERA_API_KEY"));
+    Ok(LakeraV2Config {
+        api_key,
+        api_base: resolve_secret(raw.api_base.as_deref()),
+        project_id: raw.project_id,
+        payload: raw.payload,
+        breakdown: raw.breakdown,
+        metadata: raw.metadata,
+        dev_info: raw.dev_info,
+        on_flagged: raw.on_flagged,
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -267,6 +385,6 @@ mod tests {
 
     #[test]
     fn unknown_type_is_unsupported() {
-        assert!(build_config("lakera_v2", &serde_json::json!({})).is_err());
+        assert!(build_config("definitely_not_a_guardrail", &serde_json::json!({})).is_err());
     }
 }

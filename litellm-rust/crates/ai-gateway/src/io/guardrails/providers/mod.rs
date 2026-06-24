@@ -1,13 +1,17 @@
 //! Network-backed guardrail providers and the dispatch that builds them.
 
 mod azure;
+mod bedrock;
 mod generic;
+mod lakera;
 mod local_pii;
 mod openai_moderation;
 mod presidio;
 
 pub use azure::{AzurePromptShield, AzureTextModeration};
+pub use bedrock::BedrockGuardrail;
 pub use generic::GenericGuardrailApi;
+pub use lakera::LakeraV2;
 pub use local_pii::LocalPii;
 pub use openai_moderation::OpenaiModeration;
 pub use presidio::Presidio;
@@ -83,25 +87,18 @@ pub fn build(config: ProviderConfig) -> Result<Box<dyn Guardrail>, ProviderError
             Ok(Box::new(AzureTextModeration::new(cfg)))
         }
         ProviderConfig::Presidio(cfg) => Ok(Box::new(Presidio::new(cfg))),
+        ProviderConfig::LakeraV2(cfg) => {
+            if let Some(base) = &cfg.api_base {
+                validate_url(base)?;
+            }
+            Ok(Box::new(LakeraV2::new(cfg)))
+        }
+        ProviderConfig::Bedrock(cfg) => {
+            if let Some(endpoint) = &cfg.aws_bedrock_runtime_endpoint {
+                validate_url(endpoint)?;
+            }
+            Ok(Box::new(BedrockGuardrail::new(cfg)))
+        }
         ProviderConfig::LocalPii(cfg) => Ok(Box::new(LocalPii::new(cfg))),
-        other => Err(ProviderError::InvalidConfig {
-            message: format!(
-                "guardrail provider not yet supported by the Rust engine: {}",
-                provider_label(&other)
-            ),
-        }),
-    }
-}
-
-fn provider_label(config: &ProviderConfig) -> &'static str {
-    match config {
-        ProviderConfig::GenericGuardrailApi(_) => "generic_guardrail_api",
-        ProviderConfig::OpenaiModeration(_) => "openai_moderation",
-        ProviderConfig::AzurePromptShield(_) => "azure/prompt_shield",
-        ProviderConfig::AzureTextModeration(_) => "azure/text_moderations",
-        ProviderConfig::Presidio(_) => "presidio",
-        ProviderConfig::LakeraV2(_) => "lakera_v2",
-        ProviderConfig::Bedrock(_) => "bedrock",
-        ProviderConfig::LocalPii(_) => "local_pii",
     }
 }

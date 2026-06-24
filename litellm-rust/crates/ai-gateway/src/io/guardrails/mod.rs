@@ -310,10 +310,92 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lakera_blocks_non_pii_violation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/guard"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "flagged": true,
+                "breakdown": [{"detector_type": "prompt_attack/jailbreak", "detected": true}]
+            })))
+            .mount(&server)
+            .await;
+        let params = serde_json::json!({"api_key": "k", "api_base": server.uri()});
+        let outcome = tokio::task::spawn_blocking(move || {
+            run_guardrail(
+                "lakera_v2",
+                &params,
+                &one_text("jailbreak attempt"),
+                InputType::Request,
+                &RequestContext::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(outcome.verdict, Verdict::Block { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bedrock_blocks_on_intervention() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/guardrail/gid/version/1/apply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "action": "GUARDRAIL_INTERVENED",
+                "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "action": "BLOCKED"}]}}]
+            })))
+            .mount(&server)
+            .await;
+        let params = serde_json::json!({
+            "guardrailIdentifier": "gid",
+            "guardrailVersion": "1",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIA_TEST",
+            "aws_secret_access_key": "secret",
+            "aws_bedrock_runtime_endpoint": server.uri(),
+        });
+        let outcome = tokio::task::spawn_blocking(move || {
+            run_guardrail(
+                "bedrock",
+                &params,
+                &one_text("violent text"),
+                InputType::Request,
+                &RequestContext::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(outcome.verdict, Verdict::Block { .. }));
+    }
+
+    #[test]
+    fn bedrock_without_static_creds_falls_back() {
+        // No creds in params and (assuming) none in env -> unsupported. Guard
+        // against a CI runner that exports AWS creds by skipping in that case.
+        if std::env::var("AWS_ACCESS_KEY_ID").is_ok() {
+            return;
+        }
+        let result = run_guardrail(
+            "bedrock",
+            &serde_json::json!({
+                "guardrailIdentifier": "gid",
+                "guardrailVersion": "1",
+                "aws_region_name": "us-east-1",
+            }),
+            &one_text("hi"),
+            InputType::Request,
+            &RequestContext::default(),
+        );
+        assert!(result.is_err());
+    }
+
     #[test]
     fn unsupported_type_signals_python_fallback() {
         let result = run_guardrail(
-            "lakera_v2",
+            "definitely_not_a_guardrail",
             &serde_json::json!({}),
             &one_text("hi"),
             InputType::Request,
