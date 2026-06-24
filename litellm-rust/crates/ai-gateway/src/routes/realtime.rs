@@ -5,6 +5,7 @@ use axum::Json;
 use litellm_core::error::CoreError;
 use litellm_core::realtime::types::RealtimeEvent;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
 
@@ -55,8 +56,10 @@ pub async fn invoke(
 /// the Python proxy in a later phase (pull-from-Python).
 fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
     let Some(expected) = state.gateway_key.as_deref() else {
+        // Permanent server misconfiguration (no key set), not a transient outage —
+        // 500 so clients don't treat it as retryable like a 503.
         return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::INTERNAL_SERVER_ERROR,
             "gateway auth not configured (set LITELLM_GATEWAY_KEY)".to_string(),
         ));
     };
@@ -66,7 +69,8 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, S
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::trim);
     match provided {
-        Some(token) if token == expected => Ok(()),
+        // Constant-time compare to avoid leaking the key via timing.
+        Some(token) if bool::from(token.as_bytes().ct_eq(expected.as_bytes())) => Ok(()),
         _ => Err((
             StatusCode::UNAUTHORIZED,
             "missing or invalid bearer token".to_string(),
