@@ -8667,6 +8667,84 @@ class ProxyStartupEvent:
             )
 
 
+def _apply_budget_exceeded_models_policy(
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+    all_models: list,
+) -> list:
+    """
+    Applies the budget_exceeded_models_policy general setting to model listings.
+    Supports list of strings or list of model dictionaries.
+    """
+    global general_settings, llm_router
+    if general_settings is None or llm_router is None or not user_api_key_dict:
+        return all_models
+
+    settings = cast(dict[str, object], general_settings)
+    policy = settings.get("budget_exceeded_models_policy", "blocked")
+
+    # If policy is not free_only or blocked, we just return all_models (the "all" behavior)
+    if policy not in ("free_only", "blocked"):
+        return all_models
+
+    # Determine if any budget is exceeded
+    budget_exceeded = False
+    current_cost = 0.0
+    max_budget = 0.0
+
+    if (
+        user_api_key_dict.max_budget is not None
+        and (user_api_key_dict.spend or 0) >= user_api_key_dict.max_budget
+    ):
+        budget_exceeded = True
+        current_cost = user_api_key_dict.spend or 0.0
+        max_budget = user_api_key_dict.max_budget
+    elif (
+        user_api_key_dict.team_max_budget is not None
+        and (user_api_key_dict.team_spend or 0) >= user_api_key_dict.team_max_budget
+    ):
+        budget_exceeded = True
+        current_cost = user_api_key_dict.team_spend or 0.0
+        max_budget = user_api_key_dict.team_max_budget
+    elif (
+        user_api_key_dict.user_max_budget is not None
+        and (user_api_key_dict.user_spend or 0) >= user_api_key_dict.user_max_budget
+    ):
+        budget_exceeded = True
+        current_cost = user_api_key_dict.user_spend or 0.0
+        max_budget = user_api_key_dict.user_max_budget
+
+    if not budget_exceeded:
+        return all_models
+
+    # If policy is "blocked" and budget is exceeded, raise BudgetExceededError (429)
+    if policy == "blocked":
+        import litellm
+        raise litellm.BudgetExceededError(
+            current_cost=current_cost,
+            max_budget=max_budget,
+        )
+
+    # If policy is "free_only" and budget is exceeded, filter to zero-cost models
+    if policy == "free_only":
+        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+
+        filtered_models = []
+        for m in all_models:
+            if isinstance(m, str):
+                model_name = m
+            elif isinstance(m, dict):
+                model_name = m.get("model_name") or m.get("model") or m.get("litellm_params", {}).get("model")
+            else:
+                model_name = getattr(m, "model_name", None) or getattr(m, "model", None)
+
+            if model_name and _is_model_cost_zero(model_name, llm_router):
+                filtered_models.append(m)
+
+        return filtered_models
+
+    return all_models
+
+
 #### API ENDPOINTS ####
 @router.get(
     "/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -8832,12 +8910,8 @@ async def model_list(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
-    # Budget-exceeded models policy: when "free_only", return only zero-cost models
-    policy = settings.get("budget_exceeded_models_policy", "blocked")
-    if policy == "free_only":
-        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-        all_models = [m for m in all_models if _is_model_cost_zero(m, llm_router)]
+    # Budget-exceeded models policy
+    all_models = _apply_budget_exceeded_models_policy(user_api_key_dict, all_models)
 
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the
@@ -12562,6 +12636,10 @@ async def model_info_v2(
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]
 
+    # Budget-exceeded models policy
+    all_models = _apply_budget_exceeded_models_policy(user_api_key_dict, all_models)
+    search_total_count = len(all_models)
+
     return _paginate_models_response(
         all_models=all_models,
         page=page,
@@ -13335,6 +13413,9 @@ async def model_info_v1(
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
         )
+
+    # Budget-exceeded models policy
+    all_models = _apply_budget_exceeded_models_policy(user_api_key_dict, all_models)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
