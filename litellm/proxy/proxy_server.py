@@ -346,6 +346,9 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+    rust_control_plane_router,
+)
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
@@ -16638,6 +16641,7 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
+app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
