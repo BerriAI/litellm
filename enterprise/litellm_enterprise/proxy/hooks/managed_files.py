@@ -13,7 +13,9 @@ from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    extract_file_metadata,
+)
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
@@ -981,9 +983,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         target_model_names_list: List[str],
     ) -> OpenAIFileObject:
         ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
-        file_data = extract_file_data(create_file_request["file"])
-
-        file_type = file_data["content_type"]
+        _, file_type = extract_file_metadata(create_file_request["file"])
 
         output_file_id = file_objects[0].id
         model_id = file_objects[0]._hidden_params.get("model_id")

@@ -2778,6 +2778,36 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["custom_llm_provider"] == "bedrock"
 
 
+def test_get_deployment_credentials_with_provider_includes_bucket_name():
+    """
+    Regression: bucket_name must survive the CredentialLiteLLMParams filter so
+    managed-files batch retrieval can resolve the GCS/S3 bucket. Previously it was
+    dropped, causing "GCS bucket_name is required" when fetching batch output files.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "my-batch-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="vertex-gemini"
+    )
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "my-batch-bucket"
+    assert credentials["vertex_project"] == "my-project"
+    assert credentials["custom_llm_provider"] == "vertex_ai"
+
+
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves
