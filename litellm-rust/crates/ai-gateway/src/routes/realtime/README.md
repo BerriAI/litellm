@@ -78,5 +78,10 @@ upstream sockets, which is why warm sockets are short-lived
   a request resolving to the same key — no cross-tenant reuse.
 - **Idle billing.** Warm sockets are liveness-checked at handoff and capped at
   `REALTIME_POOL_MAX_IDLE_SECS` to bound idle billing and dodge OpenAI's idle timeout.
+- **Replenish backoff.** If a key's warm-up dials all fail (invalid credentials, an
+  unreachable upstream), the replenisher puts that key into exponential backoff
+  (500 ms → 30 s cap) instead of re-dialing it every tick. This bounds connection
+  attempts against a broken key so it can't exhaust upstream rate limits and degrade
+  valid cold-path traffic; the backoff resets the moment a dial succeeds.
 
 Benchmarks and repro: `../../benchmarks/realtime/README.md`.
