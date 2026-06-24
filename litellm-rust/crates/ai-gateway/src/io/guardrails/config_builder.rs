@@ -4,9 +4,14 @@
 //! any referenced files. When a config uses a feature the Rust engine does not
 //! support, it returns [`Unsupported`] so the caller falls back to Python.
 
-use litellm_core::guardrails::{LocalPiiConfig, OpenaiModerationConfig, ProviderConfig};
+use std::collections::HashMap;
+
+use litellm_core::guardrails::{
+    GenericApiConfig, LocalPiiConfig, OpenaiModerationConfig, PiiAction, PresidioConfig,
+    ProviderConfig, UnreachableFallback,
+};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The Rust engine cannot handle this config; the caller must use the Python
 /// implementation. The message is for logs only.
@@ -29,6 +34,10 @@ fn resolve_secret(value: Option<&str>) -> Option<String> {
     (!trimmed.is_empty()).then(|| value.to_owned())
 }
 
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
 fn parse_params<T: for<'de> Deserialize<'de>>(params: &Value) -> Result<T, Unsupported> {
     serde_json::from_value(params.clone())
         .map_err(|e| unsupported(format!("could not parse guardrail params: {e}")))
@@ -36,12 +45,41 @@ fn parse_params<T: for<'de> Deserialize<'de>>(params: &Value) -> Result<T, Unsup
 
 pub fn build_config(guardrail_type: &str, params: &Value) -> Result<ProviderConfig, Unsupported> {
     match guardrail_type {
+        "generic_guardrail_api" => Ok(ProviderConfig::GenericGuardrailApi(generic(params)?)),
         "openai_moderation" => Ok(ProviderConfig::OpenaiModeration(openai_moderation(params)?)),
+        "presidio" => Ok(ProviderConfig::Presidio(presidio(params)?)),
         "local_pii" => Ok(ProviderConfig::LocalPii(local_pii(params)?)),
         other => Err(unsupported(format!(
             "guardrail type not supported by the Rust engine: {other}"
         ))),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct GenericParams {
+    #[serde(default)]
+    api_base: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    additional_provider_specific_params: Map<String, Value>,
+    #[serde(default)]
+    unreachable_fallback: Option<UnreachableFallback>,
+}
+
+fn generic(params: &Value) -> Result<GenericApiConfig, Unsupported> {
+    let raw: GenericParams = parse_params(params)?;
+    let api_base = resolve_secret(raw.api_base.as_deref())
+        .ok_or_else(|| unsupported("generic_guardrail_api requires api_base"))?;
+    Ok(GenericApiConfig {
+        api_base,
+        api_key: resolve_secret(raw.api_key.as_deref()),
+        headers: raw.headers,
+        additional_provider_specific_params: raw.additional_provider_specific_params,
+        unreachable_fallback: raw.unreachable_fallback,
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -70,6 +108,67 @@ fn openai_moderation(params: &Value) -> Result<OpenaiModerationConfig, Unsupport
 
 fn local_pii(params: &Value) -> Result<LocalPiiConfig, Unsupported> {
     parse_params(params)
+}
+
+#[derive(Deserialize, Default)]
+struct PresidioParams {
+    #[serde(default)]
+    output_parse_pii: Option<bool>,
+    #[serde(default)]
+    mock_redacted_text: Option<Value>,
+    #[serde(default)]
+    presidio_analyzer_api_base: Option<String>,
+    #[serde(default)]
+    presidio_anonymizer_api_base: Option<String>,
+    #[serde(default)]
+    pii_entities_config: HashMap<String, PiiAction>,
+    #[serde(default)]
+    presidio_language: Option<String>,
+    #[serde(default)]
+    presidio_score_thresholds: HashMap<String, f64>,
+    #[serde(default)]
+    presidio_entities_deny_list: Vec<String>,
+    #[serde(default)]
+    presidio_ad_hoc_recognizers: Option<String>,
+}
+
+fn presidio(params: &Value) -> Result<PresidioConfig, Unsupported> {
+    let raw: PresidioParams = parse_params(params)?;
+
+    // The Rust path does not implement output_parse_pii (un-masking the
+    // response) or the mock_redacted_text test hook; fall back to Python.
+    if raw.output_parse_pii.unwrap_or(false) || raw.mock_redacted_text.is_some() {
+        return Err(unsupported("presidio output_parse_pii/mock_redacted_text"));
+    }
+
+    let analyzer = resolve_secret(raw.presidio_analyzer_api_base.as_deref())
+        .or_else(|| env_var("PRESIDIO_ANALYZER_API_BASE"))
+        .ok_or_else(|| unsupported("presidio requires presidio_analyzer_api_base"))?;
+    let anonymizer = resolve_secret(raw.presidio_anonymizer_api_base.as_deref())
+        .or_else(|| env_var("PRESIDIO_ANONYMIZER_API_BASE"));
+
+    let ad_hoc_recognizers = match raw.presidio_ad_hoc_recognizers.as_deref() {
+        Some(path) if !path.trim().is_empty() => read_ad_hoc_recognizers(path)?,
+        _ => Value::Null,
+    };
+
+    Ok(PresidioConfig {
+        presidio_analyzer_api_base: analyzer,
+        presidio_anonymizer_api_base: anonymizer,
+        pii_entities_config: raw.pii_entities_config,
+        presidio_language: raw.presidio_language,
+        presidio_score_thresholds: raw.presidio_score_thresholds,
+        presidio_entities_deny_list: raw.presidio_entities_deny_list,
+        presidio_ad_hoc_recognizers: ad_hoc_recognizers,
+    })
+}
+
+fn read_ad_hoc_recognizers(path: &str) -> Result<Value, Unsupported> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| unsupported(format!("could not read presidio recognizers file: {e}")))?;
+    let parsed: Value = serde_json::from_str(&contents)
+        .map_err(|e| unsupported(format!("invalid presidio recognizers JSON: {e}")))?;
+    Ok(parsed.get("recognizers").cloned().unwrap_or(Value::Null))
 }
 
 #[cfg(test)]

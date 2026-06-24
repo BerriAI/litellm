@@ -1,10 +1,14 @@
 //! Network-backed guardrail providers and the dispatch that builds them.
 
+mod generic;
 mod local_pii;
 mod openai_moderation;
+mod presidio;
 
+pub use generic::GenericGuardrailApi;
 pub use local_pii::LocalPii;
 pub use openai_moderation::OpenaiModeration;
+pub use presidio::Presidio;
 
 use std::time::Instant;
 
@@ -58,12 +62,17 @@ pub(crate) fn read_success_json(
 /// Build the provider for a fully-resolved config.
 pub fn build(config: ProviderConfig) -> Result<Box<dyn Guardrail>, ProviderError> {
     match config {
+        ProviderConfig::GenericGuardrailApi(cfg) => {
+            validate_url(&cfg.api_base)?;
+            Ok(Box::new(GenericGuardrailApi::new(cfg)))
+        }
         ProviderConfig::OpenaiModeration(cfg) => {
             if let Some(base) = &cfg.api_base {
                 validate_url(base)?;
             }
             Ok(Box::new(OpenaiModeration::new(cfg)))
         }
+        ProviderConfig::Presidio(cfg) => Ok(Box::new(Presidio::new(cfg))),
         ProviderConfig::LocalPii(cfg) => Ok(Box::new(LocalPii::new(cfg))),
         other => Err(ProviderError::InvalidConfig {
             message: format!(

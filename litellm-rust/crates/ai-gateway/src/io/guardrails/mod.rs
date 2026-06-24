@@ -7,6 +7,7 @@
 //! HTTP call.
 
 mod config_builder;
+mod headers;
 mod http;
 mod provider;
 mod providers;
@@ -149,6 +150,108 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(matches!(outcome.verdict, Verdict::Block { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn generic_blocks_on_blocked_action() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/beta/litellm_basic_guardrail_api"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"action": "BLOCKED", "blocked_reason": "nope"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        let params = serde_json::json!({"api_base": server.uri()});
+        let outcome = tokio::task::spawn_blocking(move || {
+            run_guardrail(
+                "generic_guardrail_api",
+                &params,
+                &one_text("hi"),
+                InputType::Request,
+                &RequestContext::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        match outcome.verdict {
+            Verdict::Block {
+                violation_message, ..
+            } => assert_eq!(violation_message, "nope"),
+            other => panic!("expected block, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn generic_fails_open_when_configured() {
+        // No server listening at this port -> connection refused (unreachable).
+        let params = serde_json::json!({
+            "api_base": "http://127.0.0.1:1",
+            "unreachable_fallback": "fail_open",
+        });
+        let outcome = tokio::task::spawn_blocking(move || {
+            run_guardrail(
+                "generic_guardrail_api",
+                &params,
+                &one_text("hi"),
+                InputType::Request,
+                &RequestContext::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(outcome.verdict, Verdict::Pass);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn presidio_masks_via_analyze_then_anonymize() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/analyze"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"entity_type": "EMAIL_ADDRESS", "start": 6, "end": 26, "score": 0.99}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/anonymize"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "email <EMAIL_ADDRESS>",
+                "items": [{"entity_type": "EMAIL_ADDRESS"}]
+            })))
+            .mount(&server)
+            .await;
+        let params = serde_json::json!({
+            "presidio_analyzer_api_base": server.uri(),
+            "presidio_anonymizer_api_base": server.uri(),
+        });
+        let outcome = tokio::task::spawn_blocking(move || {
+            run_guardrail(
+                "presidio",
+                &params,
+                &one_text("email jane.doe@example.com"),
+                InputType::Request,
+                &RequestContext::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        match outcome.verdict {
+            Verdict::Mask {
+                texts,
+                masked_entity_count,
+                ..
+            } => {
+                assert_eq!(texts[0], "email <EMAIL_ADDRESS>");
+                assert_eq!(masked_entity_count.get("EMAIL_ADDRESS"), Some(&1));
+            }
+            other => panic!("expected mask, got {other:?}"),
+        }
     }
 
     #[test]
