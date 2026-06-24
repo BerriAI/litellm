@@ -8450,3 +8450,60 @@ def test_config_field_info_returns_raw_secrets_for_full_admin(monkeypatch):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+class _FakeModelTable:
+    """Fake prisma model table whose find_many honors the `order` argument.
+
+    Returns rows in scrambled insertion order when no `order` is given, so a
+    test asserting deterministic output fails if the caller stops passing one.
+    """
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    async def find_many(self, *args, order=None, where=None, **kwargs):
+        if not order:
+            return list(self._rows)
+
+        def sort_key(row):
+            return tuple(getattr(row, list(o)[0]) for o in order)
+
+        directions = [list(o.values())[0] for o in order]
+        if any(d not in ("asc", "desc") for d in directions):
+            raise ValueError(f"unexpected sort direction in {order}")
+        if any(d == "desc" for d in directions):
+            raise AssertionError("model list is expected ascending, not descending")
+        return sorted(self._rows, key=sort_key)
+
+
+class TestGetModelsFromDbDeterministicOrder:
+    """Regression: the model list must come back in a stable order so the UI
+    does not reshuffle on every reload (e.g. after toggling a model, which
+    rewrites the row and changes Postgres' unordered scan position)."""
+
+    @pytest.mark.asyncio
+    async def test_models_ordered_by_created_at_then_model_id(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        def _row(model_id, created_at):
+            r = MagicMock()
+            r.model_id = model_id
+            r.created_at = created_at
+            return r
+
+        early = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        late = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+        scrambled = [
+            _row("z-newest", late),
+            _row("b-oldest", early),
+            _row("a-oldest", early),
+        ]
+
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_proxymodeltable = _FakeModelTable(scrambled)
+
+        result = await ProxyConfig()._get_models_from_db(prisma_client=prisma_client)
+
+        assert [r.model_id for r in result] == ["a-oldest", "b-oldest", "z-newest"]

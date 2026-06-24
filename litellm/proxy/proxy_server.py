@@ -6016,7 +6016,9 @@ class ProxyConfig:
           as "all models deleted" and must not evict existing router deployments.
         """
         try:
-            new_models = await ModelRepository(prisma_client).table.find_many()
+            new_models = await ModelRepository(prisma_client).table.find_many(
+                order=[{"created_at": "asc"}, {"model_id": "asc"}]
+            )
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
