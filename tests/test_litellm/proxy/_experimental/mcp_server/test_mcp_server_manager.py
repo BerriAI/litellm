@@ -4785,5 +4785,24 @@ class TestCreateMcpClientV2Graft:
         assert exc.value.detail["error"] == "byok_auth_required"
 
 
+def test_invalidate_byok_credential_evicts_default_manager_cache():
+    # The default manager builds its own CachedByokStore; provisioning must reach it.
+    manager = MCPServerManager()
+    assert manager._byok_cache is not None
+    manager._byok_cache._cache[("u", "s")] = ("stale", 0.0)
+    manager.invalidate_byok_credential("u", "s")
+    assert ("u", "s") not in manager._byok_cache._cache
+
+
+def test_invalidate_byok_credential_is_noop_with_injected_provider():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+        UpstreamCredentialProvider,
+    )
+
+    manager = MCPServerManager(cred_provider=UpstreamCredentialProvider())
+    assert manager._byok_cache is None
+    manager.invalidate_byok_credential("u", "s")  # must not raise
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

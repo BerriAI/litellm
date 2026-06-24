@@ -78,12 +78,6 @@ from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
-# Short-lived in-memory cache for BYOK credentials, used by _check_byok_credential.
-# Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
-# The v2 resolver path fetches BYOK keys through CachedByokStore, not this cache.
-_byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
-_BYOK_CRED_CACHE_TTL = 60  # seconds
-_BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
 # Upper bound on concurrent stateful sessions a single caller may hold. Each
 # `initialize` creates a session that survives until the idle timeout, so
@@ -100,21 +94,14 @@ _MCP_ROUTING_PEEK_MAX_BYTES = 4096
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
-    """Remove a (user_id, server_id) entry from the BYOK credential cache.
+    """Evict the BYOK credential cache after a key is stored, rotated, or deleted, so a stale
+    value cannot mask the change. The resolver and the override-path identity check share one
+    cache (the v2 CachedByokStore), so a single eviction covers both paths."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
 
-    Call this after storing or deleting a credential so subsequent calls
-    see the fresh value rather than a stale cached result.
-    """
-    _byok_cred_cache.pop((user_id, server_id), None)
-
-
-def _write_byok_cred_cache(
-    user_id: str, server_id: str, credential: Optional[str]
-) -> None:
-    """Write a credential value to the cache, evicting all entries if at capacity."""
-    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
-        _byok_cred_cache.clear()
-    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
+    global_mcp_server_manager.invalidate_byok_credential(user_id, server_id)
 
 
 # Check if MCP is available
@@ -2355,11 +2342,10 @@ if MCP_AVAILABLE:
         mcp_server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> None:
-        """
-        If the MCP server is BYOK-enabled, verify that the requesting user has a
-        stored credential.  When no credential is found, raise an HTTP 401 with a
-        WWW-Authenticate header that points the MCP client to our OAuth metadata
-        endpoint so it can drive the authorization flow.
+        """Verify a BYOK-enabled server's caller has a stored credential, raising a 401 with the
+        OAuth WWW-Authenticate challenge when not. Reads through the v2 resolver's CachedByokStore,
+        so the override path and the resolved path share one cache (a single invalidation on
+        provisioning covers both).
         """
         if not mcp_server.is_byok:
             return
@@ -2379,37 +2365,23 @@ if MCP_AVAILABLE:
                 },
             )
 
-        # Check shared credential cache before hitting the DB.
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            cached_cred, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                if cached_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
-                    )
-                return
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
 
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
+        credential = await global_mcp_server_manager.fetch_byok_credential(
+            user_id, mcp_server.server_id
+        )
+        if credential is not None:
+            # A fresh cache hit is served here without touching the DB, so an owner verified
+            # within the TTL is not locked out during a transient DB outage.
+            return
+
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            # Fail closed on DB unavailability: returning here previously
-            # bypassed the ownership check and let any proxy-authenticated
-            # caller invoke BYOK tools during outage windows.
+            # Nothing cached and the DB is unreachable: fail closed rather than bypass the
+            # ownership check (a silent pass here previously let any caller invoke BYOK tools).
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -2420,28 +2392,21 @@ if MCP_AVAILABLE:
                 },
             )
 
-        credential = await get_user_credential(
-            prisma_client=prisma_client,
-            user_id=user_id,
-            server_id=mcp_server.server_id,
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "byok_auth_required",
+                "server_id": mcp_server.server_id,
+                "server_name": mcp_server.server_name or mcp_server.name,
+                "message": (
+                    "No stored credential found for this BYOK server. "
+                    "Complete the OAuth authorization flow to provide your API key."
+                ),
+            },
+            headers={
+                "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+            },
         )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
-        if credential is None:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "byok_auth_required",
-                    "server_id": mcp_server.server_id,
-                    "server_name": mcp_server.server_name or mcp_server.name,
-                    "message": (
-                        "No stored credential found for this BYOK server. "
-                        "Complete the OAuth authorization flow to provide your API key."
-                    ),
-                },
-                headers={
-                    "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                },
-            )
 
     async def execute_mcp_tool(
         name: str,

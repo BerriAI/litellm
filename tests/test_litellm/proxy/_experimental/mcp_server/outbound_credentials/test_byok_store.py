@@ -78,3 +78,17 @@ async def test_bounded_cache_clears_when_full():
     await store.fetch("u3", "s")  # len >= max_size -> clear before inserting u3
     await store.fetch("u1", "s")  # u1 was evicted -> re-fetch
     assert inner.calls.count(("u1", "s")) == 2
+
+
+async def test_invalidate_forces_refetch_so_a_provisioned_key_is_not_masked():
+    # Models the provision-then-retry flow: a cached miss (the 401 path) must not survive
+    # provisioning. Without invalidate, the cached None would mask the fresh key for the TTL.
+    inner = _FakeStore({})  # user has not provisioned a key yet
+    store = CachedByokStore(inner, ttl_seconds=60, clock=_Clock())
+
+    assert await store.fetch("u", "s") is None  # miss is cached
+    inner._values[("u", "s")] = "freshly-provisioned"
+    store.invalidate("u", "s")
+
+    assert await store.fetch("u", "s") == "freshly-provisioned"
+    assert inner.calls == [("u", "s"), ("u", "s")]  # re-hit after invalidation

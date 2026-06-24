@@ -527,9 +527,17 @@ class MCPServerManager:
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
         # BYOK reads the per-user key through the DB store, cached for parity with v1's 60s TTL.
-        self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            byok_store=CachedByokStore(DbBackedByokStore(), ttl_seconds=60)
-        )
+        # The cache is held so provisioning/rotation can evict it via invalidate_byok_credential.
+        if cred_provider is None:
+            self._byok_cache: Optional[CachedByokStore] = CachedByokStore(
+                DbBackedByokStore(), ttl_seconds=60
+            )
+            self._cred_provider: UpstreamCredentialProvider = (
+                UpstreamCredentialProvider(byok_store=self._byok_cache)
+            )
+        else:
+            self._byok_cache = None
+            self._cred_provider = cred_provider
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
         """
@@ -559,6 +567,25 @@ class MCPServerManager:
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
         self._upstream_initialize_instructions_probed_at: Dict[str, float] = {}
+
+    def invalidate_byok_credential(self, user_id: str, server_id: str) -> None:
+        """Evict the v2 BYOK cache entry after the user provisions/rotates/removes their key,
+        so a stale cached value cannot mask the change. No-op when a provider was injected.
+        """
+        if self._byok_cache is not None:
+            self._byok_cache.invalidate(user_id, server_id)
+
+    async def fetch_byok_credential(
+        self, user_id: str, server_id: str
+    ) -> Optional[str]:
+        """Read a user's BYOK credential through the shared cache, for callers that only need
+        existence (the override-path identity gate). Uses the same CachedByokStore as the
+        resolver so both paths see one cache; falls back to an uncached read when a provider was
+        injected and no cache is held.
+        """
+        if self._byok_cache is not None:
+            return await self._byok_cache.fetch(user_id, server_id)
+        return await DbBackedByokStore().fetch(user_id, server_id)
 
     def _remember_upstream_initialize_instructions(
         self, server: MCPServer, client: MCPClient

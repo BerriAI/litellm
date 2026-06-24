@@ -766,7 +766,7 @@ async def test_get_container_owner_uses_cache_after_first_db_hit(monkeypatch):
     """Repeated access checks within the TTL window must not hit the DB.
 
     Greptile's P1 was that ownership reads issued a Prisma query on every
-    request. The cache here mirrors `_byok_cred_cache`: TTL'd, capped, and
+    request. The cache here mirrors `CachedByokStore`: TTL'd, capped, and
     invalidated on writes.
     """
     table = AsyncMock()

@@ -52,3 +52,9 @@ class CachedByokStore:
             self._cache.clear()
         self._cache[key] = (value, self._clock())
         return value
+
+    def invalidate(self, user_id: str, server_id: str) -> None:
+        """Drop a cached entry so the next fetch re-reads the source. Called when the user
+        provisions, rotates, or removes their key, so a stale ``None`` cannot mask a fresh key.
+        """
+        self._cache.pop((user_id, server_id), None)
