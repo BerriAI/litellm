@@ -553,6 +553,135 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
 
 
 @pytest.mark.asyncio
+async def test_new_team_with_budget_limits_serializes_to_json_string(
+    mock_db_client, mock_admin_auth
+):
+    """
+    Regression: /team/new must JSON-encode `budget_limits` before sending it to
+    Prisma. The team table column is `Json?`, and the Prisma Python client
+    rejects bare Python lists for that field with
+    "should be of any of the following types: NullableJsonNullValueInput, Json".
+    The update path already json.dumps the list; create previously left it as a
+    list, which broke create requests.
+    """
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model123")
+    )
+
+    team_create_result = MagicMock(team_id="team-budget-windows")
+    team_create_result.model_dump.return_value = {"team_id": "team-budget-windows"}
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
+
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import BudgetLimitEntry, NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    team_request = NewTeamRequest(
+        team_alias="budget-windows-team",
+        budget_limits=[
+            BudgetLimitEntry(budget_duration="30d", max_budget=12.0),
+            BudgetLimitEntry(budget_duration="365d", max_budget=144.0),
+        ],
+    )
+
+    await new_team(
+        data=team_request,
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    assert mock_team_create.call_count == 1
+    team_data = mock_team_create.call_args.kwargs["data"]
+
+    assert isinstance(team_data["budget_limits"], str), (
+        "budget_limits must be a JSON string for Prisma's Json? column; "
+        f"got {type(team_data['budget_limits']).__name__}"
+    )
+
+    decoded = json.loads(team_data["budget_limits"])
+    assert [(w["budget_duration"], w["max_budget"]) for w in decoded] == [
+        ("30d", 12.0),
+        ("365d", 144.0),
+    ]
+    assert all(
+        isinstance(w.get("reset_at"), str) and w["reset_at"] for w in decoded
+    ), "each window must have reset_at initialized to a non-empty ISO timestamp"
+
+
+@pytest.mark.asyncio
+async def test_new_team_with_empty_budget_limits_drops_the_key(
+    mock_db_client, mock_admin_auth
+):
+    """
+    Regression: /team/new must not forward an empty `budget_limits` list to
+    Prisma. The team table column is `Json?` and the Prisma Python client
+    rejects bare Python lists with "should be of any of the following types:
+    NullableJsonNullValueInput, Json" -- the same error a non-empty list used to
+    raise. Treating an empty list as "no windows" (key absent) matches the
+    update path, which skips empty lists entirely.
+    """
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model123")
+    )
+
+    team_create_result = MagicMock(team_id="team-empty-budget-limits")
+    team_create_result.model_dump.return_value = {
+        "team_id": "team-empty-budget-limits"
+    }
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
+
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    await new_team(
+        data=NewTeamRequest(team_alias="empty-budget-limits", budget_limits=[]),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    assert mock_team_create.call_count == 1
+    team_data = mock_team_create.call_args.kwargs["data"]
+
+    assert "budget_limits" not in team_data, (
+        "an empty budget_limits list must be dropped before reaching Prisma; "
+        f"got {team_data.get('budget_limits')!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_team_update_object_permissions_existing_permission(monkeypatch):
     """
     Test updating object permissions when a team already has an existing object_permission_id.

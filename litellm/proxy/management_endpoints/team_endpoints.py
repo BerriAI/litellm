@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -26,6 +26,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BlockTeamRequest,
+    BudgetLimitEntry,
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
@@ -1247,18 +1248,9 @@ async def new_team(
                 budget_duration=complete_team_data.budget_duration,
             )
 
-        # If budget_limits is set, initialize reset_at for each window
-        if complete_team_data.budget_limits:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            initialized_windows = []
-            for window in complete_team_data.budget_limits:
-                w = window if isinstance(window, dict) else window.model_dump()
-                w["reset_at"] = get_budget_reset_time(
-                    budget_duration=w["budget_duration"]
-                ).isoformat()
-                initialized_windows.append(w)
-            complete_team_data.budget_limits = initialized_windows  # type: ignore[assignment]
+        initialized_budget_limits = _initialize_budget_windows(
+            complete_team_data.budget_limits
+        )
 
         ## Add Team Member Budget Table
         members_with_roles: List[Member] = []
@@ -1267,6 +1259,13 @@ async def new_team(
             complete_team_data.members_with_roles = []
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+
+        if initialized_budget_limits is not None:
+            complete_team_data_dict["budget_limits"] = json.dumps(
+                initialized_budget_limits
+            )
+        else:
+            complete_team_data_dict.pop("budget_limits", None)
 
         # Serialize router_settings to JSON (matching key creation pattern)
         router_settings_value = getattr(data, "router_settings", None)
@@ -2037,6 +2036,30 @@ async def update_team(
         raise handle_exception_on_proxy(e)
 
 
+def _initialize_budget_windows(
+    budget_limits: Optional[Sequence[Union[BudgetLimitEntry, dict]]],
+) -> Optional[List[dict]]:
+    """Stamp each budget window's reset_at and return plain dicts ready for JSON serialization. Returns None when there are no windows so callers can drop or skip the field."""
+    if not budget_limits:
+        return None
+
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    window_dicts = [
+        window if isinstance(window, dict) else window.model_dump()
+        for window in budget_limits
+    ]
+    return [
+        {
+            **w,
+            "reset_at": get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat(),
+        }
+        for w in window_dicts
+    ]
+
+
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
     if data.budget_duration is not None:
@@ -2047,17 +2070,9 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
     elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
         updated_kv["budget_reset_at"] = None
 
-    if data.budget_limits is not None and len(data.budget_limits) > 0:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-        initialized_windows = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(
-                budget_duration=w["budget_duration"]
-            ).isoformat()
-            initialized_windows.append(w)
-        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+    initialized_budget_limits = _initialize_budget_windows(data.budget_limits)
+    if initialized_budget_limits is not None:
+        updated_kv["budget_limits"] = json.dumps(initialized_budget_limits)
 
 
 async def handle_update_object_permission(
