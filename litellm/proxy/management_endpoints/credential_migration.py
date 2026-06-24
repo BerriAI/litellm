@@ -235,12 +235,20 @@ async def _migrate_config_settings_row(
             report.already_v2 += 1
             continue
         if cls == "legacy":
-            report.legacy += 1
+            if dry_run:
+                # Residual: would migrate, but a dry run writes nothing, so it
+                # stays legacy for the attestation (never counted as migrated).
+                report.legacy += 1
+                continue
             new_v = reencrypt_value(v, key=fld)
             if new_v != v:
                 settings[fld] = new_v
                 report.migrated += 1
                 changed = True
+            else:
+                # Defensive: a legacy value that did not re-encrypt is still
+                # residual, not migrated.
+                report.legacy += 1
         else:  # plaintext / not-a-string — nothing to migrate
             report.plaintext += 1
 
@@ -281,12 +289,20 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
             report.already_v2 += 1
             continue
         if cls == "legacy":
-            report.legacy += 1
+            if dry_run:
+                # Residual: would migrate, but a dry run writes nothing, so it
+                # stays legacy for the attestation (never counted as migrated).
+                report.legacy += 1
+                continue
             new_v = reencrypt_value(v, key=fld)
             if new_v != v:
                 new_settings[fld] = new_v
                 report.migrated += 1
                 changed = True
+            else:
+                # Defensive: a legacy value that did not re-encrypt is still
+                # residual, not migrated.
+                report.legacy += 1
         else:
             report.plaintext += 1
 

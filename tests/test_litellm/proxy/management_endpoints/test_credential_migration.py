@@ -155,7 +155,7 @@ async def test_vantage_walker_migrates_legacy_field(salt_key, monkeypatch):
     )
 
     assert report.migrated == 1
-    assert report.legacy == 1
+    assert report.legacy == 0  # migrated -> no longer residual legacy
     client.db.litellm_config.update.assert_awaited_once()
     written = json.loads(
         client.db.litellm_config.update.call_args.kwargs["data"]["param_value"]
@@ -192,9 +192,11 @@ async def test_config_walker_dry_run_does_not_write(salt_key, monkeypatch):
         client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=True
     )
 
+    # A dry run reports residual legacy only; nothing is migrated (no write), so
+    # `migrated` and `residual_legacy` are never contradictory in --check output.
     assert report.legacy == 1
-    assert report.migrated == 1  # counted as would-migrate
-    client.db.litellm_config.update.assert_not_awaited()  # but no write in dry-run
+    assert report.migrated == 0
+    client.db.litellm_config.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -206,6 +208,40 @@ async def test_config_walker_handles_missing_row(salt_key, monkeypatch):
     )
     assert report.scanned == 0
     client.db.litellm_config.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sso_walker_real_run_migrates_and_clears_residual(salt_key, monkeypatch):
+    """SSO real run: a migrated field is counted as migrated, not residual legacy."""
+    legacy = _legacy_ct("client-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    record = SimpleNamespace(sso_settings={"client_secret": legacy, "client_id": "id"})
+    client = MagicMock()
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=record)
+    client.db.litellm_ssoconfig.update = AsyncMock()
+
+    report = await cm._migrate_sso_config(client, dry_run=False)
+
+    assert report.migrated == 1
+    assert report.legacy == 0  # migrated -> no longer residual
+    client.db.litellm_ssoconfig.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sso_walker_dry_run_reports_residual_not_migrated(salt_key, monkeypatch):
+    """SSO dry run: residual legacy only; migrated stays 0 (never contradictory)."""
+    legacy = _legacy_ct("client-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    record = SimpleNamespace(sso_settings={"client_secret": legacy})
+    client = MagicMock()
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=record)
+    client.db.litellm_ssoconfig.update = AsyncMock()
+
+    report = await cm._migrate_sso_config(client, dry_run=True)
+
+    assert report.legacy == 1
+    assert report.migrated == 0
+    client.db.litellm_ssoconfig.update.assert_not_awaited()
 
 
 # --------------------------- --check scanner ---------------------------
