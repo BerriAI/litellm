@@ -24,6 +24,7 @@ from litellm.proxy.a2a.agent_card import (
     SUPPORTED_A2A_PROTOCOL_VERSIONS,
     merge_agent_card,
 )
+from litellm.proxy.utils import get_custom_url
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -43,8 +44,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 
 
 def _proxy_base_url(http_request: Request) -> str:
-    """Return the proxy's base URL as seen by the caller, without trailing slash."""
-    return str(http_request.base_url).rstrip("/")
+    """Return the proxy's public base URL, preferring PROXY_BASE_URL when set."""
+    return get_custom_url(str(http_request.base_url), route=None)
 
 
 def _validate_protocol_version(upstream_card: Optional[Mapping[str, Any]]) -> None:

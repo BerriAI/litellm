@@ -968,6 +968,104 @@ async def test_get_extended_agent_card_rewrites_url():
 
 
 @pytest.mark.asyncio
+async def test_get_agent_card_uses_proxy_base_url_when_set(monkeypatch):
+    """Regression: discovery must expose the public proxy URL, not the internal one."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    agent = _make_agent_mock()
+    mock_request = MagicMock()
+    mock_request.base_url = "http://litellm-internal:4000/"
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["url"] == "https://litellm.example.com/a2a/test-agent"
+
+
+@pytest.mark.asyncio
+async def test_get_extended_agent_card_uses_proxy_base_url_when_set(monkeypatch):
+    """Regression: proxied extended cards must rewrite url to the public proxy base."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("GetExtendedAgentCard", {})
+    mock_request.base_url = "http://litellm-internal:4000/"
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    upstream_card = {
+        "name": "Test Agent",
+        "url": "http://backend-agent:10001",
+        "description": "A test agent",
+    }
+    upstream_response = {"jsonrpc": "2.0", "id": "req-1", "result": upstream_card}
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+    mock_http_response.raise_for_status = MagicMock()
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["result"]["url"] == "https://litellm.example.com/a2a/test-agent"
+
+
+def test_build_merged_agent_card_uses_proxy_base_url_for_supported_interfaces(
+    monkeypatch,
+):
+    """Regression: agent create/update must front supportedInterfaces with the public base."""
+    from litellm.proxy.agent_endpoints.endpoints import _build_merged_agent_card
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    mock_request = MagicMock()
+    mock_request.base_url = "http://litellm-internal:4000/"
+
+    merged = _build_merged_agent_card(
+        {"name": "My Agent", "url": "http://upstream:8080"},
+        agent_id="jenkins_agent",
+        http_request=mock_request,
+    )
+
+    assert merged["supportedInterfaces"][0]["url"] == (
+        "https://litellm.example.com/a2a/jenkins_agent"
+    )
+
+
+@pytest.mark.asyncio
 async def test_unknown_method_returns_jsonrpc_error():
     from litellm.proxy._types import UserAPIKeyAuth
 
