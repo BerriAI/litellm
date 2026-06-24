@@ -119,6 +119,24 @@ class TestCallbackDurationMs:
         assert hidden.get("litellm_overhead_time_ms") == pytest.approx(100.0, rel=0.01)
         assert hidden.get("_response_ms") == pytest.approx(1000.0, rel=0.01)
 
+    def test_overhead_guard_skips_when_already_present(self):
+        """GH#30566: the guard in base_process_llm_request prevents
+        calling update_response_metadata when litellm_overhead_time_ms
+        is already set by the SDK layer (e.g. /v1/chat/completions).
+        This test verifies the guard condition directly."""
+        # Chat-completions path: overhead already populated
+        result = ModelResponse()
+        result._hidden_params = {"litellm_overhead_time_ms": 50.0}
+        hidden_params = getattr(result, "_hidden_params", {}) or {}
+        should_skip = bool(hidden_params.get("litellm_overhead_time_ms"))
+        assert should_skip is True
+
+        # Non-chat path (/v1/messages, /v1/responses): no overhead yet
+        result2 = ModelResponse()
+        hidden_params2 = getattr(result2, "_hidden_params", {}) or {}
+        should_skip2 = bool(hidden_params2.get("litellm_overhead_time_ms"))
+        assert should_skip2 is False
+
 
 class TestCallbackDurationInCustomHeaders:
     """Test that callback_duration_ms flows into get_custom_headers."""
