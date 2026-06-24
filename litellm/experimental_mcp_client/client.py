@@ -18,7 +18,13 @@ from typing import (
     Union,
 )
 import httpx
-from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
+from mcp import (
+    ClientSession,
+    McpError,
+    ReadResourceResult,
+    Resource,
+    StdioServerParameters,
+)
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
@@ -32,6 +38,7 @@ except ImportError:
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    METHOD_NOT_FOUND,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
@@ -75,6 +82,10 @@ def _first_non_cancelled_cause(exc: BaseException) -> Optional[BaseException]:
         elif not isinstance(current, asyncio.CancelledError):
             return current
     return None
+
+
+def _is_method_not_found(exc: BaseException) -> bool:
+    return isinstance(exc, McpError) and getattr(exc.error, "code", None) == METHOD_NOT_FOUND
 
 
 TSessionResult = TypeVar("TSessionResult")
@@ -389,8 +400,9 @@ class MCPClient:
             self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
-        except Exception:
-            verbose_logger.warning("MCP client run_with_session failed for %s", self.server_url or "stdio")
+        except Exception as e:
+            if not _is_method_not_found(e):
+                verbose_logger.warning("MCP client run_with_session failed for %s", self.server_url or "stdio")
             raise
         finally:
             if http_client is not None:
@@ -604,6 +616,12 @@ class MCPClient:
             verbose_logger.warning("MCP client list_prompts was cancelled")
             raise
         except Exception as e:
+            if _is_method_not_found(e):
+                verbose_logger.debug(
+                    f"MCP server {self.server_url or 'stdio'} does not support "
+                    f"prompts/list (method not found); returning empty list"
+                )
+                return []
             error_type = type(e).__name__
             verbose_logger.error(
                 f"MCP client list_prompts failed - "
@@ -681,6 +699,12 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resources was cancelled")
             raise
         except Exception as e:
+            if _is_method_not_found(e):
+                verbose_logger.debug(
+                    f"MCP server {self.server_url or 'stdio'} does not support "
+                    f"resources/list (method not found); returning empty list"
+                )
+                return []
             error_type = type(e).__name__
             verbose_logger.error(
                 f"MCP client list_resources failed - "
