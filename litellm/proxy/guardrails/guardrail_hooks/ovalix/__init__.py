@@ -10,23 +10,19 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail"
+) -> OvalixGuardrail:
     """Create and register an Ovalix guardrail callback from proxy config."""
     import litellm
 
-    tracker_api_base = getattr(litellm_params, "tracker_api_base", None)
-    tracker_api_key = getattr(litellm_params, "tracker_api_key", None)
-    application_id = getattr(litellm_params, "application_id", None)
-    pre_checkpoint_id = getattr(litellm_params, "pre_checkpoint_id", None)
-    post_checkpoint_id = getattr(litellm_params, "post_checkpoint_id", None)
-
     _ovalix_callback = OvalixGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
-        tracker_api_base=tracker_api_base,
-        tracker_api_key=tracker_api_key,
-        application_id=application_id,
-        pre_checkpoint_id=pre_checkpoint_id,
-        post_checkpoint_id=post_checkpoint_id,
+        tracker_api_base=litellm_params.tracker_api_base,
+        tracker_api_key=litellm_params.tracker_api_key,
+        application_id=litellm_params.application_id,
+        pre_checkpoint_id=litellm_params.pre_checkpoint_id,
+        post_checkpoint_id=litellm_params.post_checkpoint_id,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
