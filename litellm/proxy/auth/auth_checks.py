@@ -2454,9 +2454,6 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
-        # Unique per-login identity so concurrent sessions get isolated spend
-        # attribution; budget is enforced via the shared team/user counters
-        # (team_id/user_id), not a per-key max_budget.
         session_token = f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
         session_alias = f"{CLI_SESSION_KEY_PREFIX}-{user_info.user_id}"
 
@@ -2465,6 +2462,7 @@ class ExperimentalUIJWTToken:
             key_name=session_alias,
             key_alias=session_alias,
             expires=expires,
+            max_budget=litellm.max_ui_session_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
