@@ -113,6 +113,10 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
         for chunk in parsed_chunks
         for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
     )
+    expected_delta_blocks = (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
     expected_thinking_block = {
         "type": "thinking",
         "thinking": "Step 1. Step 2.",
@@ -120,7 +124,10 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
     }
 
     assert reasoning_content == "Step 1. Step 2."
-    assert thinking_blocks == (expected_thinking_block,)
+    assert thinking_blocks == (*expected_delta_blocks, expected_thinking_block)
+    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {
+        "thinking_blocks": [expected_delta_blocks[0]]
+    }
     assert parsed_chunks[-1].choices[0].delta.provider_specific_fields == {
         "thinking_blocks": [expected_thinking_block]
     }
@@ -163,7 +170,10 @@ def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
     )
 
     assert reasoning_content == "Step 1. Step 2."
-    assert thinking_blocks == ()
+    assert thinking_blocks == (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
 
 
 def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
@@ -202,7 +212,10 @@ def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
     )
 
     assert reasoning_content == "Step 1. Step 2."
-    assert thinking_blocks == ()
+    assert thinking_blocks == (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
 
 
 def test_handle_json_mode_chunk_response_format_tool():

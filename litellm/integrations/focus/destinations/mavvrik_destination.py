@@ -288,12 +288,10 @@ class FocusMavvrikDestination(FocusDestination):
                 "Re-enable the connection in the Mavvrik dashboard."
             )
         if resp.status_code >= 400:
-            verbose_logger.warning(
-                "Mavvrik FOCUS destination: failed to update metricsMarker (%s): %s",
-                resp.status_code,
-                resp.text[:200],
+            raise RuntimeError(
+                f"Mavvrik FOCUS destination: failed to update metricsMarker "
+                f"({resp.status_code}): {resp.text[:200]}"
             )
-            return
         verbose_logger.debug(
             "Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch
         )

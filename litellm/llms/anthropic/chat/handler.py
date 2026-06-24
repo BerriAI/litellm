@@ -672,6 +672,13 @@ class ModelResponseIterator:
             if isinstance(thinking_content, str) and thinking_content:
                 self.reasoning_content_chunks.append(thinking_content)
                 reasoning_content = thinking_content
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking=thinking_content,
+                    )
+                ]
+                provider_specific_fields["thinking_blocks"] = thinking_blocks
 
             signature = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:

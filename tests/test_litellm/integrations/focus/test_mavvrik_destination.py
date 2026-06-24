@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -575,6 +575,39 @@ async def test_run_scheduled_export_no_catchup_when_marker_is_current():
 
 
 @pytest.mark.asyncio
+async def test_run_scheduled_export_skips_catchup_when_marker_is_unparseable():
+    import polars as pl
+    from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+        MavvrikFocusLogger,
+    )
+    from litellm.integrations.focus.destinations.mavvrik_destination import (
+        FocusMavvrikDestination,
+    )
+
+    logger = MavvrikFocusLogger()
+    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday = now - timedelta(days=1)
+
+    dest_mock = MagicMock(spec=FocusMavvrikDestination)
+    dest_mock.get_metrics_marker = AsyncMock(return_value="not-a-date")
+
+    db_mock = MagicMock()
+    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
+    engine_mock = MagicMock()
+    engine_mock._database = db_mock
+    engine_mock._destination = dest_mock
+    logger._engine = engine_mock
+
+    await logger._run_scheduled_export()
+
+    assert db_mock.get_usage_data.call_count == 1
+    assert (
+        db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date()
+        == yesterday.date()
+    )
+
+
+@pytest.mark.asyncio
 async def test_metrics_marker_always_calls_api():
     """get_metrics_marker must call the register API every time to get a fresh marker.
 
@@ -774,8 +807,7 @@ async def test_gcs_session_cancelled_on_chunk_failure():
 
 
 @pytest.mark.asyncio
-async def test_update_metrics_marker_warns_on_non_410_error():
-    """_update_metrics_marker must log a warning on any >=400 (non-410) status but not raise."""
+async def test_update_metrics_marker_raises_on_non_410_error():
     dest = _dest()
 
     fail_resp = MagicMock()
@@ -787,8 +819,8 @@ async def test_update_metrics_marker_warns_on_non_410_error():
     mock_http.client.request = AsyncMock(return_value=fail_resp)
     dest._http = mock_http
 
-    # Must not raise — warning only
-    await dest._update_metrics_marker(1234567890)
+    with pytest.raises(RuntimeError, match="failed to update metricsMarker"):
+        await dest._update_metrics_marker(1234567890)
     assert mock_http.client.request.call_count == 1
 
 

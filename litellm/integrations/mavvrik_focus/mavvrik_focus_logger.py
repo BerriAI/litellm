@@ -72,6 +72,16 @@ def _parse_metrics_marker(
     return None
 
 
+def _is_empty_metrics_marker(marker: Optional[object]) -> bool:
+    if marker is None:
+        return True
+    if isinstance(marker, (int, float)):
+        return marker == 0
+    if isinstance(marker, str):
+        return not marker.strip()
+    return False
+
+
 class MavvrikFocusLogger(FocusLogger):
     """FOCUS-based export logger that routes to the Mavvrik destination."""
 
@@ -177,11 +187,9 @@ class MavvrikFocusLogger(FocusLogger):
 
         last_ingested = _parse_metrics_marker(marker)
 
-        # Catch up missed dates, capped at _MAX_CATCHUP_DAYS.
-        # last_ingested=None means metricsMarker=0 (fresh connector, never ingested) —
-        # treat the same as being _MAX_CATCHUP_DAYS behind so we export all available history.
+        is_empty_marker = _is_empty_metrics_marker(marker)
         earliest_catchup = yesterday - timedelta(days=self._MAX_CATCHUP_DAYS - 1)
-        if last_ingested is None or last_ingested < yesterday:
+        if is_empty_marker or (last_ingested is not None and last_ingested < yesterday):
             catch_up_date = (
                 earliest_catchup
                 if last_ingested is None

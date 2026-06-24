@@ -158,10 +158,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         through, and drop the now-dangling tool_choice/parallel_tool_calls when
         nothing callable survives.
 
-        Only non-`function` tools are ever dropped, so a `tool_choice` that names
-        a specific function still points at a surviving tool and is left intact;
-        `tool_choice`/`parallel_tool_calls` are cleared only when no function
-        tool remains.
+        When a specific `tool_choice` points at a dropped tool, clear it so the
+        sanitized request does not reference a tool DeepSeek will never receive.
         """
         tools = optional_params.get("tools")
         if not isinstance(tools, list) or not tools:
@@ -169,6 +167,28 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         def _is_function_tool(tool: object) -> bool:
             return isinstance(tool, dict) and tool.get("type") == "function"
+
+        def _get_function_tool_name(tool: object) -> str | None:
+            if not isinstance(tool, dict):
+                return None
+            function = tool.get("function")
+            if not isinstance(function, dict):
+                return None
+            name = function.get("name")
+            return name if isinstance(name, str) else None
+
+        def _tool_choice_matches_function_tool(
+            tool_choice: object, function_tool_names: set[str]
+        ) -> bool:
+            if not isinstance(tool_choice, dict):
+                return True
+            if tool_choice.get("type") != "function":
+                return False
+            function = tool_choice.get("function")
+            if not isinstance(function, dict):
+                return False
+            name = function.get("name")
+            return isinstance(name, str) and name in function_tool_names
 
         function_tools = [tool for tool in tools if _is_function_tool(tool)]
         if len(function_tools) == len(tools):
@@ -189,6 +209,16 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         cleaned = {k: v for k, v in optional_params.items() if k != "tools"}
         if function_tools:
+            function_tool_names = {
+                name
+                for tool in function_tools
+                for name in (_get_function_tool_name(tool),)
+                if name is not None
+            }
+            if not _tool_choice_matches_function_tool(
+                cleaned.get("tool_choice"), function_tool_names
+            ):
+                cleaned = {k: v for k, v in cleaned.items() if k != "tool_choice"}
             return {**cleaned, "tools": function_tools}
         return {
             k: v
