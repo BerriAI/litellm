@@ -33,6 +33,13 @@ impl Router {
         }
     }
 
+    /// Whether any deployment is registered under `model`.
+    pub fn has_deployment(&self, model: &str) -> bool {
+        self.model_list
+            .iter()
+            .any(|deployment| deployment.model_name == model)
+    }
+
     /// Pick a deployment for `model` per the routing strategy. Returns `None`
     /// when no deployment is registered under that `model_name`.
     pub fn get_available_deployment(&self, model: &str) -> Option<&Deployment> {
