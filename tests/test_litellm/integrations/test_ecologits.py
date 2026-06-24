@@ -27,6 +27,31 @@ def _clear_ecologits_env(monkeypatch):
     monkeypatch.delenv("ECOLOGITS_API_BASE", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _ensure_ecologits_counters_registered():
+    """Re-register the module-global ecologits Counters if a sibling test
+    wiped them from the global REGISTRY.
+
+    The ``ecologits`` module registers its Counters once, at import time,
+    against the default ``prometheus_client.REGISTRY``. Several sibling
+    ``test_prometheus_*.py`` files have an ``autouse`` fixture that clears
+    the *entire* REGISTRY (``REGISTRY.unregister(<every collector>)``).
+    Under ``make test-unit-integrations`` (``pytest -n 4``) those tests
+    interleave with these in the same worker, so by the time a counter
+    assertion runs the ecologits Counters may no longer be in REGISTRY —
+    ``REGISTRY.get_sample_value`` then returns ``None`` and every measured
+    delta collapses to ``0.0``. The Counter objects themselves survive, so
+    re-registering the ones that went missing restores observability without
+    resetting their accumulated values (the tests measure deltas).
+    """
+    from litellm.integrations.ecologits import _ECOLOGITS_COUNTERS
+
+    for counter in _ECOLOGITS_COUNTERS.values():
+        if counter not in REGISTRY._collector_to_names:
+            REGISTRY.register(counter)
+    yield
+
+
 def _make_kwargs(
     *,
     model: str = "gpt-4o",
