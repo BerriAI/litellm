@@ -39,9 +39,9 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Entity | Existing | Status | Live e2e |
 |--------|----------|--------|----------|
 | API key | `test_db_spend_update_writer.py`, `test_spend_counters.py` | covered | yes (`test_key_spend_equals_sum_of_logs`) |
-| Tag | `test_update_daily_tag_spend.py` | partial | yes (`test_tag_spend_matches_sum_of_tagged_logs`) |
+| Tag | `test_update_daily_tag_spend.py` | partial | yes (`test_request_tags_round_trip`, propagation only) |
 | End-user | `test_proxy_update_spend.py` | covered | yes |
-| Spend == sum(logs) consistency | none | gap | yes (key + tag aggregate == sum of rows) |
+| Spend == sum(logs) consistency | none | gap | yes (key aggregate == sum of rows) |
 
 ## Spend read endpoints (verification surface)
 
@@ -49,7 +49,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 |----------|----------|--------|----------|
 | `/spend/logs` (request_id / api_key) | `test_spend_management_endpoints.py` | covered | yes (primary read path) |
 | `/spend/calculate` | `local_testing/test_spend_calculate_endpoint.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
-| `/spend/tags` | `test_spend_management_endpoints.py` | partial | yes (tag accuracy test) |
+| `/spend/tags` | `test_spend_management_endpoints.py` | partial | yes (`test_spend_routes.py` route probe) |
 | whole spend GET surface (22 routes) | unit per-handler | partial | yes (`test_spend_routes.py` probes each for 404/5xx) |
 
 ## What this suite pins
@@ -62,7 +62,6 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_cache_hit_is_zero_cost_and_suffixed` | cache hits not double-charged; `_cache_hit` suffix |
 | `test_key_spend_equals_sum_of_logs` | key aggregate == sum of rows |
 | `test_request_tags_round_trip` | tags persist onto the row |
-| `test_tag_spend_matches_sum_of_tagged_logs` | `/spend/tags` SUM/COUNT == tagged rows |
 | `test_end_user_spend_attributed_on_row` | `end_user` attributed + costed |
 | `test_failure_call_writes_failure_status_row` | failed call -> `status=failure`, `spend=0` |
 | `test_spend_calculate_returns_nonzero_cost` | cost-map smoke (no batch wait) |
