@@ -1,13 +1,14 @@
+import asyncio
 import json
 import ssl
 from functools import lru_cache
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -16,6 +17,7 @@ from typing import (
     cast,
     get_type_hints,
 )
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
@@ -27,8 +29,8 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -107,6 +109,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
@@ -132,7 +135,6 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
-from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
@@ -3438,6 +3440,23 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
+        elif (
+            isinstance(transformed_request, dict)
+            and "resumable_chunked_upload" in transformed_request
+        ):
+            try:
+                upload_response = self._resumable_chunked_upload(
+                    client=sync_httpx_client,
+                    initiate_url=api_base,
+                    base_headers=headers,
+                    config=cast(Dict[str, Any], transformed_request)[
+                        "resumable_chunked_upload"
+                    ],
+                    timeout=timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
+                raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -3519,7 +3538,15 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                # A resumable upload config holds a reference to the (potentially
+                # huge) upload payload; logging deep-copies additional_args, so log
+                # a placeholder instead of re-materializing the payload.
+                "complete_input_dict": (
+                    "<resumable chunked upload>"
+                    if isinstance(transformed_request, dict)
+                    and "resumable_chunked_upload" in transformed_request
+                    else transformed_request
+                ),
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -3596,6 +3623,23 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
+        elif (
+            isinstance(transformed_request, dict)
+            and "resumable_chunked_upload" in transformed_request
+        ):
+            try:
+                upload_response = await self._aresumable_chunked_upload(
+                    client=async_httpx_client,
+                    initiate_url=api_base,
+                    base_headers=headers,
+                    config=cast(Dict[str, Any], transformed_request)[
+                        "resumable_chunked_upload"
+                    ],
+                    timeout=timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
+                raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -3638,6 +3682,224 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    # 8 MiB; a 256 KiB multiple, which GCS requires for every non-final chunk.
+    _RESUMABLE_CHUNK_SIZE = 8 * 1024 * 1024
+
+    @staticmethod
+    def _iter_resumable_chunks(
+        byte_iter: Iterator[bytes], chunk_size: int
+    ) -> Iterator[bytes]:
+        """Regroup a byte stream into ``chunk_size`` pieces, yielding a final
+        partial piece only when it is non-empty. Every full piece is exactly
+        ``chunk_size`` bytes (kept a 256 KiB multiple for GCS) and never more than
+        one chunk is buffered. An exactly chunk-aligned stream yields only full
+        chunks, so the upload finalizes on its last data chunk instead of making
+        an extra empty request; a 0-byte stream yields nothing and the caller
+        finalizes with a single empty request.
+        """
+        buf = bytearray()
+        for piece in byte_iter:
+            buf.extend(piece)
+            while len(buf) >= chunk_size:
+                yield bytes(buf[:chunk_size])
+                del buf[:chunk_size]
+        if buf:
+            yield bytes(buf)
+
+    @staticmethod
+    def _resumable_content_range(offset: int, data_len: int, is_final: bool) -> str:
+        if not is_final:
+            return f"bytes {offset}-{offset + data_len - 1}/*"
+        total = offset + data_len
+        if data_len == 0:
+            return f"bytes */{total}"
+        return f"bytes {offset}-{total - 1}/{total}"
+
+    @staticmethod
+    def _resumable_request_kwargs(
+        headers: dict,
+        content: bytes,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> dict:
+        kwargs: Dict[str, Any] = {"headers": headers, "content": content}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return kwargs
+
+    def _resumable_chunked_upload(
+        self,
+        *,
+        client: HTTPHandler,
+        initiate_url: str,
+        base_headers: dict,
+        config: dict,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        """Open a GCS resumable session, then PUT the body in bounded chunks so a
+        large upload is never held in memory in full."""
+        stream = config["body_stream"]
+        chunk_size = config.get("chunk_size", self._RESUMABLE_CHUNK_SIZE)
+        session_url_header = config.get("session_url_header", "location")
+        httpx_client = client.client
+
+        init_headers = {**base_headers, **config.get("initiate_headers", {})}
+        init_req = httpx_client.build_request(
+            "POST",
+            initiate_url,
+            **self._resumable_request_kwargs(init_headers, b"", timeout),
+        )
+        init_resp = httpx_client.send(init_req, follow_redirects=False)
+        init_resp.read()
+        if init_resp.status_code not in (200, 201):
+            init_resp.raise_for_status()
+        session_url = init_resp.headers.get(session_url_header)
+        if not session_url:
+            raise ValueError(
+                f"resumable upload: no session URL in '{session_url_header}' header"
+            )
+
+        offset = 0
+        pending: Optional[bytes] = None
+        for chunk in self._iter_resumable_chunks(stream.iter_bytes(), chunk_size):
+            if pending is not None:
+                self._send_resumable_chunk(
+                    httpx_client,
+                    session_url,
+                    base_headers,
+                    pending,
+                    offset,
+                    is_final=False,
+                    timeout=timeout,
+                )
+                offset += len(pending)
+            pending = chunk
+        return self._send_resumable_chunk(
+            httpx_client,
+            session_url,
+            base_headers,
+            pending or b"",
+            offset,
+            is_final=True,
+            timeout=timeout,
+        )
+
+    def _send_resumable_chunk(
+        self,
+        httpx_client: httpx.Client,
+        url: str,
+        base_headers: dict,
+        data: bytes,
+        offset: int,
+        *,
+        is_final: bool,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        headers = {
+            **base_headers,
+            "Content-Range": self._resumable_content_range(offset, len(data), is_final),
+        }
+        req = httpx_client.build_request(
+            "PUT", url, **self._resumable_request_kwargs(headers, data, timeout)
+        )
+        resp = httpx_client.send(req, follow_redirects=False)
+        resp.read()
+        if resp.status_code not in ((200, 201) if is_final else (308,)):
+            # 4xx/5xx raise here; the ValueError catches an unexpected success
+            # status (e.g. a 200 where the protocol expects a 308 between chunks).
+            resp.raise_for_status()
+            raise ValueError(f"resumable upload: unexpected status {resp.status_code}")
+        return resp
+
+    async def _aresumable_chunked_upload(
+        self,
+        *,
+        client: AsyncHTTPHandler,
+        initiate_url: str,
+        base_headers: dict,
+        config: dict,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        stream = config["body_stream"]
+        chunk_size = config.get("chunk_size", self._RESUMABLE_CHUNK_SIZE)
+        session_url_header = config.get("session_url_header", "location")
+        httpx_client = client.client
+
+        init_headers = {**base_headers, **config.get("initiate_headers", {})}
+        init_req = httpx_client.build_request(
+            "POST",
+            initiate_url,
+            **self._resumable_request_kwargs(init_headers, b"", timeout),
+        )
+        init_resp = await httpx_client.send(init_req, follow_redirects=False)
+        await init_resp.aread()
+        if init_resp.status_code not in (200, 201):
+            init_resp.raise_for_status()
+        session_url = init_resp.headers.get(session_url_header)
+        if not session_url:
+            raise ValueError(
+                f"resumable upload: no session URL in '{session_url_header}' header"
+            )
+
+        offset = 0
+        pending: Optional[bytes] = None
+        # Producing each chunk runs the synchronous per-row transform for that
+        # chunk's worth of rows. Pull it off the event loop thread so a large
+        # upload does not block other concurrent requests between PUTs.
+        chunk_iter = self._iter_resumable_chunks(stream.iter_bytes(), chunk_size)
+        done = object()
+        while True:
+            chunk = await asyncio.to_thread(next, chunk_iter, done)
+            if chunk is done:
+                break
+            if pending is not None:
+                await self._asend_resumable_chunk(
+                    httpx_client,
+                    session_url,
+                    base_headers,
+                    pending,
+                    offset,
+                    is_final=False,
+                    timeout=timeout,
+                )
+                offset += len(pending)
+            pending = chunk
+        return await self._asend_resumable_chunk(
+            httpx_client,
+            session_url,
+            base_headers,
+            pending or b"",
+            offset,
+            is_final=True,
+            timeout=timeout,
+        )
+
+    async def _asend_resumable_chunk(
+        self,
+        httpx_client: httpx.AsyncClient,
+        url: str,
+        base_headers: dict,
+        data: bytes,
+        offset: int,
+        *,
+        is_final: bool,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        headers = {
+            **base_headers,
+            "Content-Range": self._resumable_content_range(offset, len(data), is_final),
+        }
+        req = httpx_client.build_request(
+            "PUT", url, **self._resumable_request_kwargs(headers, data, timeout)
+        )
+        resp = await httpx_client.send(req, follow_redirects=False)
+        await resp.aread()
+        if resp.status_code not in ((200, 201) if is_final else (308,)):
+            # 4xx/5xx raise here; the ValueError catches an unexpected success
+            # status (e.g. a 200 where the protocol expects a 308 between chunks).
+            resp.raise_for_status()
+            raise ValueError(f"resumable upload: unexpected status {resp.status_code}")
+        return resp
 
     def create_batch(
         self,
