@@ -26,6 +26,12 @@ const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
 const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
+/// Default **idle** timeout: if neither side sends a frame for this long, the
+/// session is reaped. It resets on any activity, so it does not cap a healthy
+/// (continuously streaming) session — it only frees a stalled one (e.g. a
+/// half-open upstream that keeps the socket open but stops sending).
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
+
 /// Resolve the OpenAI API key from the explicit param or the environment.
 ///
 /// Blank/whitespace values are treated as absent (guard at resolution time).
@@ -52,7 +58,7 @@ pub async fn realtime<In, Out>(
     model: &str,
     api_key: Option<&str>,
     api_base: Option<&str>,
-    _timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
     mut client_in: In,
     mut client_out: Out,
 ) -> CoreResult<()>
@@ -82,46 +88,49 @@ where
         .map_err(|err| CoreError::Network(err.to_string()))?;
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
 
-    // client -> upstream
-    let to_upstream = async {
-        while let Some(event) = client_in.next().await {
-            for outbound in config.transform_realtime_request(&event, model)?.events {
-                let payload = serde_json::to_string(&outbound)
-                    .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
-                upstream_tx
-                    .send(Message::Text(payload))
-                    .await
-                    .map_err(|err| CoreError::Network(err.to_string()))?;
-            }
-        }
-        Ok::<(), CoreError>(())
-    };
+    let idle = idle_timeout.unwrap_or(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS));
 
-    // upstream -> client
-    let to_client = async {
-        while let Some(message) = upstream_rx.next().await {
-            match message.map_err(|err| CoreError::Network(err.to_string()))? {
-                Message::Text(text) => {
-                    let event: RealtimeEvent = serde_json::from_str(&text)
+    // One loop forwarding both directions. The `sleep(idle)` arm is rebuilt every
+    // iteration, so any frame (either way) resets it — it fires only when the
+    // session has been fully idle for `idle`, reaping a stalled connection
+    // (task + upstream TCP socket) instead of leaking it.
+    loop {
+        tokio::select! {
+            // client -> upstream
+            client_event = client_in.next() => {
+                let Some(event) = client_event else { break }; // client disconnected
+                for outbound in config.transform_realtime_request(&event, model)?.events {
+                    let payload = serde_json::to_string(&outbound)
                         .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
-                    for outbound in config.transform_realtime_response(&event, model)?.events {
-                        client_out
-                            .send(outbound)
-                            .await
-                            .map_err(|err| CoreError::Network(err.to_string()))?;
-                    }
+                    upstream_tx
+                        .send(Message::Text(payload))
+                        .await
+                        .map_err(|err| CoreError::Network(err.to_string()))?;
                 }
-                Message::Close(_) => break,
-                _ => {}
             }
+            // upstream -> client
+            upstream_message = upstream_rx.next() => {
+                let Some(message) = upstream_message else { break }; // upstream closed
+                match message.map_err(|err| CoreError::Network(err.to_string()))? {
+                    Message::Text(text) => {
+                        let event: RealtimeEvent = serde_json::from_str(&text)
+                            .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                        for outbound in config.transform_realtime_response(&event, model)?.events {
+                            client_out
+                                .send(outbound)
+                                .await
+                                .map_err(|err| CoreError::Network(err.to_string()))?;
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            // idle timeout: no activity from either side within `idle`
+            _ = tokio::time::sleep(idle) => break,
         }
-        Ok::<(), CoreError>(())
-    };
-
-    tokio::select! {
-        result = to_upstream => result,
-        result = to_client => result,
     }
+    Ok(())
 }
 
 #[cfg(test)]
