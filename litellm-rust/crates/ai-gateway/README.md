@@ -7,6 +7,7 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
 - **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
+- **Request logs:** piped to the LiteLLM control plane via `POST /v1/callbacks/logs` (see [Request logging](#request-logging--litellm-control-plane))
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to
 > read the config once at boot. The realtime hot path never touches Python.
@@ -53,6 +54,7 @@ overridden at deploy time (e.g. a Render secret file mounted at the same path).
 | `OPENAI_API_KEY` | yes | — | Upstream OpenAI key. Referenced by config.yaml as `os.environ/OPENAI_API_KEY` for the gateway→OpenAI dial. |
 | `HOST` | no | `127.0.0.1` | **Set to `0.0.0.0` in any container/deploy** or external traffic is refused. |
 | `PORT` | no | `4001` | Listen port. Render and most PaaS inject this automatically. |
+| `LITELLM_PROXY_BASE_URL` | no | `http://localhost:4000` | Base URL of the LiteLLM control plane to pipe request logs to. See [Request logging](#request-logging--litellm-control-plane). |
 
 > Secrets (`LITELLM_MASTER_KEY`, `OPENAI_API_KEY`) are never baked into the image
 > or `render.yaml` — inject them at deploy time only.
@@ -70,6 +72,52 @@ stand-in built from the environment:
 This mode links no libpython and needs no config file, but it only supports one
 hard-coded OpenAI deployment. **config.yaml is the recommended path** — use the
 stand-in only for the leanest possible build.
+
+## Request logging → LiteLLM control plane
+
+The gateway owns the realtime connection, but it does **not** run spend logic
+itself. Instead, when a realtime session ends it emits **one**
+`StandardLoggingPayload` (model, cumulative usage, timing, session id) and ships
+it to the **LiteLLM control plane** — your existing LiteLLM proxy — which replays
+it through its normal callback fan-out. Spend logs, Langfuse, Datadog, and every
+other configured callback fire exactly as they would for a Python-served request.
+
+The gateway POSTs to **`{LITELLM_PROXY_BASE_URL}/v1/callbacks/logs`** (an
+admin-only endpoint on the proxy) authenticated with the master key.
+
+### Configure it — two env vars
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LITELLM_PROXY_BASE_URL` | `http://localhost:4000` | Base URL of the LiteLLM control plane (your proxy). The gateway POSTs request logs to `<this>/v1/callbacks/logs`. |
+| `LITELLM_MASTER_KEY` | — | Sent as `Authorization: Bearer <key>` on the log POST. The `/v1/callbacks/logs` route is admin-only, so this must be the proxy's master key. (Same var the client auth uses.) |
+
+```bash
+# Pipe this gateway's realtime request logs to a LiteLLM proxy at logs.acme.com
+LITELLM_PROXY_BASE_URL=https://logs.acme.com \
+LITELLM_MASTER_KEY=sk-...                     \
+OPENAI_API_KEY=sk-...                         \
+  ./litellm-ai-gateway
+```
+
+On Render / Docker, set the same two vars (the master key is already required for
+client auth, so logging adds only `LITELLM_PROXY_BASE_URL`). Point it at the proxy
+that owns your DB and callbacks — it can be a different host/region than the
+gateway.
+
+### How it behaves
+
+- **Non-blocking.** Handlers only `try_send` the finished payload to a bounded,
+  byte-capped channel; a background worker batches and POSTs. The realtime hot
+  path never awaits the network — if the control plane is slow or down, logs are
+  dropped (with a counter) rather than stalling or crashing the gateway.
+- **One payload per session.** Per-session state is O(1) (no buffered frames), so
+  long voice calls can't OOM the gateway.
+- **`request_id` == the OpenAI realtime session id** (`sess_…`), so a logged row
+  maps 1:1 to OpenAI's session.
+
+The receiving endpoint (`POST /v1/callbacks/logs`) ships with the LiteLLM proxy;
+no extra setup beyond a reachable proxy URL + the master key.
 
 ## Build & run with Docker
 
