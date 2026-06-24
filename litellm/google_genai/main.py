@@ -188,6 +188,7 @@ class GenerateContentHelper:
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
+            user=kwargs.get("user"),
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
