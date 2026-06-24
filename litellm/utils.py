@@ -205,6 +205,50 @@ from litellm.types.utils import (
 
 _CALL_TYPE_ENUM_MAP: dict = {ct.value: ct for ct in CallTypes}
 
+_COMPLETION_CALL_TYPE_VALUES = frozenset(
+    {
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+        CallTypes.anthropic_messages.value,
+    }
+)
+_COMPLETION_ACOMPLETION_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.completion.value, CallTypes.acompletion.value}
+)
+_EMBEDDING_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.embedding.value, CallTypes.aembedding.value}
+)
+_IMAGE_GENERATION_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.image_generation.value, CallTypes.aimage_generation.value}
+)
+_MODERATION_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.moderation.value, CallTypes.amoderation.value}
+)
+_TEXT_COMPLETION_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.atext_completion.value, CallTypes.text_completion.value}
+)
+_RERANK_CALL_TYPE_VALUES = frozenset({CallTypes.rerank.value, CallTypes.arerank.value})
+_TRANSCRIPTION_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.atranscription.value, CallTypes.transcription.value}
+)
+_SPEECH_CALL_TYPE_VALUES = frozenset({CallTypes.aspeech.value, CallTypes.speech.value})
+_RESPONSES_CALL_TYPE_VALUES = frozenset(
+    {CallTypes.aresponses.value, CallTypes.responses.value}
+)
+_GENERATE_CONTENT_CALL_TYPE_VALUES = frozenset(
+    {
+        CallTypes.generate_content.value,
+        CallTypes.agenerate_content.value,
+        CallTypes.generate_content_stream.value,
+        CallTypes.agenerate_content_stream.value,
+    }
+)
+_COMPLETION_CALL_TYPE_VALUE = CallTypes.completion.value
+_ACOMPLETION_CALL_TYPE_VALUE = CallTypes.acompletion.value
+_RESPONSES_CALL_TYPE_VALUE = CallTypes.responses.value
+_ARESPONSES_CALL_TYPE_VALUE = CallTypes.aresponses.value
+_AREALTIME_CALL_TYPE_VALUE = CallTypes.arealtime.value
+
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
@@ -951,11 +995,7 @@ def function_setup(
         # INIT LOGGER - for user-specified integrations
         model = args[0] if len(args) > 0 else kwargs.get("model", None)
         call_type = original_function
-        if (
-            call_type == CallTypes.completion.value
-            or call_type == CallTypes.acompletion.value
-            or call_type == CallTypes.anthropic_messages.value
-        ):
+        if call_type in _COMPLETION_CALL_TYPE_VALUES:
             messages = None
             if len(args) > 1:
                 messages = args[1]
@@ -1032,34 +1072,17 @@ def function_setup(
                     verbose_logger.warning(
                         f"Error removing thought signatures from tool call IDs: {str(e)}"
                     )
-        elif (
-            call_type == CallTypes.embedding.value
-            or call_type == CallTypes.aembedding.value
-        ):
+        elif call_type in _EMBEDDING_CALL_TYPE_VALUES:
             messages = args[1] if len(args) > 1 else kwargs.get("input", None)
-        elif (
-            call_type == CallTypes.image_generation.value
-            or call_type == CallTypes.aimage_generation.value
-        ):
+        elif call_type in _IMAGE_GENERATION_CALL_TYPE_VALUES:
             messages = args[0] if len(args) > 0 else kwargs["prompt"]
-        elif (
-            call_type == CallTypes.moderation.value
-            or call_type == CallTypes.amoderation.value
-        ):
+        elif call_type in _MODERATION_CALL_TYPE_VALUES:
             messages = args[1] if len(args) > 1 else kwargs["input"]
-        elif (
-            call_type == CallTypes.atext_completion.value
-            or call_type == CallTypes.text_completion.value
-        ):
+        elif call_type in _TEXT_COMPLETION_CALL_TYPE_VALUES:
             messages = args[0] if len(args) > 0 else kwargs["prompt"]
-        elif (
-            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
-        ):
+        elif call_type in _RERANK_CALL_TYPE_VALUES:
             messages = kwargs.get("query")
-        elif (
-            call_type == CallTypes.atranscription.value
-            or call_type == CallTypes.transcription.value
-        ):
+        elif call_type in _TRANSCRIPTION_CALL_TYPE_VALUES:
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils = _get_cached_audio_utils()
@@ -1069,14 +1092,9 @@ def function_setup(
             else:
                 kwargs["metadata"] = {"file_checksum": file_checksum}
             messages = file_checksum
-        elif (
-            call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
-        ):
+        elif call_type in _SPEECH_CALL_TYPE_VALUES:
             messages = kwargs.get("input", "speech")
-        elif (
-            call_type == CallTypes.aresponses.value
-            or call_type == CallTypes.responses.value
-        ):
+        elif call_type in _RESPONSES_CALL_TYPE_VALUES:
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
             messages = (
                 args[0]
@@ -1084,12 +1102,7 @@ def function_setup(
                 else kwargs.get("input")
                 or kwargs.get("messages", "default-message-value")
             )
-        elif (
-            call_type == CallTypes.generate_content.value
-            or call_type == CallTypes.agenerate_content.value
-            or call_type == CallTypes.generate_content_stream.value
-            or call_type == CallTypes.agenerate_content_stream.value
-        ):
+        elif call_type in _GENERATE_CONTENT_CALL_TYPE_VALUES:
             try:
                 from litellm.google_genai.adapters.transformation import (
                     GoogleGenAIAdapter,
@@ -1319,10 +1332,7 @@ def post_call_processing(
             pass
         else:
             call_type = original_function.__name__
-            if (
-                call_type == CallTypes.completion.value
-                or call_type == CallTypes.acompletion.value
-            ):
+            if call_type in _COMPLETION_ACOMPLETION_CALL_TYPE_VALUES:
                 is_coroutine = check_coroutine(original_response)
                 if is_coroutine is True:
                     pass
@@ -1567,11 +1577,7 @@ def client(original_function):
                 and model is not None
                 and litellm.modify_params
                 is True  # user is okay with params being modified
-                and (
-                    call_type == CallTypes.acompletion.value
-                    or call_type == CallTypes.completion.value
-                    or call_type == CallTypes.anthropic_messages.value
-                )
+                and call_type in _COMPLETION_CALL_TYPE_VALUES
             ):
                 try:
                     base_model = model
@@ -1682,7 +1688,7 @@ def client(original_function):
             return result
         except Exception as e:
             call_type = original_function.__name__
-            if call_type == CallTypes.completion.value:
+            if call_type == _COMPLETION_CALL_TYPE_VALUE:
                 num_retries = (
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
@@ -1731,7 +1737,7 @@ def client(original_function):
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return original_function(*args, **kwargs)
-            elif call_type == CallTypes.responses.value:
+            elif call_type == _RESPONSES_CALL_TYPE_VALUE:
                 num_retries = (
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
@@ -1869,11 +1875,7 @@ def client(original_function):
                 and model is not None
                 and litellm.modify_params
                 is True  # user is okay with params being modified
-                and (
-                    call_type == CallTypes.acompletion.value
-                    or call_type == CallTypes.completion.value
-                    or call_type == CallTypes.anthropic_messages.value
-                )
+                and call_type in _COMPLETION_CALL_TYPE_VALUES
             ):
                 try:
                     base_model = model
@@ -1925,7 +1927,7 @@ def client(original_function):
                         end_time=end_time,
                     )
                     return result
-            elif call_type == CallTypes.arealtime.value:
+            elif call_type == _AREALTIME_CALL_TYPE_VALUE:
                 return result
             ### POST-CALL RULES ###
             post_call_processing(
@@ -2031,7 +2033,7 @@ def client(original_function):
 
             call_type = original_function.__name__
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if call_type == CallTypes.acompletion.value:
+            if call_type == _ACOMPLETION_CALL_TYPE_VALUE:
                 context_window_fallback_dict = kwargs.get(
                     "context_window_fallback_dict", {}
                 )
@@ -2069,7 +2071,7 @@ def client(original_function):
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
-            elif call_type == CallTypes.aresponses.value:
+            elif call_type == _ARESPONSES_CALL_TYPE_VALUE:
                 _is_litellm_router_call = "model_group" in (
                     kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy

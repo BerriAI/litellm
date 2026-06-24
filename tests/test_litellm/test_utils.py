@@ -1179,9 +1179,7 @@ def test_check_provider_match_none_value_matches_any_provider():
         is True
     )
     # When custom_llm_provider is also None nothing constrains the match.
-    assert (
-        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
-    )
+    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
 
 
 def test_get_provider_rerank_config():
@@ -1546,8 +1544,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1562,8 +1559,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1925,8 +1921,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1979,8 +1974,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2194,8 +2188,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2248,8 +2241,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2463,8 +2455,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2517,8 +2508,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -4179,7 +4169,9 @@ def test_deepseek_v4_models_in_cost_map():
         ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
     ]:
         info = model_cost.get(key)
-        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
         assert info["litellm_provider"] == "deepseek"
         assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == expected_input
@@ -4195,7 +4187,9 @@ def test_deepseek_v4_models_in_cost_map():
         ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
     ]:
         info = model_cost.get(key)
-        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
         assert info["litellm_provider"] == "deepseek"
         assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == expected_input
@@ -4213,7 +4207,11 @@ def test_deepseek_v4_models_in_backup_cost_map():
     import json
     from pathlib import Path
 
-    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
+    json_path = (
+        Path(__file__).parents[2]
+        / "litellm"
+        / "model_prices_and_context_window_backup.json"
+    )
     with open(json_path) as f:
         model_cost = json.load(f)
 
@@ -4558,3 +4556,100 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
 
+
+class TestCallTypeMembershipSets:
+    """The per-request wrapper routes on call_type via precomputed frozensets of
+    CallTypes values (replacing chained `== CallTypes.X.value or ...` checks).
+    Each set must contain exactly the values it replaced; a dropped, added, or
+    mistyped member would silently misroute a call type, so pin them explicitly."""
+
+    def test_membership_sets_match_enum_values(self):
+        from litellm.types.utils import CallTypes
+        from litellm import utils as u
+
+        expected = {
+            "_COMPLETION_CALL_TYPE_VALUES": {
+                CallTypes.completion,
+                CallTypes.acompletion,
+                CallTypes.anthropic_messages,
+            },
+            "_COMPLETION_ACOMPLETION_CALL_TYPE_VALUES": {
+                CallTypes.completion,
+                CallTypes.acompletion,
+            },
+            "_EMBEDDING_CALL_TYPE_VALUES": {
+                CallTypes.embedding,
+                CallTypes.aembedding,
+            },
+            "_IMAGE_GENERATION_CALL_TYPE_VALUES": {
+                CallTypes.image_generation,
+                CallTypes.aimage_generation,
+            },
+            "_MODERATION_CALL_TYPE_VALUES": {
+                CallTypes.moderation,
+                CallTypes.amoderation,
+            },
+            "_TEXT_COMPLETION_CALL_TYPE_VALUES": {
+                CallTypes.text_completion,
+                CallTypes.atext_completion,
+            },
+            "_RERANK_CALL_TYPE_VALUES": {CallTypes.rerank, CallTypes.arerank},
+            "_TRANSCRIPTION_CALL_TYPE_VALUES": {
+                CallTypes.transcription,
+                CallTypes.atranscription,
+            },
+            "_SPEECH_CALL_TYPE_VALUES": {CallTypes.speech, CallTypes.aspeech},
+            "_RESPONSES_CALL_TYPE_VALUES": {
+                CallTypes.responses,
+                CallTypes.aresponses,
+            },
+            "_GENERATE_CONTENT_CALL_TYPE_VALUES": {
+                CallTypes.generate_content,
+                CallTypes.agenerate_content,
+                CallTypes.generate_content_stream,
+                CallTypes.agenerate_content_stream,
+            },
+        }
+        for name, members in expected.items():
+            assert getattr(u, name) == {m.value for m in members}, name
+
+    def test_membership_sets_use_raw_string_values(self):
+        """Routing compares against original_function (a str), so the sets must
+        hold the enum .value strings, not the enum members."""
+        from litellm import utils as u
+
+        for name in (
+            "_COMPLETION_CALL_TYPE_VALUES",
+            "_EMBEDDING_CALL_TYPE_VALUES",
+            "_GENERATE_CONTENT_CALL_TYPE_VALUES",
+        ):
+            s = getattr(u, name)
+            assert s and all(isinstance(v, str) for v in s), name
+
+    def test_scalar_call_type_values_match_enum_values(self):
+        """The single-value `==` comparisons in the sync/async exception handlers
+        (retry, context-window fallback, realtime early-return) route on these
+        scalar constants. A typo or wrong enum member would silently skip the
+        branch on error, so pin each to the exact enum value it stands in for."""
+        from litellm.types.utils import CallTypes
+        from litellm import utils as u
+
+        assert u._COMPLETION_CALL_TYPE_VALUE == CallTypes.completion.value
+        assert u._ACOMPLETION_CALL_TYPE_VALUE == CallTypes.acompletion.value
+        assert u._RESPONSES_CALL_TYPE_VALUE == CallTypes.responses.value
+        assert u._ARESPONSES_CALL_TYPE_VALUE == CallTypes.aresponses.value
+        assert u._AREALTIME_CALL_TYPE_VALUE == CallTypes.arealtime.value
+
+    def test_streaming_call_types_match_enum_members_and_values(self):
+        """`_is_streaming_request` checks membership against either the enum
+        member or its raw value, so the set must hold both forms for the two
+        streaming generate-content call types."""
+        from litellm.types.utils import CallTypes
+        from litellm import utils as u
+
+        assert u._STREAMING_CALL_TYPES == {
+            CallTypes.generate_content_stream,
+            CallTypes.agenerate_content_stream,
+            CallTypes.generate_content_stream.value,
+            CallTypes.agenerate_content_stream.value,
+        }
