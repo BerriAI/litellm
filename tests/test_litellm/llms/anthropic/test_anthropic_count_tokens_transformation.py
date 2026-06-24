@@ -140,3 +140,12 @@ def test_build_count_tokens_url_trailing_slash_stripped():
         config._build_count_tokens_url("https://my-proxy.example.com/")
         == "https://my-proxy.example.com/v1/messages/count_tokens"
     )
+
+
+def test_build_count_tokens_url_base_with_v1_only():
+    """/v1-suffixed base gets /messages/count_tokens appended (not doubled /v1)."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config._build_count_tokens_url("https://my-proxy.example.com/v1")
+        == "https://my-proxy.example.com/v1/messages/count_tokens"
+    )

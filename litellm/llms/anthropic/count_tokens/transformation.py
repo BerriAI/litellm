@@ -34,6 +34,8 @@ class AnthropicCountTokensConfig:
             return base
         if base.endswith("/v1/messages"):
             return f"{base}/count_tokens"
+        if base.endswith("/v1"):
+            return f"{base}/messages/count_tokens"
         return f"{base}{self._COUNT_TOKENS_PATH}"
 
     def transform_request_to_count_tokens(
