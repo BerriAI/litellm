@@ -4705,10 +4705,10 @@ class TestCreateMcpClientV2Graft:
         assert client._resolved_auth is None
         assert client._mcp_auth_value == "caller-override"
 
-    async def test_conflicting_extra_header_defers_to_v1(self):
+    async def test_conflicting_extra_header_skips_resolved_auth_on_v2(self):
         # An Authorization already supplied via extra_headers (guardrail hook like the JWT
-        # signer, static_headers, or a forwarded caller header) must not be clobbered by the
-        # resolved static credential, so the static server defers to v1.
+        # signer, static_headers, or a forwarded caller header) must win. The server stays on
+        # the v2 path but skips resolved_auth, so nothing overwrites the inbound header.
         client = await MCPServerManager()._create_mcp_client(
             self._http_server(
                 auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"
@@ -4717,8 +4717,7 @@ class TestCreateMcpClientV2Graft:
         )
 
         assert client._resolved_auth is None
-        assert client._mcp_auth_value == "shared-tok"
-        # v1 applies extra_headers last, so the inbound header wins on the wire.
+        assert client._mcp_auth_value is None
         assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
 
     async def test_none_with_extra_header_stays_v2_without_clobbering(self):
