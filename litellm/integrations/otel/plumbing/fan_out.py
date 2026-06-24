@@ -122,11 +122,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         from litellm.integrations.otel.plumbing.providers import (
             _exporter_from_spec,
             _processor_for,
+            default_otlp_kind_for_backend,
         )
 
         try:
             spec = ExporterSpec(
-                kind=_resolve_kind(destination),
+                kind=default_otlp_kind_for_backend(destination.callback_name),
                 endpoint=destination.endpoint,
                 headers=destination.header_string(),
                 owner=None,
@@ -142,22 +143,15 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return None
         self._processors[key] = processor
         if len(self._processors) > _MAX_CACHED_PROCESSORS:
-            _, evicted = self._processors.popitem(last=False)
-            try:
-                evicted.shutdown()
-            except Exception:
-                pass
+            # Evict the LRU entry but do NOT shut it down here: a
+            # ``BatchSpanProcessor`` may still hold spans queued on its exporter
+            # thread, and calling ``shutdown`` synchronously can drop or raise on
+            # those in-flight spans. Dropping the reference lets the worker drain
+            # naturally and be reclaimed at process exit. The cache is bounded at
+            # ``_MAX_CACHED_PROCESSORS``, so the un-shut-down working set stays
+            # bounded.
+            self._processors.popitem(last=False)
         return processor
-
-
-# Per-backend transport: Arize speaks OTLP/gRPC, every other current preset
-# speaks OTLP/HTTP. Kept here so the fan-out picks the same transport the
-# preset's own exporter uses, mirroring ``TenantTracerCache._owned_otlp_kind``.
-_GRPC_BACKENDS = frozenset({"arize"})
-
-
-def _resolve_kind(destination: "OtelDestination") -> str:
-    return "otlp_grpc" if destination.callback_name in _GRPC_BACKENDS else "otlp_http"
 
 
 # Attribute set on every gen-AI LLM-call span by the v2 emitter. Used as the

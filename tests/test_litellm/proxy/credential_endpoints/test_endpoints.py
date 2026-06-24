@@ -44,9 +44,7 @@ def _connected_db(monkeypatch):
     repo.create = AsyncMock()
     repo.delete_by_name = AsyncMock()
     monkeypatch.setattr(endpoints, "CredentialsRepository", lambda _client: repo)
-    monkeypatch.setattr(
-        endpoints.CredentialAccessor, "upsert_credentials", lambda creds: None
-    )
+    monkeypatch.setattr(endpoints.CredentialAccessor, "upsert_credentials", lambda creds: None)
     return repo
 
 
@@ -117,9 +115,7 @@ async def test_update_logging_credential_forbidden_for_non_admin(_connected_db):
 
 
 @pytest.mark.asyncio
-async def test_update_existing_logging_credential_forbidden_even_without_logging_patch(
-    _connected_db, monkeypatch
-):
+async def test_update_existing_logging_credential_forbidden_even_without_logging_patch(_connected_db, monkeypatch):
     """A non-admin cannot edit a stored logging credential's values, even with a patch
     that omits credential_info (the gate consults the in-memory credential too)."""
     monkeypatch.setattr(
@@ -180,9 +176,7 @@ def test_update_db_credential_preserves_existing_info_on_partial_patch():
 
 
 @pytest.mark.asyncio
-async def test_delete_logging_credential_forbidden_for_non_admin(
-    _connected_db, monkeypatch
-):
+async def test_delete_logging_credential_forbidden_for_non_admin(_connected_db, monkeypatch):
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -193,6 +187,59 @@ async def test_delete_logging_credential_forbidden_for_non_admin(
                 credential_info=_LOGGING_INFO,
             )
         ],
+    )
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.delete_credential(
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            credential_name="dest",
+            user_api_key_dict=_member(),
+        )
+    assert exc.value.status_code == 403
+    _connected_db.delete_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_db_only_logging_credential_forbidden_for_non_admin(_connected_db, monkeypatch):
+    """A logging credential that exists ONLY in the DB (not resident in the
+    in-memory ``credential_list`` -- e.g. created on another scaled instance or
+    before a restart) must still gate a non-admin update. The gate falls back to
+    the DB so a credential_values-only patch can't redirect a logging
+    destination's endpoint without the proxy-admin check."""
+    monkeypatch.setattr(litellm, "credential_list", [])  # nothing in memory
+    _connected_db.find_by_name = AsyncMock(
+        return_value=CredentialItem(
+            credential_name="dest",
+            credential_values={"langfuse_host": "h"},
+            credential_info=_LOGGING_INFO,
+        )
+    )
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.update_credential(
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            credential=CredentialItem(
+                credential_name="dest",
+                credential_values={"langfuse_host": "evil"},
+                credential_info={},
+            ),
+            credential_name="dest",
+            user_api_key_dict=_member(),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_db_only_logging_credential_forbidden_for_non_admin(_connected_db, monkeypatch):
+    """Same DB-only fallback for delete: a non-admin can't delete a logging
+    credential that is resident only in the DB."""
+    monkeypatch.setattr(litellm, "credential_list", [])
+    _connected_db.find_by_name = AsyncMock(
+        return_value=CredentialItem(
+            credential_name="dest",
+            credential_values={},
+            credential_info=_LOGGING_INFO,
+        )
     )
     with pytest.raises(HTTPException) as exc:
         await endpoints.delete_credential(

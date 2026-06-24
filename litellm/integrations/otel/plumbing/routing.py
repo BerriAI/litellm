@@ -95,14 +95,24 @@ class TenantTracerCache:
 
     def _owned_otlp_kind(self) -> str:
         """The OTLP transport of this integration's own exporter (langfuse -> http,
-        arize -> grpc), used for the destinations appended below."""
+        arize -> grpc), used for the destinations appended below.
+
+        Prefer the admin's configured exporter kind for this backend; fall back to
+        the backend's intrinsic default (shared with the fan-out processor via
+        ``default_otlp_kind_for_backend``) so a lazily-activated backend with no
+        owned spec still picks the right transport (e.g. arize -> grpc, not http).
+        """
+        from litellm.integrations.otel.plumbing.providers import (
+            default_otlp_kind_for_backend,
+        )
+
         for spec in self._config.exporters:
             if (
                 spec.owner == self._callback_name
                 and spec.kind.lower() not in _NON_OTLP_KINDS
             ):
                 return spec.kind
-        return "otlp_http"
+        return default_otlp_kind_for_backend(self._callback_name)
 
     def _config_with_destinations(
         self, destinations: "tuple[OtelDestination, ...]"

@@ -34,13 +34,32 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
 
 def _credential_in_memory(credential_name: str) -> Optional[CredentialItem]:
     return next(
-        (
-            cred
-            for cred in litellm.credential_list
-            if cred.credential_name == credential_name
-        ),
+        (cred for cred in litellm.credential_list if cred.credential_name == credential_name),
         None,
     )
+
+
+async def _credential_for_admin_gate(credential_name: str, prisma_client: object) -> Optional[CredentialItem]:
+    """Authoritative credential lookup for the admin gate on update/delete.
+
+    The in-process ``litellm.credential_list`` can be stale: a credential created
+    via the API on another horizontally-scaled instance, or before a restart,
+    exists only in the DB. Gating on the in-memory copy alone would let a logging
+    credential that isn't resident be updated/deleted without the proxy-admin
+    check. Prefer the in-memory copy, fall back to the DB so the gate sees the
+    real ``credential_info``.
+    """
+    existing = _credential_in_memory(credential_name)
+    if existing is not None:
+        return existing
+    if prisma_client is None:
+        return None
+    try:
+        return await CredentialsRepository(
+            prisma_client  # type: ignore[arg-type]
+        ).find_by_name(credential_name)
+    except Exception:
+        return None
 
 
 class CredentialHelperUtils:
@@ -51,9 +70,7 @@ class CredentialHelperUtils:
         """Encrypt values in credential.credential_values and add to DB"""
         encrypted_credential_values = {}
         for key, value in (credential.credential_values or {}).items():
-            encrypted_credential_values[key] = encrypt_value_helper(
-                value, new_encryption_key
-            )
+            encrypted_credential_values[key] = encrypt_value_helper(value, new_encryption_key)
 
         # Return a new object to avoid mutating the caller's credential, which
         # is kept in memory and should remain unencrypted.
@@ -102,9 +119,7 @@ async def create_credential(
             model = llm_router.get_deployment(credential.model_id)
             if model is None:
                 raise HTTPException(status_code=404, detail="Model not found")
-            credential_values = llm_router.get_deployment_credentials(
-                credential.model_id
-            )
+            credential_values = llm_router.get_deployment_credentials(credential.model_id)
             if credential_values is None:
                 raise HTTPException(status_code=404, detail="Model not found")
             credential.credential_values = credential_values
@@ -119,9 +134,7 @@ async def create_credential(
             credential_values=credential.credential_values,
             credential_info=credential.credential_info,
         )
-        encrypted_credential = CredentialHelperUtils.encrypt_credential_values(
-            processed_credential
-        )
+        encrypted_credential = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict = encrypted_credential.model_dump()
         credentials_dict_jsonified = jsonify_object(credentials_dict)
         await CredentialsRepository(prisma_client).create(
@@ -177,9 +190,7 @@ async def get_credentials(
 async def get_credential_by_name(
     request: Request,
     fastapi_response: Response,
-    credential_name: str = Path(
-        ..., description="The credential name, percent-decoded; may contain slashes"
-    ),
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -257,9 +268,7 @@ async def get_credential_by_model(
 async def delete_credential(
     request: Request,
     fastapi_response: Response,
-    credential_name: str = Path(
-        ..., description="The credential name, percent-decoded; may contain slashes"
-    ),
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -267,10 +276,8 @@ async def delete_credential(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    existing = _credential_in_memory(credential_name)
-    if existing is not None and is_admin_gated_credential_info(
-        existing.credential_info
-    ):
+    existing = await _credential_for_admin_gate(credential_name, prisma_client)
+    if existing is not None and is_admin_gated_credential_info(existing.credential_info):
         _require_proxy_admin(user_api_key_dict)
 
     try:
@@ -282,11 +289,7 @@ async def delete_credential(
         await CredentialsRepository(prisma_client).delete_by_name(credential_name)
 
         ## DELETE FROM LITELLM ##
-        litellm.credential_list = [
-            cred
-            for cred in litellm.credential_list
-            if cred.credential_name != credential_name
-        ]
+        litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
@@ -317,9 +320,7 @@ def update_db_credential(
     # update litellm params
     if encrypted_credential.credential_values:
         # Encrypt any sensitive values
-        encrypted_params = {
-            k: v for k, v in encrypted_credential.credential_values.items()
-        }
+        encrypted_params = {k: v for k, v in encrypted_credential.credential_values.items()}
 
         merged_credential.credential_values.update(encrypted_params)
 
@@ -344,9 +345,7 @@ async def update_credential(
     request: Request,
     fastapi_response: Response,
     credential: CredentialItem,
-    credential_name: str = Path(
-        ..., description="The credential name, percent-decoded; may contain slashes"
-    ),
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -354,10 +353,9 @@ async def update_credential(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    existing = _credential_in_memory(credential_name)
+    existing = await _credential_for_admin_gate(credential_name, prisma_client)
     if is_admin_gated_credential_info(credential.credential_info) or (
-        existing is not None
-        and is_admin_gated_credential_info(existing.credential_info)
+        existing is not None and is_admin_gated_credential_info(existing.credential_info)
     ):
         _require_proxy_admin(user_api_key_dict)
     validate_credential_access(credential.credential_info)
@@ -404,11 +402,7 @@ async def update_credential(
             )
             # Remove old entry if renamed, then use upsert_credentials to handle duplicates
             if new_name != credential_name:
-                litellm.credential_list = [
-                    c
-                    for c in litellm.credential_list
-                    if c.credential_name != credential_name
-                ]
+                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
             CredentialAccessor.upsert_credentials([updated_in_memory])
 
         return {"success": True, "message": "Credential updated successfully"}
