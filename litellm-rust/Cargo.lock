@@ -564,14 +564,16 @@ name = "litellm-ai-gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-channel",
  "futures-util",
  "litellm-core",
- "litellm-providers",
  "pyo3",
+ "reqwest",
  "serde",
  "serde_json",
  "subtle",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -585,24 +587,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-providers"
-version = "0.1.0"
-dependencies = [
- "futures-channel",
- "futures-util",
- "litellm-core",
- "reqwest",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
-]
-
-[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "litellm-ai-gateway",
  "litellm-core",
- "litellm-providers",
  "pyo3",
  "serde_json",
 ]
