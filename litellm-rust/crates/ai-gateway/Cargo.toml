@@ -19,6 +19,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "tim
 reqwest = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
+# sha2 hashes the master key into user_api_key_hash (matches the proxy's
+# SHA-256 hash_token) so the plaintext credential never enters a log payload.
+sha2.workspace = true
 subtle.workspace = true
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 

@@ -102,8 +102,13 @@ async fn bridge(
     // Attribute the spend log to the key that authenticated this session (the
     // master key — the gateway is master-key auth). A non-null user_api_key_hash
     // is required for the Python spend logger to write a SpendLogs row.
+    //
+    // SECURITY: hash the key — never send the raw credential. This field fans out
+    // to spend logs and every callback integration; the SHA-256 (matching the
+    // proxy's hash_token) keeps the plaintext master key out of all of them while
+    // still matching the key's hash in LiteLLM_SpendLogs.
     let metadata = RequestMetadata {
-        user_api_key_hash: master_key.as_deref().map(str::to_string),
+        user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
         ..RequestMetadata::default()
     };
 
