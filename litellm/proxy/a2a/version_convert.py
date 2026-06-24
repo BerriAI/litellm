@@ -195,7 +195,7 @@ def _send_result_to(
         compat_result = _validate_message_or_task(result, types_v03)
         response = types_v03.SendMessageResponse(
             root=types_v03.SendMessageSuccessResponse(
-                id=str(request_id or ""),
+                id=str(request_id) if request_id is not None else "",
                 result=compat_result,  # pyright: ignore[reportArgumentType]
             )
         )
@@ -271,7 +271,7 @@ def _stream_result_to(
     if target == "1.0":
         event = _validate_stream_event(result, types_v03)
         wrapper = types_v03.SendStreamingMessageSuccessResponse(
-            id=str(request_id or ""),
+            id=str(request_id) if request_id is not None else "",
             result=event,  # pyright: ignore[reportArgumentType]
         )
         return MessageToDict(

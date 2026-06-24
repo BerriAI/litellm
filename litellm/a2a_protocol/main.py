@@ -293,6 +293,7 @@ async def _execute_a2a_stream_with_retry(
                 is_streaming=True,
             )
             card_url = get_agent_card_url(agent_card) if agent_card else None
+            continue
         except Exception as e:
             if response_started:
                 raise
