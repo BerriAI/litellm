@@ -20,6 +20,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.byok_store import (
+    CachedByokStore,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
     ByokCredentialStore,
 )
@@ -54,6 +57,7 @@ __all__ = [
     "StaticHeaderAuth",
     "UpstreamCredentialProvider",
     "ByokCredentialStore",
+    "CachedByokStore",
     "AuthSpecKind",
     "CredError",
     "Subject",
