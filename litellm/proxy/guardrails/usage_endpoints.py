@@ -102,7 +102,7 @@ def _trend_from_comparison(current_fail: float, previous_fail: float) -> str:
 
 
 def _aggregate_daily_metrics(
-    metrics: object, id_attr: str
+    metrics: list[Any], id_attr: str
 ) -> Dict[str, Dict[str, Any]]:
     agg: Dict[str, Dict[str, Any]] = {}
     for m in metrics:
@@ -116,7 +116,7 @@ def _aggregate_daily_metrics(
     return agg
 
 
-def _prev_fail_rates(metrics_prev: object, id_attr: str) -> Dict[str, float]:
+def _prev_fail_rates(metrics_prev: list[Any], id_attr: str) -> Dict[str, float]:
     prev_agg_raw: Dict[str, Dict[str, int]] = {}
     for m in metrics_prev:
         gid = getattr(m, id_attr)
@@ -128,7 +128,7 @@ def _prev_fail_rates(metrics_prev: object, id_attr: str) -> Dict[str, float]:
     return {gid: (100.0 * v["blocked"] / v["req"]) if v["req"] else 0.0 for gid, v in prev_agg_raw.items()}
 
 
-def _chart_from_metrics(metrics: object) -> List[Dict[str, Any]]:
+def _chart_from_metrics(metrics: list[Any]) -> List[Dict[str, Any]]:
     chart_by_date: Dict[str, Dict[str, int]] = {}
     for m in metrics:
         d = m.date
@@ -139,7 +139,7 @@ def _chart_from_metrics(metrics: object) -> List[Dict[str, Any]]:
     return [{"date": d, "passed": v["passed"], "blocked": v["blocked"]} for d, v in sorted(chart_by_date.items())]
 
 
-def _get_guardrail_attrs(g: object) -> tuple[object, str]:
+def _get_guardrail_attrs(g: object) -> tuple[str | None, str]:
     """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
     gid = getattr(g, "guardrail_id", None) or (g.get("guardrail_id") if isinstance(g, dict) else None)
     name = getattr(g, "guardrail_name", None) or (g.get("guardrail_name") if isinstance(g, dict) else None)
@@ -187,7 +187,7 @@ def _find_config_loaded_guardrail(
     return None
 
 
-def _merge_config_loaded_guardrails(db_guardrails: object) -> list[object]:
+def _merge_config_loaded_guardrails(db_guardrails: list[Any]) -> list[Any]:
     guardrails = list(db_guardrails)
     seen_keys: set[str] = set()
     for guardrail in guardrails:
@@ -611,7 +611,7 @@ async def guardrails_usage_logs(
             ) or _find_config_loaded_guardrail(guardrail_id)
             if guardrail:
                 logical_name = _get_guardrail_dict_field(guardrail, "guardrail_name")
-                if logical_name and logical_name not in effective_guardrail_ids:
+                if logical_name and isinstance(logical_name, str) and logical_name not in effective_guardrail_ids:
                     effective_guardrail_ids.append(logical_name)
 
         where = _build_usage_logs_where(effective_guardrail_ids or None, policy_id, start_date, end_date)
