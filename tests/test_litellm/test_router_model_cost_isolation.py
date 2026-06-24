@@ -537,3 +537,147 @@ def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
     )
 
     assert model_info == {"input_cost_per_token": 0.000003}
+
+
+def test_custom_pricing_field_denylist_covers_all_builtin_pricing_fields():
+    """The shared-backend-key stripping in Router relies on
+    CustomPricingLiteLLMParams enumerating every per-deployment pricing field.
+    If a new pricing field is added to ModelInfoBase but not mirrored here, a
+    deployment override on that field leaks into the shared backend key and
+    every sibling deployment reads the wrong rate (LIT-3897). This guard fails
+    fast when the two drift apart.
+    """
+    import typing
+
+    from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfoBase
+
+    pricing_markers = ("cost", "price", "uplift", "vector_size", "tiered_pricing")
+    builtin_pricing_fields = {
+        name
+        for name in typing.get_type_hints(ModelInfoBase)
+        if any(marker in name for marker in pricing_markers)
+    }
+    denylisted_fields = set(CustomPricingLiteLLMParams.model_fields.keys())
+
+    uncovered = sorted(builtin_pricing_fields - denylisted_fields)
+    assert not uncovered, (
+        "ModelInfoBase pricing fields missing from CustomPricingLiteLLMParams; "
+        f"these would leak into shared backend keys: {uncovered}"
+    )
+
+
+def test_tiered_pricing_override_isolated_from_sibling_via_model_info_lookup():
+    """LIT-3897: a deployment that overrides a tiered pricing field
+    (input_cost_per_token_above_272k_tokens) must not pollute the shared
+    backend key, so a sibling sharing the same backend resolves its pricing
+    via litellm.get_model_info (the path /model/info uses) without seeing the
+    override.
+    """
+    backend_model = "gemini/gemini-2.5-flash"
+    override = 0.000999
+
+    builtin_info = litellm.get_model_info(model=backend_model)
+    assert builtin_info.get("input_cost_per_token_above_272k_tokens") != override
+
+    model_keys = {
+        "lit3897-tiered-custom": litellm.model_cost.get("lit3897-tiered-custom"),
+        "lit3897-tiered-sibling": litellm.model_cost.get("lit3897-tiered-sibling"),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "custom-priced-flash",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-tiered-1",
+                    },
+                    "model_info": {
+                        "id": "lit3897-tiered-custom",
+                        "input_cost_per_token_above_272k_tokens": override,
+                        "cache_read_input_token_cost_above_272k_tokens": override,
+                    },
+                },
+                {
+                    "model_name": "gemini-2.5-flash",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-tiered-2",
+                    },
+                    "model_info": {"id": "lit3897-tiered-sibling"},
+                },
+            ],
+        )
+
+        shared = litellm.get_model_info(model=backend_model)
+        assert shared.get("input_cost_per_token_above_272k_tokens") != override, (
+            "Tiered override leaked into the shared backend key; siblings read "
+            "the wrong rate via /model/info"
+        )
+        assert shared.get("cache_read_input_token_cost_above_272k_tokens") != override
+
+        custom_entry = litellm.model_cost["lit3897-tiered-custom"]
+        assert custom_entry["input_cost_per_token_above_272k_tokens"] == override
+        assert custom_entry["cache_read_input_token_cost_above_272k_tokens"] == override
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_custom_pricing_isolated_from_sibling_via_proxy_model_info_path():
+    """LIT-3897 end to end through the proxy resolution helper: the override
+    deployment reports its custom input rate while the sibling keeps the
+    canonical gemini rate when /model/info resolves each deployment. Mirrors the
+    ticket config where the override is set on litellm_params.
+    """
+    from litellm.proxy.proxy_server import _get_proxy_model_info
+
+    backend_model = "gemini/gemini-2.5-flash"
+    override_input = 5e-05
+    override_output = 1e-04
+
+    builtin_info = litellm.get_model_info(model=backend_model)
+    builtin_input = builtin_info["input_cost_per_token"]
+    assert builtin_input != override_input
+
+    model_keys = {
+        "lit3897-proxy-custom": litellm.model_cost.get("lit3897-proxy-custom"),
+        "lit3897-proxy-sibling": litellm.model_cost.get("lit3897-proxy-sibling"),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "custom-priced-flash",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-proxy-1",
+                        "input_cost_per_token": override_input,
+                        "output_cost_per_token": override_output,
+                    },
+                    "model_info": {"id": "lit3897-proxy-custom"},
+                },
+                {
+                    "model_name": "gemini-2.5-flash",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-proxy-2",
+                    },
+                    "model_info": {"id": "lit3897-proxy-sibling"},
+                },
+            ],
+        )
+
+        resolved = {
+            m["model_name"]: _get_proxy_model_info(model=copy.deepcopy(m))[
+                "model_info"
+            ]["input_cost_per_token"]
+            for m in router.model_list
+        }
+
+        assert resolved["custom-priced-flash"] == override_input
+        assert resolved["gemini-2.5-flash"] == builtin_input
+        assert resolved["gemini-2.5-flash"] != resolved["custom-priced-flash"]
+    finally:
+        _restore_model_cost_entries(model_keys)

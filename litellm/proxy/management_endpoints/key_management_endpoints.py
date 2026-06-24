@@ -874,6 +874,8 @@ async def _common_key_generation_helper(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
+        is_proxy_admin=user_api_key_dict.user_role
+        == LitellmUserRoles.PROXY_ADMIN.value,
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
@@ -2164,6 +2166,7 @@ async def _validate_mcp_servers_for_key_update(
     existing_key_row: Any,
     prisma_client: Any,
     user_api_key_cache: Any,
+    is_proxy_admin: bool,
 ) -> Optional[dict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
@@ -2186,6 +2189,7 @@ async def _validate_mcp_servers_for_key_update(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
+        is_proxy_admin=is_proxy_admin,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
@@ -2422,6 +2426,7 @@ async def _validate_update_key_data(
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            is_proxy_admin=_is_proxy_admin,
         )
         if normalized_object_permission is not None:
             data.object_permission = LiteLLM_ObjectPermissionBase(
