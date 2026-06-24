@@ -112,6 +112,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             merged_chunk["delta"] = {}
 
         uncached_input_tokens = chunk.usage.prompt_tokens or 0
+        cached_tokens = 0
         if (
             hasattr(chunk.usage, "prompt_tokens_details")
             and chunk.usage.prompt_tokens_details
@@ -132,11 +133,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             usage_dict["cache_creation_input_tokens"] = (
                 chunk.usage._cache_creation_input_tokens
             )
-        if (
-            hasattr(chunk.usage, "_cache_read_input_tokens")
-            and chunk.usage._cache_read_input_tokens > 0
-        ):
-            usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+        # OpenAI-format upstreams (e.g. OpenRouter) carry the cache-read count in
+        # prompt_tokens_details.cached_tokens, not the Anthropic-native private
+        # attribute; fall back to it so the merged message_delta surfaces it.
+        cache_read_input_tokens = (
+            getattr(chunk.usage, "_cache_read_input_tokens", 0) or 0
+        ) or cached_tokens
+        if cache_read_input_tokens > 0:
+            usage_dict["cache_read_input_tokens"] = cache_read_input_tokens
         merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
             merged_chunk["context_management"] = ContextManagementResponse(
