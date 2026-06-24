@@ -296,7 +296,7 @@ class MistralConfig(OpenAIGPTConfig):
     @staticmethod
     def _strip_extra_fields(messages: list[AllMessageValues]) -> list[AllMessageValues]:
         for m in messages:
-            if isinstance(m, dict):
+            if isinstance(m, dict) and m.get("role") == "assistant":
                 m.pop("metadata", None)
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)

@@ -281,6 +281,21 @@ class TestMistralReasoningSupport:
         assert "cache_control" not in msg
         assert "reasoning_content" not in msg
 
+    def test_user_message_extra_fields_are_preserved(self):
+        """GH#30882: user messages should not be stripped of extra fields."""
+        mistral_config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            cast(
+                AllMessageValues,
+                {"role": "user", "content": "Question?", "reasoning_content": "noise"},
+            )
+        ]
+        result = mistral_config._transform_messages(messages, "mistral/mistral-large-latest")
+        assert len(result) == 1
+        msg = cast(dict, result[0])
+        assert msg["role"] == "user"
+        assert msg["reasoning_content"] == "noise"
+
     def test_transform_request_magistral_with_reasoning(self):
         """Test transform_request method for magistral model with reasoning."""
         mistral_config = MistralConfig()
