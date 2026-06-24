@@ -99,11 +99,7 @@ class UpstreamCredentialProvider:
             case Byok():
                 key = await self._byok_store.fetch(subject.subject_id, server.server_id)
                 if not key:
-                    return Error(
-                        CredError.of_unauthorized(
-                            "BYOK credential not provisioned for this user"
-                        )
-                    )
+                    return Error(_byok_challenge(server.server_id))
                 header_name, header_value = config.header(key)
                 return Ok(StaticHeaderAuth(header_value, header_name=header_name))
         assert_never(config.key_source)
@@ -112,4 +108,30 @@ class UpstreamCredentialProvider:
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
     return Error(
         CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet")
+    )
+
+
+_BYOK_AUTH_MESSAGE = (
+    "No stored credential found for this BYOK server. Complete the OAuth authorization flow "
+    "to provide your API key."
+)
+_BYOK_WWW_AUTHENTICATE = (
+    'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+)
+
+
+def _byok_challenge(server_id: str) -> CredError:
+    """The 401 a BYOK server returns when the user has not provisioned a key.
+
+    Carries the RFC 9728 ``WWW-Authenticate`` challenge that drives the provisioning flow, plus
+    a ``byok_auth_required`` body, reproducing v1's BYOK 401 through the resolver.
+    """
+    return CredError.of_unauthorized(
+        _BYOK_AUTH_MESSAGE,
+        www_authenticate=_BYOK_WWW_AUTHENTICATE,
+        body={
+            "error": "byok_auth_required",
+            "server_id": server_id,
+            "message": _BYOK_AUTH_MESSAGE,
+        },
     )

@@ -35,7 +35,7 @@ litellm/proxy/_experimental/mcp_server/
   byok_oauth_endpoints.py    # BYOK OAuth UI/API flow
   oauth_utils.py             # redirect URI and proxy base URL validation
   oauth2_token_cache.py      # OAuth2 and per-user token resolution/cache        [PR7: resolve_mcp_auth removed; cache class stays, V1OAuth2CacheAdapter delegates to async_get_token]
-  db.py                      # MCP server, credential, env var, submission DB access  [unchanged; V1ByokStore delegates to _get_byok_credential / get_user_credential]
+  db.py                      # MCP server, credential, env var, submission DB access  [unchanged; DbBackedByokStore delegates to get_user_credential]
   toolset_db.py              # MCP toolset DB access
   rest_endpoints.py          # proxy REST facade for listing/calling MCP tools   [PR7: 7-arm only — pass identity + inbound token down instead of mcp_auth_header]
   openapi_to_mcp_generator.py# OpenAPI spec to MCP tool generation

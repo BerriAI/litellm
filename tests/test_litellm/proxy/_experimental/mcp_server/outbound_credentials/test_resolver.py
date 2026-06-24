@@ -143,6 +143,11 @@ async def test_api_key_byok_missing_credential_is_unauthorized():
     )
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
+    # the 401 carries the provisioning challenge, not a bare message
+    challenge = result.error.unauthorized
+    assert challenge.www_authenticate is not None
+    assert challenge.body is not None
+    assert challenge.body["error"] == "byok_auth_required"
 
 
 @pytest.mark.asyncio

@@ -78,10 +78,9 @@ from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
-# Short-lived in-memory cache for BYOK credentials.
+# Short-lived in-memory cache for BYOK credentials, used by _check_byok_credential.
 # Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
-# Storing the credential value (not just a bool) means _get_byok_credential and
-# _check_byok_credential share a single DB round-trip per TTL window.
+# The v2 resolver path fetches BYOK keys through CachedByokStore, not this cache.
 _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
@@ -2352,41 +2351,6 @@ if MCP_AVAILABLE:
                     )
         return name
 
-    async def _get_byok_credential(
-        mcp_server: MCPServer,
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-    ) -> Optional[str]:
-        """Retrieve the stored BYOK credential for a user+server pair.
-
-        Uses the shared _byok_cred_cache to avoid a DB round-trip on every
-        tool call within the TTL window.
-        """
-        if not mcp_server.is_byok:
-            return None
-        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
-        if not user_id:
-            return None
-
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            credential, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
-
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            return None
-        credential = await get_user_credential(
-            prisma_client=prisma_client,
-            user_id=user_id,
-            server_id=mcp_server.server_id,
-        )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
-        return credential
-
     async def _check_byok_credential(
         mcp_server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -2627,29 +2591,10 @@ if MCP_AVAILABLE:
                     standard_logging_mcp_tool_call
                 )
 
-            # BYOK: retrieve the stored per-user credential.  A single DB call
-            # both checks existence and fetches the value, avoiding a double query.
-            if mcp_server.is_byok and not mcp_auth_header:
-                byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
-                if byok_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
-                    )
-                mcp_auth_header = byok_cred
-            elif mcp_server.is_byok:
-                # External auth header supplied; still enforce user-identity check.
+            # A BYOK server with a per-request override is validated here; without an override the
+            # stored key is resolved through the v2 credential resolver (see _create_mcp_client),
+            # which fetches it per-user and returns the byok_auth_required 401 when it is missing.
+            if mcp_server.is_byok and mcp_auth_header:
                 await _check_byok_credential(mcp_server, user_api_key_auth)
 
         # Check if tool exists in local registry first (for OpenAPI-based tools)

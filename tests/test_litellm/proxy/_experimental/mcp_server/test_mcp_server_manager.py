@@ -4778,7 +4778,11 @@ class TestCreateMcpClientV2Graft:
                 self._http_server(auth_type=MCPAuth.api_key, is_byok=True),
                 user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
             )
+        # the graft surfaces the BYOK provisioning challenge, not a bare 401
         assert exc.value.status_code == 401
+        assert exc.value.headers is not None
+        assert "WWW-Authenticate" in exc.value.headers
+        assert exc.value.detail["error"] == "byok_auth_required"
 
 
 if __name__ == "__main__":
