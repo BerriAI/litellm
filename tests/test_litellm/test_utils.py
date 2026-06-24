@@ -156,7 +156,7 @@ def test_supports_native_streaming_unknown_model_returns_true():
     assert (
         litellm.utils.supports_native_streaming(
             model="my-custom-vllm-model-not-in-registry",
-            custom_llm_provider=None,
+            custom_llm_provider="openai",
         )
         is True
     )
