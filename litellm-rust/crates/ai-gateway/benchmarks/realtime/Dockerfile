@@ -15,8 +15,14 @@ FROM busybox:1.36-glibc
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/wsbench /usr/local/bin/wsbench
 COPY run.sh /usr/local/bin/run.sh
-RUN chmod +x /usr/local/bin/run.sh
-# Parent service stays alive; real measurements run as one-off jobs whose
-# start command is:  /bin/sh /usr/local/bin/run.sh <base64-of-flags>
-# Keeping the arg count tiny dodges Render's start-command tokenizer quirk.
+COPY serve.sh /usr/local/bin/serve.sh
+RUN chmod +x /usr/local/bin/run.sh /usr/local/bin/serve.sh
+# Two ways to run a leg, both taking a base64-encoded flag list (dodges Render's
+# start-command tokenizer):
+#   - run.sh   <b64>  → exec wsbench (stdout to the console; fine when stdout is
+#                       reachable, e.g. local docker or a host whose job logs you
+#                       can read).
+#   - serve.sh <b64>  → run wsbench, tee output to /tmp/web/result.txt, then serve
+#                       it over HTTP on $PORT. Use on a hosted runner whose
+#                       one-off-job stdout is NOT surfaced (fetch /result.txt).
 CMD ["sh", "-c", "echo wsbench image ready; sleep infinity"]
