@@ -1,6 +1,6 @@
 """Pure transforms for Alice WonderFence: context build, user-text mapping, verdict apply."""
 
-from typing import Any
+from typing import Any, Callable
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -16,8 +16,8 @@ logger = verbose_proxy_logger.getChild("alice_wonderfence")
 def build_analysis_context(
     request_data: dict,
     platform: str | None,
-    context_class: Any,
-) -> Any:
+    context_class: Callable[..., object],
+) -> object:
     """Build WonderFence AnalysisContext from request data."""
     metadata = get_metadata(request_data)
     model_str = request_data.get("model", "")
@@ -75,7 +75,7 @@ def tool_call_arg_segments(
 
 
 def _description_strings(
-    root: Any, root_prefix: list[Any]
+    root: object, root_prefix: list[Any]
 ) -> list[tuple[list[Any], str]]:
     """Collect ``(path, text)`` for every non-blank ``description`` string under
     ``root`` (a tool's ``function`` dict), walking nested JSON-schema parameters
@@ -146,7 +146,7 @@ def function_definition_segments(
     return paths, segments
 
 
-def _set_by_path(root: Any, path: list[Any], value: Any) -> None:
+def _set_by_path(root: Any, path: list[Any], value: object) -> None:
     obj = root
     for key in path[:-1]:
         obj = obj[key]

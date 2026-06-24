@@ -18,12 +18,22 @@ The stash bridges pre_call resolution into post_call where request metadata is
 gone — see ``stash_resolved`` for the full rationale.
 """
 
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Optional
 
 from .exceptions import WonderFenceMissingSecrets
 
 
-def _nonempty_str(value: Any) -> str | None:
+@dataclass(frozen=True)
+class CredentialConfig:
+    """Per-guardrail config consulted during credential resolution."""
+
+    guardrail_name: str
+    default_api_key: str | None
+    allow_request_metadata_override: bool
+
+
+def _nonempty_str(value: object) -> str | None:
     """Return ``value`` only if it is a non-empty/non-blank string, else None.
 
     Credential sources (request body, key/team metadata, config default) are
@@ -225,9 +235,7 @@ def resolve_credentials(
     request_data: dict,
     input_type: Literal["request", "response"],
     logging_obj: Optional["LiteLLMLoggingObj"],
-    guardrail_name: str,
-    default_api_key: str | None,
-    allow_request_metadata_override: bool,
+    config: CredentialConfig,
 ) -> tuple[str, str]:
     """Resolve (api_key, app_id) for this call.
 
@@ -241,22 +249,20 @@ def resolve_credentials(
     stash for values supplied in the original request body's metadata, which
     the framework drops before post_call.
     """
+    default_api_key = config.default_api_key
+    allow_override = config.allow_request_metadata_override
     if input_type == "request":
-        api_key = resolve_api_key(
-            request_data, default_api_key, allow_request_metadata_override
-        )
-        app_id = resolve_app_id(request_data, allow_request_metadata_override)
-        stash_resolved(logging_obj, guardrail_name, api_key, app_id)
+        api_key = resolve_api_key(request_data, default_api_key, allow_override)
+        app_id = resolve_app_id(request_data, allow_override)
+        stash_resolved(logging_obj, config.guardrail_name, api_key, app_id)
         return api_key, app_id
     try:
         return (
-            resolve_api_key(
-                request_data, default_api_key, allow_request_metadata_override
-            ),
-            resolve_app_id(request_data, allow_request_metadata_override),
+            resolve_api_key(request_data, default_api_key, allow_override),
+            resolve_app_id(request_data, allow_override),
         )
     except WonderFenceMissingSecrets:
-        recovered = recover_resolved(logging_obj, guardrail_name)
+        recovered = recover_resolved(logging_obj, config.guardrail_name)
         if recovered is None:
             raise
         return recovered

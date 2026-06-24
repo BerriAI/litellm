@@ -22,8 +22,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .chunked_evaluation import DEFAULT_MAX_CONCURRENCY, evaluate_segments
-from .client_cache import get_or_create_client, load_sdk
-from .credentials import resolve_credentials
+from .client_cache import ClientBuildSpec, get_or_create_client, load_sdk
+from .credentials import CredentialConfig, resolve_credentials
 from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
 from .processing import (
     apply_verdicts,
@@ -34,7 +34,7 @@ from .processing import (
 )
 
 if TYPE_CHECKING:
-    from wonderfence_sdk.client import (  # type: ignore[import-untyped]
+    from wonderfence_sdk.client import (  # type: ignore[import-untyped]  # pyright: ignore[reportMissingTypeStubs]
         WonderFenceV2Client as _WonderFenceV2Client,
     )
 
@@ -118,7 +118,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         if debug:
             logger.setLevel(logging.DEBUG)
 
-        self._client_cache: "OrderedDict[str, _WonderFenceV2Client]" = OrderedDict()
+        self._client_cache: OrderedDict[str, _WonderFenceV2Client] = OrderedDict()
         self._client_cache_maxsize = max_cached_clients or int(
             os.environ.get("ALICE_MAX_CACHED_CLIENTS", "10")
         )
@@ -159,11 +159,13 @@ class WonderFenceGuardrail(CustomGuardrail):
             api_key,
             self._client_cache,
             self._client_cache_maxsize,
-            self._WonderFenceV2Client,
-            self.api_timeout,
-            self.api_base,
-            self.platform,
-            self._connection_pool_limit,
+            ClientBuildSpec(
+                client_class=self._WonderFenceV2Client,
+                api_timeout=self.api_timeout,
+                api_base=self.api_base,
+                platform=self.platform,
+                connection_pool_limit=self._connection_pool_limit,
+            ),
         )
 
     @log_guardrail_information
@@ -202,9 +204,11 @@ class WonderFenceGuardrail(CustomGuardrail):
                 request_data,
                 input_type,
                 logging_obj,
-                self.guardrail_name,
-                self.api_key,
-                self.allow_request_metadata_override,
+                CredentialConfig(
+                    guardrail_name=self.guardrail_name,
+                    default_api_key=self.api_key,
+                    allow_request_metadata_override=self.allow_request_metadata_override,
+                ),
             )
             client = await self._get_client(api_key)
             context = build_analysis_context(
@@ -213,14 +217,14 @@ class WonderFenceGuardrail(CustomGuardrail):
 
             if input_type == "request":
 
-                async def evaluate(text: str) -> Any:
+                async def evaluate(text: str) -> object:
                     return await client.evaluate_prompt(
                         app_id=app_id, prompt=text, context=context, custom_fields=None
                     )
 
             else:
 
-                async def evaluate(text: str) -> Any:
+                async def evaluate(text: str) -> object:
                     return await client.evaluate_response(
                         app_id=app_id,
                         response=text,

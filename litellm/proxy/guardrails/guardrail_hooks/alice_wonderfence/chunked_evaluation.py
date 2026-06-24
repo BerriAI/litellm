@@ -61,7 +61,7 @@ def _split_text(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def _action_str(result: Any) -> str:
+def _action_str(result: object) -> str:
     action = getattr(result, "action", "")
     return action.value if hasattr(action, "value") else (action or "")
 
@@ -130,7 +130,7 @@ async def evaluate_segments(
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def run(text: str) -> Any:
+    async def run(text: str) -> object:
         async with semaphore:
             return await evaluate(text)
 
