@@ -1,7 +1,6 @@
-//! Gateway orchestration: pick a deployment with the (pure) core router, then
-//! perform the provider call. This is the seam that bridges `core::router`
-//! (selection only) and `providers` (the actual I/O), which is why it lives in
-//! the gateway rather than in `core`.
+//! Business logic: select a deployment with the (pure) core router, then call the
+//! provider splice. The seam between `core::router` (selection only) and
+//! `providers` (the actual WebSocket I/O).
 
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ use litellm_core::router::Router;
 use litellm_core::CoreResult;
 
 /// Select a deployment for `model` and splice the client stream to the provider.
-pub async fn realtime<In, Out>(
+pub async fn run<In, Out>(
     router: &Router,
     model: &str,
     timeout: Option<Duration>,
@@ -28,6 +27,7 @@ where
         CoreError::Routing(format!("no deployment available for model '{model}'"))
     })?;
     let params = &deployment.litellm_params;
+    // Strip a leading `openai/` so the OpenAI-only realtime fn gets the bare model.
     let provider_model = params
         .model
         .strip_prefix("openai/")
