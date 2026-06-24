@@ -31,6 +31,7 @@ from lifecycle import ResourceManager
 
 if TYPE_CHECKING:
     import redis
+    from redis.cluster import RedisCluster
 
 pytestmark = pytest.mark.e2e
 
@@ -42,45 +43,41 @@ BURST = 6
 COLD_WAIT_SECONDS = 80
 
 
-def _redis() -> "redis.Redis[str]":
+def _redis() -> "redis.Redis[str] | RedisCluster[str]":
+    """The proxy's Redis. The deployed runner sets REDIS_HOST to the serverless
+    ElastiCache, which is always TLS + cluster-mode; without it, fall back to a
+    local standalone redis for docker-compose runs."""
     import redis
 
-    kwargs = {
-        "host": os.getenv("E2E_REDIS_HOST", "localhost"),
-        "port": int(os.getenv("E2E_REDIS_PORT", "6380")),
-        "password": os.getenv("REDIS_PASSWORD") or None,
-        "decode_responses": True,
-        "socket_connect_timeout": 2,
-        "ssl": os.getenv("E2E_REDIS_SSL", "false").lower() in ("1", "true", "yes"),
-    }
-    # Serverless ElastiCache is cluster-mode + TLS; a standalone client breaks on
-    # MOVED redirects, so use the cluster client when the deploy says so. A local
-    # docker redis stays standalone.
-    if os.getenv("E2E_REDIS_CLUSTER", "false").lower() in ("1", "true", "yes"):
-        from redis.cluster import RedisCluster
+    host = os.getenv("REDIS_HOST")
+    if not host:
+        return redis.Redis(host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2)
 
-        return RedisCluster(**kwargs)
-    return redis.Redis(**kwargs)
+    from redis.cluster import RedisCluster
+
+    return RedisCluster(
+        host=host,
+        port=int(os.getenv("REDIS_PORT", "6379")),
+        ssl=True,
+        decode_responses=True,
+        socket_connect_timeout=2,
+    )
 
 
-def _spend_counter(rds: "redis.Redis[str]", key: str) -> float | None:
-    """The shared spend counter for `key`, or None if it is cold. The counter key is
-    the optional cache namespace plus ``spend:key:{sha256(key)}``. A cluster client
-    can't run a keyspace SCAN that spans shards, so on E2E_REDIS_CLUSTER (or when a
-    namespace is given) read the key directly - the namespaced key, then the bare
-    suffix. Otherwise match by suffix so a local namespace need not be hard-coded."""
+def _spend_counter(rds: "redis.Redis[str] | RedisCluster[str]", key: str) -> float | None:
+    """The shared spend counter for `key`, or None if it is cold. A cluster client
+    can't run a keyspace SCAN that spans shards, so read the key directly - the stage
+    gateway sets no cache namespace, so the key is the bare ``spend:key:{sha256(key)}``.
+    A standalone client matches by suffix, so the local cache namespace (litellm.caching)
+    need not be hard-coded here."""
+    from redis.cluster import RedisCluster
+
     digest = hashlib.sha256(key.encode()).hexdigest()
     suffix = f"spend:key:{digest}"
-    namespace = os.getenv("E2E_REDIS_NAMESPACE")
-    cluster = os.getenv("E2E_REDIS_CLUSTER", "false").lower() in ("1", "true", "yes")
-    if cluster or namespace:
-        candidates = [f"{namespace}:{suffix}"] if namespace else []
-        candidates.append(suffix)
-        for candidate in candidates:
-            raw = rds.get(candidate)
-            if raw is not None:
-                return float(raw)
-        return None
+    if isinstance(rds, RedisCluster):
+        raw = rds.get(suffix)
+        return float(raw) if raw is not None else None
+
     matches = list(rds.scan_iter(match=f"*{suffix}"))
     if not matches:
         return None
@@ -120,7 +117,7 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
         rds = _redis()
         rds.ping()
     except Exception as exc:  # noqa: BLE001 - any connect failure means skip
-        pytest.skip(f"e2e redis not reachable (set E2E_REDIS_HOST/E2E_REDIS_PORT): {exc}")
+        pytest.skip(f"e2e redis not reachable (set REDIS_HOST/REDIS_PORT): {exc}")
 
     key = client.generate_key(max_budget=1.0, models=[MODEL])
     resources.defer(lambda: client.delete_key(key))
