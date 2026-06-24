@@ -264,7 +264,11 @@ class TestValidateEnvironment:
         assert data["client_secret"] == "secret-ve"
         assert data["scope"] == "scope-ve"
 
-    def test_oauth_reads_from_env_when_litellm_params_absent(self, monkeypatch):
+    def test_oauth_env_vars_are_not_consulted(self, monkeypatch):
+        # OAuth creds are deployment configuration (litellm_params) only. The
+        # CUSTOM_OAUTH_* env vars must never mint a token, otherwise an admin's
+        # env-configured credential could be forwarded to a client-redirected
+        # api_base (the clear-on-override step has nothing to clear from env).
         monkeypatch.setenv("CUSTOM_OAUTH_TOKEN_URL", "https://idp.env/token")
         monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_ID", "cid-env")
         monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_SECRET", "secret-env")
@@ -275,17 +279,55 @@ class TestValidateEnvironment:
             "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
             return_value=client,
         ):
-            headers = config.validate_environment(
-                headers={},
-                model="gpt-4o",
-                messages=[{"role": "user", "content": "hi"}],
-                optional_params={},
-                litellm_params={},
-            )
+            with pytest.raises(OAuthClientCredentialsError):
+                config.validate_environment(
+                    headers={},
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                    optional_params={},
+                    litellm_params={},
+                )
 
-        assert headers["Authorization"] == "Bearer tok-env"
-        assert client.post.call_args.args[0] == "https://idp.env/token"
-        assert client.post.call_args.kwargs["data"]["client_id"] == "cid-env"
+        client.post.assert_not_called()
+
+    def test_no_bearer_after_clientside_base_override_clear(self, monkeypatch):
+        # End-to-end: a client api_base override makes the router clear the
+        # deployment's oauth_* from litellm_params; with no env fallback, no
+        # bearer is minted from admin creds for the client-controlled upstream.
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        monkeypatch.setenv("CUSTOM_OAUTH_TOKEN_URL", "https://idp.env/token")
+        monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_ID", "cid-env")
+        monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_SECRET", "secret-env")
+
+        cleared = get_dynamic_litellm_params(
+            {
+                "oauth_token_url": "https://idp.internal/token",
+                "oauth_client_id": "admin-id",
+                "oauth_client_secret": "admin-secret",
+                "oauth_scope": "admin-scope",
+            },
+            {"api_base": "https://client.example/v1"},
+        )
+
+        config = create_config_class(JSONProviderRegistry.get("custom_oauth"))()
+        client = _token_client(access_token="tok-leak")
+        with patch(
+            "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
+            return_value=client,
+        ):
+            with pytest.raises(OAuthClientCredentialsError):
+                config.validate_environment(
+                    headers={},
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                    optional_params={},
+                    litellm_params=cleared,
+                )
+
+        client.post.assert_not_called()
 
     def test_non_oauth_provider_still_uses_api_key_bearer(self):
         # Regression: existing JSON providers keep the inherited api_key -> Bearer path.

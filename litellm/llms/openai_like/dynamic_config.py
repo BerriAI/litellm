@@ -94,19 +94,15 @@ def create_config_class(provider: SimpleProviderConfig):
 
             from .oauth_authenticator import get_client_credentials_token
 
-            def _oauth_param(key: str, env_var: str) -> Optional[str]:
+            def _oauth_param(key: str) -> Optional[str]:
                 value = litellm_params.get(key)
-                if isinstance(value, str) and value:
-                    return value
-                return get_secret_str(env_var)
+                return value if isinstance(value, str) and value else None
 
             token = get_client_credentials_token(
-                token_url=_oauth_param("oauth_token_url", "CUSTOM_OAUTH_TOKEN_URL"),
-                client_id=_oauth_param("oauth_client_id", "CUSTOM_OAUTH_CLIENT_ID"),
-                client_secret=_oauth_param(
-                    "oauth_client_secret", "CUSTOM_OAUTH_CLIENT_SECRET"
-                ),
-                scope=_oauth_param("oauth_scope", "CUSTOM_OAUTH_SCOPE"),
+                token_url=_oauth_param("oauth_token_url"),
+                client_id=_oauth_param("oauth_client_id"),
+                client_secret=_oauth_param("oauth_client_secret"),
+                scope=_oauth_param("oauth_scope"),
             )
             headers["Authorization"] = f"Bearer {token}"
             if "content-type" not in headers and "Content-Type" not in headers:
