@@ -412,12 +412,12 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     id: "thirdlaw",
     name: "ThirdLaw",
     description:
-      "ThirdLaw guardrail for content filtering and moderation.",
+      "Runtime policy enforcement for LiteLLM traffic. Evaluates requests and responses against centrally managed policies called Laws, then returns a decision to continue, modify, or block.",
     category: "partner",
-    logo: `${ASSET_PREFIX}thirdlaw.svg`,
-    tags: ["Security", "Content Filtering", "Moderation", "Guardrail"],
-    providerKey: "ThirdLaw",
-  },
+      logo: `${ASSET_PREFIX}thirdlaw.svg`,
+      tags: ["Policy Enforcement", "Runtime Security", "Intervention"],
+      providerKey: "ThirdLaw",
+    },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
