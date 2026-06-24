@@ -1,5 +1,5 @@
 import { readFileSync } from "fs";
-import { countBudgetViolations } from "./lint-budget-lib.mjs";
+import { countBudgetViolations, findDrift } from "./lint-budget-lib.mjs";
 
 const argv = process.argv.slice(2);
 const positional = [];
@@ -32,13 +32,13 @@ for (const [rule, { max, target }] of Object.entries(budgets)) {
 
 if (flags.check) {
   const committed = JSON.parse(readFileSync(flags.check, "utf8"));
-  const drifted = Object.keys(counts).filter((rule) => committed[rule] !== counts[rule]);
-  for (const rule of drifted) {
+  const drift = findDrift(committed, counts);
+  for (const { rule, committed: was, actual } of drift) {
     console.error(
-      `::error::${flags.check} is stale for ${rule}: committed ${committed[rule] ?? "missing"}, actual ${counts[rule]}.`,
+      `::error::${flags.check} is stale for ${rule}: committed ${was ?? "missing"}, actual ${actual ?? "not a tracked rule"}.`,
     );
   }
-  if (drifted.length > 0) {
+  if (drift.length > 0) {
     console.error(`::error::Run \`npm run lint:metrics\` and commit ${flags.check}.`);
     failed = true;
   } else {

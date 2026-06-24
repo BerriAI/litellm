@@ -4,15 +4,16 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { countBudgetViolations } from "./lint-budget-lib.mjs";
 
+const ESLINT_EXIT_LINT_ERRORS = 1;
+
 const budgets = JSON.parse(readFileSync("eslint-budgets.json", "utf8"));
 const dir = mkdtempSync(join(tmpdir(), "litellm-lint-"));
 const reportPath = join(dir, "report.json");
 
 try {
-  // eslint exits non-zero whenever any error-level rule fires; the JSON report is still written.
   execSync(`npx eslint . -f json -o "${reportPath}"`, { stdio: "inherit" });
-} catch {
-  /* report file is what we read below */
+} catch (err) {
+  if (err.status !== ESLINT_EXIT_LINT_ERRORS) throw err;
 }
 
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
