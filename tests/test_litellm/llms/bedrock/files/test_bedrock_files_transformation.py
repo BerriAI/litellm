@@ -1425,3 +1425,49 @@ class TestBedrockFilesContentRetrieval:
         )
         assert isinstance(result, HttpxBinaryResponseContent)
         assert result.content == body
+
+    def test_retrieve_file_content_through_generic_handler(self):
+        import time as _time
+
+        from litellm.files.main import base_llm_http_handler
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        body = b'{"recordId":"req-1","modelOutput":{"ok":true}}\n'
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            return httpx.Response(status_code=200, content=body)
+
+        sync_client = HTTPHandler()
+        sync_client.client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        logging_obj = Logging(
+            model="",
+            messages=[],
+            stream=False,
+            call_type="file_content",
+            start_time=_time.time(),
+            litellm_call_id="test-call",
+            function_id="",
+        )
+
+        with patch.object(self.config, "get_credentials", return_value=self.fake_creds):
+            result = base_llm_http_handler.retrieve_file_content(
+                file_content_request={
+                    "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+                },
+                provider_config=self.config,
+                litellm_params=_trusted(
+                    s3_bucket_name="in-bucket", aws_region_name="us-west-2"
+                ),
+                headers={},
+                logging_obj=logging_obj,
+                _is_async=False,
+                client=sync_client,
+            )
+
+        assert "X-Amz-Signature=" in seen["url"]
+        assert "/in-bucket/litellm-batch-outputs/job/in.jsonl.out" in seen["url"]
+        assert result.content == body
