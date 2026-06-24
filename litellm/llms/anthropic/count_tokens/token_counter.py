@@ -66,9 +66,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         # Resolve custom api_base using the unified model info helper to support secret managers and alternative env vars
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        api_base = AnthropicModelInfo.get_api_base(
-            litellm_params.get("api_base")
-        ) or None
+        api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or None
 
         try:
             result = await anthropic_count_tokens_handler.handle_count_tokens_request(
@@ -89,9 +87,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except AnthropicError as e:
-            verbose_logger.warning(
-                f"Anthropic CountTokens API error: status={e.status_code}, message={e.message}"
-            )
+            verbose_logger.warning(f"Anthropic CountTokens API error: status={e.status_code}, message={e.message}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
