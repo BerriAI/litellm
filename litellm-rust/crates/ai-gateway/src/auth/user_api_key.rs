@@ -54,13 +54,16 @@ impl UserApiKeyAuth {
     }
 }
 
-/// SHA-256 over `(route, key)`, used as the cache key. Hashing keeps plaintext
-/// keys out of the in-memory cache map; including the route means a key cached for
-/// one route is never served for a different route (route restrictions can differ).
-pub(crate) fn key_hash(key: &str, route: &str) -> [u8; 32] {
+/// SHA-256 over `(route, model, key)`, used as the cache key. Hashing keeps
+/// plaintext keys out of the in-memory cache map; including the route AND model
+/// means an authorization cached for one (route, model) is never reused for a
+/// different one — both can be restricted independently per key/team.
+pub(crate) fn key_hash(key: &str, route: &str, model: Option<&str>) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(route.as_bytes());
-    hasher.update([0u8]); // domain separator between route and key
+    hasher.update([0u8]); // domain separator
+    hasher.update(model.unwrap_or("").as_bytes());
+    hasher.update([0u8]);
     hasher.update(key.as_bytes());
     hasher.finalize().into()
 }
@@ -74,6 +77,17 @@ fn bearer_token(parts: &Parts) -> Option<&str> {
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::trim)
         .filter(|token| !token.is_empty())
+}
+
+/// Pull a query parameter's value out of a raw query string, e.g. `model` from
+/// `model=gpt-realtime&foo=bar`. Returns the raw (un-percent-decoded) value;
+/// model names use only query-safe characters (alphanumerics, `-`, `_`, `.`, `/`),
+/// so no decoding is needed for the values we authorize on.
+fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
+    query?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == name).then_some(v)
+    })
 }
 
 #[axum::async_trait]
@@ -97,18 +111,20 @@ impl FromRequestParts<AppState> for UserApiKeyAuth {
             return Ok(Self::admin());
         }
 
-        // Validate against the route the gateway is actually serving, so the
-        // backend can enforce the key's route/model restrictions for THIS route.
+        // Validate against the route AND requested model, so the backend enforces
+        // the key's route/model restrictions for what's actually being requested
+        // (not just that the key exists — closes the model-authorization bypass).
         let route = parts.uri.path();
+        let model = query_param(parts.uri.query(), "model");
 
         // Virtual key: serve from cache, else verify via the (swappable) backend
-        // and cache the result keyed by (route, key) hash.
-        let hash = key_hash(token, route);
+        // and cache the result keyed by (route, model, key) hash.
+        let hash = key_hash(token, route, model);
         if let Some(cached) = state.key_cache.get(&hash) {
             return Ok(cached);
         }
 
-        match state.authenticator.verify(token, route).await {
+        match state.authenticator.verify(token, route, model).await {
             Ok(auth) => {
                 state.key_cache.insert(hash, auth.clone());
                 Ok(auth)
@@ -116,10 +132,15 @@ impl FromRequestParts<AppState> for UserApiKeyAuth {
             Err(AuthError::Unauthorized) => {
                 Err((StatusCode::UNAUTHORIZED, "invalid api key".to_string()))
             }
-            Err(AuthError::Upstream(detail)) => Err((
-                StatusCode::UNAUTHORIZED,
-                format!("auth backend error: {detail}"),
-            )),
+            Err(AuthError::Upstream(detail)) => {
+                // Keep the backend detail (which can include internal URLs/topology)
+                // server-side only; return a generic message to the caller.
+                eprintln!("auth backend error: {detail}");
+                Err((
+                    StatusCode::UNAUTHORIZED,
+                    "authentication unavailable".to_string(),
+                ))
+            }
         }
     }
 }
@@ -149,7 +170,12 @@ mod tests {
 
     #[axum::async_trait]
     impl KeyAuthenticator for StubAuthenticator {
-        async fn verify(&self, _key: &str, _route: &str) -> Result<UserApiKeyAuth, AuthError> {
+        async fn verify(
+            &self,
+            _key: &str,
+            _route: &str,
+            _model: Option<&str>,
+        ) -> Result<UserApiKeyAuth, AuthError> {
             match &self.result {
                 Ok(auth) => Ok(auth.clone()),
                 Err(AuthError::Unauthorized) => Err(AuthError::Unauthorized),
