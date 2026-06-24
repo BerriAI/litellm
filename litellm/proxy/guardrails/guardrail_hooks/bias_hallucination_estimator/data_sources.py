@@ -11,6 +11,15 @@ from typing import Any, cast
 
 
 @dataclass
+class DataSourceConfig:
+    """Common configuration shared by all DataSource subclasses."""
+
+    name: str = ""
+    enabled: bool = True
+    priority: int = 0
+
+
+@dataclass
 class FetchConfig:
     """HTTP fetch settings for URL-backed data sources."""
 
@@ -162,12 +171,11 @@ class URLDataSource(DataSource):
     def __init__(
         self,
         urls: list[str],
-        name: str = "url_source",
-        enabled: bool = True,
-        priority: int = 0,
+        source_config: DataSourceConfig | None = None,
         fetch_config: FetchConfig | None = None,
     ) -> None:
-        super().__init__(name=name, enabled=enabled, priority=priority)
+        _sc = source_config or DataSourceConfig(name="url_source")
+        super().__init__(name=_sc.name, enabled=_sc.enabled, priority=_sc.priority)
         self.urls = urls
         _fetch = fetch_config or FetchConfig()
         self.cache_ttl = _fetch.cache_ttl
@@ -241,14 +249,15 @@ class VectorStoreDataSource(DataSource):
     def __init__(
         self,
         provider: str,
-        name: str = "",
-        enabled: bool = True,
-        priority: int = 0,
+        source_config: DataSourceConfig | None = None,
         client_config: VectorStoreClientConfig | None = None,
         **config: str,
     ) -> None:
+        _sc = source_config or DataSourceConfig()
         super().__init__(
-            name=name or f"vectorstore_{provider}", enabled=enabled, priority=priority
+            name=_sc.name or f"vectorstore_{provider}",
+            enabled=_sc.enabled,
+            priority=_sc.priority,
         )
         self.provider = provider
         self.config = config
@@ -403,14 +412,15 @@ class FactCheckDataSource(DataSource):
     def __init__(
         self,
         provider: str = "snopes",
-        name: str = "",
-        enabled: bool = True,
-        priority: int = 0,
+        source_config: DataSourceConfig | None = None,
         api_key: str | None = None,
         **config: str,
     ) -> None:
+        _sc = source_config or DataSourceConfig()
         super().__init__(
-            name=name or f"factcheck_{provider}", enabled=enabled, priority=priority
+            name=_sc.name or f"factcheck_{provider}",
+            enabled=_sc.enabled,
+            priority=_sc.priority,
         )
         self.provider = provider
         self.api_key = api_key

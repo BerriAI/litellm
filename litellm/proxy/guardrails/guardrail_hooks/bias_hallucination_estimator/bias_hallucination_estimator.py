@@ -192,7 +192,6 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
             response_payload=response_payload,
             status=status,
             start_time=start_time,
-            highest_risk_percentage=highest_risk.risk.overall_risk_percentage,
         )
 
         if decision == "blocked":
@@ -276,8 +275,16 @@ class BiasHallucinationEstimatorGuardrail(CustomGuardrail):
         response_payload: dict[str, object],
         status: GuardrailStatus,
         start_time: datetime,
-        highest_risk_percentage: int,
     ) -> None:
+        risk_scores = response_payload.get("risk_scores") or []
+        highest_risk_percentage: int = max(
+            (
+                int(r["overall_risk_percentage"])  # type: ignore[index]
+                for r in risk_scores
+                if isinstance(r, dict) and "overall_risk_percentage" in r
+            ),
+            default=0,
+        )
         detection_methods = self._detection_methods(response_payload)
         tracing_detail = GuardrailTracingDetail(
             guardrail_id=self.guardrail_id or self.guardrail_name,
