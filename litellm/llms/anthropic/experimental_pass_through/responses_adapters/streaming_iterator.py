@@ -271,17 +271,33 @@ class AnthropicResponsesStreamWrapper:
                     stop_reason = "max_tokens"
                 usage = getattr(response_obj, "usage", None)
                 if usage is not None:
-                    input_tokens = getattr(usage, "input_tokens", 0) or 0
-                    output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
-                    # Prefer direct cache fields if present
+                    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+                    # OpenAI Responses API exposes cached prompt tokens at
+                    # ``usage.input_tokens_details.cached_tokens`` (parallel to
+                    # ``usage.prompt_tokens_details.cached_tokens`` on Chat Completions).
+                    itd = getattr(usage, "input_tokens_details", None)
+                    if itd is not None:
+                        if isinstance(itd, dict):
+                            cache_read_tokens = int(itd.get("cached_tokens", 0) or 0)
+                        else:
+                            cache_read_tokens = int(
+                                getattr(itd, "cached_tokens", 0) or 0
+                            )
+                    # Fall back to Anthropic-style direct fields if the upstream
+                    # provider already speaks Anthropic usage.
+                    if not cache_read_tokens:
+                        cache_read_tokens = int(
+                            getattr(usage, "cache_read_input_tokens", 0) or 0
+                        )
                     cache_creation_tokens = int(
                         getattr(usage, "cache_creation_input_tokens", 0) or 0
                     )
-                    cache_read_tokens = int(
-                        getattr(usage, "cache_read_input_tokens", 0) or 0
-                    )
+                    # Anthropic semantics: ``input_tokens`` is the *uncached* prompt
+                    # count. OpenAI reports total prompt tokens (cached + uncached),
+                    # so subtract to keep client-side accounting consistent.
+                    if cache_read_tokens and input_tokens >= cache_read_tokens:
+                        input_tokens = input_tokens - cache_read_tokens
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
