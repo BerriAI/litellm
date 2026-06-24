@@ -806,13 +806,14 @@ async def invoke_agent_a2a(
                     logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
                     _enqueue_fn()
 
+            response_dict: Dict[str, Any] = (
+                response.model_dump(mode="json", exclude_none=True)  # type: ignore
+                if hasattr(response, "model_dump")
+                else response if isinstance(response, dict) else {}
+            )
             return JSONResponse(
                 content=normalize_jsonrpc_response(
-                    (
-                        response.model_dump(mode="json", exclude_none=True)  # type: ignore
-                        if hasattr(response, "model_dump")
-                        else response
-                    ),
+                    response_dict,
                     served_version,
                     method="message/send",
                 )

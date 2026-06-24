@@ -199,8 +199,8 @@ async def _send_message(
     )
     return SendMessageResponse(
         root=SendMessageSuccessResponse(
-            id=request.id,  # pyright: ignore[reportArgumentType]
-            result=stream_compat.result,  # pyright: ignore[reportArgumentType]
+            id=request.id,
+            result=stream_compat.result,
         )
     )
 
@@ -262,9 +262,7 @@ async def _stream_messages(
             event,
             request_id=request.id,
         )
-        yield SendStreamingMessageResponse(
-            root=compat_chunk  # pyright: ignore[reportArgumentType]
-        )
+        yield SendStreamingMessageResponse(root=compat_chunk)
 
 
 async def _execute_a2a_stream_with_retry(
@@ -616,7 +614,10 @@ async def asend_message_streaming(
     if request is None:
         raise ValueError("request is required")
 
-    logging_obj = kwargs.get("litellm_logging_obj")
+    _raw_logging_obj = kwargs.get("litellm_logging_obj")
+    logging_obj: Optional[Logging] = (
+        _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
+    )
 
     if a2a_client is None:
         if api_base is None:
