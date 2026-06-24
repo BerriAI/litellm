@@ -5318,6 +5318,47 @@ async def test_router_stream_idle_timeout_completes_when_not_stalled():
 
 
 @pytest.mark.asyncio
+async def test_router_stream_idle_timeout_avoids_per_chunk_wait_for():
+    """The idle timer should use one rescheduled watchdog, not wrap every streamed
+    chunk in asyncio.wait_for."""
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    with (
+        patch("asyncio.wait_for", side_effect=AssertionError("per-chunk wait_for")),
+        patch("litellm.main.stream_chunk_builder", return_value=reconstructed),
+    ):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=5.0,
+        )
+
+    assert result is reconstructed
+
+
+@pytest.mark.asyncio
 async def test_router_stream_idle_timeout_does_not_fire_before_first_token():
     """When stream_idle_timeout is set without ttft_timeout, a slow first token must NOT be
     treated as a mid-stream stall: the idle clock only governs gaps after content has started.

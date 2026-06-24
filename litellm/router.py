@@ -3004,24 +3004,46 @@ class Router:
                         first_token_received = True
 
             if stream_idle_timeout is not None:
-                while True:
+                idle_timeout = stream_idle_timeout
+                stream_idle_timed_out = False
+                current_task = asyncio.current_task()
+                idle_timeout_handle: asyncio.TimerHandle | None = None
+
+                def _cancel_on_stream_idle_timeout() -> None:
+                    nonlocal stream_idle_timed_out
+                    stream_idle_timed_out = True
+                    if current_task is not None:
+                        current_task.cancel()
+
+                def _reset_stream_idle_timer() -> None:
+                    nonlocal idle_timeout_handle
+                    if idle_timeout_handle is not None:
+                        idle_timeout_handle.cancel()
+                    idle_timeout_handle = loop.call_later(
+                        idle_timeout, _cancel_on_stream_idle_timeout
+                    )
+
+                _reset_stream_idle_timer()
+                try:
                     try:
-                        chunk = await asyncio.wait_for(
-                            aiter.__anext__(), timeout=stream_idle_timeout
-                        )
-                    except asyncio.TimeoutError:
-                        verbose_router_logger.warning(
-                            f"stream_idle_timeout={stream_idle_timeout}s exceeded for model={response.model}: "
-                            "provider stalled mid-stream"
-                        )
-                        raise litellm.Timeout(
-                            message=f"Router stream_idle_timeout={stream_idle_timeout}s exceeded: provider stalled mid-stream",
-                            model=response.model or "",
-                            llm_provider=response.custom_llm_provider or "",
-                        )
-                    except StopAsyncIteration:
-                        break
-                    chunks.append(chunk)
+                        async for chunk in aiter:
+                            chunks.append(chunk)
+                            _reset_stream_idle_timer()
+                    except asyncio.CancelledError:
+                        if stream_idle_timed_out:
+                            verbose_router_logger.warning(
+                                f"stream_idle_timeout={stream_idle_timeout}s exceeded for model={response.model}: "
+                                "provider stalled mid-stream"
+                            )
+                            raise litellm.Timeout(
+                                message=f"Router stream_idle_timeout={stream_idle_timeout}s exceeded: provider stalled mid-stream",
+                                model=response.model or "",
+                                llm_provider=response.custom_llm_provider or "",
+                            )
+                        raise
+                finally:
+                    if idle_timeout_handle is not None:
+                        idle_timeout_handle.cancel()
             else:
                 async for chunk in aiter:
                     chunks.append(chunk)
