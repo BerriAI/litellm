@@ -57,6 +57,7 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+    ApiKeyConfig,
     Error,
     Ok,
     UpstreamCredentialProvider,
@@ -1955,6 +1956,24 @@ class MCPServerManager:
         """
         transport = server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else to_server_spec(server)
+        # Credential-isolation invariant (mirrors the v2 egress path): the resolved credential
+        # rides the httpx auth flow, which writes its header after extra_headers, so it would
+        # overwrite an inbound credential. Defer to v1 when a per-request override is present, or
+        # when the credential's header is already supplied via extra_headers (guardrail hook,
+        # static_headers, or a forwarded caller header) — v1 lets those win. ``none`` writes no
+        # header, so it never conflicts.
+        if spec is not None and (
+            mcp_auth_header
+            or (
+                isinstance(spec.config, ApiKeyConfig)
+                and extra_headers
+                and any(
+                    key.lower() == spec.config.header_name.lower()
+                    for key in extra_headers
+                )
+            )
+        ):
+            spec = None
         auth_value = (
             await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token)
             if spec is None
