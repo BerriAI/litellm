@@ -147,7 +147,9 @@ class TestInternalOnlyServerResolutionRegression:
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
         assert client_ip == "192.168.1.50"
 
-        manager = _make_manager([_make_server("internal_math", available_on_public_internet=False)])
+        manager = _make_manager(
+            [_make_server("internal_math", available_on_public_internet=False)]
+        )
         server = manager.get_mcp_server_by_name("internal_math", client_ip=client_ip)
         assert server is not None
         assert server.server_id == "internal_math"
@@ -166,8 +168,12 @@ class TestInternalOnlyServerResolutionRegression:
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
         assert client_ip == "8.8.8.8"
 
-        manager = _make_manager([_make_server("internal_math", available_on_public_internet=False)])
-        assert manager.get_mcp_server_by_name("internal_math", client_ip=client_ip) is None
+        manager = _make_manager(
+            [_make_server("internal_math", available_on_public_internet=False)]
+        )
+        assert (
+            manager.get_mcp_server_by_name("internal_math", client_ip=client_ip) is None
+        )
 
 
 class TestMCPServerIPFiltering:
@@ -190,7 +196,9 @@ class TestMCPServerIPFiltering:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        result = manager.filter_server_ids_by_ip(["pub", "priv"], client_ip="192.168.1.1")
+        result = manager.filter_server_ids_by_ip(
+            ["pub", "priv"], client_ip="192.168.1.1"
+        )
         assert result == ["pub", "priv"]
 
     @patch("litellm.public_mcp_servers", [])
@@ -213,7 +221,9 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["pub", "priv"], client_ip="8.8.8.8")
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip="8.8.8.8"
+        )
         assert allowed == ["pub"]
         assert blocked == 1
 
@@ -224,7 +234,9 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["pub", "priv"], client_ip="192.168.1.1")
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip="192.168.1.1"
+        )
         assert allowed == ["pub", "priv"]
         assert blocked == 0
 
@@ -234,7 +246,9 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["priv"], client_ip=None)
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv"], client_ip=None
+        )
         assert allowed == ["priv"]
         assert blocked == 0
 
@@ -245,6 +259,8 @@ class TestFilterServerIdsByIpWithInfo:
         priv2 = _make_server("priv2", available_on_public_internet=False)
         manager = _make_manager([priv1, priv2])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["priv1", "priv2"], client_ip="1.2.3.4")
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv1", "priv2"], client_ip="1.2.3.4"
+        )
         assert allowed == []
         assert blocked == 2

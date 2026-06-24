@@ -42,7 +42,9 @@ class IPAddressUtils:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
             except ValueError:
-                verbose_proxy_logger.warning("Invalid CIDR in mcp_internal_ip_ranges: %s, skipping", cidr)
+                verbose_proxy_logger.warning(
+                    "Invalid CIDR in mcp_internal_ip_ranges: %s, skipping", cidr
+                )
         return networks if networks else IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
 
     @staticmethod
@@ -60,7 +62,9 @@ class IPAddressUtils:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
             except ValueError:
-                verbose_proxy_logger.warning("Invalid CIDR in mcp_trusted_proxy_ranges: %s, skipping", cidr)
+                verbose_proxy_logger.warning(
+                    "Invalid CIDR in mcp_trusted_proxy_ranges: %s, skipping", cidr
+                )
         return networks
 
     @staticmethod
@@ -80,7 +84,9 @@ class IPAddressUtils:
     @staticmethod
     def is_internal_ip(
         client_ip: Optional[str],
-        internal_networks: Optional[List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]] = None,
+        internal_networks: Optional[
+            List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]
+        ] = None,
     ) -> bool:
         """
         Check if a client IP is from an internal/private network.
@@ -198,9 +204,13 @@ class IPAddressUtils:
             use_xff
             and "x-forwarded-for" in request.headers
             and general_settings.get("mcp_trusted_proxy_ranges")
-            and not IPAddressUtils.is_request_from_trusted_proxy(request, general_settings=general_settings)
+            and not IPAddressUtils.is_request_from_trusted_proxy(
+                request, general_settings=general_settings
+            )
         ):
             direct_ip = request.client.host if request.client else None
-            verbose_proxy_logger.warning("XFF header from untrusted IP %s, ignoring", direct_ip)
+            verbose_proxy_logger.warning(
+                "XFF header from untrusted IP %s, ignoring", direct_ip
+            )
             return direct_ip
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
