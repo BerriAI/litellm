@@ -1090,6 +1090,139 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
 
+def test_add_openrouter_style_usage_fields_with_explicit_cost_details():
+    original_flag = getattr(litellm, "include_openrouter_style_cost_details", False)
+    litellm.include_openrouter_style_cost_details = True
+
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 12000,
+            "completion_tokens": 452,
+            "total_tokens": 12452,
+        }
+    }
+
+    try:
+        ProxyBaseLLMRequestProcessing._add_openrouter_style_usage_fields(
+            response=response_obj,
+            model_name="openai/gpt-4o-mini",
+            is_byok=False,
+            response_cost=0.007356,
+            response_cost_details={
+                "upstream_inference_cost": 0.007356,
+                "upstream_inference_prompt_cost": 0.006,
+                "upstream_inference_completions_cost": 0.001356,
+            },
+        )
+
+        usage = response_obj["usage"]
+        assert usage["cost"] == pytest.approx(0.007356)
+        assert usage["is_byok"] is False
+        assert usage["cost_details"]["upstream_inference_cost"] == pytest.approx(
+            0.007356
+        )
+        assert usage["cost_details"][
+            "upstream_inference_prompt_cost"
+        ] == pytest.approx(0.006)
+        assert usage["cost_details"][
+            "upstream_inference_completions_cost"
+        ] == pytest.approx(0.001356)
+    finally:
+        litellm.include_openrouter_style_cost_details = original_flag
+
+
+def test_add_openrouter_style_usage_fields_computes_prompt_and_completion_costs(
+    monkeypatch,
+):
+    original_flag = getattr(litellm, "include_openrouter_style_cost_details", False)
+    litellm.include_openrouter_style_cost_details = True
+
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 12000,
+            "completion_tokens": 452,
+            "total_tokens": 12452,
+        }
+    }
+
+    monkeypatch.setattr(
+        litellm,
+        "cost_per_token",
+        lambda model, usage: (0.006, 0.001356),
+    )
+
+    try:
+        ProxyBaseLLMRequestProcessing._add_openrouter_style_usage_fields(
+            response=response_obj,
+            model_name="openai/gpt-4o-mini",
+            is_byok=True,
+            response_cost=0.007356,
+            response_cost_details=None,
+        )
+
+        usage = response_obj["usage"]
+        assert usage["cost"] == pytest.approx(0.007356)
+        assert usage["is_byok"] is True
+        assert usage["cost_details"]["upstream_inference_cost"] == pytest.approx(
+            0.007356
+        )
+        assert usage["cost_details"][
+            "upstream_inference_prompt_cost"
+        ] == pytest.approx(0.006)
+        assert usage["cost_details"][
+            "upstream_inference_completions_cost"
+        ] == pytest.approx(0.001356)
+    finally:
+        litellm.include_openrouter_style_cost_details = original_flag
+
+
+def test_add_openrouter_style_usage_fields_is_noop_when_disabled():
+    original_flag = getattr(litellm, "include_openrouter_style_cost_details", False)
+    litellm.include_openrouter_style_cost_details = False
+
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 12000,
+            "completion_tokens": 452,
+            "total_tokens": 12452,
+        }
+    }
+
+    try:
+        ProxyBaseLLMRequestProcessing._add_openrouter_style_usage_fields(
+            response=response_obj,
+            model_name="openai/gpt-4o-mini",
+            is_byok=False,
+            response_cost=0.007356,
+            response_cost_details={
+                "upstream_inference_cost": 0.007356,
+            },
+        )
+
+        usage = response_obj["usage"]
+        assert "cost" not in usage
+        assert "is_byok" not in usage
+        assert "cost_details" not in usage
+    finally:
+        litellm.include_openrouter_style_cost_details = original_flag
+
+
+def test_resolve_is_byok_flag_prefers_request_metadata():
+    data = {"litellm_metadata": {"model_info": {"is_byok": True}}}
+    assert ProxyBaseLLMRequestProcessing._resolve_is_byok_flag(data=data) is True
+
+    data_without_flag = {"litellm_metadata": {"model_info": {}}}
+    logging_obj = MagicMock()
+    logging_obj.litellm_params = {"model_info": {"is_byok": False}}
+    assert (
+        ProxyBaseLLMRequestProcessing._resolve_is_byok_flag(
+            data=data_without_flag,
+            logging_obj=logging_obj,
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:
     async def consume_stream(self, streaming_response: StreamingResponse) -> list:

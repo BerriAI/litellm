@@ -1177,6 +1177,148 @@ class ProxyBaseLLMRequestProcessing:
             model_id = model_info.get("id", "") or ""
         return model_id
 
+    @staticmethod
+    def _resolve_is_byok_flag(
+        data: dict,
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> bool:
+        """Resolve BYOK status from request metadata or logging context."""
+        litellm_metadata = data.get("litellm_metadata", {}) or {}
+        model_info = litellm_metadata.get("model_info", {}) or {}
+        if isinstance(model_info, dict) and isinstance(model_info.get("is_byok"), bool):
+            return model_info["is_byok"]
+
+        if logging_obj is not None and hasattr(logging_obj, "litellm_params"):
+            litellm_params = logging_obj.litellm_params or {}
+            direct_model_info = litellm_params.get("model_info", {}) or {}
+            if isinstance(direct_model_info, dict) and isinstance(
+                direct_model_info.get("is_byok"), bool
+            ):
+                return direct_model_info["is_byok"]
+
+            nested_metadata = litellm_params.get("metadata", {}) or {}
+            nested_model_info = nested_metadata.get("model_info", {}) or {}
+            if isinstance(nested_model_info, dict) and isinstance(
+                nested_model_info.get("is_byok"), bool
+            ):
+                return nested_model_info["is_byok"]
+
+        return False
+
+    @staticmethod
+    def _add_openrouter_style_usage_fields(
+        response: Any,
+        model_name: str,
+        is_byok: bool,
+        response_cost: Optional[Union[float, str]],
+        response_cost_details: Optional[dict],
+    ) -> None:
+        """Add OpenRouter-style usage metadata (`cost`, `is_byok`, `cost_details`)."""
+        if not getattr(litellm, "include_openrouter_style_cost_details", False):
+            return
+
+        if response is None:
+            return
+
+        usage_obj: Optional[Union[dict, Usage]] = None
+        if isinstance(response, dict):
+            usage_obj = response.get("usage")
+        else:
+            usage_obj = getattr(response, "usage", None)
+
+        if not isinstance(usage_obj, (dict, Usage)):
+            return
+
+        def _get_usage_value(key: str, default: Any = None) -> Any:
+            if isinstance(usage_obj, dict):
+                return usage_obj.get(key, default)
+            return getattr(usage_obj, key, default)
+
+        def _set_usage_value(key: str, value: Any) -> None:
+            if isinstance(usage_obj, dict):
+                usage_obj[key] = value
+            else:
+                setattr(usage_obj, key, value)
+
+        parsed_response_cost: Optional[float] = None
+        if response_cost not in (None, ""):
+            try:
+                parsed_response_cost = float(response_cost)
+            except (TypeError, ValueError):
+                parsed_response_cost = None
+
+        prompt_tokens = int(
+            _get_usage_value("prompt_tokens", _get_usage_value("input_tokens", 0)) or 0
+        )
+        completion_tokens = int(
+            _get_usage_value(
+                "completion_tokens", _get_usage_value("output_tokens", 0)
+            )
+            or 0
+        )
+        total_tokens = int(
+            _get_usage_value("total_tokens", prompt_tokens + completion_tokens)
+            or (prompt_tokens + completion_tokens)
+        )
+
+        prompt_cost: Optional[float] = None
+        completion_cost: Optional[float] = None
+
+        if model_name:
+            try:
+                prompt_cost, completion_cost = litellm.cost_per_token(
+                    model=model_name,
+                    usage=Usage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        prompt_tokens_details=_get_usage_value(
+                            "prompt_tokens_details", None
+                        ),
+                        completion_tokens_details=_get_usage_value(
+                            "completion_tokens_details", None
+                        ),
+                    ),
+                )
+            except Exception:
+                prompt_cost, completion_cost = None, None
+
+        calculated_total_cost: Optional[float] = None
+        if prompt_cost is not None and completion_cost is not None:
+            calculated_total_cost = float(prompt_cost + completion_cost)
+
+        final_cost = (
+            parsed_response_cost
+            if parsed_response_cost is not None
+            else calculated_total_cost
+        )
+        if final_cost is not None:
+            _set_usage_value("cost", final_cost)
+
+        _set_usage_value("is_byok", is_byok)
+
+        existing_cost_details = _get_usage_value("cost_details", None)
+        merged_cost_details: Dict[str, float] = {}
+        if isinstance(existing_cost_details, dict):
+            merged_cost_details.update(existing_cost_details)
+
+        if isinstance(response_cost_details, dict) and response_cost_details:
+            merged_cost_details.update(response_cost_details)
+        else:
+            if final_cost is not None:
+                merged_cost_details["upstream_inference_cost"] = float(final_cost)
+            if prompt_cost is not None:
+                merged_cost_details["upstream_inference_prompt_cost"] = float(
+                    prompt_cost
+                )
+            if completion_cost is not None:
+                merged_cost_details["upstream_inference_completions_cost"] = float(
+                    completion_cost
+                )
+
+        if merged_cost_details:
+            _set_usage_value("cost_details", merged_cost_details)
+
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
         if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
@@ -1696,6 +1838,18 @@ class ProxyBaseLLMRequestProcessing:
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
+        hidden_params_after_hooks = getattr(response, "_hidden_params", {}) or {}
+        ProxyBaseLLMRequestProcessing._add_openrouter_style_usage_fields(
+            response=response,
+            model_name=str(self.data.get("model") or getattr(response, "model", "") or ""),
+            is_byok=ProxyBaseLLMRequestProcessing._resolve_is_byok_flag(
+                data=self.data,
+                logging_obj=logging_obj,
+            ),
+            response_cost=hidden_params_after_hooks.get("response_cost"),
+            response_cost_details=hidden_params_after_hooks.get("response_cost_details"),
+        )
+
         if requested_model_from_client:
             _override_openai_response_model(
                 response_obj=response,
