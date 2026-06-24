@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -109,6 +110,11 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         # vLLM's embeddings endpoint accepts a chat-style `messages` body for multimodal
         # (image) embeddings; forward it instead of `input` when present
         if "messages" in optional_params:
+            if input:
+                verbose_logger.debug(
+                    "hosted_vllm embeddings: both `messages` and `input` provided; "
+                    "forwarding `messages` and ignoring `input`"
+                )
             remaining_params = {
                 k: v for k, v in optional_params.items() if k != "messages"
             }

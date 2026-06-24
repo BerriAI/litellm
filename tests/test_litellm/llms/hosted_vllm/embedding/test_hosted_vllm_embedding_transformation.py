@@ -382,14 +382,23 @@ class TestHostedVLLMMultimodalEmbedding:
         )
         assert result["messages"] == messages
 
-    def test_router_aembedding_accepts_messages_without_input(self):
-        """Router.aembedding must not raise when called with messages and no input (failure mode 2)."""
-        import asyncio
-        from unittest.mock import AsyncMock, patch
+    def test_messages_takes_precedence_when_both_input_and_messages_provided(self):
+        """When both are supplied, messages wins and input is dropped (no raw input forwarded)."""
+        messages = [{"role": "user", "content": "hi"}]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=["should be ignored"],
+            optional_params={"messages": messages},
+            headers={},
+        )
 
+        assert result["messages"] == messages
+        assert "input" not in result
+
+    def _router(self):
         from litellm import Router
 
-        router = Router(
+        return Router(
             model_list=[
                 {
                     "model_name": "qwen3-vl-embedding",
@@ -401,7 +410,9 @@ class TestHostedVLLMMultimodalEmbedding:
             ]
         )
 
-        messages = [
+    @property
+    def _image_messages(self):
+        return [
             {
                 "role": "user",
                 "content": [
@@ -413,17 +424,70 @@ class TestHostedVLLMMultimodalEmbedding:
             }
         ]
 
+    def test_router_aembedding_accepts_messages_without_input(self):
+        """Router.aembedding must not raise when called with messages and no input (failure mode 2)."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
         fake_response = MagicMock()
-        fake_response.data = []
-        fake_response.model = "Qwen3-VL-Embedding-8B-MLX-4bit"
-        fake_response.usage = MagicMock(prompt_tokens=1, total_tokens=1)
 
         with patch("litellm.aembedding", new=AsyncMock(return_value=fake_response)):
             result = asyncio.run(
-                router.aembedding(model="qwen3-vl-embedding", messages=messages)
+                self._router().aembedding(
+                    model="qwen3-vl-embedding", messages=self._image_messages
+                )
             )
 
         assert result is fake_response
+
+    def test_router_aembedding_forwards_input_when_present(self):
+        """Router.aembedding must still forward `input` downstream when it is provided."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        fake_response = MagicMock()
+
+        with patch(
+            "litellm.aembedding", new=AsyncMock(return_value=fake_response)
+        ) as mock_aembedding:
+            result = asyncio.run(
+                self._router().aembedding(
+                    model="qwen3-vl-embedding", input=["hello world"]
+                )
+            )
+
+        assert result is fake_response
+        assert mock_aembedding.call_args.kwargs["input"] == ["hello world"]
+
+    def test_router_embedding_sync_accepts_messages_without_input(self):
+        """Router.embedding (sync) must not raise when called with messages and no input."""
+        from unittest.mock import patch
+
+        fake_response = MagicMock()
+
+        with patch("litellm.embedding", return_value=fake_response) as mock_embedding:
+            result = self._router().embedding(
+                model="qwen3-vl-embedding", messages=self._image_messages
+            )
+
+        assert result is fake_response
+        forwarded = mock_embedding.call_args.kwargs
+        assert "input" not in forwarded
+        assert forwarded["messages"] == self._image_messages
+
+    def test_router_embedding_sync_forwards_input_when_present(self):
+        """Router.embedding (sync) must still forward `input` downstream when it is provided."""
+        from unittest.mock import patch
+
+        fake_response = MagicMock()
+
+        with patch("litellm.embedding", return_value=fake_response) as mock_embedding:
+            result = self._router().embedding(
+                model="qwen3-vl-embedding", input=["hello world"]
+            )
+
+        assert result is fake_response
+        assert mock_embedding.call_args.kwargs["input"] == ["hello world"]
 
 
 if __name__ == "__main__":
