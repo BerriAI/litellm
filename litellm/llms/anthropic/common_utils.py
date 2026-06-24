@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -10,6 +11,9 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+)
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -272,23 +276,68 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
+    def _supports_sampling_params(model: str) -> bool:
+        """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
+        rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
+        a 400 ("`temperature` is deprecated for this model").
 
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
-        """
-        from litellm.utils import _supports_factory
+        Driven by the ``supports_sampling_params`` flag in the model map; the
+        name check remains only as a fallback for provider-routed ids whose
+        map entries predate the flag."""
+        flag = AnthropicModelInfo._get_model_capability(
+            model, "supports_sampling_params"
+        )
+        if flag is not None:
+            return flag
+        model_lower = model.lower()
+        return not any(
+            v in model_lower
+            for v in (
+                "fable",
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
 
-        try:
-            if _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=key,
-            ):
-                return True
-        except Exception:
-            pass
+    @staticmethod
+    def _apply_sampling_param(
+        optional_params: dict,
+        model: str,
+        param: str,
+        value: Any,
+        drop_params: bool,
+        output_key: str,
+    ) -> None:
+        """Forward ``temperature``/``top_p``/``top_k`` to
+        ``optional_params[output_key]`` unless the model removed sampling
+        params, in which case drop the param (with drop_params) or raise a
+        clean client-side 400."""
+        if AnthropicModelInfo._supports_sampling_params(model) or (
+            param == "temperature" and value == 1
+        ):
+            optional_params[output_key] = value
+        elif not (litellm.drop_params or drop_params):
+            supported_hint = (
+                "Only temperature=1 is supported. " if param == "temperature" else ""
+            )
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support {param}={value}. {supported_hint}"
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+
+    @staticmethod
+    def _model_map_lookup_candidates(model: str) -> List[str]:
+        """Model-map keys to try for ``model``, stripping bedrock/vertex
+        prefixes so a provider-routed Claude still resolves to its entry."""
         candidates = [model]
         for prefix in (
             "bedrock/converse/",
@@ -307,15 +356,50 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 candidates.append(f"bedrock/{base}")
         except Exception:
             pass
+        return candidates
+
+    @staticmethod
+    def _get_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the model map, or None when
+        no entry declares it."""
         try:
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
+            for cand in AnthropicModelInfo._model_map_lookup_candidates(model):
+                value = litellm.model_cost.get(cand, {}).get(key)
+                if isinstance(value, bool):
+                    return value
         except Exception:
             pass
-        return False
+        return None
+
+    @staticmethod
+    def _get_exact_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the exact model-map entry only.
+
+        Unlike ``_get_model_capability``, does not walk stripped provider aliases.
+        Use when a feature is tied to a specific host (e.g. Anthropic API fast mode).
+        """
+        value = litellm.model_cost.get(model, {}).get(key)
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def _supports_model_capability(model: str, key: str) -> bool:
+        """Check a boolean capability ``key`` in the model map.
+
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
+        """
+        from litellm.utils import _supports_factory
+
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider="anthropic",
+                key=key,
+            ):
+                return True
+        except Exception:
+            pass
+        return AnthropicModelInfo._get_model_capability(model, key) is True
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
@@ -917,6 +1001,67 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text = block.get("text")
     return not isinstance(text, str) or not text.strip()
+
+
+def normalize_anthropic_tool_use_id(raw_id: str) -> str:
+    """
+    Normalize a tool_use / tool_result id for Anthropic's ``^[a-zA-Z0-9_-]+$``
+    pattern.
+
+    Strips Gemini thought-signature suffixes (``__thought__``) first, then
+    replaces any remaining invalid characters with underscores.
+    """
+    base_id = (
+        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+        else raw_id
+    )
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
+    return sanitized or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+    if not isinstance(block, dict):
+        return block
+    block_type = block.get("type")
+    if block_type in ("tool_use", "server_tool_use"):
+        raw_id = block.get("id")
+        if isinstance(raw_id, str):
+            normalized = normalize_anthropic_tool_use_id(raw_id)
+            if normalized != raw_id:
+                return {**block, "id": normalized}
+    elif block_type == "tool_result":
+        raw_id = block.get("tool_use_id")
+        if isinstance(raw_id, str):
+            normalized = normalize_anthropic_tool_use_id(raw_id)
+            if normalized != raw_id:
+                return {**block, "tool_use_id": normalized}
+    return block
+
+
+def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+    """
+    Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
+    ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
+    ``^[a-zA-Z0-9_-]+$`` requirement.
+
+    Cross-provider clients (e.g. Claude Code routed through kimi) may replay
+    conversation history containing ids like ``functions.Bash:0`` with ``.``
+    and ``:`` — valid on the upstream provider but rejected by Anthropic when
+    the session is switched to a native Anthropic deployment.
+    """
+    out: list[Any] = []
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        content = m["content"]
+        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
+        if new_content == content:
+            out.append(m)
+        else:
+            out.append({**m, "content": new_content})
+    return out
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

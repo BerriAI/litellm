@@ -30,6 +30,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
     _deserialize_json_list,
+    _normalize_mcp_server_cost_info,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -256,6 +257,69 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_coerces_cost_string_to_float(self):
+        """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
+        manager = MCPServerManager()
+        config = {
+            "google_maps": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "mcp_info": {
+                    "mcp_server_cost_info": {
+                        "default_cost_per_query": "7e-05",
+                        "tool_name_to_cost_per_query": {"geocode": "1e-3"},
+                    }
+                },
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        cost_info = server.mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 7e-05
+        assert isinstance(cost_info["default_cost_per_query"], float)
+        assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
+        assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
+
+    def test_normalize_mcp_server_cost_info_preserves_float_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": 0.01,
+                "tool_name_to_cost_per_query": {"search": 0.05},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 0.01
+        assert cost_info["tool_name_to_cost_per_query"] == {"search": 0.05}
+
+    def test_normalize_mcp_server_cost_info_drops_non_numeric_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": "not-a-number",
+                "tool_name_to_cost_per_query": {"search": "free", "geocode": "2e-4"},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert "default_cost_per_query" not in cost_info
+        assert cost_info["tool_name_to_cost_per_query"] == {"geocode": 2e-4}
+
+    def test_normalize_mcp_server_cost_info_leaves_missing_cost_info_alone(self):
+        mcp_info = {"server_name": "maps"}
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        assert "mcp_server_cost_info" not in mcp_info
 
     def test_warns_when_custom_separator_invalid(self, monkeypatch, caplog):
         """Invalid MCP_TOOL_PREFIX_SEPARATOR values should log a warning."""
@@ -2883,6 +2947,41 @@ class TestMCPServerManager:
             # Verify result contains the expected servers
             assert "test_server_1" in result
             assert "test_server_2" in result
+
+    @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_blocks_allow_all_keys(self):
+        """A key scoped to no-mcp-servers gets zero servers even when allow_all_keys
+        servers exist, and the inner resolver is never consulted."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with patch.object(
+            manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+        ), patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=["leaked-server"],
+        ) as mock_inner:
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):

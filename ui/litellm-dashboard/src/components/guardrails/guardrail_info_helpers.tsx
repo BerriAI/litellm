@@ -53,6 +53,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
   QostodianNexus: "qostodian_nexus",
+  Repelloai: "repelloai",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -123,6 +124,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
+  "Cisco AI Defense": `${asset_logos_folder}cisco.png`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
   "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
   "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,
@@ -141,6 +143,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
   Akto: `${asset_logos_folder}akto.svg`,
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
+  "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {

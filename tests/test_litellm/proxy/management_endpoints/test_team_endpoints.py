@@ -1609,7 +1609,8 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
         ) as mock_cache_team,
     ):
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
@@ -1618,7 +1619,7 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
             return_value=updated_team
         )
-        mock_cache_team.return_value = None
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
 
         if endpoint_name == "team_model_add":
             await team_model_add(
@@ -3061,6 +3062,106 @@ async def test_list_team_v2_org_admin_sees_org_teams():
         # Verify org-scoped where clause
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
         assert where["organization_id"] == {"in": ["org_A"]}
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
+    """
+    Test that an org admin whose own user_id is sent (as the UI does for
+    non-Admin roles) still sees all teams in their organization, not just
+    teams they are a direct member of.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/30215
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org_admin_user",
+    )
+
+    mock_user = LiteLLM_UserTable(
+        user_id="org_admin_user",
+        teams=["team_1"],  # direct member of only 1 team
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org_admin_user",
+                organization_id="org_A",
+                user_role="org_admin",
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=mock_user,
+        ),
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        mock_team_1 = Mock()
+        mock_team_1.model_dump.return_value = {
+            "team_id": "team_1",
+            "team_alias": "Team One",
+            "organization_id": "org_A",
+            "members_with_roles": [{"user_id": "org_admin_user", "role": "admin"}],
+        }
+        mock_team_2 = Mock()
+        mock_team_2.model_dump.return_value = {
+            "team_id": "team_2",
+            "team_alias": "Team Two",
+            "organization_id": "org_A",
+            "members_with_roles": [{"user_id": "other_user", "role": "user"}],
+        }
+        mock_db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[mock_team_1, mock_team_2]
+        )
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+
+        # UI sends the caller's own user_id for non-Admin roles
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id="org_admin_user",  # same as caller — UI sends this
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            user_api_key_dict=mock_user_api_key_dict,
+            page=1,
+            page_size=10,
+            sort_by=None,
+            sort_order="asc",
+            status=None,
+        )
+
+        assert result["total"] == 2
+        assert len(result["teams"]) == 2
+
+        # Verify the where clause scopes by org only — no team_id filter
+        where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
+        assert where["organization_id"] == {"in": ["org_A"]}
+        assert "team_id" not in where
 
 
 @pytest.mark.asyncio
@@ -8886,3 +8987,360 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
             )
     assert str(exc.value.code) == "403"
     assert "allowed_passthrough_routes" in str(exc.value.message)
+
+
+def test_set_budget_reset_at_clears_when_budget_duration_null():
+    """
+    When budget_duration is explicitly set to null, _set_budget_reset_at
+    should set budget_reset_at=None in updated_kv so Prisma clears it in the DB.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest(team_id="test-team", budget_duration=None)
+    updated_kv = {"team_id": "test-team", "budget_duration": None}
+
+    _set_budget_reset_at(data, updated_kv)
+
+    assert "budget_reset_at" in updated_kv
+    assert updated_kv["budget_reset_at"] is None
+
+
+def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
+    """
+    When budget_duration is NOT sent (unset), _set_budget_reset_at should
+    not add budget_reset_at to updated_kv.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest(team_id="test-team")
+    updated_kv = {"team_id": "test-team"}
+
+    _set_budget_reset_at(data, updated_kv)
+
+    assert "budget_reset_at" not in updated_kv
+
+
+def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
+    """
+    When budget_duration is set to a valid string, _set_budget_reset_at
+    should compute and set budget_reset_at.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest(team_id="test-team", budget_duration="30d")
+    updated_kv = {"team_id": "test-team", "budget_duration": "30d"}
+
+    _set_budget_reset_at(data, updated_kv)
+
+    assert "budget_reset_at" in updated_kv
+    assert updated_kv["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_clear_team_member_budget_duration_calls_update_budget():
+    """
+    When team_member_budget_duration is explicitly null and a budget row
+    exists, clear_team_member_budget_fields should call update_budget
+    with budget_duration=None and budget_reset_at=None.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="admin-user",
+    )
+
+    team_table = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "budget-123"},
+        members_with_roles=[],
+    )
+
+    updated_kv = {
+        "team_id": "test-team",
+        "team_member_budget_duration": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            explicitly_set_fields={"team_member_budget_duration"},
+        )
+
+    mock_update_budget.assert_awaited_once()
+    budget_request = mock_update_budget.call_args.kwargs["budget_obj"]
+    assert budget_request.budget_id == "budget-123"
+    assert "budget_duration" in budget_request.model_fields_set
+    assert budget_request.budget_duration is None
+    assert "budget_reset_at" in budget_request.model_fields_set
+    assert budget_request.budget_reset_at is None
+    assert "team_member_budget_duration" not in result
+
+
+@pytest.mark.asyncio
+async def test_clear_team_member_budget_clears_max_budget():
+    """
+    When team_member_budget is explicitly null, clear_team_member_budget_fields
+    should call update_budget with max_budget=None.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="admin-user",
+    )
+
+    team_table = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "budget-456"},
+        members_with_roles=[],
+    )
+
+    updated_kv = {
+        "team_id": "test-team",
+        "team_member_budget": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            explicitly_set_fields={"team_member_budget"},
+        )
+
+    mock_update_budget.assert_awaited_once()
+    budget_request = mock_update_budget.call_args.kwargs["budget_obj"]
+    assert budget_request.budget_id == "budget-456"
+    assert "max_budget" in budget_request.model_fields_set
+    assert budget_request.max_budget is None
+    assert "team_member_budget" not in result
+
+
+@pytest.mark.asyncio
+async def test_clear_team_member_rpm_tpm_limits():
+    """
+    When team_member_rpm_limit and team_member_tpm_limit are explicitly null,
+    clear_team_member_budget_fields should clear both on the budget row.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="admin-user",
+    )
+
+    team_table = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "budget-789"},
+        members_with_roles=[],
+    )
+
+    updated_kv = {
+        "team_id": "test-team",
+        "team_member_rpm_limit": None,
+        "team_member_tpm_limit": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            explicitly_set_fields={"team_member_rpm_limit", "team_member_tpm_limit"},
+        )
+
+    mock_update_budget.assert_awaited_once()
+    budget_request = mock_update_budget.call_args.kwargs["budget_obj"]
+    assert budget_request.budget_id == "budget-789"
+    assert "rpm_limit" in budget_request.model_fields_set
+    assert budget_request.rpm_limit is None
+    assert "tpm_limit" in budget_request.model_fields_set
+    assert budget_request.tpm_limit is None
+    assert "team_member_rpm_limit" not in result
+    assert "team_member_tpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_clear_all_team_member_fields_at_once():
+    """
+    When all team_member fields are explicitly null, all corresponding
+    budget row fields should be cleared in a single update.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="admin-user",
+    )
+
+    team_table = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "budget-all"},
+        members_with_roles=[],
+    )
+
+    updated_kv = {
+        "team_id": "test-team",
+        "team_member_budget": None,
+        "team_member_budget_duration": None,
+        "team_member_rpm_limit": None,
+        "team_member_tpm_limit": None,
+    }
+
+    all_fields = {
+        "team_member_budget",
+        "team_member_budget_duration",
+        "team_member_rpm_limit",
+        "team_member_tpm_limit",
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            explicitly_set_fields=all_fields,
+        )
+
+    mock_update_budget.assert_awaited_once()
+    budget_request = mock_update_budget.call_args.kwargs["budget_obj"]
+    assert budget_request.budget_id == "budget-all"
+    assert budget_request.max_budget is None
+    assert budget_request.budget_duration is None
+    assert budget_request.budget_reset_at is None
+    assert budget_request.rpm_limit is None
+    assert budget_request.tpm_limit is None
+    for field in all_fields:
+        assert field not in result
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_duration_not_sent_does_not_update():
+    """
+    When team_member_budget_duration is NOT sent in the request, no budget
+    update should occur and the field should not appear in updated_kv.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    updated_kv = {"team_id": "test-team", "max_budget": 200}
+
+    _team_member_fields_in_request = {
+        field
+        for field in [
+            "team_member_budget",
+            "team_member_rpm_limit",
+            "team_member_tpm_limit",
+            "team_member_budget_duration",
+        ]
+        if field in updated_kv
+    }
+
+    assert len(_team_member_fields_in_request) == 0
+
+    TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+
+    assert "team_member_budget_duration" not in updated_kv
+    assert "team_member_budget" not in updated_kv
+
+
+@pytest.mark.asyncio
+async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="admin-user",
+    )
+
+    team_table = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata=None,
+        members_with_roles=[],
+    )
+
+    updated_kv = {
+        "team_id": "test-team",
+        "team_member_budget": None,
+        "team_member_rpm_limit": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            explicitly_set_fields={"team_member_budget", "team_member_rpm_limit"},
+        )
+
+    mock_update_budget.assert_not_awaited()
+    assert "team_member_budget" not in result
+    assert "team_member_rpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_team_info_forwards_key_limit_to_get_data():
+    """/team/info must thread its ``key_limit`` query param into the key
+    lookup so the database caps how many keys are returned for the team.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-1")
+    )
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+    ):
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            key_limit=7,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert mock_prisma.get_data.await_args.kwargs["limit"] == 7

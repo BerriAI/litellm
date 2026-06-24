@@ -30,10 +30,6 @@ import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
 interface ModelDashboardProps {
-  token: string | null;
-  modelData: any;
-  keys: any[] | null;
-  setModelData: any;
   premiumUser: boolean;
   teams: Team[] | null;
 }

@@ -15,7 +15,22 @@ BEDROCK_MANAGED_S3_PREFIXES = (
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
+MANAGED_CLOUD_STORAGE_SCHEMES = ("s3://", "gs://")
 _MAPPING_PROXY_TYPE: type = type(MappingProxyType({}))
+
+
+def is_managed_cloud_storage_uri(file_id: str) -> bool:
+    """
+    True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``).
+
+    These are internal provider artifacts. On the multi-tenant proxy they must be
+    retrieved through their managed unified file id so owner/team access is enforced;
+    a raw URI supplied by a caller bypasses that check.
+    """
+    return isinstance(file_id, str) and file_id.startswith(
+        MANAGED_CLOUD_STORAGE_SCHEMES
+    )
+
 
 _SAFE_OBJECT_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
