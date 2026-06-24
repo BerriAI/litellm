@@ -49,6 +49,7 @@ import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
+import TokenMetricLabel from "./TokenMetricLabel";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -636,14 +637,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               className="cursor-pointer hover:bg-gray-50 transition-colors"
                               onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
                             >
-                              <div className="flex items-center gap-2">
-                                <Title>Total Tokens</Title>
-                                {showTokenBreakdown ? (
-                                  <DownOutlined className="text-gray-400 text-xs" />
-                                ) : (
-                                  <RightOutlined className="text-gray-400 text-xs" />
-                                )}
-                              </div>
+                              <TokenMetricLabel
+                                kind="total"
+                                label="Total Tokens"
+                                trailing={
+                                  showTokenBreakdown ? (
+                                    <DownOutlined className="text-gray-400 text-xs" />
+                                  ) : (
+                                    <RightOutlined className="text-gray-400 text-xs" />
+                                  )
+                                }
+                              />
                               <Text className="text-2xl font-bold mt-2">
                                 {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
                               </Text>
@@ -652,25 +656,30 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           {showTokenBreakdown && (
                             <Grid numItems={4} className="gap-4 mt-4">
                               <Card>
-                                <Title>Input Tokens</Title>
+                                <TokenMetricLabel kind="input" label="Input Tokens" />
                                 <Text className="text-2xl font-bold mt-2 text-blue-600">
-                                  {(userSpendData.metadata?.total_prompt_tokens || 0).toLocaleString()}
+                                  {Math.max(
+                                    0,
+                                    (userSpendData.metadata?.total_prompt_tokens || 0) -
+                                      (userSpendData.metadata?.total_cache_read_input_tokens || 0) -
+                                      (userSpendData.metadata?.total_cache_creation_input_tokens || 0)
+                                  ).toLocaleString()}
                                 </Text>
                               </Card>
                               <Card>
-                                <Title>Output Tokens</Title>
+                                <TokenMetricLabel kind="output" label="Output Tokens" />
                                 <Text className="text-2xl font-bold mt-2 text-cyan-600">
                                   {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
                                 </Text>
                               </Card>
                               <Card>
-                                <Title>Cache Read Tokens</Title>
+                                <TokenMetricLabel kind="cache_read" label="Cache Read Tokens" />
                                 <Text className="text-2xl font-bold mt-2 text-green-600">
                                   {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
                                 </Text>
                               </Card>
                               <Card>
-                                <Title>Cache Write Tokens</Title>
+                                <TokenMetricLabel kind="cache_write" label="Cache Write Tokens" />
                                 <Text className="text-2xl font-bold mt-2 text-purple-600">
                                   {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
                                 </Text>
