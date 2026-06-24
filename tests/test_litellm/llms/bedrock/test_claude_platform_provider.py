@@ -480,6 +480,31 @@ def test_claude_platform_unsupported_override_allows_context_management():
     assert "context_management" in request_body
 
 
+def test_claude_platform_unsupported_override_ignores_invalid_type():
+    """
+    If claude_platform_unsupported_params is set to a non-collection type
+    (e.g. a string), the override is ignored and defaults apply.
+    """
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+    request_body = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+            "max_tokens": 10,
+        },
+        litellm_params={"claude_platform_unsupported_params": "not_a_list"},
+        headers={},
+    )
+
+    assert "context_management" not in request_body
+    assert request_body["max_tokens"] == 10
+
+
 def test_chat_completion_claude_platform_sigv4_body_has_no_auth_params():
     """
     End-to-end (mocked transport): a config-driven SigV4 call with
