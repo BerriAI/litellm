@@ -14,8 +14,8 @@ surfaces (all OpenAI-Responses wire format, so transforms are inherited from
   / qwen / llama /   (:class:`DatabricksOpenResponsesAPIConfig`)
   gemma / others
 
-Surface scopes were verified live (see ``_local/litellm-unity-ai-gateway/probes``):
-the unified Open Responses API lives only on ``/serving-endpoints`` (there is no
+Surface scopes were verified live against a Databricks workspace: the unified Open
+Responses API lives only on ``/serving-endpoints`` (there is no
 ``/ai-gateway/open-responses``), Supervisor is allowlisted, and the native OpenAI
 Responses path is GPT-only. An explicit ``/serving-endpoints`` or custom-path base is
 honored for backward compatibility.
@@ -57,7 +57,8 @@ class _DatabricksResponsesBase(DatabricksBase, OpenAIResponsesAPIConfig):
     gateway_path: str = AI_GATEWAY_PATHS["openai_responses"]
     # Full suffix appended to ``<host>`` when on the serving-endpoints surface.
     serving_url_suffix: str = "/serving-endpoints/responses"
-    # Pin a surface ("ai_gateway" | "serving_endpoints"); ``None`` = resolve/probe.
+    # Pin a surface ("ai_gateway" | "serving_endpoints"); ``None`` = resolve via the
+    # optimistic gateway-first cache lookup (no network probe).
     force_surface: Optional[str] = None
 
     @property
@@ -191,7 +192,7 @@ class DatabricksOpenResponsesAPIConfig(_DatabricksResponsesBase):
     so the surface is pinned accordingly.
 
     TODO(ai-gateway-open-responses): the AI Gateway is expected to expose Open
-    Responses soon. When it lands (and the exact path is re-probed), set
+    Responses soon. When it lands (and the exact path is confirmed), set
     ``gateway_path`` to the real gateway path and ``force_surface = None`` so this
     resolves gateway-first with the serving-endpoints path below as the fallback —
     no other change needed. Until then keep it pinned to serving-endpoints.

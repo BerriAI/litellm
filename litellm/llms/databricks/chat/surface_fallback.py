@@ -18,6 +18,11 @@ Design notes:
   or forced gateway); explicit ``/serving-endpoints`` users never pay a retry.
 - ``optional_params`` is snapshotted and restored before the retry so values the
   first attempt popped (request tags, profile, user-agent) are reapplied.
+- Streaming: a gateway-absent workspace returns the ``404`` at request
+  establishment (inside ``completion``, before any chunk is produced), so the retry
+  is safe. This wrapper only guards the ``completion`` call, NOT iteration of the
+  returned stream, so a mid-stream error is intentionally never retried (no risk of
+  duplicated/replayed chunks).
 """
 
 import asyncio

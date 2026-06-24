@@ -96,6 +96,11 @@ def is_surface_unavailable_error(exc: Exception) -> bool:
         return True
     # Other 4xx/5xx only fall back with a corroborating marker (Databricks uses
     # generic BAD_REQUEST / INTERNAL_ERROR for "model not served on this surface").
+    # Caveat: a genuine transient 5xx that happens to carry one of these markers is
+    # indistinguishable from "not served here" and will trigger a surface switch.
+    # This is the documented platform trade-off; the chain re-raises the PRIMARY
+    # surface's original error if every surface (and chat emulation) ultimately
+    # fails, so a real outage is not masked by a confusing emulation error.
     if status_int in _FALLBACK_STATUSES and has_marker:
         return True
     # No HTTP status available (some transports): only fall back on a

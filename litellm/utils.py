@@ -8914,8 +8914,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
-            # Family-routed responses() (surfaces verified live, see
-            # _local/litellm-unity-ai-gateway/probes):
+            # Family-routed responses() (surfaces verified live against a workspace):
             #   gpt-N (non-oss) -> native OpenAI Responses  (/ai-gateway/openai/v1/responses)
             #   claude          -> Supervisor (ai-gateway)  (/ai-gateway/mlflow/v1/responses)
             #   gemini + open    -> Open Responses (serving) (/serving-endpoints/open-responses)
