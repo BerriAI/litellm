@@ -27,6 +27,7 @@ from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.router_utils.search_api_router import SearchAPIRouter
 from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
@@ -92,6 +93,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: List[Dict],
         tools: Optional[List[Dict]],
         custom_llm_provider: Optional[str],
+        kwargs: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Short-circuit web-search-only requests by executing the search directly.
@@ -178,8 +180,15 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Execute search — keep the structured SearchResponse so the native
         # block can carry per-result url/title/page_age.
         try:
-            search_result_text, structured = await self._execute_search(query)
+            if kwargs is None:
+                search_result_text, structured = await self._execute_search(query)
+            else:
+                search_result_text, structured = await self._execute_search(
+                    query, kwargs=kwargs
+                )
         except Exception as e:
+            if self._is_proxy_exception(e):
+                raise
             verbose_logger.error(
                 f"WebSearchInterception: Short-circuit search failed: {e}"
             )
@@ -945,7 +954,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 verbose_logger.debug(
                     f"WebSearchInterception: Queuing search for query='{query}'"
                 )
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs))
             else:
                 verbose_logger.debug(
                     f"WebSearchInterception: Tool call {tool_call['id']} has no query"
@@ -966,6 +975,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         structured_results: List[Optional[SearchResponse]] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
+                if self._is_proxy_exception(result):
+                    raise result
                 verbose_logger.error(
                     f"WebSearchInterception: Search {i} failed with error: {str(result)}"
                 )
@@ -1045,7 +1056,141 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return patch, structured_results
 
-    async def _execute_search(self, query: str) -> Tuple[str, Optional[SearchResponse]]:
+    @staticmethod
+    def _get_user_api_key_auth_from_kwargs(kwargs: Optional[Dict[str, Any]]) -> Any:
+        if not kwargs:
+            return None
+
+        for metadata_key in ("metadata", "litellm_metadata"):
+            metadata = kwargs.get(metadata_key)
+            if isinstance(metadata, dict):
+                user_api_key_auth = metadata.get("user_api_key_auth")
+                if user_api_key_auth is not None:
+                    return user_api_key_auth
+
+        litellm_params = kwargs.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            for metadata_key in ("metadata", "litellm_metadata"):
+                metadata = litellm_params.get(metadata_key)
+                if isinstance(metadata, dict):
+                    user_api_key_auth = metadata.get("user_api_key_auth")
+                    if user_api_key_auth is not None:
+                        return user_api_key_auth
+
+        return kwargs.get("user_api_key_auth") or kwargs.get("user_api_key_dict")
+
+    @staticmethod
+    def _get_auth_attr(user_api_key_auth: Any, attr_name: str) -> Any:
+        if isinstance(user_api_key_auth, dict):
+            return user_api_key_auth.get(attr_name)
+        return getattr(user_api_key_auth, attr_name, None)
+
+    @staticmethod
+    def _is_proxy_exception(exception: BaseException) -> bool:
+        from litellm.proxy._types import ProxyException
+
+        return isinstance(exception, ProxyException)
+
+    @staticmethod
+    def _get_search_tool_names_from_object_permission(
+        object_permission: Any,
+    ) -> List[str]:
+        if object_permission is None:
+            return []
+        if isinstance(object_permission, dict):
+            raw_search_tools = object_permission.get("search_tools")
+        else:
+            raw_search_tools = getattr(object_permission, "search_tools", None)
+        if not raw_search_tools:
+            return []
+        return list(raw_search_tools)
+
+    @staticmethod
+    def _assert_search_tool_allowed(
+        *,
+        search_tool_name: str,
+        object_permission: Any,
+        object_type: str,
+    ) -> None:
+        allowed_search_tools = (
+            WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(
+                object_permission
+            )
+        )
+        if not allowed_search_tools or search_tool_name in allowed_search_tools:
+            return
+
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+        raise ProxyException(
+            message=f"{object_type.capitalize()} not allowed to access search tool: {search_tool_name}. "
+            f"Allowed search tools: {allowed_search_tools}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="search_tool_name",
+            code=403,
+        )
+
+    @staticmethod
+    async def _authorize_search_tool_access(
+        search_tool_name: Optional[str],
+        kwargs: Optional[Dict[str, Any]],
+    ) -> None:
+        if not search_tool_name:
+            return
+
+        user_api_key_auth = (
+            WebSearchInterceptionLogger._get_user_api_key_auth_from_kwargs(kwargs)
+        )
+        if user_api_key_auth is None:
+            return
+
+        WebSearchInterceptionLogger._assert_search_tool_allowed(
+            search_tool_name=search_tool_name,
+            object_permission=WebSearchInterceptionLogger._get_auth_attr(
+                user_api_key_auth, "object_permission"
+            ),
+            object_type="key",
+        )
+
+        team_id = WebSearchInterceptionLogger._get_auth_attr(
+            user_api_key_auth, "team_id"
+        )
+        if not team_id:
+            return
+
+        team_object_permission = WebSearchInterceptionLogger._get_auth_attr(
+            user_api_key_auth, "team_object_permission"
+        )
+        if team_object_permission is None:
+            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=WebSearchInterceptionLogger._get_auth_attr(
+                    user_api_key_auth, "parent_otel_span"
+                ),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            team_object_permission = getattr(team_object, "object_permission", None)
+
+        WebSearchInterceptionLogger._assert_search_tool_allowed(
+            search_tool_name=search_tool_name,
+            object_permission=team_object_permission,
+            object_type="team",
+        )
+
+    async def _execute_search(
+        self,
+        query: str,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Optional[SearchResponse]]:
         """
         Execute a single web search using router's search tools.
 
@@ -1068,6 +1213,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 llm_router = None
 
             # Determine search provider from router's search_tools
+            search_api_key: Optional[str] = None
+            search_api_base: Optional[str] = None
             search_provider: Optional[str] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
@@ -1079,8 +1226,17 @@ class WebSearchInterceptionLogger(CustomLogger):
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get(
-                            "search_provider"
+                        selected_search_tool_name = search_tool.get("search_tool_name")
+                        await self._authorize_search_tool_access(
+                            selected_search_tool_name, kwargs
+                        )
+                        litellm_params = search_tool.get("litellm_params", {})
+                        search_provider = litellm_params.get("search_provider")
+                        (
+                            search_api_key,
+                            search_api_base,
+                        ) = SearchAPIRouter._resolve_search_provider_credentials(
+                            tool_litellm_params=litellm_params
                         )
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
@@ -1095,8 +1251,17 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get(
-                        "search_provider"
+                    selected_search_tool_name = first_tool.get("search_tool_name")
+                    await self._authorize_search_tool_access(
+                        selected_search_tool_name, kwargs
+                    )
+                    litellm_params = first_tool.get("litellm_params", {})
+                    search_provider = litellm_params.get("search_provider")
+                    (
+                        search_api_key,
+                        search_api_base,
+                    ) = SearchAPIRouter._resolve_search_provider_credentials(
+                        tool_litellm_params=litellm_params
                     )
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
@@ -1113,7 +1278,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            result = await litellm.asearch(
+                query=query,
+                search_provider=search_provider,
+                api_key=search_api_key,
+                api_base=search_api_base,
+            )
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
@@ -1188,7 +1358,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 verbose_logger.debug(
                     f"WebSearchInterception: Queuing search for query='{query}'"
                 )
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs))
             else:
                 verbose_logger.debug(
                     f"WebSearchInterception: Tool call {tool_call.get('id')} has no query"
@@ -1207,6 +1377,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         final_search_results: List[str] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
+                if self._is_proxy_exception(result):
+                    raise result
                 verbose_logger.error(
                     f"WebSearchInterception: Search {i} failed with error: {str(result)}"
                 )

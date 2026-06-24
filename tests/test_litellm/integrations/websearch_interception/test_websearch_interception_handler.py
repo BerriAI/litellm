@@ -4,6 +4,9 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
+import builtins
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -11,6 +14,12 @@ import pytest
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    ProxyException,
+)
+from litellm.router_utils.search_api_router import SearchAPIRouter
 from litellm.types.utils import LlmProviders
 
 
@@ -154,6 +163,614 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
 
 
 @pytest.mark.asyncio
+async def test_execute_search_passes_configured_search_tool_credentials(monkeypatch):
+    """Search interception should use credentials from the selected router search tool."""
+    monkeypatch.setenv("FOO_BAR", "custom-perplexity-key")
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-search",
+                "litellm_params": {
+                    "search_provider": "perplexity",
+                    "api_key": "os.environ/FOO_BAR",
+                    "api_base": "https://custom.perplexity.example",
+                },
+            }
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    search_response = SearchResponse(
+        object="search",
+        results=[
+            SearchResult(
+                title="LiteLLM",
+                url="https://docs.litellm.ai",
+                snippet="LiteLLM search result",
+            )
+        ],
+    )
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key="custom-perplexity-key",
+        api_base="https://custom.perplexity.example",
+    )
+    assert structured_response is search_response
+    assert "LiteLLM" in search_text
+
+
+def _search_tool_auth(
+    *,
+    key_search_tools: list[str] | None = None,
+    team_search_tools: list[str] | None = None,
+):
+    key_permission = (
+        LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-permission",
+            search_tools=key_search_tools,
+        )
+        if key_search_tools is not None
+        else None
+    )
+    team_permission = (
+        LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-permission",
+            search_tools=team_search_tools,
+        )
+        if team_search_tools is not None
+        else None
+    )
+    return SimpleNamespace(
+        api_key="hashed-key",
+        object_permission=key_permission,
+        team_id="team-1" if team_permission is not None else None,
+        team_object_permission=team_permission,
+    )
+
+
+def _set_proxy_search_tools(monkeypatch, search_tools):
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(search_tools=search_tools)
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+
+def _mock_asearch(monkeypatch):
+    asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+    return asearch
+
+
+def _perplexity_search_tool(
+    *,
+    search_tool_name: str = "perplexity-search",
+    api_key: str = "should-not-be-used",
+):
+    return {
+        "search_tool_name": search_tool_name,
+        "litellm_params": {
+            "search_provider": "perplexity",
+            "api_key": api_key,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_search_checks_key_search_tool_permission(monkeypatch):
+    """Search interception should not use configured credentials denied to the key."""
+    _set_proxy_search_tools(monkeypatch, [_perplexity_search_tool()])
+    asearch = _mock_asearch(monkeypatch)
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+    user_api_key_auth = _search_tool_auth(key_search_tools=["other-search"])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    assert "not allowed to access search tool" in exc_info.value.message
+    asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_allows_key_search_tool_permission(monkeypatch):
+    """Allowed keys should keep the configured search credential path."""
+    monkeypatch.setenv("FOO_BAR", "custom-perplexity-key")
+    _set_proxy_search_tools(
+        monkeypatch, [_perplexity_search_tool(api_key="os.environ/FOO_BAR")]
+    )
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+    user_api_key_auth = _search_tool_auth(key_search_tools=["perplexity-search"])
+
+    _, structured_response = await logger._execute_search(
+        "what is litellm",
+        kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+    )
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key="custom-perplexity-key",
+        api_base=None,
+    )
+    assert structured_response is search_response
+
+
+@pytest.mark.asyncio
+async def test_execute_search_checks_fallback_search_tool_permission(monkeypatch):
+    """Fallback to the first router tool should authorize that actual tool name."""
+    _set_proxy_search_tools(
+        monkeypatch,
+        [_perplexity_search_tool(search_tool_name="default-perplexity-search")],
+    )
+    asearch = _mock_asearch(monkeypatch)
+
+    logger = WebSearchInterceptionLogger(search_tool_name="missing-search-tool")
+    user_api_key_auth = _search_tool_auth(key_search_tools=["missing-search-tool"])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    assert "default-perplexity-search" in exc_info.value.message
+    asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_checks_team_search_tool_permission(monkeypatch):
+    """Team search-tool allowlists should still apply when the key allows access."""
+    _set_proxy_search_tools(monkeypatch, [_perplexity_search_tool()])
+    asearch = _mock_asearch(monkeypatch)
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+    user_api_key_auth = _search_tool_auth(
+        key_search_tools=["perplexity-search"],
+        team_search_tools=["other-search"],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    assert "Team not allowed" in exc_info.value.message
+    asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_short_circuit_search_propagates_search_tool_permission_error(
+    monkeypatch,
+):
+    """Short-circuit requests should fail authorization instead of returning error text."""
+    _set_proxy_search_tools(monkeypatch, [_perplexity_search_tool()])
+    asearch = _mock_asearch(monkeypatch)
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["test_provider"],
+        search_tool_name="perplexity-search",
+    )
+    user_api_key_auth = _search_tool_auth(key_search_tools=["other-search"])
+
+    with pytest.raises(ProxyException):
+        await logger.try_short_circuit_search(
+            model="test-model",
+            messages=[{"role": "user", "content": "what is litellm"}],
+            tools=[{"name": "litellm_web_search"}],
+            custom_llm_provider="test_provider",
+            kwargs={
+                "litellm_params": {"metadata": {"user_api_key_auth": user_api_key_auth}}
+            },
+        )
+
+    asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_agentic_loop_propagates_search_tool_permission_error(
+    monkeypatch,
+):
+    """Anthropic agentic-loop searches should not turn auth failures into tool text."""
+    _set_proxy_search_tools(monkeypatch, [_perplexity_search_tool()])
+    asearch = _mock_asearch(monkeypatch)
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+    user_api_key_auth = _search_tool_auth(key_search_tools=["other-search"])
+
+    with pytest.raises(ProxyException):
+        await logger._build_anthropic_request_patch(
+            model="bedrock/claude",
+            messages=[{"role": "user", "content": "what is litellm"}],
+            tool_calls=[
+                {
+                    "id": "toolu_123",
+                    "type": "tool_use",
+                    "name": "litellm_web_search",
+                    "input": {"query": "what is litellm"},
+                }
+            ],
+            thinking_blocks=[],
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_loop_propagates_search_tool_permission_error(
+    monkeypatch,
+):
+    """Chat-completion agentic-loop searches should preserve auth failures."""
+    _set_proxy_search_tools(monkeypatch, [_perplexity_search_tool()])
+    asearch = _mock_asearch(monkeypatch)
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+    user_api_key_auth = _search_tool_auth(key_search_tools=["other-search"])
+
+    with pytest.raises(ProxyException):
+        await logger._build_chat_completion_request_patch(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "what is litellm"}],
+            tool_calls=[
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "litellm_web_search",
+                        "arguments": {"query": "what is litellm"},
+                    },
+                }
+            ],
+            optional_params={},
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    asearch.assert_not_awaited()
+
+
+def test_search_tool_auth_helpers_cover_fallback_shapes():
+    """Auth helpers should handle proxy object and dict shapes used in tests/hooks."""
+    user_api_key_auth = _search_tool_auth(key_search_tools=["perplexity-search"])
+    auth_dict = {
+        "object_permission": {"search_tools": ["dict-search"]},
+        "team_id": "team-1",
+    }
+
+    assert (
+        WebSearchInterceptionLogger._get_user_api_key_auth_from_kwargs(
+            {"user_api_key_auth": user_api_key_auth}
+        )
+        is user_api_key_auth
+    )
+    assert (
+        WebSearchInterceptionLogger._get_user_api_key_auth_from_kwargs(
+            {"user_api_key_dict": user_api_key_auth}
+        )
+        is user_api_key_auth
+    )
+    assert WebSearchInterceptionLogger._get_auth_attr(auth_dict, "team_id") == "team-1"
+    assert (
+        WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(None)
+        == []
+    )
+    assert WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(
+        {"search_tools": ["dict-search"]}
+    ) == ["dict-search"]
+    assert (
+        WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(
+            {"search_tools": []}
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_search_tool_access_loads_team_permission(monkeypatch):
+    """Team permissions should be loaded when auth context has only a team id."""
+    team_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team-permission",
+        search_tools=["perplexity-search"],
+    )
+
+    async def get_team_object(**kwargs):
+        assert kwargs["team_id"] == "team-1"
+        assert kwargs["prisma_client"] == "prisma"
+        assert kwargs["user_api_key_cache"] == "cache"
+        assert kwargs["proxy_logging_obj"] == "proxy-logging"
+        return SimpleNamespace(object_permission=team_permission)
+
+    auth_checks_module = ModuleType("litellm.proxy.auth.auth_checks")
+    auth_checks_module.get_team_object = get_team_object
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.auth.auth_checks", auth_checks_module
+    )
+
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.prisma_client = "prisma"
+    proxy_server_module.proxy_logging_obj = "proxy-logging"
+    proxy_server_module.user_api_key_cache = "cache"
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    user_api_key_auth = _search_tool_auth(key_search_tools=["perplexity-search"])
+    user_api_key_auth.team_id = "team-1"
+    user_api_key_auth.team_object_permission = None
+
+    await WebSearchInterceptionLogger._authorize_search_tool_access(
+        "perplexity-search",
+        {"user_api_key_auth": user_api_key_auth},
+    )
+    await WebSearchInterceptionLogger._authorize_search_tool_access(
+        None,
+        {"user_api_key_auth": user_api_key_auth},
+    )
+
+
+@pytest.mark.asyncio
+async def test_short_circuit_search_returns_text_for_non_auth_search_errors():
+    """Non-auth search failures should keep the existing synthetic error response."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["test_provider"])
+    logger._execute_search = AsyncMock(side_effect=RuntimeError("search down"))  # type: ignore
+
+    response = await logger.try_short_circuit_search(
+        model="test-model",
+        messages=[{"role": "user", "content": "what is litellm"}],
+        tools=[{"name": "litellm_web_search"}],
+        custom_llm_provider="test_provider",
+    )
+
+    assert response is not None
+    assert response["content"] == [
+        {"type": "text", "text": "Search failed: search down"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_agentic_loop_keeps_non_auth_search_errors_as_tool_text():
+    """Non-auth search failures should still be passed to the follow-up model as text."""
+    logger = WebSearchInterceptionLogger()
+    logger._execute_search = AsyncMock(side_effect=RuntimeError("search down"))  # type: ignore
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    patch, structured_results = await logger._build_anthropic_request_patch(
+        model="bedrock/claude",
+        messages=[{"role": "user", "content": "what is litellm"}],
+        tool_calls=[
+            {
+                "id": "toolu_123",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            },
+            {
+                "id": "toolu_empty",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {},
+            },
+        ],
+        thinking_blocks=[],
+        anthropic_messages_optional_request_params={},
+        logging_obj=logging_obj,
+        kwargs={},
+    )
+
+    assert patch.messages is not None
+    assert "Search failed: search down" in str(patch.messages)
+    assert structured_results == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_loop_keeps_non_auth_search_errors_as_tool_text():
+    """Chat-completion search failures should remain ordinary tool-result text."""
+    logger = WebSearchInterceptionLogger()
+    logger._execute_search = AsyncMock(side_effect=RuntimeError("search down"))  # type: ignore
+
+    patch = await logger._build_chat_completion_request_patch(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "what is litellm"}],
+        tool_calls=[
+            {
+                "id": "call_123",
+                "type": "function",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+                "function": {
+                    "name": "litellm_web_search",
+                    "arguments": {"query": "what is litellm"},
+                },
+            },
+            {
+                "id": "call_empty",
+                "type": "function",
+                "name": "litellm_web_search",
+                "input": {},
+                "function": {
+                    "name": "litellm_web_search",
+                    "arguments": {},
+                },
+            },
+        ],
+        optional_params={},
+        kwargs={},
+    )
+
+    assert patch.messages is not None
+    assert "Search failed: search down" in str(patch.messages)
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_to_first_search_tool_credentials(monkeypatch):
+    """If the requested search tool is missing, use the first configured tool's credentials."""
+    monkeypatch.setenv("CUSTOM_SEARCH_BASE", "https://fallback.perplexity.example")
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(
+        search_tools=[
+            {
+                "search_tool_name": "default-perplexity-search",
+                "litellm_params": {
+                    "search_provider": "perplexity",
+                    "api_key": "literal-perplexity-key",
+                    "api_base": "os.environ/CUSTOM_SEARCH_BASE",
+                },
+            }
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger(search_tool_name="missing-search-tool")
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key="literal-perplexity-key",
+        api_base="https://fallback.perplexity.example",
+    )
+    assert structured_response is search_response
+    assert "search" in search_text
+
+
+@pytest.mark.asyncio
+async def test_execute_search_uses_default_perplexity_without_router_tools(monkeypatch):
+    """Search interception should not pass stale credentials when no router tools exist."""
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(search_tools=[])
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger()
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key=None,
+        api_base=None,
+    )
+    assert structured_response is search_response
+    assert "search" in search_text
+
+
+@pytest.mark.asyncio
+async def test_execute_search_uses_default_perplexity_when_router_import_fails(
+    monkeypatch,
+):
+    """Search interception should still work when proxy router import is unavailable."""
+    real_import = builtins.__import__
+
+    def raise_for_proxy_server(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "litellm.proxy.proxy_server":
+            raise ImportError("proxy unavailable")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", raise_for_proxy_server)
+
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger()
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key=None,
+        api_base=None,
+    )
+    assert structured_response is search_response
+    assert "search" in search_text
+
+
+def test_search_provider_credentials_resolve_configured_values(monkeypatch):
+    """Credential resolver should resolve supported values and ignore unsupported ones."""
+    monkeypatch.setenv("FOO_BAR", "custom-perplexity-key")
+
+    api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+        tool_litellm_params={
+            "api_key": "os.environ/FOO_BAR",
+            "api_base": "https://custom.perplexity.example",
+        }
+    )
+
+    assert api_key == "custom-perplexity-key"
+    assert api_base == "https://custom.perplexity.example"
+
+    api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+        tool_litellm_params={"api_key": 123, "api_base": None}
+    )
+
+    assert api_key is None
+    assert api_base is None
+
+
+@pytest.mark.asyncio
+async def test_execute_search_reraises_search_errors(monkeypatch):
+    """Search interception should not hide provider search failures."""
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(search_tools=[])
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    asearch = AsyncMock(side_effect=RuntimeError("search failed"))
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger()
+
+    with pytest.raises(RuntimeError, match="search failed"):
+        await logger._execute_search("what is litellm")
+
+
+@pytest.mark.asyncio
 async def test_internal_flags_filtered_from_followup_kwargs():
     """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
 
@@ -161,8 +778,6 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     to the follow-up LLM request, causing "Extra inputs are not permitted" errors
     from providers like Bedrock that use strict parameter validation.
     """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
     # Simulate kwargs that would be passed during agentic loop execution
     kwargs_with_internal_flags = {
         "_websearch_interception_converted_stream": True,

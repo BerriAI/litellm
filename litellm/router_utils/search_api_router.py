@@ -8,9 +8,10 @@ import asyncio
 import random
 import traceback
 from functools import partial
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Mapping, Optional, Tuple
 
 from litellm._logging import verbose_router_logger
+from litellm.secret_managers.main import get_secret_str
 
 
 class SearchAPIRouter:
@@ -21,9 +22,17 @@ class SearchAPIRouter:
     """
 
     @staticmethod
+    def _resolve_configured_credential(value: Any) -> Optional[str]:
+        if isinstance(value, str) and value.startswith("os.environ/"):
+            return get_secret_str(value)
+        if isinstance(value, str) or value is None:
+            return value
+        return None
+
+    @staticmethod
     def _resolve_search_provider_credentials(
         *,
-        tool_litellm_params: Dict[str, Any],
+        tool_litellm_params: Mapping[str, Any],
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Resolve search provider credentials from tool configuration ONLY.
@@ -37,8 +46,12 @@ class SearchAPIRouter:
         Returns:
             Tuple of (api_key, api_base) from tool configuration
         """
-        resolved_api_key: Optional[str] = tool_litellm_params.get("api_key")
-        resolved_api_base: Optional[str] = tool_litellm_params.get("api_base")
+        resolved_api_key = SearchAPIRouter._resolve_configured_credential(
+            tool_litellm_params.get("api_key")
+        )
+        resolved_api_base = SearchAPIRouter._resolve_configured_credential(
+            tool_litellm_params.get("api_base")
+        )
 
         return resolved_api_key, resolved_api_base
 
