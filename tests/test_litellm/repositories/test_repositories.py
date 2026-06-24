@@ -2247,3 +2247,17 @@ class TestCountBillableUsers:
     async def test_all_deactivated_returns_zero(self):
         repo = self._repo([{"scim_active": False}, {"scim_active": False}])
         assert await repo.count_billable_users() == 0
+
+    @pytest.mark.asyncio
+    async def test_floors_at_zero_when_deactivated_exceeds_total(self):
+        """The total and deactivated counts are separate queries; a burst of
+        deactivations between them must never yield a negative seat count."""
+
+        class _RacyTable:
+            async def count(self, where=None):
+                return 5 if where is not None else 2
+
+        client = MockPrismaClient()
+        client.db.litellm_usertable = _RacyTable()
+        repo = UserRepository(client)
+        assert await repo.count_billable_users() == 0

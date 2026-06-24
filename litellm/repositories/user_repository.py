@@ -77,7 +77,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         deactivated = await self.count(
             where={"metadata": {"path": ["scim_active"], "equals": Json(False)}}
         )
-        return total - deactivated
+        return max(0, total - deactivated)
 
     async def create_user(
         self,
