@@ -164,6 +164,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)
-        # Azure AI Foundry does not support output_config, remove it if present
-        anthropic_messages_request.pop("output_config", None)
+        # Azure AI Foundry Haiku models reject output_config.effort with 400
+        if "haiku" in model.lower():
+            anthropic_messages_request.pop("output_config", None)
         return anthropic_messages_request
