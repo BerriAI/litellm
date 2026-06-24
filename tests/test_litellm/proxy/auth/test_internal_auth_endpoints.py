@@ -95,15 +95,38 @@ async def test_verify_key_returns_model_dump(monkeypatch):
         fake_user_api_key_auth,
     )
 
-    body = VerifyKeyRequest(api_key="sk-test-key", route="/v1/realtime")
+    body = VerifyKeyRequest(
+        api_key="sk-test-key", route="/v1/realtime", model="gpt-realtime"
+    )
     result = await verify_key(body=body)
 
     # The key is forwarded WITH the Bearer prefix (user_api_key_auth strips it).
     assert captured["api_key"] == "Bearer sk-test-key"
-    # Validation runs against a synthetic request carrying the gateway's route.
+    # Validation runs against a synthetic request carrying the gateway's route...
     assert captured["request"].url.path == "/v1/realtime"
+    # ...and the requested model in the body, so model-access checks enforce it.
+    assert (await captured["request"].json())["model"] == "gpt-realtime"
     assert result == expected_auth.model_dump(exclude_none=True, mode="json")
     assert result["user_id"] == "user-123"
+
+
+@pytest.mark.asyncio
+async def test_verify_key_omits_model_when_absent(monkeypatch):
+    captured = {}
+
+    async def fake_user_api_key_auth(request, api_key):
+        captured["request"] = request
+        return UserAPIKeyAuth(api_key="hashed-key")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+        fake_user_api_key_auth,
+    )
+
+    body = VerifyKeyRequest(api_key="sk-test-key", route="/v1/realtime")
+    await verify_key(body=body)
+    # No model requested → empty body, not {"model": null}.
+    assert (await captured["request"].json()) == {}
 
 
 @pytest.mark.asyncio
