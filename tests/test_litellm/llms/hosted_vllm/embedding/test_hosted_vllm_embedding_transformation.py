@@ -290,5 +290,141 @@ class TestHostedVLLMEmbeddingTransformation:
             assert sent_data["input"] == ["Hello world"]
 
 
+class TestHostedVLLMMultimodalEmbedding:
+    """Regression tests for issue #31178 - multimodal embedding (image inputs) via hosted_vllm proxy."""
+
+    def setup_method(self):
+        self.config = HostedVLLMEmbeddingConfig()
+        self.model = "hosted_vllm/Qwen3-VL-Embedding-8B-MLX-4bit"
+
+    def test_messages_in_optional_params_forwarded_as_messages(self):
+        """A messages-shaped request must be forwarded as `messages`, not `input`.
+
+        vLLM's embeddings endpoint expects chat-style `messages` for image embeddings.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc="},
+                    }
+                ],
+            }
+        ]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=[],
+            optional_params={"messages": messages},
+            headers={},
+        )
+
+        assert "input" not in result
+        assert result["messages"] == messages
+        assert result["model"] == "Qwen3-VL-Embedding-8B-MLX-4bit"
+
+    def test_messages_forwarded_alongside_other_optional_params(self):
+        """messages must not collide with or duplicate other optional params."""
+        messages = [{"role": "user", "content": "hi"}]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=[],
+            optional_params={"messages": messages, "dimensions": 256},
+            headers={},
+        )
+
+        assert result["messages"] == messages
+        assert result["dimensions"] == 256
+        assert "input" not in result
+
+    def test_data_url_input_passed_through_unchanged(self):
+        """A data: URL in `input` must be forwarded as-is, not rewritten.
+
+        Backends differ: some (e.g. MLX-served Qwen3-VL) accept image data URLs directly
+        in `input`. The transform must not hijack the `input` field.
+        """
+        data_url = "data:image/png;base64,iVBORw0KGgo="
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=data_url,
+            optional_params={},
+            headers={},
+        )
+
+        assert "messages" not in result
+        assert result["input"] == [data_url]
+
+    def test_plain_text_input_unaffected(self):
+        """Plain text input is wrapped in a list and forwarded as `input`."""
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=["hello world"],
+            optional_params={},
+            headers={},
+        )
+
+        assert "messages" not in result
+        assert result["input"] == ["hello world"]
+
+    def test_messages_supported_param(self):
+        """messages must be in get_supported_openai_params so it survives optional-param filtering."""
+        assert "messages" in self.config.get_supported_openai_params(self.model)
+
+    def test_messages_mapped_through_map_openai_params(self):
+        """map_openai_params must pass messages into optional_params."""
+        messages = [{"role": "user", "content": "hi"}]
+        result = self.config.map_openai_params(
+            non_default_params={"messages": messages},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result["messages"] == messages
+
+    def test_router_aembedding_accepts_messages_without_input(self):
+        """Router.aembedding must not raise when called with messages and no input (failure mode 2)."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "qwen3-vl-embedding",
+                    "litellm_params": {
+                        "model": "hosted_vllm/Qwen3-VL-Embedding-8B-MLX-4bit",
+                        "api_base": "http://localhost:8001/v1",
+                    },
+                }
+            ]
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc="},
+                    }
+                ],
+            }
+        ]
+
+        fake_response = MagicMock()
+        fake_response.data = []
+        fake_response.model = "Qwen3-VL-Embedding-8B-MLX-4bit"
+        fake_response.usage = MagicMock(prompt_tokens=1, total_tokens=1)
+
+        with patch("litellm.aembedding", new=AsyncMock(return_value=fake_response)):
+            result = asyncio.run(
+                router.aembedding(model="qwen3-vl-embedding", messages=messages)
+            )
+
+        assert result is fake_response
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

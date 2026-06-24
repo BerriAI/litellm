@@ -102,13 +102,25 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         """
         Transform embedding request to Hosted VLLM format (OpenAI-compatible).
         """
-        # Ensure input is a list
-        if isinstance(input, str):
-            input = [input]
-
         # Strip 'hosted_vllm/' prefix if present
         if model.startswith("hosted_vllm/"):
             model = model.replace("hosted_vllm/", "", 1)
+
+        # vLLM's embeddings endpoint accepts a chat-style `messages` body for multimodal
+        # (image) embeddings; forward it instead of `input` when present
+        if "messages" in optional_params:
+            remaining_params = {
+                k: v for k, v in optional_params.items() if k != "messages"
+            }
+            return {
+                "model": model,
+                "messages": optional_params["messages"],
+                **remaining_params,
+            }
+
+        # Ensure input is a list
+        if isinstance(input, str):
+            input = [input]
 
         return {
             "model": model,
@@ -150,6 +162,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
             "dimensions",
             "encoding_format",
             "user",
+            "messages",
         ]
 
     def map_openai_params(
