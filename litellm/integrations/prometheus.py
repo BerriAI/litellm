@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import sys
 from datetime import datetime, timedelta
@@ -2821,8 +2822,8 @@ class PrometheusLogger(CustomLogger):
             supported_enum_labels=self.get_labels_for_metric(
                 metric_name="litellm_deployment_cooled_down"
             ),
-            enum_values=UserAPIKeyLabelValues(
-                **{**enum_values.__dict__, "exception_status": exception_status}
+            enum_values=dataclasses.replace(
+                enum_values, exception_status=exception_status
             ),
         )
         self.litellm_deployment_cooled_down.labels(**_labels).inc()

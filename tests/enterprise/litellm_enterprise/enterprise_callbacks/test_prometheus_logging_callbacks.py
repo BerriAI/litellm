@@ -1179,39 +1179,28 @@ def test_deployment_state_management(prometheus_logger, monkeypatch):
 
 
 def test_increment_deployment_cooled_down(prometheus_logger, monkeypatch):
-    import inspect
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     monkeypatch.setattr(litellm, "prometheus_emit_deployment_model_group_label", True)
     prometheus_logger.get_labels_for_metric = (
         lambda metric_name: PrometheusMetricLabels.get_labels(metric_name)
     )
 
-    method_sig = inspect.signature(prometheus_logger.increment_deployment_cooled_down)
-    expected_label_count = len([p for p in method_sig.parameters.keys() if p != "self"])
-
     mock_chain = MagicMock()
-
-    def validating_labels(*label_values, **label_kwargs):
-        """Validate label count matches metric definition"""
-        total = len(label_values) + len(label_kwargs)
-        if total != expected_label_count:
-            raise ValueError(
-                f"Incorrect label count: expected {expected_label_count}, got {total}"
-            )
-        return mock_chain
-
     prometheus_logger.litellm_deployment_cooled_down = MagicMock()
     prometheus_logger.litellm_deployment_cooled_down.labels = MagicMock(
-        side_effect=validating_labels
+        return_value=mock_chain
     )
 
     prometheus_logger.increment_deployment_cooled_down(
-        litellm_model_name="gpt-5-mini",
-        model_id="model-123",
-        api_base="https://api.openai.com",
-        api_provider="openai",
+        enum_values=UserAPIKeyLabelValues(
+            litellm_model_name="gpt-5-mini",
+            model_id="model-123",
+            api_base="https://api.openai.com",
+            api_provider="openai",
+            model_group="openai-gpt",
+        ),
         exception_status="429",
-        model_group="openai-gpt",
     )
 
     prometheus_logger.litellm_deployment_cooled_down.labels.assert_called_once_with(

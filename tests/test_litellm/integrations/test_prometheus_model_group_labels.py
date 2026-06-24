@@ -100,13 +100,17 @@ def test_set_litellm_deployment_state_emits_model_group(monkeypatch):
         lambda metric_name: PrometheusMetricLabels.get_labels(metric_name)
     )
 
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
     logger.set_litellm_deployment_state(
         state=2,
-        litellm_model_name="gpt-4o-mini",
-        model_id="model-123",
-        api_base="https://api.openai.com",
-        api_provider="openai",
-        model_group="gpt-group",
+        enum_values=UserAPIKeyLabelValues(
+            litellm_model_name="gpt-4o-mini",
+            model_id="model-123",
+            api_base="https://api.openai.com",
+            api_provider="openai",
+            model_group="gpt-group",
+        ),
     )
 
     labels = logger.litellm_deployment_state.labels.call_args.kwargs
@@ -154,13 +158,17 @@ def test_deployment_metrics_omit_model_group_when_flag_disabled(monkeypatch):
         lambda metric_name: PrometheusMetricLabels.get_labels(metric_name)
     )
 
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
     logger.set_litellm_deployment_state(
         state=0,
-        litellm_model_name="gpt-4o-mini",
-        model_id="model-123",
-        api_base="https://api.openai.com",
-        api_provider="openai",
-        model_group="gpt-group",
+        enum_values=UserAPIKeyLabelValues(
+            litellm_model_name="gpt-4o-mini",
+            model_id="model-123",
+            api_base="https://api.openai.com",
+            api_provider="openai",
+            model_group="gpt-group",
+        ),
     )
 
     assert "model_group" not in logger.litellm_deployment_state.labels.call_args.kwargs
