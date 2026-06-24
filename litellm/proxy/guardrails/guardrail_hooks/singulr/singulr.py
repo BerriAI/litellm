@@ -85,12 +85,12 @@ class SingulrGuardrail(CustomGuardrail):
 
         return SingulrGuardrailConfigModel
 
-    def _extract_prompt(
+    def _build_payload(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-    ) -> str:
+    ) -> Dict[str, str]:
         if input_type == "request":
             from litellm.proxy.guardrails._content_utils import (
                 build_inspection_messages,
@@ -106,21 +106,34 @@ class SingulrGuardrail(CustomGuardrail):
                 ),
                 -1,
             )
-            current_turn_texts = [
+            direct_texts = [
                 m["content"]
                 for m in messages[last_assistant_idx + 1 :]
                 if str(m.get("role") or "").lower() == "user" and m.get("content")
             ]
+            indirect_texts = [
+                json.dumps(request_data[k])
+                for k in ("tools", "functions")
+                if request_data.get(k)
+            ]
 
-            raw_tools = request_data.get("tools")
-            tool_text = json.dumps(raw_tools) if raw_tools else ""
+            if direct_texts or indirect_texts:
+                return {
+                    k: v
+                    for k, v in {
+                        "prompt": "\n".join(direct_texts),
+                        "indirect_prompt": "\n".join(indirect_texts),
+                    }.items()
+                    if v
+                }
 
-            parts = tuple(p for p in (tool_text, "\n".join(current_turn_texts)) if p)
-            if parts:
-                return "\n".join(parts)
+            texts = inputs.get("texts", [])
+            prompt = "\n".join(texts) if texts else ""
+            return {"prompt": prompt} if prompt else {}
 
         texts = inputs.get("texts", [])
-        return "\n".join(texts) if texts else ""
+        prompt = "\n".join(texts) if texts else ""
+        return {"prompt": prompt} if prompt else {}
 
     def _build_headers(self) -> Dict[str, str]:
         return dict(
@@ -137,12 +150,7 @@ class SingulrGuardrail(CustomGuardrail):
             if value
         )
 
-    async def _call_api(self, prompt: str) -> Optional[Dict[str, Any]]:
-        """Returns the parsed response dict on success.
-
-        Returns None (instead of raising) when the API fails and
-        block_on_error=False, so the caller can fall through gracefully.
-        """
+    async def _call_api(self, payload: Dict[str, str]) -> Optional[Dict[str, Any]]:
         endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
@@ -150,7 +158,7 @@ class SingulrGuardrail(CustomGuardrail):
             response = await self.async_handler.post(
                 url=endpoint,
                 headers=self._build_headers(),
-                json={"prompt": prompt},
+                json=payload,
                 timeout=30,
             )
             response.raise_for_status()
@@ -202,12 +210,12 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        prompt = self._extract_prompt(inputs, request_data, input_type)
-        verbose_proxy_logger.debug("Singulr: prompt=%s", prompt)
-        if not prompt:
+        payload = self._build_payload(inputs, request_data, input_type)
+        verbose_proxy_logger.debug("Singulr: payload=%s", payload)
+        if not payload:
             return inputs
 
-        result = await self._call_api(prompt)
+        result = await self._call_api(payload)
         if result is None:
             return inputs
 
