@@ -66,9 +66,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import (
-    add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
-    has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
     token_counter,
@@ -1647,26 +1645,6 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
         drop_params: bool = False,
     ) -> CommonRequestObject:
-        ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if (
-            "tools" not in optional_params
-            and messages is not None
-            and has_tool_call_blocks(messages)
-        ):
-            if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(
-                    custom_llm_provider="bedrock_converse"
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="bedrock",
-                )
-
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
         #
@@ -1763,6 +1741,8 @@ class AmazonConverseConfig(BaseConfig):
             messages, model=model
         )
 
+        messages = self._neutralize_orphaned_tool_blocks(messages, optional_params)
+
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
             messages, optional_params
@@ -1821,6 +1801,8 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(
             messages, model=model
         )
+
+        messages = self._neutralize_orphaned_tool_blocks(messages, optional_params)
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(

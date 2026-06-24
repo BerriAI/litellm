@@ -5582,3 +5582,177 @@ def test_neutralize_orphaned_tool_blocks_logs_warning(caplog):
         "neutralizing orphaned tool blocks" in record.getMessage()
         for record in caplog.records
     )
+
+
+def _assert_no_structured_tool_blocks(result):
+    """A valid Bedrock body for a neutralized request has no tool config AND no
+    structured tool blocks in messages. Checking only toolConfig is insufficient:
+    deleting the raise without rewriting still leaves toolUse/toolResult, the
+    exact shape Bedrock rejects."""
+    assert "toolConfig" not in result
+    serialized = json.dumps(result)
+    assert "toolUse" not in serialized
+    assert "toolResult" not in serialized
+
+
+def test_transform_request_no_tools_with_tool_history_succeeds_24158(monkeypatch):
+    """#24158: a compaction-style call (tool blocks in history, no tools=) must
+    not raise and must send no toolConfig or structured tool blocks, on
+    default settings."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+    serialized = json.dumps(result)
+    assert "get_weather" in serialized
+    assert "Sunny, 25C" in serialized
+
+
+def test_transform_request_tool_unsupported_model_no_toolconfig_27138(monkeypatch):
+    """#27138: a tool-incapable model with tool blocks in history and no tools=
+    must not get a toolConfig/toolUse/toolResult injected (which Bedrock would
+    400 on), even with modify_params on."""
+    monkeypatch.setattr(litellm, "modify_params", True)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="meta.llama3-2-3b-instruct-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+
+
+@pytest.mark.parametrize("tools_value", [[], None])
+def test_transform_request_empty_tools_with_tool_history(monkeypatch, tools_value):
+    """tools=[] / tools=None must be neutralized like no tools at all; a
+    key-presence gate would skip them and emit toolUse/toolResult with no
+    toolConfig."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={"tools": tools_value},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+
+
+def test_transform_request_tool_result_only_history(monkeypatch):
+    """A role:"tool"-only history (no assistant tool_calls) currently emits a
+    lone toolResult with no toolConfig; it must be neutralized."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+    assert "lookup result" in json.dumps(result)
+
+
+def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
+    """With guardrailConfig present, a neutralized tool result that becomes the
+    trailing user turn must be emitted as guardContent, not plain text, so
+    untrusted tool output does not bypass the guardrail (neutralize must run
+    before guarded-text conversion)."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=[
+            {"role": "user", "content": "look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "secret tool output"},
+        ],
+        optional_params={
+            "guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+    serialized = json.dumps(result)
+    assert "guardContent" in serialized
+    assert "secret tool output" in serialized
+
+
+@pytest.mark.asyncio
+async def test_async_transform_request_no_tools_with_tool_history(monkeypatch):
+    """Async is a separate request assembler; it must neutralize identically."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = await config._async_transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+    assert "get_weather" in json.dumps(result)
+
+
+def test_transform_request_with_tools_still_builds_toolconfig(monkeypatch):
+    """Guard: when a non-empty tools= IS provided, tool blocks are legitimate and
+    a toolConfig must still be produced (neutralization must not regress this)."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" in result
