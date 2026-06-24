@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-17T19:10:29.753403Z"
+exclude-newer = "2026-06-21T02:06:31.426368Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3280,7 +3280,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.88.4"
+version = "1.88.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
