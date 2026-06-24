@@ -898,6 +898,7 @@ class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
     logit_bias: Optional[Dict[str, float]] = None
     logprobs: Optional[bool] = None
     top_logprobs: Optional[int] = None
+    return_token_ids: Optional[bool] = None
     max_tokens: Optional[int] = None
     n: Optional[int] = None
     presence_penalty: Optional[float] = None

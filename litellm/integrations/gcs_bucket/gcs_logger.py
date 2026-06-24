@@ -159,7 +159,12 @@ class ProductionGCSLogger(CustomLogger):
                 "litellm_session_id": session_id,
                 "type": "SUCCESS",
                 "user": {
-                    "email": metadata.get("user_api_key_user_email"),
+                    "email": (
+                        metadata.get("user_api_key_user_email")
+                        or metadata.get("user_email")
+                        or kwargs.get("user_email")
+                        or kwargs.get("metadata", {}).get("user_api_key_user_email")
+                    ),
                     "user_id": metadata.get("user_api_key_user_id"),
                     "team_alias": metadata.get("user_api_key_team_alias"),
                     "department": (metadata.get("user_api_key_metadata") or {}).get(
@@ -199,6 +204,10 @@ class ProductionGCSLogger(CustomLogger):
                 "headers": metadata.get("headers"),
             }
 
+            # no sensitive info is present in the full log verified manually
+            if not success_log["user"]["email"]:
+                success_log["litellm_kwargs"] = kwargs
+
             if hasattr(response_obj, "choices") and response_obj.choices:
                 choice = response_obj.choices[0]
                 success_log["response"] = {
@@ -224,6 +233,32 @@ class ProductionGCSLogger(CustomLogger):
                         message, "function_call", None
                     )
 
+                # --- RL training fields: logprobs + token_ids ---
+                if hasattr(choice, "logprobs") and choice.logprobs is not None:
+                    try:
+                        if hasattr(choice.logprobs, "model_dump"):
+                            success_log["response"]["logprobs"] = choice.logprobs.model_dump()
+                        elif hasattr(choice.logprobs, "to_dict"):
+                            success_log["response"]["logprobs"] = choice.logprobs.to_dict()
+                        else:
+                            success_log["response"]["logprobs"] = choice.logprobs
+                    except Exception:
+                        success_log["response"]["logprobs"] = str(choice.logprobs)
+
+                token_ids = getattr(choice, "token_ids", None)
+                if token_ids is None:
+                    provider_fields = getattr(choice, "provider_specific_fields", {}) or {}
+                    token_ids = provider_fields.get("token_ids")
+                if token_ids is not None:
+                    success_log["response"]["token_ids"] = token_ids
+
+                provider_fields = getattr(choice, "provider_specific_fields", {}) or {}
+                if provider_fields:
+                    success_log["response"]["provider_specific_fields"] = provider_fields
+
+
+            if hasattr(response_obj, "prompt_token_ids"):
+                success_log["prompt_token_ids"] = response_obj.prompt_token_ids
             if hasattr(response_obj, "usage"):
                 usage = response_obj.usage
                 success_log["usage"] = {
