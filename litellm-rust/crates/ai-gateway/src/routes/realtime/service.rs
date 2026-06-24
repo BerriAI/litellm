@@ -14,7 +14,7 @@ use litellm_core::CoreResult;
 pub async fn run<In, Out>(
     router: &Router,
     model: &str,
-    timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
     client_in: In,
     client_out: Out,
 ) -> CoreResult<()>
@@ -37,7 +37,7 @@ where
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-        timeout,
+        idle_timeout,
         client_in,
         client_out,
     )
