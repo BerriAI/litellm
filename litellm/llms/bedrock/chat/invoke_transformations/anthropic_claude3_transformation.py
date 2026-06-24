@@ -11,7 +11,10 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import (
+    AnthropicConfig,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -34,6 +37,28 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _add_additional_properties_false(schema: dict) -> dict:
+    """Add ``additionalProperties: false`` to every object node in ``schema``.
+
+    AWS Bedrock Invoke rejects ``output_config.format`` schemas that contain
+    any object-type node without this field.  Walk the tree so nested objects
+    (array items, sub-keys) also satisfy the requirement.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    result = dict(schema)
+    if result.get("type") == "object":
+        result["additionalProperties"] = False
+        if "properties" in result:
+            result["properties"] = {
+                k: _add_additional_properties_false(v)
+                for k, v in result["properties"].items()
+            }
+    if "items" in result:
+        result["items"] = _add_additional_properties_false(result["items"])
+    return result
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -66,6 +91,20 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> List[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
+    # Bedrock-invoke models AWS hasn't shipped native output_config.format for yet.
+    # Remove from this set as AWS adds support — empirically verified Jun 2026.
+    _BEDROCK_INVOKE_NATIVE_OUTPUT_FORMAT_EXCLUSIONS = frozenset(
+        {
+            "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+            "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
+        }
+    )
+
+    @classmethod
+    def _needs_tool_workaround(cls, model: str) -> bool:
+        m = model.lower()
+        return any(s in m for s in cls._BEDROCK_INVOKE_NATIVE_OUTPUT_FORMAT_EXCLUSIONS)
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -73,13 +112,18 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201)
-        # Bedrock Invoke doesn't support output_format parameter
-        original_model = model
-        if "response_format" in non_default_params:
-            # Use a model name that forces tool-based approach
-            model = "claude-3-sonnet-20240229"
+        # For models AWS doesn't accept native output_config.format on yet, force
+        # the tool path WITHOUT renaming the model: pop response_format before
+        # delegating so the parent maps everything else (incl. adaptive thinking)
+        # against the real model name, then inject the synthetic tool ourselves.
+        response_format = None
+        if "response_format" in non_default_params and self._needs_tool_workaround(
+            model
+        ):
+            response_format = non_default_params["response_format"]
+            non_default_params = {
+                k: v for k, v in non_default_params.items() if k != "response_format"
+            }
 
         # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
         # parent mapping converts it to ``output_config.effort`` and the
@@ -89,7 +133,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
         # models like Opus 4.6 that don't natively advertise xhigh.
         self._clamp_adaptive_reasoning_effort_for_bedrock(
-            model=original_model, params=non_default_params
+            model=model, params=non_default_params
         )
 
         optional_params = AnthropicConfig.map_openai_params(
@@ -100,8 +144,21 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
-        # Restore original model name
-        model = original_model
+        if response_format is not None:
+            is_thinking = self.is_thinking_enabled(non_default_params)
+            tool = self.map_response_format_to_anthropic_tool(
+                response_format, optional_params, is_thinking
+            )
+            if tool is not None:
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params, tools=[tool]
+                )
+                if not is_thinking:
+                    optional_params["tool_choice"] = {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "type": "tool",
+                    }
+                optional_params["json_mode"] = True
 
         return optional_params
 
@@ -221,15 +278,33 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             anthropic_request
         )
         if output_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_format,
-                request_body=anthropic_request,
-            )
+            if self._needs_tool_workaround(model):
+                convert_bedrock_invoke_output_format_to_inline_schema(
+                    output_format=output_format,
+                    request_body=anthropic_request,
+                )
+            else:
+                schema = _add_additional_properties_false(
+                    output_format.get("schema", {})
+                )
+                anthropic_request.setdefault("output_config", {})["format"] = {
+                    "type": output_format.get("type", "json_schema"),
+                    "schema": schema,
+                }
         elif output_config_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_config_format,
-                request_body=anthropic_request,
-            )
+            if self._needs_tool_workaround(model):
+                convert_bedrock_invoke_output_format_to_inline_schema(
+                    output_format=output_config_format,
+                    request_body=anthropic_request,
+                )
+            else:
+                schema = _add_additional_properties_false(
+                    output_config_format.get("schema", {})
+                )
+                anthropic_request.setdefault("output_config", {})["format"] = {
+                    "type": output_config_format.get("type", "json_schema"),
+                    "schema": schema,
+                }
         if not (
             _supports_factory(
                 model=model,
