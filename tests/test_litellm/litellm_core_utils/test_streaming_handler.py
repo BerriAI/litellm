@@ -878,6 +878,114 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+def _bedrock_error_event(exception_type: str):
+    """A mocked botocore event-stream error event: status_code is botocore's
+    hard-coded 400, with the real type in the :exception-type header."""
+    event = Mock()
+    event.to_response_dict = Mock(
+        return_value={
+            "status_code": 400,
+            "headers": {
+                ":exception-type": exception_type,
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            "body": b'{"message":"Bedrock had an internal error."}',
+        }
+    )
+    return event
+
+
+@pytest.mark.asyncio
+async def test_bedrock_midstream_internal_server_error_wraps_for_fallback(
+    logging_obj: Logging,
+):
+    """End-to-end regression for https://github.com/BerriAI/litellm/issues/24608:
+    a Bedrock mid-stream internalServerException event (botocore stamps it 400)
+    must flow through the real decoder, gain its modeled 500 status, and wrap
+    into MidStreamFallbackError so the Router can run streaming fallback.
+
+    Calls the real AWSEventStreamDecoder, so reverting the decoder status fix
+    makes the decoder raise BedrockError(400) and the gate raises BadRequestError
+    directly -> this test fails without the fix."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-3-sonnet-20240229-v1:0")
+
+    async def _bedrock_stream():
+        decoder._parse_message_from_event(
+            _bedrock_error_event("internalServerException")
+        )
+        yield  # unreachable; the line above raises
+
+    async def _make_call(**kwargs):
+        return _bedrock_stream()
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+        make_call=_make_call,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await response.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_5xx_wraps_for_midstream_fallback(logging_obj: Logging):
+    """Gate contract: a Bedrock 5xx (here 503 serviceUnavailableException) wraps
+    into MidStreamFallbackError so the Router can run streaming fallback."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockError
+
+    async def _raise_503(**kwargs):
+        raise BedrockError(
+            status_code=503,
+            message="serviceUnavailableException Bedrock is unavailable.",
+        )
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+        make_call=_raise_503,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await response.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
+    """Gate contract: a Bedrock validationException (400) is a client error and
+    must surface directly, never wrapped into MidStreamFallbackError."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockError
+
+    async def _raise_400(**kwargs):
+        raise BedrockError(
+            status_code=400,
+            message="validationException malformed input.",
+        )
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+        make_call=_raise_400,
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await response.__anext__()
+    assert not isinstance(excinfo.value, MidStreamFallbackError)
+    assert getattr(excinfo.value, "status_code", None) == 400
+
+
 @pytest.mark.asyncio
 async def test_async_streaming_read_timeout_triggers_midstream_fallback(
     logging_obj: Logging,
@@ -2646,7 +2754,9 @@ def test_chunk_creator_tool_calls_not_dropped_on_finish(
                     tool_calls=[
                         ChatCompletionDeltaToolCall(
                             id="call_abc",
-                            function=Function(name="get_weather", arguments='{"city":"NYC"}'),
+                            function=Function(
+                                name="get_weather", arguments='{"city":"NYC"}'
+                            ),
                             type="function",
                             index=0,
                         )
@@ -2741,3 +2851,131 @@ def test_record_partial_usage_for_failure_noop_without_chunks():
     wrapper._record_partial_usage_for_failure()
 
     assert "combined_usage_object" not in logging_obj.model_call_details
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_chunk_builder_raise_at_end_of_stream_still_recovers_usage(
+    sync_mode,
+):
+    """stream_chunk_builder re-raises (as APIError) on large agentic tool-use
+    streams. That raise originates inside the except-StopIteration handler, so
+    before the fix it escaped __next__/__anext__ and the request was dropped from
+    SpendLogs while the provider billed the tokens. The wrapper must catch it and
+    recover usage from the raw chunks so cost is still tracked."""
+    final_usage_block = Usage(
+        completion_tokens=392, prompt_tokens=1799, total_tokens=2191
+    )
+    final_chunk = ModelResponseStream(
+        id="chatcmpl-raise-test",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+            )
+        ],
+        usage=final_usage_block,
+    )
+    test_chunks = bedrock_chunks + [final_chunk]
+
+    logging_obj = Logging(
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="raise-test",
+        function_id="1245",
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=test_chunks),
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    seen_usage = []
+    with patch.object(
+        litellm,
+        "stream_chunk_builder",
+        side_effect=Exception("simulated assembly failure"),
+    ):
+        # before the fix this raised and dropped the request; it must not raise now
+        if sync_mode:
+            for chunk in response:
+                if getattr(chunk, "usage", None) is not None:
+                    seen_usage.append(chunk.usage)
+        else:
+            async for chunk in response:
+                if getattr(chunk, "usage", None) is not None:
+                    seen_usage.append(chunk.usage)
+
+    assert any(
+        u.total_tokens == final_usage_block.total_tokens for u in seen_usage
+    ), "usage recovered from raw chunks was not emitted after stream_chunk_builder raised"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_chunk_builder_raise_and_usage_recovery_failure_does_not_crash(
+    sync_mode,
+):
+    """If end-of-stream assembly raises AND best-effort usage recovery from the raw
+    chunks also fails, the stream must still complete cleanly rather than propagate
+    the exception to the consumer."""
+    from litellm.litellm_core_utils import streaming_handler as sh_module
+
+    final_chunk = ModelResponseStream(
+        id="chatcmpl-raise-recover-fail",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+            )
+        ],
+        usage=Usage(completion_tokens=1, prompt_tokens=1, total_tokens=2),
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=bedrock_chunks + [final_chunk]
+        ),
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        custom_llm_provider="bedrock",
+        logging_obj=Logging(
+            model="bedrock/claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="raise-recover-fail",
+            function_id="1245",
+        ),
+        stream_options={"include_usage": True},
+    )
+
+    with (
+        patch.object(
+            litellm, "stream_chunk_builder", side_effect=Exception("assembly failed")
+        ),
+        patch.object(
+            sh_module, "calculate_total_usage", side_effect=Exception("recovery failed")
+        ),
+    ):
+        # must not raise even though both assembly and recovery fail
+        if sync_mode:
+            chunks = [c for c in response]
+        else:
+            chunks = [c async for c in response]
+
+    assert len(chunks) > 0
