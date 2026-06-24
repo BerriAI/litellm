@@ -290,11 +290,19 @@ export function KeyEditView({
         values.duration = null;
       }
 
-      // Include multi-window budget limits (filter out incomplete entries)
+      // Reconcile multi-window budget limits from the editor state, dropping
+      // incomplete entries (no max_budget). Sending [] tells the backend to clear
+      // all stored windows, so only send it when the user removed every window;
+      // when entries remain but are still incomplete, omit the field so the saved
+      // windows are left untouched (JSON.stringify drops the undefined key).
       const validWindows = budgetLimits.filter(
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
-      values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
+      if (validWindows.length > 0) {
+        values.budget_limits = validWindows;
+      } else if (budgetLimits.length === 0) {
+        values.budget_limits = [];
+      }
 
       await onSubmit(values);
     } finally {
