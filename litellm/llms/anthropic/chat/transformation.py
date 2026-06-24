@@ -402,7 +402,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if AnthropicConfig._model_supports_speed_param(model):
             return
         if not (litellm.drop_params or drop_params):
-            return
+            speed_value = optional_params.get("speed")
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support speed={speed_value!r}. "
+                    "To drop unsupported params, set "
+                    "`litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
         litellm.verbose_logger.warning(
             DROP_UNSUPPORTED_SPEED_WARNING,
             model,
@@ -1614,6 +1622,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             "`litellm.drop_params = True`."
                         ),
                         status_code=400,
+                    )
+                else:
+                    litellm.verbose_logger.warning(
+                        DROP_UNSUPPORTED_SPEED_WARNING,
+                        model,
                     )
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching

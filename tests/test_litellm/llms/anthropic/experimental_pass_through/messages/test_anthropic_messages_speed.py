@@ -1,4 +1,5 @@
 import litellm
+import pytest
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -77,3 +78,14 @@ def test_messages_drop_params_keeps_speed_for_supporting_models():
     assert optional_params.get("speed") == "fast"
     assert result.get("speed") == "fast"
     assert "fast-mode-2026-02-01" in headers.get("anthropic-beta", "")
+
+
+def test_messages_raises_when_speed_unsupported_and_drop_params_false(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            params={"max_tokens": 1024, "speed": "fast"},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
