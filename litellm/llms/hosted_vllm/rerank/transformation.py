@@ -168,7 +168,13 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             message=error_message, status_code=status_code, headers=headers
         )
 
-    def _transform_response(self, response: dict) -> RerankResponse:
+    def _transform_response(self, response: Union[dict, list]) -> RerankResponse:
+        # SGLang's /v1/rerank endpoint returns a bare list of result objects
+        # instead of the OpenAI/Cohere-style {"results": [...], "usage": {...}}
+        # envelope. Normalize both shapes here so hosted_vllm covers both.
+        if isinstance(response, list):
+            response = {"results": response}
+
         # Extract usage information
         usage_data = response.get("usage", {})
         _billed_units = RerankBilledUnits(
@@ -186,17 +192,25 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         rerank_results: List[RerankResponseResult] = []
 
         for result in _results:
+            # SGLang uses "score" rather than the OpenAI/Cohere "relevance_score".
+            if "relevance_score" not in result and "score" in result:
+                result = {**result, "relevance_score": result["score"]}
+
             # Validate required fields exist
             if not all(key in result for key in ["index", "relevance_score"]):
                 raise ValueError(f"Missing required fields in the result={result}")
 
-            # Get document data if it exists
-            document_data = result.get("document", {})
-            document = (
-                RerankResponseDocument(text=str(document_data.get("text", "")))
-                if document_data
-                else None
-            )
+            # Get document data if it exists. SGLang returns the document as a
+            # plain string; the OpenAI/Cohere envelope returns {"text": "..."}.
+            document_data = result.get("document")
+            if isinstance(document_data, str):
+                document = RerankResponseDocument(text=document_data)
+            elif isinstance(document_data, dict) and document_data:
+                document = RerankResponseDocument(
+                    text=str(document_data.get("text", ""))
+                )
+            else:
+                document = None
 
             # Create typed result
             rerank_result = RerankResponseResult(
