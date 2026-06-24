@@ -3,14 +3,16 @@ import re
 
 import pytest
 
-try:
-    from litellm.proxy.guardrails import _rust  # noqa: F401
-except ImportError:
-    pytest.skip("litellm guardrails _rust engine not built", allow_module_level=True)
-
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.rust_scanner import (
     ContentFilterScanner,
 )
+
+try:
+    import litellm_python_bridge  # noqa: F401
+
+    _BRIDGE_AVAILABLE = True
+except ImportError:
+    _BRIDGE_AVAILABLE = False
 
 
 class _FakeScanner:
@@ -108,6 +110,7 @@ def test_uncompilable_pattern_falls_back_to_python():
     assert scanner.fallback_pattern_indexes == {0}
 
 
+@pytest.mark.skipif(not _BRIDGE_AVAILABLE, reason="litellm_python_bridge extension not built")
 def test_end_to_end_against_real_rust_scanner():
     scanner = ContentFilterScanner.build(
         category_keywords={"bomb": ("violence", "high", "BLOCK")},

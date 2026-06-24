@@ -2,16 +2,23 @@
 
 The Python content filter screens every request by running ``re.search`` once
 per keyword and once per regex pattern, under the GIL. This wraps the Rust
-``Scanner`` (one Aho-Corasick pass over the literal keywords plus one
+``ContentScanner`` (one Aho-Corasick pass over the literal keywords plus one
 ``RegexSet`` pass over the patterns, with the GIL released) and maps the
 matches back to the keyword/pattern keys the guardrail already uses.
 """
 
 import json
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from litellm.proxy.guardrails import _rust  # type: ignore[attr-defined]
+
+def _load_scanner_factory() -> Callable[[str], object]:
+    """Return the compiled ``ContentScanner`` constructor, raising ImportError
+    when the optional ``litellm_python_bridge`` extension is not installed so the
+    caller can fall back to pure-Python screening."""
+    import litellm_python_bridge
+
+    return litellm_python_bridge.ContentScanner
 
 
 @dataclass
@@ -55,13 +62,15 @@ class ContentFilterScanner:
         blocked_words: Dict[str, object],
         compiled_patterns: List[Dict[str, object]],
         keyword_to_regex: Callable[[str], str],
-        scanner_factory: Callable[[str], object] = _rust.Scanner,
+        scanner_factory: Optional[Callable[[str], object]] = None,
     ) -> "ContentFilterScanner":
         """Build a scanner from the guardrail's compiled config.
 
         scanner_factory is injectable for tests; it defaults to the Rust wheel's
-        Scanner constructor (a JSON string in, a Scanner out).
+        ContentScanner constructor (a JSON string in, a scanner out).
         """
+        if scanner_factory is None:
+            scanner_factory = _load_scanner_factory()
         literals: List[dict] = []
         regexes: List[dict] = []
         id_lookup: Dict[int, Tuple[str, object]] = {}
@@ -98,9 +107,7 @@ class ContentFilterScanner:
 
         fallback_pattern_indexes: Set[int] = set()
         for index, entry in enumerate(compiled_patterns):
-            if entry.get("keyword_regex") is not None or entry.get(
-                "allow_word_numbers"
-            ):
+            if entry.get("keyword_regex") is not None or entry.get("allow_word_numbers"):
                 # Contextual extras are not modeled by the scanner; screen in Python.
                 fallback_pattern_indexes.add(index)
                 continue
@@ -109,9 +116,7 @@ class ContentFilterScanner:
             id_lookup[term_id] = (_KIND_PATTERN, index)
             regexes.append({"id": term_id, "pattern": entry["regex"].pattern})
 
-        scanner = scanner_factory(
-            json.dumps({"literals": literals, "regexes": regexes})
-        )
+        scanner = scanner_factory(json.dumps({"literals": literals, "regexes": regexes}))
 
         # Any regex Rust could not compile (lookaround, backrefs) falls back to
         # Python screening for that pattern only.
