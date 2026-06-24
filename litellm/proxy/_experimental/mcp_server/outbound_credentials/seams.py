@@ -1,7 +1,7 @@
 """Injected ports the resolver depends on for the modes that fetch a credential.
 
 These are pure contracts with no v1 imports, so the resolver core stays free of v1. The
-v1-backed bodies live in ``v1_adapters.py`` and are injected at the composition root.
+concrete bodies (e.g. ``stores.py``) are injected at the composition root.
 """
 
 from __future__ import annotations

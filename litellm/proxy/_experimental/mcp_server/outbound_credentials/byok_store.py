@@ -2,7 +2,7 @@
 
 ``CachedByokStore`` is a per-process TTL cache in front of any ``ByokCredentialStore``, so
 v2 owns the BYOK credential lifecycle rather than borrowing v1's cache. It composes over the
-backing store (the v1-backed lookup today, a v2-native source later) without either side
+backing store (the DB-backed lookup today, a different source later) without either side
 knowing about the other.
 """
 

@@ -27,8 +27,9 @@ litellm/proxy/_experimental/mcp_server/
     types.py                 # AuthConfig union, CredError, Subject, ServerSpec
     httpx_auth.py            # NoOpAuth, StaticHeaderAuth (every mode -> one httpx.Auth)
     resolver.py              # resolve_credentials(): exhaustive per-mode match + assert_never
-    seams.py                 # injected Protocols (one per cache-touching mode)
-    v1_adapters.py           # v1-backed seam bodies; delegate to auth/oauth2/db owners
+    seams.py                 # injected Protocols (one per fetch-touching mode)
+    stores.py                # concrete credential sources (DbBackedByokStore); read storage
+    byok_store.py            # CachedByokStore: v2-native TTL cache wrapping a store
     adapter.py               # to_subject / to_server_spec / raise_public (v1 <-> v2 boundary)
   discoverable_endpoints.py  # MCP OAuth metadata, authorize, token, callback
   byok_oauth_endpoints.py    # BYOK OAuth UI/API flow
