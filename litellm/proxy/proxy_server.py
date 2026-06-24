@@ -101,7 +101,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.db_model_utils import strip_env_refs_for_team_model
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -5217,13 +5216,6 @@ class ProxyConfig:
                             value=v, key=k, return_original_value=True
                         )
                         _litellm_params[k] = _value
-                _model_info_raw = (
-                    m.model_info if isinstance(m.model_info, dict) else None
-                )
-                _litellm_params = strip_env_refs_for_team_model(
-                    litellm_params=_litellm_params,
-                    model_info=_model_info_raw,
-                )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -5260,13 +5252,6 @@ class ProxyConfig:
                         value=v, key=k, return_original_value=True
                     )
                     _litellm_params[k] = decrypted_value
-                _model_info_raw = (
-                    m.model_info if isinstance(m.model_info, dict) else None
-                )
-                _litellm_params = strip_env_refs_for_team_model(
-                    litellm_params=_litellm_params,
-                    model_info=_model_info_raw,
-                )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
