@@ -32,7 +32,7 @@ SQS_API_VERSION = "2012-11-05"
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 # Max records accepted in one POST /v1/callbacks/logs batch. Bounds the blast
 # radius: each record fans out to spend logs + every callback integration.
-MAX_CALLBACK_LOG_RECORDS = int(os.getenv("MAX_CALLBACK_LOG_RECORDS", 1000))
+MAX_CALLBACK_LOG_RECORDS = 1000
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
     os.getenv("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10)
