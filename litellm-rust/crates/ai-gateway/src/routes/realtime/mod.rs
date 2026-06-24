@@ -20,7 +20,7 @@ use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
-use crate::auth::RequireMasterKey;
+use crate::auth::UserApiKeyAuth;
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -33,11 +33,12 @@ struct RealtimeQuery {
     model: String,
 }
 
-/// Auth runs via the `RequireMasterKey` extractor. We validate the model BEFORE
-/// the upgrade so failures are clean HTTP (400/404), not a socket that opens then
+/// Auth runs via the `UserApiKeyAuth` extractor (master key → admin, otherwise
+/// cache then the swappable authenticator). We validate the model BEFORE the
+/// upgrade so failures are clean HTTP (400/404), not a socket that opens then
 /// closes, then hand the socket to `bridge`.
 async fn handle(
-    _auth: RequireMasterKey,
+    _auth: UserApiKeyAuth,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Query(query): Query<RealtimeQuery>,
