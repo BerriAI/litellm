@@ -211,29 +211,29 @@ def _cloud_sign_payload(
 ) -> dict[str, Any]:
     """Build the digests-only body for the agent sign endpoint.
 
-    Binds the messages digest as the hashed payload and carries the response
-    digest plus call metadata alongside.  record_hash is the pre-receipt
-    canonical hash of the record content, so the signature commits to the
-    exact record fields.  Raw prompt/response text is never included.
+    The signed payload is body["hash"]; the cloud signs it verbatim in hash mode
+    and drops any metadata key outside its whitelist (record_hash is not on it).
+    So the signed hash is pre_receipt_hash, the canonical content hash covering
+    model, status, both digests, seq, prev_hash and timestamp; binding the whole
+    record, not just the prompt. messages_digest rides in metadata for reference
+    and is transitively bound through pre_receipt_hash. No raw text is included.
     """
-    messages_digest = record.get("messages_digest")
     metadata: dict[str, Any] = {
         "source": "litellm",
         "call_id": record.get("call_id"),
         "model": record.get("model"),
         "status": record.get("status"),
         "response_content_digest": record.get("response_content_digest"),
+        "messages_digest": record.get("messages_digest"),
         "record_hash": pre_receipt_hash,
         "seq": record.get("seq"),
     }
-    body: dict[str, Any] = {
+    return {
         "action_type": "litellm:completion",
+        "hash": f"sha256:{pre_receipt_hash}",
+        "hash_algo": "sha256",
         "metadata": {k: v for k, v in metadata.items() if v is not None},
     }
-    if messages_digest:
-        body["hash"] = f"sha256:{messages_digest}"
-        body["hash_algo"] = "sha256"
-    return body
 
 
 class AsqavLogger(CustomLogger):

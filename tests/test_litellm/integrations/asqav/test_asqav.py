@@ -757,10 +757,13 @@ def test_cloud_sign_payload_carries_digests_not_content() -> None:
     body = _cloud_sign_payload(record, "c" * 64)
     raw = json.dumps(body)
     assert body["action_type"] == "litellm:completion"
-    assert body["hash"] == "sha256:" + "a" * 64
+    # The SIGNED hash is the pre-receipt content hash, not the prompt digest.
+    # The cloud signs body["hash"] verbatim, so this is what the receipt binds.
+    assert body["hash"] == "sha256:" + "c" * 64
     assert body["hash_algo"] == "sha256"
     assert body["metadata"]["response_content_digest"] == "b" * 64
-    # The signed metadata carries the real pre-receipt content hash.
+    # messages_digest stays in metadata for reference only.
+    assert body["metadata"]["messages_digest"] == "a" * 64
     assert body["metadata"]["record_hash"] == "c" * 64
     # No raw prompt/response text ever leaves; only digests.
     assert "hello" not in raw
@@ -814,19 +817,26 @@ def test_cloud_sign_records_signature_when_key_set(
     assert ok is True, msg
 
 
-def _posted_record_hash(call: dict) -> str:
-    return call["json"]["metadata"]["record_hash"]
+def _posted_signed_hash(call: dict) -> str:
+    """The hex the cloud actually signs: body["hash"] minus the sha256: prefix.
+
+    The cloud signs body["hash"] verbatim in hash mode and drops metadata keys
+    outside its whitelist (record_hash is not whitelisted), so body["hash"] is
+    the only field that proves what the receipt binds.
+    """
+    signed = call["json"]["hash"]
+    assert signed.startswith("sha256:"), signed
+    return signed[len("sha256:") :]
 
 
-def test_cloud_sign_posts_real_pre_receipt_hash(
+def test_cloud_sign_signs_real_pre_receipt_hash(
     tmp_path, _cloud_env, _patch_httpx
 ) -> None:
-    """The signed payload's record_hash is a real 64-hex content hash equal to
-    sha256(canonical(record content)), not None.
+    """The SIGNED hash (body["hash"]) is a real 64-hex content hash equal to
+    sha256(canonical(record content)).
 
-    Regression for the P2 ordering bug: _maybe_cloud_sign ran before record_hash
-    was computed, so record.get("record_hash") was always None and the field was
-    silently dropped from the signed body. The signature then bound to nothing.
+    The cloud signs body["hash"], not metadata, so the binding lives there. This
+    asserts the signed field equals the re-derived pre-receipt content hash.
     """
     path = str(tmp_path / "audit.jsonl")
     resp = _FakeResponse(201, {"signature_id": "sig-1", "mode": "hash"})
@@ -842,10 +852,9 @@ def test_cloud_sign_posts_real_pre_receipt_hash(
     )
 
     assert len(client.calls) == 1
-    posted = _posted_record_hash(client.calls[0])
-    assert posted is not None, "record_hash must not be None in the signed body"
-    assert isinstance(posted, str) and len(posted) == 64
-    int(posted, 16)  # must be valid hex
+    signed = _posted_signed_hash(client.calls[0])
+    assert isinstance(signed, str) and len(signed) == 64
+    int(signed, 16)  # must be valid hex
 
     # Re-derive the pre-receipt hash from the stored record: canonicalize the
     # content minus record_hash and asqav_cloud. It must equal the signed hash.
@@ -853,19 +862,30 @@ def test_cloud_sign_posts_real_pre_receipt_hash(
     content = {
         k: v for k, v in record.items() if k not in ("record_hash", "asqav_cloud")
     }
-    assert posted == _sha256_hex(_canonical_bytes(content))
+    assert signed == _sha256_hex(_canonical_bytes(content))
 
 
-def test_cloud_signature_binds_to_content_changes(
-    tmp_path, _cloud_env, _patch_httpx
+@pytest.mark.parametrize(
+    "tampered_field, tampered_value",
+    [
+        ("model", "attacker-model"),
+        ("response_content_digest", "f" * 64),
+        ("status", "failure"),
+        ("seq", 999),
+        ("prev_hash", "9" * 64),
+    ],
+)
+def test_cloud_signature_binds_full_record_not_just_prompt(
+    tmp_path, _cloud_env, _patch_httpx, tampered_field, tampered_value
 ) -> None:
-    """The signed hash binds to the canonical record content: flipping any
-    content field yields a different signed hash.
+    """The SIGNED hash binds the whole canonical record, so tampering any
+    content field (including non-prompt fields like model, status, response
+    digest, seq, prev_hash) changes the hash the cloud signed.
 
-    Without binding, an attacker could alter fields outside the signed payload,
-    recompute the local chain, and keep the cloud receipt looking valid. We
-    prove binding by re-deriving the signed hash from the stored content and
-    showing a one-field tamper changes it.
+    Against the prior code body["hash"] was sha256:{messages_digest} (the prompt
+    only), so tampering model/status/response/seq/prev_hash did NOT change the
+    signed hash and the receipt validated a forged record. This is the end-to-end
+    binding regression: the signed field must move with every content field.
     """
     path = str(tmp_path / "audit.jsonl")
     resp = _FakeResponse(201, {"signature_id": "sig-1", "mode": "hash"})
@@ -880,15 +900,17 @@ def test_cloud_signature_binds_to_content_changes(
         end_time=end,
     )
 
-    signed_hash = _posted_record_hash(client.calls[0])
+    signed_hash = _posted_signed_hash(client.calls[0])
     record = _read_records(path)[0]
     content = {
         k: v for k, v in record.items() if k not in ("record_hash", "asqav_cloud")
     }
-    # The signed hash matches the untouched content.
+    # The signed hash matches the untouched content the cloud committed to.
     assert signed_hash == _sha256_hex(_canonical_bytes(content))
-    # Tampering one content field changes the hash the signature committed to.
-    tampered = {**content, "model": "attacker-model"}
+    # Tampering the field flips the signed hash, so the receipt cannot validate
+    # a record with this field altered. Fails against the prompt-only binding.
+    assert tampered_field in content
+    tampered = {**content, tampered_field: tampered_value}
     assert _sha256_hex(_canonical_bytes(tampered)) != signed_hash
 
 
