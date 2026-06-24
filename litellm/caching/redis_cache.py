@@ -1222,7 +1222,14 @@ class RedisCache(BaseCache):
         self.redis_client.flushall()
 
     async def disconnect(self):
-        await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        if self.async_redis_conn_pool is not None:
+            await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        elif "startup_nodes" in self.redis_kwargs:
+            if self.redis_async_client is not None:
+                await self.redis_async_client.aclose()
+        else:
+            raise RuntimeError("Redis connection pool is not initialized")
+
         try:
             self.redis_client.close()
         except Exception as e:
