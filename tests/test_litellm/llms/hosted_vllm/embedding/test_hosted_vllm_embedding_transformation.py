@@ -324,6 +324,115 @@ class TestHostedVLLMMultimodalEmbedding:
         assert result["messages"] == messages
         assert result["model"] == "Qwen3-VL-Embedding-8B-MLX-4bit"
 
+    def test_remote_http_image_url_in_messages_rejected(self):
+        """A remote http image_url must be rejected; vLLM would fetch it (SSRF)."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "http://169.254.169.254/latest/meta-data/"
+                        },
+                    }
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_public_https_image_url_in_messages_rejected(self):
+        """Even a public https image_url is rejected; only data: URLs are allowed."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/cat.png"},
+                    }
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_non_data_scheme_image_url_in_messages_rejected(self):
+        """A non-data scheme (e.g. file://) must be rejected."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "file:///etc/passwd"}}
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_string_form_remote_image_url_rejected(self):
+        """A remote URL given as the image_url string (not a dict) is also rejected."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": "http://169.254.169.254/"}
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_data_url_image_in_messages_allowed(self):
+        """data: URLs are never fetched server-side, so they are allowed and forwarded."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    }
+                ],
+            }
+        ]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=[],
+            optional_params={"messages": messages},
+            headers={},
+        )
+        assert result["messages"] == messages
+
     def test_messages_forwarded_alongside_other_optional_params(self):
         """messages must not collide with or duplicate other optional params."""
         messages = [{"role": "user", "content": "hi"}]
