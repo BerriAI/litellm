@@ -1917,6 +1917,16 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
+        )
+
         # Get prompts from each allowed server
         all_prompts = []
         for server in allowed_mcp_servers:
@@ -1976,6 +1986,16 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
+        )
+
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
             if server is None:
@@ -2030,6 +2050,16 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+        )
+
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
         )
 
         all_resource_templates: List[ResourceTemplate] = []
@@ -2496,6 +2526,17 @@ if MCP_AVAILABLE:
         Returns:
             CallToolResult: Tool execution result
         """
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+            assert_requested_server_passes_trust_filter,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
+        )
+
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
         requested_server_id: Optional[str] = kwargs.get("requested_server_id")
@@ -2601,6 +2642,12 @@ if MCP_AVAILABLE:
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
             mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+
+        if mcp_server is not None:
+            assert_requested_server_passes_trust_filter(
+                filtered_servers=allowed_mcp_servers,
+                server_id=mcp_server.server_id,
+            )
 
         if mcp_server:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
@@ -2893,6 +2940,23 @@ if MCP_AVAILABLE:
                 detail="User not allowed to get this prompt.",
             )
 
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+            TRUST_SCORE_THRESHOLD_DENIED,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
+        )
+
+        if not allowed_mcp_servers:
+            raise HTTPException(
+                status_code=403,
+                detail=TRUST_SCORE_THRESHOLD_DENIED,
+            )
+
         # Extract server name from prefixed prompt name
         original_prompt_name, server_name = split_server_prefix_from_name(name)
 
@@ -2941,6 +3005,23 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=403,
                 detail="User not allowed to read this resource.",
+            )
+
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+            TRUST_SCORE_THRESHOLD_DENIED,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
+        )
+
+        if not allowed_mcp_servers:
+            raise HTTPException(
+                status_code=403,
+                detail=TRUST_SCORE_THRESHOLD_DENIED,
             )
 
         if len(allowed_mcp_servers) != 1:

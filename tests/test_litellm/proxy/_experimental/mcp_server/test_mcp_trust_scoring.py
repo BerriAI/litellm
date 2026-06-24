@@ -8,11 +8,13 @@ import pytest
 from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
     MCPTrustScoringClient,
     MCPTrustScoringConfig,
+    assert_requested_server_passes_trust_filter,
     filter_mcp_servers_by_trust,
     initialize_mcp_trust_scoring_from_config,
     normalize_trust_score,
     parse_trust_response,
     rank_mcp_servers_by_trust,
+    sanitize_url_for_trust_lookup,
 )
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPTransportType
@@ -119,6 +121,60 @@ def test_normalize_trust_score_maps_do_percent_scale_to_fraction() -> None:
     assert abs(low_trust - 0.01) < 1e-9
 
 
+def test_sanitize_url_for_trust_lookup_strips_userinfo_and_sensitive_query_params() -> (
+    None
+):
+    sanitized = sanitize_url_for_trust_lookup(
+        "https://secret-token@mcp.example.com:8443/mcp?api_key=leak&safe=1#frag"
+    )
+
+    assert sanitized == "https://mcp.example.com:8443/mcp?safe=1"
+
+
+def test_assert_requested_server_passes_trust_filter_rejects_untrusted_server() -> None:
+    from fastapi import HTTPException
+
+    trusted = _server(server_id="srv-trusted")
+    with pytest.raises(HTTPException) as exc_info:
+        assert_requested_server_passes_trust_filter(
+            filtered_servers=[trusted],
+            server_id="srv-untrusted",
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_trust_score_forwards_sanitized_url_to_do() -> None:
+    http_client = _FakeHttpClient(
+        [
+            _trust_response(
+                payload={
+                    "found": True,
+                    "server_url": "https://mcp.example.com/mcp",
+                    "trust_score": 90,
+                }
+            )
+        ]
+    )
+    config = MCPTrustScoringConfig(enabled=True)
+    client = _isolated_client(
+        config,
+        http_client,
+    )
+
+    await client.get_trust_score(
+        "https://secret@mcp.example.com/mcp?api_key=leak&safe=1"
+    )
+
+    assert http_client.calls == [
+        (
+            config.api_url,
+            {"url": "https://mcp.example.com/mcp?safe=1"},
+        )
+    ]
+
+
 def test_parse_trust_response_found_server() -> None:
     result = parse_trust_response(
         server_url="https://alpha.example.com/mcp",
@@ -195,7 +251,9 @@ async def test_filter_servers_by_trust_excludes_low_score() -> None:
 
     filtered = await client.filter_servers_by_trust(
         [
-            _server(server_id="srv-1", name="alpha", url="https://alpha.example.com/mcp"),
+            _server(
+                server_id="srv-1", name="alpha", url="https://alpha.example.com/mcp"
+            ),
             _server(server_id="srv-2", name="beta", url="https://beta.example.com/mcp"),
         ]
     )
@@ -205,7 +263,9 @@ async def test_filter_servers_by_trust_excludes_low_score() -> None:
 
 @pytest.mark.asyncio
 async def test_filter_servers_fail_open_on_lookup_error() -> None:
-    http_client = _FakeHttpClient([_trust_response(status_code=503, payload={"error": "busy"})])
+    http_client = _FakeHttpClient(
+        [_trust_response(status_code=503, payload={"error": "busy"})]
+    )
     client = _isolated_client(
         MCPTrustScoringConfig(enabled=True, fail_open=True),
         http_client,
@@ -220,7 +280,9 @@ async def test_filter_servers_fail_open_on_lookup_error() -> None:
 
 @pytest.mark.asyncio
 async def test_filter_servers_fail_closed_on_lookup_error() -> None:
-    http_client = _FakeHttpClient([_trust_response(status_code=503, payload={"error": "busy"})])
+    http_client = _FakeHttpClient(
+        [_trust_response(status_code=503, payload={"error": "busy"})]
+    )
     client = _isolated_client(
         MCPTrustScoringConfig(enabled=True, fail_open=False),
         http_client,
@@ -275,7 +337,9 @@ async def test_rank_servers_by_trust_orders_highest_first() -> None:
     ranked = await client.rank_servers_by_trust(
         [
             _server(server_id="srv-2", name="beta", url="https://beta.example.com/mcp"),
-            _server(server_id="srv-1", name="alpha", url="https://alpha.example.com/mcp"),
+            _server(
+                server_id="srv-1", name="alpha", url="https://alpha.example.com/mcp"
+            ),
         ]
     )
 
@@ -314,7 +378,9 @@ async def test_module_helpers_use_explicit_client() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manager_list_tools_applies_trust_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_manager_list_tools_applies_trust_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
     )
@@ -347,7 +413,9 @@ async def test_manager_list_tools_applies_trust_filter(monkeypatch: pytest.Monke
     )
 
     manager = MCPServerManager()
-    alpha = _server(server_id="srv-1", name="alpha", url="https://alpha.example.com/mcp")
+    alpha = _server(
+        server_id="srv-1", name="alpha", url="https://alpha.example.com/mcp"
+    )
     beta = _server(server_id="srv-2", name="beta", url="https://beta.example.com/mcp")
     manager.registry = {"srv-1": alpha, "srv-2": beta}
 

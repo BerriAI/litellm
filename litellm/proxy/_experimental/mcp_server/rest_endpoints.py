@@ -380,12 +380,17 @@ if MCP_AVAILABLE:
 
         from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
             apply_trust_filter_to_allowed_mcp_servers,
+            assert_requested_server_passes_trust_filter,
         )
 
         allowed_mcp_servers = list(
             await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
                 allowed_mcp_servers
             )
+        )
+        assert_requested_server_passes_trust_filter(
+            filtered_servers=allowed_mcp_servers,
+            server_id=canonical_server_id,
         )
 
         return allowed_mcp_servers, canonical_server_id
@@ -476,13 +481,20 @@ if MCP_AVAILABLE:
 
         from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
             apply_trust_filter_to_allowed_mcp_servers,
+            assert_requested_server_passes_trust_filter,
         )
 
-        return list(
+        filtered_servers = list(
             await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
                 allowed_mcp_servers
             )
         )
+        assert_requested_server_passes_trust_filter(
+            filtered_servers=filtered_servers,
+            server_id=server_id,
+        )
+
+        return filtered_servers
 
     async def _list_tools_for_single_server(
         server_id: str,

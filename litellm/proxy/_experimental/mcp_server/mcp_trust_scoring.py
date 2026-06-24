@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Callable, Literal, Protocol, Sequence, cast
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -28,6 +29,25 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+TRUST_SCORE_THRESHOLD_DENIED = (
+    "Server does not meet the configured trust score threshold."
+)
+
+_SENSITIVE_QUERY_PARAM_NAMES = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth",
+        "credential",
+        "credentials",
+        "key",
+        "password",
+        "secret",
+        "token",
+    }
+)
 
 
 class MCPTrustScoringConfig(BaseModel):
@@ -145,6 +165,42 @@ class _ScoredServer:
 
 def _normalize_server_url(server_url: str) -> str:
     return server_url.rstrip("/")
+
+
+def sanitize_url_for_trust_lookup(server_url: str) -> str:
+    parsed = urlparse(server_url)
+    hostname = parsed.hostname
+    if not hostname:
+        return _normalize_server_url(server_url)
+
+    port_suffix = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{hostname}{port_suffix}"
+    filtered_query = tuple(
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in _SENSITIVE_QUERY_PARAM_NAMES
+    )
+    sanitized = parsed._replace(
+        netloc=netloc,
+        query=urlencode(filtered_query),
+        fragment="",
+    )
+    return urlunparse(sanitized)
+
+
+def assert_requested_server_passes_trust_filter(
+    *,
+    filtered_servers: Sequence[MCPServer],
+    server_id: str,
+) -> None:
+    from fastapi import HTTPException
+
+    trusted_server_ids = {server.server_id for server in filtered_servers}
+    if server_id not in trusted_server_ids:
+        raise HTTPException(
+            status_code=403,
+            detail=TRUST_SCORE_THRESHOLD_DENIED,
+        )
 
 
 def _cache_key_for_url(server_url: str) -> str:
@@ -303,7 +359,8 @@ class MCPTrustScoringClient:
             )
 
     async def get_trust_score(self, server_url: str) -> DominionObservatoryTrustResult:
-        normalized_url = _normalize_server_url(server_url)
+        sanitized_url = sanitize_url_for_trust_lookup(server_url)
+        normalized_url = _normalize_server_url(sanitized_url)
         cached = await self._read_cached_result(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
             normalized_url
         )
