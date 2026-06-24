@@ -4,9 +4,9 @@
 
 **Goal:** Make `GET /v1/files/{id}/content` return the S3 object bytes for a Bedrock-backed managed file instead of a 500.
 
-**Architecture:** Implement `transform_file_content_request` / `transform_file_content_response` on `BedrockFilesConfig` so Bedrock flows through the same generic `retrieve_file_content` handler as Vertex/Anthropic/Manus. The request transform validates the file_id and returns a botocore presigned S3 GET URL (auth in the query string, the only shape that fits a handler which computes URL and headers independently); the response transform wraps the raw bytes. The validated S3-id helpers move out of the now-dead `BedrockFilesHandler`, which is deleted along with its unreachable branch in `files/main.py`.
+**Architecture:** Implement `transform_file_content_request` / `transform_file_content_response` on `BedrockFilesConfig` so Bedrock flows through the same generic `retrieve_file_content` handler as Vertex/Anthropic/Manus. The request transform validates the file_id against the configured input and output buckets and returns a botocore presigned S3 GET URL (auth in the query string, the only shape that fits a handler which computes URL and headers independently); the response transform wraps the raw bytes. All bucket/region config is read from the trusted `_litellm_internal_model_credentials` snapshot, because the production `file_content` path strips plain `s3_*` keys via `get_litellm_params`. The validated S3-id helpers move out of the now-dead `BedrockFilesHandler`, which is deleted along with its unreachable branch in `files/main.py`.
 
-**Tech Stack:** Python, botocore (S3 SigV4 presigning), httpx, pytest.
+**Tech Stack:** Python, botocore (S3 SigV4 presigning, already a hard dependency `boto3>=1.43.1`), httpx, pytest.
 
 ## Global Constraints
 
@@ -14,23 +14,32 @@
 - Fully typed; no `Any` or bare `dict`/`dict[str, Any]`. Validate untyped inputs and pass typed values.
 - No mutation of variables where avoidable; prefer building values in one shot.
 - Tests must fail if the feature is mutated/broken (mutation kill rate > 90%); mock only the AWS/S3 boundary, never the transform logic under test.
+- All bucket/region config in tests must be supplied via the `_litellm_internal_model_credentials` `MappingProxyType` snapshot, never as plain `litellm_params` keys — that is what the production proxy path delivers (`get_litellm_params` strips `s3_bucket_name`/`s3_region_name`/`s3_output_bucket_name`).
 - Run `make format` and `make lint` before each commit; run `make lint-budget-update` and commit lowered baselines if `ruff-strict-budget.json` / `basedpyright-code-budget.json` trip.
 - Branch is `litellm_bedrock_file_content`, based on `litellm_internal_staging`. Commit messages follow conventional commits; no Claude attribution.
 - `git push` always uses `--no-verify` (only when explicitly asked to push).
 
 ## File Structure
 
-- `litellm/llms/bedrock/files/transformation.py` (modify): add `_extract_s3_uri_from_file_id`, `_get_configured_s3_bucket_name`, `_resolve_s3_region`, `_generate_presigned_s3_get_url` to `BedrockFilesConfig`; replace the two `NotImplementedError` content methods with real implementations.
+- `litellm/llms/bedrock/files/transformation.py` (modify): add `_get_trusted_credentials`, `_extract_s3_uri_from_file_id`, `_get_configured_s3_buckets`, `_validate_against_configured_buckets`, `_resolve_s3_region`, `_generate_presigned_s3_get_url` to `BedrockFilesConfig`; replace the two `NotImplementedError` content methods with real implementations.
 - `litellm/llms/bedrock/files/handler.py` (delete): superseded; logic moved to the config.
 - `litellm/files/main.py` (modify): drop the `BedrockFilesHandler` import, the `bedrock_files_instance` global, and the unreachable `elif custom_llm_provider == "bedrock":` branch in `file_content`.
 - `tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py` (modify): new `TestBedrockFilesContentRetrieval` class.
 - `tests/test_litellm/llms/bedrock/files/test_bedrock_files_handler.py` (modify): re-point the helper tests at `BedrockFilesConfig`.
 
+## Background facts (verified)
+
+- `get_litellm_params(**kwargs)` keeps `aws_region_name` and `aws_external_id` but **drops** `s3_bucket_name`, `s3_region_name`, `s3_output_bucket_name`, `s3_endpoint_url`. So `transform_file_content_request` must not rely on those plain keys.
+- The proxy forwards the model deployment credentials as `litellm_params["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))`. That snapshot carries `s3_bucket_name`, `s3_region_name`, `s3_output_bucket_name`, `aws_external_id`, etc. It is immutable and server-side, so it is the trustworthy source (a plain request-level `s3_bucket_name` must be ignored to prevent SSRF/bucket redirection).
+- Bedrock batch creation writes outputs to `s3://{s3_output_bucket_name or input_bucket}/litellm-batch-outputs/{job}/...` — at bucket root, ignoring any input-bucket prefix. Retrieval validation must allow that exact shape.
+- `validate_managed_cloud_file_id(file_id, scheme, configured_bucket_name, allowed_object_prefixes, allow_legacy_cloud_file_ids)` returns `(bucket, raw_object_key)`; when `configured_bucket_name` includes a prefix (`bucket/prefix`), it prepends that prefix to each allowed prefix.
+- botocore `generate_presigned_url("get_object", ...)` with `Config(signature_version="s3v4", s3={"addressing_style": "path"})` and no `endpoint_url`: emits the correct per-partition host (`s3.{region}.amazonaws.com`, `s3.amazonaws.com` for us-east-1, `s3.{region}.amazonaws.com.cn` for China), puts STS tokens in `X-Amz-Security-Token`, and survives the handler's `params.update(extract_query_params(url))` re-parse byte-for-byte.
+
 ---
 
-### Task 1: Move validated S3-id helpers into BedrockFilesConfig
+### Task 1: Trusted-credential, bucket, and region helpers on BedrockFilesConfig
 
-Move the file-id validation helpers from `BedrockFilesHandler` onto `BedrockFilesConfig` so the config owns them before the content methods use them. `BedrockFilesConfig` already extends `BaseAWSLLM`, so credential/region helpers are in scope.
+Add the config-owned helpers that read the trusted snapshot and resolve buckets/region. These are pure functions over `litellm_params`, easy to unit-test in isolation before any presigning.
 
 **Files:**
 - Modify: `litellm/llms/bedrock/files/transformation.py`
@@ -39,15 +48,18 @@ Move the file-id validation helpers from `BedrockFilesHandler` onto `BedrockFile
 **Interfaces:**
 - Consumes: `validate_managed_cloud_file_id`, `should_allow_legacy_cloud_file_ids`, `BEDROCK_MANAGED_S3_PREFIXES` (from `litellm.litellm_core_utils.cloud_storage_security`); `SpecialEnums` (from `litellm.types.utils`).
 - Produces:
+  - `BedrockFilesConfig._get_trusted_credentials(self, litellm_params: dict) -> Mapping[str, Any]`
   - `BedrockFilesConfig._extract_s3_uri_from_file_id(self, file_id: str) -> str`
-  - `BedrockFilesConfig._get_configured_s3_bucket_name(self, litellm_params: dict) -> str`
+  - `BedrockFilesConfig._get_configured_s3_buckets(self, litellm_params: dict) -> tuple[str, ...]`
+  - `BedrockFilesConfig._resolve_s3_region(self, litellm_params: dict) -> str`
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the end of `tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py` (top-level, after the existing classes). The `_encode_unified_file_id` helper mirrors the one in `test_bedrock_files_handler.py`.
+Add to the end of `tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py`:
 
 ```python
 import base64
+import os
 from types import MappingProxyType
 from unittest.mock import patch
 
@@ -68,60 +80,80 @@ def _encode_unified_file_id(s3_uri: str) -> str:
     return base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
 
 
-class TestBedrockFilesConfigS3IdHelpers:
+def _trusted(**creds) -> dict:
+    return {"_litellm_internal_model_credentials": MappingProxyType(dict(creds))}
+
+
+class TestBedrockFilesConfigResolution:
     def setup_method(self):
         self.config = BedrockFilesConfig()
 
     def test_extract_direct_s3_uri(self):
         assert (
             self.config._extract_s3_uri_from_file_id(
-                "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
+                "s3://b/litellm-batch-outputs/job/output.jsonl"
             )
-            == "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
+            == "s3://b/litellm-batch-outputs/job/output.jsonl"
         )
 
     def test_extract_unified_managed_s3_uri(self):
-        file_id = _encode_unified_file_id(
-            "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
-        )
+        file_id = _encode_unified_file_id("s3://b/litellm-batch-outputs/job/output.jsonl")
         assert (
             self.config._extract_s3_uri_from_file_id(file_id)
-            == "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
+            == "s3://b/litellm-batch-outputs/job/output.jsonl"
         )
 
     def test_extract_rejects_non_s3_file_id(self):
         with pytest.raises(ValueError, match="managed LiteLLM S3 file id"):
-            self.config._extract_s3_uri_from_file_id("safe-bucket/private.jsonl")
+            self.config._extract_s3_uri_from_file_id("b/private.jsonl")
 
-    def test_configured_bucket_prefers_trusted_credentials(self):
-        trusted = MappingProxyType({"s3_bucket_name": "safe-bucket"})
-        with patch.dict("os.environ", {}, clear=True):
-            assert (
-                self.config._get_configured_s3_bucket_name(
-                    {
-                        "s3_bucket_name": "attacker-bucket",
-                        "_litellm_internal_model_credentials": trusted,
-                    }
-                )
-                == "safe-bucket"
+    def test_buckets_prefer_trusted_snapshot_over_request(self):
+        params = {
+            "s3_bucket_name": "attacker-bucket",
+            **_trusted(s3_bucket_name="safe-bucket"),
+        }
+        with patch.dict(os.environ, {}, clear=True):
+            assert self.config._get_configured_s3_buckets(params) == ("safe-bucket",)
+
+    def test_buckets_include_output_bucket(self):
+        params = _trusted(s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket")
+        with patch.dict(os.environ, {}, clear=True):
+            assert self.config._get_configured_s3_buckets(params) == (
+                "in-bucket",
+                "out-bucket",
             )
 
-    def test_configured_bucket_ignores_untrusted_request_value(self):
-        with patch.dict("os.environ", {}, clear=True):
+    def test_buckets_fall_back_to_env(self):
+        with patch.dict(
+            os.environ,
+            {"AWS_S3_BUCKET_NAME": "env-in", "AWS_S3_OUTPUT_BUCKET_NAME": "env-out"},
+            clear=True,
+        ):
+            assert self.config._get_configured_s3_buckets({}) == ("env-in", "env-out")
+
+    def test_buckets_require_at_least_one(self):
+        with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="S3 bucket_name is required"):
-                self.config._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
-                )
+                self.config._get_configured_s3_buckets({"s3_bucket_name": "ignored"})
+
+    def test_region_prefers_trusted_s3_region_name(self):
+        params = {"aws_region_name": "us-east-1", **_trusted(s3_region_name="eu-central-1")}
+        assert self.config._resolve_s3_region(params) == "eu-central-1"
+
+    def test_region_falls_back_to_aws_region_name(self):
+        assert self.config._resolve_s3_region({"aws_region_name": "ap-southeast-2"}) == (
+            "ap-southeast-2"
+        )
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesConfigS3IdHelpers -v`
-Expected: FAIL with `AttributeError: 'BedrockFilesConfig' object has no attribute '_extract_s3_uri_from_file_id'`.
+Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesConfigResolution -v`
+Expected: FAIL with `AttributeError: 'BedrockFilesConfig' object has no attribute '_get_trusted_credentials'` (or the first missing helper).
 
-- [ ] **Step 3: Add the helpers to BedrockFilesConfig**
+- [ ] **Step 3: Add imports and helpers**
 
-In `litellm/llms/bedrock/files/transformation.py`, extend the existing import from `cloud_storage_security` (which already imports `BEDROCK_MANAGED_S3_BATCH_PREFIX`, `BEDROCK_MANAGED_S3_UPLOAD_PREFIX`, etc.) to also bring in the names below, and add `base64` / `MappingProxyType` / `cast` / `Mapping` imports at the top:
+In `litellm/llms/bedrock/files/transformation.py`, add to the top-of-file imports:
 
 ```python
 import base64
@@ -129,24 +161,17 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 ```
 
-```python
-from litellm.litellm_core_utils.cloud_storage_security import (
-    BEDROCK_MANAGED_S3_BATCH_PREFIX,
-    BEDROCK_MANAGED_S3_PREFIXES,
-    BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
-    build_managed_cloud_object_name,
-    encode_s3_object_key_for_url,
-    sanitize_cloud_object_component,
-    should_allow_legacy_cloud_file_ids,
-    split_configured_cloud_bucket_name,
-    validate_managed_cloud_file_id,
-)
-from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
-```
+Extend the existing `cloud_storage_security` import to add `BEDROCK_MANAGED_S3_PREFIXES`, `should_allow_legacy_cloud_file_ids`, and `validate_managed_cloud_file_id`; extend the `litellm.types.utils` import to add `SpecialEnums`.
 
-Add these two methods to `BedrockFilesConfig` (place them just above `transform_file_content_request`):
+Add these methods to `BedrockFilesConfig` (place above the content-transform methods):
 
 ```python
+    def _get_trusted_credentials(self, litellm_params: dict) -> Mapping[str, Any]:
+        snapshot = litellm_params.get("_litellm_internal_model_credentials")
+        if isinstance(snapshot, type(MappingProxyType({}))):
+            return cast(Mapping[str, Any], snapshot)
+        return MappingProxyType({})
+
     def _extract_s3_uri_from_file_id(self, file_id: str) -> str:
         try:
             padded = file_id + "=" * (-len(file_id) % 4)
@@ -162,29 +187,51 @@ Add these two methods to `BedrockFilesConfig` (place them just above `transform_
 
         raise ValueError("file_id must be a managed LiteLLM S3 file id")
 
-    def _get_configured_s3_bucket_name(self, litellm_params: dict) -> str:
-        trusted_model_credentials = litellm_params.get(
-            "_litellm_internal_model_credentials"
+    def _get_configured_s3_buckets(self, litellm_params: dict) -> Tuple[str, ...]:
+        trusted = self._get_trusted_credentials(litellm_params)
+
+        input_candidate = trusted.get("s3_bucket_name")
+        input_bucket = (
+            input_candidate
+            if isinstance(input_candidate, str) and input_candidate
+            else os.getenv("AWS_S3_BUCKET_NAME")
         )
-        bucket_name: Optional[str] = None
-        if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-            trusted_mapping = cast(Mapping[str, Any], trusted_model_credentials)
-            candidate = trusted_mapping.get("s3_bucket_name")
-            if isinstance(candidate, str):
-                bucket_name = candidate
-        bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
-        if not bucket_name:
+
+        output_candidate = trusted.get("s3_output_bucket_name")
+        output_bucket = (
+            output_candidate
+            if isinstance(output_candidate, str) and output_candidate
+            else os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+        )
+
+        buckets = tuple(
+            dict.fromkeys(
+                bucket for bucket in (input_bucket, output_bucket) if bucket
+            )
+        )
+        if not buckets:
             raise ValueError(
                 "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or "
                 "AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
             )
-        return bucket_name
+        return buckets
+
+    def _resolve_s3_region(self, litellm_params: dict) -> str:
+        trusted = self._get_trusted_credentials(litellm_params)
+        trusted_region = trusted.get("s3_region_name")
+        if isinstance(trusted_region, str) and trusted_region:
+            return trusted_region
+        return self._get_aws_region_name(optional_params=litellm_params, model="")
 ```
+
+Notes:
+- `_get_configured_s3_buckets` reads only the trusted snapshot or env, never a plain `litellm_params["s3_bucket_name"]`, preserving SSRF protection.
+- Buckets are built with `dict.fromkeys(...)` to de-duplicate while preserving order (input first), with no mutation — per the functional-style constraint.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesConfigS3IdHelpers -v`
-Expected: PASS (5 passed).
+Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesConfigResolution -v`
+Expected: PASS (9 passed).
 
 - [ ] **Step 5: Format, lint, commit**
 
@@ -192,24 +239,24 @@ Expected: PASS (5 passed).
 cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content
 make format && make lint
 git add litellm/llms/bedrock/files/transformation.py tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py
-git commit --no-verify -m "refactor(bedrock): move S3 file-id validation helpers into BedrockFilesConfig"
+git commit --no-verify -m "refactor(bedrock): add trusted-snapshot S3 bucket/region resolution to files config"
 ```
 
 ---
 
-### Task 2: Implement presigned-URL content request + response transforms
+### Task 2: Multi-bucket validation + presigned-URL content transforms
 
-Replace the two `NotImplementedError` methods with the real implementations: validate the file_id, resolve bucket/key/region/credentials, presign a GET, and wrap the response bytes.
+Replace the two `NotImplementedError` methods. Validation tries each configured bucket (input then output) so batch outputs in a separate bucket or at bucket root validate; presigning resolves region + credentials (incl. `aws_external_id`) and signs locally.
 
 **Files:**
 - Modify: `litellm/llms/bedrock/files/transformation.py`
 - Test: `tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py`
 
 **Interfaces:**
-- Consumes: `_extract_s3_uri_from_file_id`, `_get_configured_s3_bucket_name` (Task 1); `self.get_credentials(...)`, `self._get_aws_region_name(optional_params, model)`, `self._get_ssl_verify()` (from `BaseAWSLLM`); `HttpxBinaryResponseContent` (already imported).
+- Consumes: Task 1 helpers; `self.get_credentials(...)`, `self._get_aws_region_name(...)`, `self._get_ssl_verify()` (from `BaseAWSLLM`); `HttpxBinaryResponseContent` (already imported).
 - Produces:
-  - `BedrockFilesConfig._resolve_s3_region(self, optional_params: dict, litellm_params: dict) -> str`
-  - `BedrockFilesConfig._generate_presigned_s3_get_url(self, bucket_name: str, object_key: str, optional_params: dict, litellm_params: dict) -> str`
+  - `BedrockFilesConfig._validate_against_configured_buckets(self, s3_uri: str, litellm_params: dict) -> tuple[str, str]`
+  - `BedrockFilesConfig._generate_presigned_s3_get_url(self, bucket_name: str, object_key: str, litellm_params: dict) -> str`
   - `BedrockFilesConfig.transform_file_content_request(self, file_content_request, optional_params: dict, litellm_params: dict) -> tuple[str, dict]`
   - `BedrockFilesConfig.transform_file_content_response(self, raw_response, logging_obj, litellm_params: dict) -> HttpxBinaryResponseContent`
 
@@ -235,33 +282,43 @@ class TestBedrockFilesContentRetrieval:
             token=None,
         )
 
-    def _request(self, file_id, litellm_params):
-        with patch.object(self.config, "get_credentials", return_value=self.fake_creds):
+    def _request(self, file_id, litellm_params, capture=None):
+        real_get_credentials = self.config.get_credentials
+
+        def spy(**kwargs):
+            if capture is not None:
+                capture.update(kwargs)
+            return self.fake_creds
+
+        with patch.object(self.config, "get_credentials", side_effect=spy):
             return self.config.transform_file_content_request(
                 file_content_request={"file_id": file_id},
                 optional_params={},
                 litellm_params=litellm_params,
             )
 
-    def test_returns_presigned_get_url_for_managed_s3_uri(self):
+    def test_returns_presigned_get_url_for_input_bucket(self):
         url, params = self._request(
-            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out",
-            {"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"},
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
         )
         assert params == {}
         parts = urlsplit(url)
         query = parse_qs(parts.query)
-        assert parts.path == "/safe-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        assert parts.path == "/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
         assert query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
         assert "X-Amz-Signature" in query
 
-    def test_s3_region_name_wins_over_aws_region_name(self):
+    def test_region_from_trusted_snapshot_wins(self):
         url, _ = self._request(
-            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
             {
-                "s3_bucket_name": "safe-bucket",
                 "aws_region_name": "us-east-1",
-                "s3_region_name": "eu-central-1",
+                **_trusted(
+                    s3_bucket_name="in-bucket",
+                    s3_region_name="eu-central-1",
+                    aws_region_name="us-east-1",
+                ),
             },
         )
         credential = parse_qs(urlsplit(url).query)["X-Amz-Credential"][0]
@@ -270,44 +327,88 @@ class TestBedrockFilesContentRetrieval:
 
     def test_china_partition_uses_correct_endpoint_suffix(self):
         url, _ = self._request(
-            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out",
-            {"s3_bucket_name": "safe-bucket", "aws_region_name": "cn-north-1"},
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(s3_bucket_name="in-bucket", aws_region_name="cn-north-1"),
         )
         assert urlsplit(url).netloc == "s3.cn-north-1.amazonaws.com.cn"
         assert "X-Amz-Signature" in parse_qs(urlsplit(url).query)
 
     def test_uses_sigv4_not_deprecated_sigv2(self):
         url, _ = self._request(
-            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out",
-            {"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"},
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
         )
         query = parse_qs(urlsplit(url).query)
         assert query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
         assert "Signature" not in query and "AWSAccessKeyId" not in query
 
-    def test_unified_file_id_is_decoded_and_presigned(self):
-        file_id = _encode_unified_file_id(
-            "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out"
-        )
+    def test_output_bucket_distinct_from_input_validates(self):
         url, _ = self._request(
-            file_id, {"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"}
+            "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(
+                s3_bucket_name="in-bucket",
+                s3_output_bucket_name="out-bucket",
+                aws_region_name="us-west-2",
+            ),
         )
-        assert urlsplit(url).path == "/safe-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        assert urlsplit(url).path == "/out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+
+    def test_batch_output_at_root_validates_with_prefixed_input_bucket(self):
+        # input bucket is prefix-scoped; batch output lands at bucket root
+        url, _ = self._request(
+            "s3://shared/litellm-batch-outputs/job/in.jsonl.out",
+            _trusted(
+                s3_bucket_name="shared/team-a",
+                s3_output_bucket_name="shared",
+                aws_region_name="us-west-2",
+            ),
+        )
+        assert urlsplit(url).path == "/shared/litellm-batch-outputs/job/in.jsonl.out"
+
+    def test_unified_file_id_is_decoded_and_presigned(self):
+        file_id = _encode_unified_file_id("s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out")
+        url, _ = self._request(
+            file_id, _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2")
+        )
+        assert urlsplit(url).path == "/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
         assert "X-Amz-Signature" in parse_qs(urlsplit(url).query)
 
-    def test_rejects_bucket_mismatch(self):
-        with pytest.raises(ValueError, match="configured storage bucket"):
+    def test_rejects_bucket_outside_configured_set(self):
+        with pytest.raises(ValueError):
             self._request(
                 "s3://other-bucket/litellm-batch-outputs/job/in.jsonl.out",
-                {"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"},
+                _trusted(
+                    s3_bucket_name="in-bucket",
+                    s3_output_bucket_name="out-bucket",
+                    aws_region_name="us-west-2",
+                ),
             )
 
     def test_rejects_unmanaged_prefix_in_configured_bucket(self):
-        with pytest.raises(ValueError, match="LiteLLM-managed"):
+        with pytest.raises(ValueError):
             self._request(
-                "s3://safe-bucket/private/secret.jsonl",
-                {"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"},
+                "s3://in-bucket/private/secret.jsonl",
+                _trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
             )
+
+    def test_ignores_plain_request_bucket(self):
+        with pytest.raises(ValueError, match="S3 bucket_name is required"):
+            self._request(
+                "s3://attacker-bucket/litellm-batch-outputs/job/in.jsonl.out",
+                {"s3_bucket_name": "attacker-bucket", "aws_region_name": "us-west-2"},
+            )
+
+    def test_forwards_aws_external_id_to_get_credentials(self):
+        capture: dict = {}
+        self._request(
+            "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out",
+            {
+                "aws_external_id": "ext-123",
+                **_trusted(s3_bucket_name="in-bucket", aws_region_name="us-west-2"),
+            },
+            capture=capture,
+        )
+        assert capture.get("aws_external_id") == "ext-123"
 
     def test_response_returns_raw_bytes_unchanged(self):
         body = b'{"recordId":"req-1","modelOutput":{"foo":"bar"}}\n'
@@ -315,7 +416,7 @@ class TestBedrockFilesContentRetrieval:
             status_code=200,
             content=body,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request("GET", "https://s3.us-west-2.amazonaws.com/safe-bucket/x"),
+            request=httpx.Request("GET", "https://s3.us-west-2.amazonaws.com/in-bucket/x"),
         )
         result = self.config.transform_file_content_response(
             raw_response=raw_response, logging_obj=None, litellm_params={}
@@ -331,23 +432,32 @@ Expected: FAIL — `transform_file_content_request` raises `NotImplementedError`
 
 - [ ] **Step 3: Implement the methods**
 
-In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at the bottom of `BedrockFilesConfig` (currently raising `NotImplementedError` for file content) with:
+In `litellm/llms/bedrock/files/transformation.py`, replace the two file-content methods that currently raise `NotImplementedError` with:
 
 ```python
-    def _resolve_s3_region(self, optional_params: dict, litellm_params: dict) -> str:
-        s3_region_name = litellm_params.get("s3_region_name") or optional_params.get(
-            "s3_region_name"
+    def _validate_against_configured_buckets(
+        self, s3_uri: str, litellm_params: dict
+    ) -> Tuple[str, str]:
+        configured_buckets = self._get_configured_s3_buckets(litellm_params)
+        allow_legacy = should_allow_legacy_cloud_file_ids(litellm_params)
+        last_error: Optional[ValueError] = None
+        for configured_bucket in configured_buckets:
+            try:
+                return validate_managed_cloud_file_id(
+                    file_id=s3_uri,
+                    scheme="s3://",
+                    configured_bucket_name=configured_bucket,
+                    allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+                    allow_legacy_cloud_file_ids=allow_legacy,
+                )
+            except ValueError as e:
+                last_error = e
+        raise last_error or ValueError(
+            "file_id must reference a LiteLLM-managed storage object"
         )
-        if s3_region_name:
-            return s3_region_name
-        return self._get_aws_region_name(optional_params=litellm_params, model="")
 
     def _generate_presigned_s3_get_url(
-        self,
-        bucket_name: str,
-        object_key: str,
-        optional_params: dict,
-        litellm_params: dict,
+        self, bucket_name: str, object_key: str, litellm_params: dict
     ) -> str:
         try:
             import boto3
@@ -355,7 +465,7 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        region = self._resolve_s3_region(optional_params, litellm_params)
+        region = self._resolve_s3_region(litellm_params)
         credentials = self.get_credentials(
             aws_access_key_id=litellm_params.get("aws_access_key_id"),
             aws_secret_access_key=litellm_params.get("aws_secret_access_key"),
@@ -366,6 +476,7 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
             aws_role_name=litellm_params.get("aws_role_name"),
             aws_web_identity_token=litellm_params.get("aws_web_identity_token"),
             aws_sts_endpoint=litellm_params.get("aws_sts_endpoint"),
+            aws_external_id=litellm_params.get("aws_external_id"),
         )
 
         s3_client = boto3.client(
@@ -374,9 +485,7 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
             aws_secret_access_key=credentials.secret_key,
             aws_session_token=credentials.token,
             region_name=region,
-            config=Config(
-                signature_version="s3v4", s3={"addressing_style": "path"}
-            ),
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
             verify=self._get_ssl_verify(),
         )
 
@@ -394,20 +503,12 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
     ) -> tuple[str, dict]:
         file_id = file_content_request.get("file_id") or ""
         s3_uri = self._extract_s3_uri_from_file_id(file_id)
-        configured_bucket = self._get_configured_s3_bucket_name(litellm_params)
-        bucket_name, object_key = validate_managed_cloud_file_id(
-            file_id=s3_uri,
-            scheme="s3://",
-            configured_bucket_name=configured_bucket,
-            allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
-            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
-                litellm_params
-            ),
+        bucket_name, object_key = self._validate_against_configured_buckets(
+            s3_uri=s3_uri, litellm_params=litellm_params
         )
         url = self._generate_presigned_s3_get_url(
             bucket_name=bucket_name,
             object_key=object_key,
-            optional_params=optional_params,
             litellm_params=litellm_params,
         )
         return url, {}
@@ -422,16 +523,15 @@ In `litellm/llms/bedrock/files/transformation.py`, replace the two methods at th
 ```
 
 Notes:
-- `validate_managed_cloud_file_id` returns the *raw* (not URL-encoded) object key, which is what `generate_presigned_url` expects — botocore URL-encodes the key itself (verified with keys containing spaces and unicode). Do not pre-encode.
-- Do NOT pass `endpoint_url`. Letting botocore derive the endpoint from `region_name` produces the correct host for every partition — `s3.{region}.amazonaws.com` for standard regions, `s3.{region}.amazonaws.com.cn` for China, GovCloud/ISO hosts for those partitions — while still being regional (avoids the `us-east-1` 307 redirect that breaks SigV4). A hardcoded `f"https://s3.{region}.amazonaws.com"` would send China/GovCloud requests to the wrong host. Verified across us-west-2, us-east-1, eu-central-1, ap-southeast-2, cn-north-1, us-gov-west-1.
-- `signature_version="s3v4"` is required, not cosmetic: botocore's default with no config emits deprecated SigV2 query params (`AWSAccessKeyId`/`Signature`/`Expires`). Verified.
-- `ExpiresIn=300`: the URL is consumed synchronously within the same request, and the generic handler logs it as `api_base` in `pre_call`, so a short expiry bounds the window in which a leaked-from-logs URL could be replayed.
-- STS/role credentials (`aws_session_token`) are carried into the presigned URL as `X-Amz-Security-Token`. Verified.
+- `validate_managed_cloud_file_id` returns the raw (not URL-encoded) object key; botocore URL-encodes it. Do not pre-encode.
+- No `endpoint_url` is passed: botocore derives the correct per-partition host while staying regional.
+- `aws_external_id` is forwarded to match the Bedrock batches handler.
+- Output-bucket configs are validated by trying each bucket; because `s3_output_bucket_name` is passed to `_get_configured_s3_buckets` without a prefix, batch outputs at bucket root validate even when the input bucket is prefix-scoped.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesContentRetrieval -v`
-Expected: PASS (8 passed).
+Expected: PASS (12 passed).
 
 - [ ] **Step 5: Format, lint, commit**
 
@@ -444,9 +544,9 @@ git commit --no-verify -m "feat(bedrock): retrieve managed file content via pres
 
 ---
 
-### Task 3: Wiring test through the generic handler
+### Task 3: Real wiring test through the generic handler
 
-Prove the exact path the issue's 28-step trace exercises no longer raises: `base_llm_http_handler.retrieve_file_content` with `BedrockFilesConfig` calls the presigned URL and returns the bytes. Mock only the httpx GET.
+Prove the issue's 28-step path works end to end and that the presigned URL survives `HTTPHandler.get`'s query-param reconstruction. Use the real `litellm.files.main.base_llm_http_handler` symbol and patch the httpx transport (not the handler's `.get`), so the real param-rebuild runs.
 
 **Files:**
 - Test: `tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py`
@@ -454,37 +554,34 @@ Prove the exact path the issue's 28-step trace exercises no longer raises: `base
 **Interfaces:**
 - Consumes: `litellm.files.main.base_llm_http_handler.retrieve_file_content`; `BedrockFilesConfig` (Task 2); `litellm.llms.custom_httpx.http_handler.HTTPHandler`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the test**
 
 Add to `TestBedrockFilesContentRetrieval`:
 
 ```python
     def test_retrieve_file_content_through_generic_handler(self):
+        import time as _time
+
+        from litellm.files.main import base_llm_http_handler
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
-        from litellm.main import base_llm_http_handler
 
         body = b'{"recordId":"req-1","modelOutput":{"ok":true}}\n'
-        captured = {}
+        seen = {}
 
-        class FakeClient(HTTPHandler):
-            def __init__(self):
-                pass
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            return httpx.Response(status_code=200, content=body)
 
-            def get(self, url, headers=None, params=None):
-                captured["url"] = url
-                return httpx.Response(
-                    status_code=200,
-                    content=body,
-                    request=httpx.Request("GET", url),
-                )
+        sync_client = HTTPHandler()
+        sync_client.client = httpx.Client(transport=httpx.MockTransport(handler))
 
         logging_obj = Logging(
             model="",
             messages=[],
             stream=False,
             call_type="file_content",
-            start_time=__import__("time").time(),
+            start_time=_time.time(),
             litellm_call_id="test-call",
             function_id="",
         )
@@ -492,26 +589,29 @@ Add to `TestBedrockFilesContentRetrieval`:
         with patch.object(self.config, "get_credentials", return_value=self.fake_creds):
             result = base_llm_http_handler.retrieve_file_content(
                 file_content_request={
-                    "file_id": "s3://safe-bucket/litellm-batch-outputs/job/in.jsonl.out"
+                    "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
                 },
                 provider_config=self.config,
-                litellm_params={"s3_bucket_name": "safe-bucket", "aws_region_name": "us-west-2"},
+                litellm_params=_trusted(
+                    s3_bucket_name="in-bucket", aws_region_name="us-west-2"
+                ),
                 headers={},
                 logging_obj=logging_obj,
                 _is_async=False,
-                client=FakeClient(),
+                client=sync_client,
             )
 
-        assert "X-Amz-Signature" in captured["url"]
+        assert "X-Amz-Signature=" in seen["url"]
+        assert "/in-bucket/litellm-batch-outputs/job/in.jsonl.out" in seen["url"]
         assert result.content == body
 ```
 
-- [ ] **Step 2: Run test to verify it passes (now that Task 2 is done)**
+- [ ] **Step 2: Run the test**
 
 Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest "tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py::TestBedrockFilesContentRetrieval::test_retrieve_file_content_through_generic_handler" -v`
-Expected: PASS. (This test guards the wiring; if it fails with `NotImplementedError`, Task 2 regressed.)
+Expected: PASS. The signature reaching the MockTransport proves it survived `params.update(extract_query_params(url))`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Format, lint, commit**
 
 ```bash
 cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content
@@ -524,28 +624,25 @@ git commit --no-verify -m "test(bedrock): cover file content retrieval through g
 
 ### Task 4: Delete dead BedrockFilesHandler and re-point its tests
 
-Remove the now-superseded handler and migrate its regression coverage onto the config. The helper tests already pass against the config (Task 1 added equivalents), so this task is about removing the file and the tests that import the deleted symbol, keeping any coverage not already duplicated.
+Remove the superseded handler and migrate its SSRF/path-traversal regression coverage onto the shared validator / config.
 
 **Files:**
 - Delete: `litellm/llms/bedrock/files/handler.py`
 - Modify: `tests/test_litellm/llms/bedrock/files/test_bedrock_files_handler.py`
 
 **Interfaces:**
-- Consumes: `BedrockFilesConfig._parse_s3_uri` does NOT exist; tests must call `validate_managed_cloud_file_id` directly or the config helpers. The config exposes `_extract_s3_uri_from_file_id` and `_get_configured_s3_bucket_name` (Task 1).
+- Consumes: `validate_managed_cloud_file_id`, `BEDROCK_MANAGED_S3_PREFIXES` (shared); `BedrockFilesConfig._extract_s3_uri_from_file_id` (Task 1).
 
-- [ ] **Step 1: Rewrite the handler test file to target the config**
+- [ ] **Step 1: Rewrite the handler test file to target the shared validator + config**
 
-Replace the body of `tests/test_litellm/llms/bedrock/files/test_bedrock_files_handler.py`. Keep the two `files_main` forwarding tests at the bottom unchanged (they don't reference `BedrockFilesHandler`). Replace the `TestBedrockFilesHandler` class and its import:
+Replace `TestBedrockFilesHandler` and its import in `tests/test_litellm/llms/bedrock/files/test_bedrock_files_handler.py`. Keep the two module-level `files_main` forwarding tests at the bottom unchanged.
 
 ```python
 import base64
-import os
 from types import MappingProxyType
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-import litellm.files.main as files_main
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_PREFIXES,
     validate_managed_cloud_file_id,
@@ -556,11 +653,7 @@ from litellm.types.utils import SpecialEnums
 
 def _encode_unified_file_id(s3_uri: str) -> str:
     unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-        "application/json",
-        "unified-id",
-        "",
-        s3_uri,
-        "model-id",
+        "application/json", "unified-id", "", s3_uri, "model-id"
     )
     return base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
 
@@ -594,8 +687,7 @@ class TestBedrockFilesConfigS3Validation:
     def test_should_reject_arbitrary_bucket(self):
         with pytest.raises(ValueError, match="configured storage bucket"):
             _parse(
-                "s3://other-bucket/litellm-bedrock-files-model-id-abc.jsonl",
-                "safe-bucket",
+                "s3://other-bucket/litellm-bedrock-files-model-id-abc.jsonl", "safe-bucket"
             )
 
     def test_should_reject_unmanaged_same_bucket_key(self):
@@ -630,15 +722,11 @@ class TestBedrockFilesConfigS3Validation:
 
     def test_should_reject_dot_segment_key(self):
         with pytest.raises(ValueError, match="invalid path segment"):
-            _parse(
-                "s3://safe-bucket/litellm-bedrock-files/../secret.jsonl", "safe-bucket"
-            )
+            _parse("s3://safe-bucket/litellm-bedrock-files/../secret.jsonl", "safe-bucket")
 
     def test_should_reject_empty_middle_path_segment(self):
         with pytest.raises(ValueError, match="invalid path segment"):
-            _parse(
-                "s3://safe-bucket/litellm-bedrock-files//secret.jsonl", "safe-bucket"
-            )
+            _parse("s3://safe-bucket/litellm-bedrock-files//secret.jsonl", "safe-bucket")
 
     def test_should_extract_unified_managed_s3_uri(self):
         file_id = _encode_unified_file_id(
@@ -658,49 +746,9 @@ class TestBedrockFilesConfigS3Validation:
         s3_uri = self.config._extract_s3_uri_from_file_id(file_id)
         with pytest.raises(ValueError, match="LiteLLM-managed"):
             _parse(s3_uri, "safe-bucket")
-
-    def test_should_not_trust_request_s3_bucket_name_for_expected_bucket(self):
-        with patch.dict(os.environ, {"AWS_S3_BUCKET_NAME": "safe-bucket"}):
-            assert (
-                self.config._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
-                )
-                == "safe-bucket"
-            )
-
-    def test_should_trust_proxy_config_s3_bucket_name_for_expected_bucket(self):
-        trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
-        with patch.dict(os.environ, {}, clear=True):
-            assert (
-                self.config._get_configured_s3_bucket_name(
-                    {
-                        "s3_bucket_name": "attacker-bucket",
-                        "_litellm_internal_model_credentials": trusted_credentials,
-                    }
-                )
-                == "safe-bucket"
-            )
-
-    def test_should_not_trust_user_supplied_internal_credentials_dict(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="S3 bucket_name is required"):
-                self.config._get_configured_s3_bucket_name(
-                    {
-                        "_litellm_internal_model_credentials": {
-                            "s3_bucket_name": "attacker-bucket"
-                        }
-                    }
-                )
-
-    def test_should_require_server_s3_bucket_name(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="S3 bucket_name is required"):
-                self.config._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
-                )
 ```
 
-Leave the two module-level functions `test_should_forward_trusted_model_credentials_to_bedrock_provider_config` and `test_should_forward_trusted_model_credentials_to_retrieve_provider_config` (lines 168-207 of the original) intact.
+The bucket-resolution / trusted-credential tests now live in `TestBedrockFilesConfigResolution` (Task 1), so they are not duplicated here.
 
 - [ ] **Step 2: Delete the handler file**
 
@@ -709,46 +757,33 @@ cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_conte
 git rm litellm/llms/bedrock/files/handler.py
 ```
 
-- [ ] **Step 3: Run the handler tests to verify they pass without the deleted file**
+- [ ] **Step 3: Note — collection breaks until Task 5**
 
-Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/test_bedrock_files_handler.py -v`
-Expected: PASS. If it fails on `import litellm.files.main`, that's expected until Task 5 removes the import of the deleted module — do Task 5's Step 1 before re-running, or run Tasks 4 and 5 as one review unit. (The import `from litellm.llms.bedrock.files.handler import BedrockFilesHandler` in `files/main.py` will break collection.)
-
-- [ ] **Step 4: Commit (together with Task 5 — see note)**
-
-Because deleting `handler.py` breaks `files/main.py`'s import, commit Task 4 and Task 5 together. Proceed to Task 5 before committing.
+Deleting `handler.py` breaks `files/main.py`'s import, so the test module won't collect until Task 5 removes that import. Commit Tasks 4 and 5 together; run the suite after Task 5.
 
 ---
 
 ### Task 5: Remove the dead bedrock branch from files/main.py
 
-`files/main.py` imports the deleted `BedrockFilesHandler`, instantiates `bedrock_files_instance`, and has an unreachable `elif custom_llm_provider == "bedrock":` branch. Remove all three.
-
 **Files:**
 - Modify: `litellm/files/main.py`
 
 **Interfaces:**
-- Consumes: nothing new. The generic `provider_config is not None` branch (already present, line ~927) routes Bedrock through `retrieve_file_content`.
+- Consumes: nothing new. The generic `provider_config is not None` branch already routes Bedrock through `retrieve_file_content`.
 
-- [ ] **Step 1: Remove the import**
-
-Delete this line (currently line 42):
+- [ ] **Step 1: Remove the import (currently line 42)**
 
 ```python
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 ```
 
-- [ ] **Step 2: Remove the module global**
-
-Delete this line (currently line 85):
+- [ ] **Step 2: Remove the module global (currently line 85)**
 
 ```python
 bedrock_files_instance = BedrockFilesHandler()
 ```
 
-- [ ] **Step 3: Remove the unreachable branch**
-
-In `file_content`, delete the entire `elif custom_llm_provider == "bedrock":` block (currently lines 1021-1029):
+- [ ] **Step 3: Remove the unreachable branch in `file_content` (currently lines 1021-1029)**
 
 ```python
         elif custom_llm_provider == "bedrock":
@@ -762,7 +797,7 @@ In `file_content`, delete the entire `elif custom_llm_provider == "bedrock":` bl
             )
 ```
 
-The surrounding `if ... elif ...else` (openai / azure / vertex_ai / else BadRequestError) stays. The `else` branch's message lists `'bedrock'` as supported — leave it; bedrock is still reached via the generic `provider_config` branch above, so the message stays accurate.
+Leave the surrounding `if/elif/else` and the `else` BadRequestError message (which still lists `'bedrock'` as supported — accurate, since bedrock is served by the generic `provider_config` branch above).
 
 - [ ] **Step 4: Verify the module imports cleanly**
 
@@ -772,7 +807,7 @@ Expected: no output, exit 0.
 - [ ] **Step 5: Run the full bedrock files test dir**
 
 Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/ -v`
-Expected: PASS (all tests across the three test files).
+Expected: PASS (all three test files).
 
 - [ ] **Step 6: Format, lint, commit (Tasks 4 + 5 together)**
 
@@ -789,15 +824,15 @@ git commit --no-verify -m "refactor(bedrock): delete dead BedrockFilesHandler an
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Run the broader files + bedrock suites**
+- [ ] **Step 1: Run the bedrock files + integration suites**
 
-Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/ tests/test_litellm/test_files.py -v`
-Expected: PASS. (If `tests/test_litellm/test_files.py` does not exist, skip that path; run only the bedrock files dir.)
+Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && python -m pytest tests/test_litellm/llms/bedrock/files/ -v`
+Expected: PASS. The existing `test_bedrock_files_integration.py` mocks `retrieve_file_content`, so it stays green.
 
 - [ ] **Step 2: Lint budget check**
 
 Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && make lint`
-Expected: PASS. If `ruff-strict-budget.json` or `basedpyright-code-budget.json` trips (likely *down*, since we delete a file), run `make lint-budget-update` and commit the lowered baselines:
+Expected: PASS. If a budget file trips (likely *down*, since a file is deleted), run `make lint-budget-update` and commit only if the budget files actually changed:
 
 ```bash
 make lint-budget-update
@@ -805,44 +840,44 @@ git add ruff-strict-budget.json basedpyright-code-budget.json
 git commit --no-verify -m "chore: ratchet lint budgets after bedrock file content change"
 ```
 
-(Only commit if the budget files actually changed.)
-
 - [ ] **Step 3: grep for stragglers**
 
 Run: `cd /Users/kentpeng/projects/litellm/.claude/worktrees/litellm_bedrock_file_content && grep -rn "BedrockFilesHandler\|bedrock_files_instance" litellm/ tests/ enterprise/`
-Expected: no matches. If any remain, remove them and re-run Step 1.
+Expected: no matches.
 
 ---
 
 ## Proof of Fix (manual, for PR — after implementation)
 
-Run against a live proxy with real AWS credentials and S3 bucket configured. Capture each command and its output for the PR.
+Live proxy with real AWS credentials and an S3 bucket configured (config defines a bedrock batch model + `s3_bucket_name`, optionally `s3_output_bucket_name`). Capture each command and its output.
 
-1. Start proxy: `python litellm/proxy/proxy_cli.py --config litellm/proxy/dev_config.yaml --detailed_debug --reload --use_v2_migration_resolver 2>&1 | tee litellm.log` (config must define a bedrock batch model + `s3_bucket_name`).
-2. `POST /v1/files` with a small batch JSONL (`purpose=batch`) -> capture the managed file id.
-3. `POST /v1/batches` referencing that file id against a real Bedrock model -> capture batch id.
-4. Poll `GET /v1/batches/{id}` until `status == completed` -> capture `output_file_id`.
-5. `GET /v1/files/{output_file_id}/content` -> the batch output bytes are returned (before the fix this step returns 500 `BedrockFilesConfig does not support file content retrieval`).
+1. Start proxy: `python litellm/proxy/proxy_cli.py --config litellm/proxy/dev_config.yaml --detailed_debug --reload --use_v2_migration_resolver 2>&1 | tee litellm.log`
+2. `POST /v1/files` with a small batch JSONL (`purpose=batch`) -> managed file id
+3. `POST /v1/batches` against a real Bedrock model -> batch id
+4. Poll `GET /v1/batches/{id}` until `status == completed` -> `output_file_id`
+5. `GET /v1/files/{output_file_id}/content` -> batch output bytes returned
 
-Show the before (500 on `main`) and after (bytes returned) for step 5.
+Show before (500 on `main`) vs after (bytes returned) for step 5.
 
----
+## Out of scope (documented, not implemented)
+
+- Shared `retrieve_file_content` GET ignores `timeout` and does not `raise_for_status`; the proxy may record an S3 403/404 as `"success"`. Generic-handler behavior, all providers, pre-existing; separate PR.
+- Web-identity (OIDC) STS session-policy ceiling grants only Bedrock/Anthropic actions, not `s3:GetObject`; OIDC deployments can't retrieve S3 content until that ceiling adds an S3 statement. Affects any S3-backed retrieval regardless of approach.
 
 ## Self-Review
 
 **Spec coverage:**
-- Implement `transform_file_content_request`/`_response` via presigned URL -> Task 2. Covered.
-- Move validated helpers into the config -> Task 1. Covered.
-- Delete dead `BedrockFilesHandler` -> Task 4. Covered.
-- Remove unreachable `files/main.py` branch -> Task 5. Covered.
-- Raw S3 bytes (no OpenAI transform) -> Task 2 Step 3 (`transform_file_content_response` returns response as-is) + test in Task 2. Covered.
-- Region precedence (s3_region_name wins) -> Task 2 test `test_s3_region_name_wins_over_aws_region_name`. Covered.
-- Partition correctness (China/GovCloud endpoint) -> Task 2 test `test_china_partition_uses_correct_endpoint_suffix`. Covered.
-- SigV4 not SigV2 -> Task 2 test `test_uses_sigv4_not_deprecated_sigv2`. Covered.
-- Security (bucket confusion, unmanaged prefix, traversal) -> Tasks 1, 2, 4 tests. Covered.
-- Wiring no longer raises -> Task 3. Covered.
-- Proof of fix (full batch e2e) -> Proof of Fix section. Covered.
+- presigned content request/response -> Task 2.
+- trusted-snapshot bucket/region resolution (get_litellm_params strips s3_* keys) -> Task 1 + Task 2 region test.
+- input + output bucket validation, batch-output-at-root with prefixed input -> Task 2 tests `test_output_bucket_distinct_from_input_validates`, `test_batch_output_at_root_validates_with_prefixed_input_bucket`.
+- `aws_external_id` forwarded -> Task 2 test `test_forwards_aws_external_id_to_get_credentials`.
+- ignore plain request bucket (SSRF) -> Task 1 `test_buckets_prefer_trusted_snapshot_over_request` + Task 2 `test_ignores_plain_request_bucket`.
+- partition correctness + sigv4 -> Task 2 tests.
+- raw bytes (no OpenAI transform) -> Task 2 `test_response_returns_raw_bytes_unchanged`.
+- real wiring (correct module, real param reconstruction) -> Task 3.
+- delete dead handler + unreachable branch -> Tasks 4, 5.
+- known limitations -> Out of scope section.
 
-**Placeholder scan:** No TBD/TODO; every code step shows complete code; every command shows expected output. Clean.
+**Placeholder scan:** none; every code step has complete code and expected output.
 
-**Type consistency:** `_extract_s3_uri_from_file_id(file_id: str) -> str`, `_get_configured_s3_bucket_name(litellm_params: dict) -> str`, `_resolve_s3_region(optional_params, litellm_params) -> str`, `_generate_presigned_s3_get_url(bucket_name, object_key, optional_params, litellm_params) -> str`, `transform_file_content_request(file_content_request, optional_params, litellm_params) -> tuple[str, dict]`, `transform_file_content_response(raw_response, logging_obj, litellm_params) -> HttpxBinaryResponseContent`. Names and signatures are consistent across Tasks 1-3 and match the calls in the generic handler (`url, params = transform_file_content_request(...)`).
+**Type consistency:** `_get_trusted_credentials(litellm_params) -> Mapping[str, Any]`, `_extract_s3_uri_from_file_id(file_id) -> str`, `_get_configured_s3_buckets(litellm_params) -> Tuple[str, ...]`, `_resolve_s3_region(litellm_params) -> str`, `_validate_against_configured_buckets(s3_uri, litellm_params) -> Tuple[str, str]`, `_generate_presigned_s3_get_url(bucket_name, object_key, litellm_params) -> str`, `transform_file_content_request(file_content_request, optional_params, litellm_params) -> tuple[str, dict]`, `transform_file_content_response(raw_response, logging_obj, litellm_params) -> HttpxBinaryResponseContent`. Consistent across tasks and with the generic handler's `url, params = transform_file_content_request(...)` call.
