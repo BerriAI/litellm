@@ -197,8 +197,40 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         complete_url = f"{api_base}/chat/completions"
         return complete_url
 
+    @staticmethod
+    def _param_explicitly_unsupported(model: str, param: str) -> bool:
+        """Whether the upstream API rejects ``param`` for ``model``.
+
+        Databricks model-serving routes ``databricks-claude-*`` to the
+        Anthropic Messages API, so the same parameter-support rules apply.
+        Primary signal is the model map: ``supports_{param}: false`` flips
+        this to True via the same ``_is_explicitly_disabled_factory`` chain
+        other capability gates use, so a missing flag is treated as
+        "supported".
+
+        Falls back to a model-family check for the Opus 4.7 sampling
+        deprecation (``temperature`` / ``top_p`` / ``top_k`` return 400
+        on the Anthropic Messages API per the Opus 4.7 migration guide).
+        This keeps unreleased dated 4.7 snapshots and any
+        provider-prefixed alias that isn't yet in the JSON covered.
+        """
+        from litellm.utils import _is_explicitly_disabled_factory
+
+        try:
+            if _is_explicitly_disabled_factory(
+                model=model,
+                custom_llm_provider="databricks",
+                key=f"supports_{param}",
+            ):
+                return True
+        except Exception:
+            pass
+        if param in ("temperature", "top_p", "top_k"):
+            return AnthropicConfig._is_claude_4_7_model(model)
+        return False
+
     def get_supported_openai_params(self, model: Optional[str] = None) -> list:
-        return [
+        params = [
             "stream",
             "stop",
             "temperature",
@@ -212,6 +244,25 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "reasoning_effort",
             "thinking",
         ]
+
+        # Strip sampling params the upstream API rejects for this model.
+        # Databricks model-serving routes ``databricks-claude-*`` to the
+        # Anthropic Messages API, which returns 400 for ``temperature`` /
+        # ``top_p`` on Claude Opus 4.7. The model map encodes this via
+        # ``supports_temperature: false`` / ``supports_top_p: false``;
+        # ``_param_explicitly_unsupported`` reads those flags and falls
+        # back to a model-family check so unreleased dated 4.7 snapshots
+        # are covered too. (Mirrors the helper added in #28113 for the
+        # Anthropic / Bedrock paths — kept self-contained here so this PR
+        # can land independently.)
+        model_str = model or ""
+        params = [
+            p
+            for p in params
+            if not DatabricksConfig._param_explicitly_unsupported(model_str, p)
+        ]
+
+        return params
 
     def convert_anthropic_tool_to_databricks_tool(
         self, tool: Optional[AllAnthropicToolsValues]
@@ -291,6 +342,20 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+
+        # Defense in depth: strip sampling params the upstream API rejects
+        # for this model before delegating to the OpenAI-like mapper. The
+        # supported-params filter in ``get_supported_openai_params`` already
+        # makes ``drop_params=True`` work via the standard contract; this
+        # second guard catches raw kwargs that bypass that path (e.g. a
+        # caller passing ``temperature`` directly with ``drop_params=False``
+        # on Opus 4.7, which would otherwise propagate to a guaranteed 400).
+        non_default_params = {
+            k: v
+            for k, v in non_default_params.items()
+            if not DatabricksConfig._param_explicitly_unsupported(model, k)
+        }
+
         mapped_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )

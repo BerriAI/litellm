@@ -260,3 +260,153 @@ def test_transform_messages_sanitizes_empty_content():
     )
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
+
+
+# --- Opus 4.7 ``temperature`` / ``top_p`` deprecation (issue #26444) ---
+#
+# Databricks model-serving routes ``databricks-claude-*`` requests to the
+# Anthropic Messages API, which returns 400
+# (``Model us.anthropic.claude-opus-4-7 does not support the temperature
+# parameter``) when ``temperature`` or ``top_p`` is sent to Claude Opus 4.7.
+# ``DatabricksConfig.get_supported_openai_params`` filters those params via
+# the locally-defined ``_param_explicitly_unsupported`` helper, which reads
+# ``supports_temperature: false`` / ``supports_top_p: false`` off the model
+# registry and falls back to ``AnthropicConfig._is_claude_4_7_model`` for
+# unreleased dated snapshots. Companion to the Anthropic / Bedrock fix in
+# PR #28113.
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "databricks-claude-opus-4-7",
+        "databricks-claude-opus-4-7-20260416",
+        "databricks/databricks-claude-opus-4-7",
+    ],
+)
+def test_opus_4_7_drops_temperature_and_top_p_from_supported_params(
+    monkeypatch, model
+):
+    """Opus 4.7 on Databricks must not advertise ``temperature`` / ``top_p`` so
+    ``drop_params=True`` strips them before the request leaves litellm."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import importlib
+
+    import litellm as _litellm
+
+    importlib.reload(_litellm)
+
+    config = DatabricksConfig()
+    params = config.get_supported_openai_params(model=model)
+
+    assert "temperature" not in params, (
+        f"temperature should be filtered from Databricks Opus 4.7 supported params; got {params!r}"
+    )
+    assert "top_p" not in params, (
+        f"top_p should be filtered from Databricks Opus 4.7 supported params; got {params!r}"
+    )
+
+
+def test_opus_4_7_unknown_dated_variant_falls_back_to_family_check(monkeypatch):
+    """Dated Databricks Opus 4.7 snapshots not yet in the model registry are
+    still covered by the ``_is_claude_4_7_model`` family fallback."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = DatabricksConfig()
+
+    params = config.get_supported_openai_params(
+        model="databricks-claude-opus-4-7-20991231"
+    )
+
+    assert "temperature" not in params
+    assert "top_p" not in params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "databricks-claude-sonnet-4-5",
+        "databricks-claude-haiku-4-5",
+        "databricks-claude-opus-4-5",
+        "databricks-claude-opus-4-1",
+        "databricks-claude-3-7-sonnet",
+    ],
+)
+def test_non_opus_4_7_databricks_models_still_support_temperature_and_top_p(
+    monkeypatch, model
+):
+    """Regression guard: only Opus 4.7 deprecated temperature on Anthropic's
+    Messages API. Every other Claude served via Databricks (Sonnet 4.5,
+    Haiku 4.5, Opus 4.5/4.1, 3.7-sonnet) must keep advertising
+    ``temperature`` and ``top_p`` so existing call sites keep working."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = DatabricksConfig()
+    params = config.get_supported_openai_params(model=model)
+
+    assert "temperature" in params, (
+        f"temperature should remain supported for {model}; got {params!r}"
+    )
+    assert "top_p" in params, (
+        f"top_p should remain supported for {model}; got {params!r}"
+    )
+
+
+def test_opus_4_7_map_openai_params_drops_temperature_and_top_p(monkeypatch):
+    """``map_openai_params`` must not leak ``temperature`` / ``top_p`` into the
+    Databricks request body for Opus 4.7, even when callers pass them
+    explicitly without ``drop_params=True`` (defense in depth)."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = DatabricksConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"temperature": 0.3, "top_p": 0.9, "max_tokens": 16},
+        optional_params={},
+        model="databricks-claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert "temperature" not in mapped, (
+        f"temperature leaked through Databricks Opus 4.7 mapping: {mapped!r}"
+    )
+    assert "top_p" not in mapped, (
+        f"top_p leaked through Databricks Opus 4.7 mapping: {mapped!r}"
+    )
+    # ``max_tokens`` is unrelated to the deprecation and must still be forwarded.
+    assert mapped.get("max_tokens") == 16
+
+
+def test_opus_4_5_map_openai_params_preserves_temperature_and_top_p(monkeypatch):
+    """Regression guard on the mapping site: Databricks Opus 4.5 still receives
+    both sampling params verbatim."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = DatabricksConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"temperature": 0.3, "top_p": 0.9},
+        optional_params={},
+        model="databricks-claude-opus-4-5",
+        drop_params=False,
+    )
+
+    assert mapped["temperature"] == 0.3
+    assert mapped["top_p"] == 0.9
+
+
+def test_opus_4_7_drop_params_true_strips_temperature_end_to_end(monkeypatch):
+    """End-to-end-shape check that mirrors @dgomez04's reproduction in issue
+    #26444: ``get_supported_openai_params`` says ``temperature`` is NOT
+    supported for ``databricks-claude-opus-4-7``, which is the exact contract
+    ``litellm.utils.drop_params=True`` keys off to strip the param before the
+    Databricks call. Without this PR the same lookup returned True for
+    ``temperature``, so ``drop_params`` was a no-op and the request hit a 400."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    params = litellm.get_supported_openai_params(
+        model="databricks-claude-opus-4-7", custom_llm_provider="databricks"
+    )
+    assert "temperature" not in params, (
+        "regression: top-level litellm.get_supported_openai_params still "
+        "claims temperature is supported for databricks-claude-opus-4-7; "
+        "drop_params=True will be a no-op and Anthropic will return 400."
+    )
+    assert "top_p" not in params
