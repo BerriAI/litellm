@@ -3005,6 +3005,7 @@ class VertexLLM(VertexBase):
             model=model,
             custom_llm_provider="vertex_ai_beta",
             logging_obj=logging_obj,
+            max_streaming_duration=timeout if isinstance(timeout, float) else None,
         )
         return streaming_response
 
@@ -3297,6 +3298,7 @@ class VertexLLM(VertexBase):
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
+                max_streaming_duration=timeout if isinstance(timeout, float) else None,
             )
 
             return streaming_response

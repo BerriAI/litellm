@@ -1371,6 +1371,7 @@ class BedrockLLM(BaseAWSLLM):
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            max_streaming_duration=timeout if isinstance(timeout, float) else None,
         )
         return streaming_response
 
