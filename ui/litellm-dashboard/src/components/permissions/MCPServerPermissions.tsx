@@ -121,9 +121,7 @@ export function MCPServerPermissions({
       {blocksAllMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200">
           <ServerIcon className="h-4 w-4 text-red-400" />
-          <Text className="text-red-700 text-sm">
-            {t("permissions.mcpServerPermissions.allServersBlocked")}
-          </Text>
+          <Text className="text-red-700 text-sm">{t("permissions.mcpServerPermissions.allServersBlocked")}</Text>
         </div>
       ) : totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
