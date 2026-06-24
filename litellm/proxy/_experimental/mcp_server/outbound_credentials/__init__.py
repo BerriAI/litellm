@@ -20,6 +20,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.seams import (
+    ByokCredentialStore,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Ambient,
     ApiKeyConfig,
@@ -50,6 +53,7 @@ __all__ = [
     "NoOpAuth",
     "StaticHeaderAuth",
     "UpstreamCredentialProvider",
+    "ByokCredentialStore",
     "AuthSpecKind",
     "CredError",
     "Subject",
