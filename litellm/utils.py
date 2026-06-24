@@ -2093,9 +2093,17 @@ def client(original_function):
                     except Exception:
                         pass
 
-            setattr(
-                e, "num_retries", num_retries
-            )  ## IMPORTANT: returns the deployment's num_retries to the router
+            # Only set num_retries on the exception for non-router calls.
+            # When the router is in use, it manages retry counts itself and stamps
+            # the actual attempted count via setattr after the retry loop completes.
+            # Injecting litellm.num_retries here for router calls causes misleading
+            # "LiteLLM Retried: N times" in error messages even when zero retries
+            # occurred (e.g. TimeoutErrorRetries=0 in retry_policy).
+            _is_router_or_proxy_call = "model_group" in (kwargs.get("metadata") or {})
+            if not _is_router_or_proxy_call:
+                setattr(
+                    e, "num_retries", num_retries
+                )  ## returns the deployment's num_retries for non-router retry logic
 
             timeout = _get_wrapper_timeout(kwargs=kwargs, exception=e)
             setattr(e, "timeout", timeout)

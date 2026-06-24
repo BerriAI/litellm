@@ -7043,6 +7043,12 @@ class Router:
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             else:
+                # No retries will occur; stamp the exception with the actual counts
+                # (0) before raising so error messages reflect reality instead of
+                # carrying a stale value injected by the @client decorator.
+                if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
+                    setattr(original_exception, "max_retries", num_retries)
+                    setattr(original_exception, "num_retries", num_retries)
                 raise
 
             verbose_router_logger.debug(
