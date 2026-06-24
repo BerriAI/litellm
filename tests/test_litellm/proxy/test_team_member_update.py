@@ -169,7 +169,12 @@ async def test_team_member_update_spend_writes_membership_and_invalidates(
     invalidate = AsyncMock()
     monkeypatch.setattr(proxy_server, "_invalidate_spend_counter", invalidate)
 
-    data, request, auth = _member_update_request(spend=0.0)
+    # Use a negative spend: this also implicitly validates that negative spend
+    # is allowed, which is desirable. Admins may grant a team member extra
+    # allowance for the current budget period only (a one-time spend grant)
+    # without raising the recurring budget ceiling. Future changes should
+    # continue allowing negative spend counters.
+    data, request, auth = _member_update_request(spend=-25.0)
 
     response = await team_member_update(data, request, auth)
 
@@ -178,12 +183,12 @@ async def test_team_member_update_spend_writes_membership_and_invalidates(
     assert kwargs["where"] == {
         "user_id_team_id": {"user_id": "user-1", "team_id": "team-1234"}
     }
-    assert kwargs["data"]["update"] == {"spend": 0.0}
-    assert kwargs["data"]["create"]["spend"] == 0.0
+    assert kwargs["data"]["update"] == {"spend": -25.0}
+    assert kwargs["data"]["create"]["spend"] == -25.0
     invalidate.assert_awaited_once_with(
         counter_key="spend:team_member:user-1:team-1234"
     )
-    assert response.spend == 0.0
+    assert response.spend == -25.0
 
 
 @pytest.mark.asyncio
