@@ -27,7 +27,9 @@ if TYPE_CHECKING:
     from a2a.compat.v0_3.types import (
         AgentCard,
         SendMessageRequest,
+        SendMessageResponse,
         SendStreamingMessageRequest,
+        SendStreamingMessageResponse,
     )
 
 # Runtime imports — requires a2a-sdk>=1.1.0
@@ -174,7 +176,9 @@ async def _send_message_via_completion_bridge(
     return LiteLLMSendMessageResponse.from_dict(response_dict, request_id=str(request.id))
 
 
-async def _send_message(a2a_client: Any, request: Any) -> Any:
+async def _send_message(
+    a2a_client: "A2AClientType", request: "SendMessageRequest"
+) -> "SendMessageResponse":
     """Send a non-streaming message via a2a-sdk 1.x and return JSON-RPC response."""
     if _a2a_conversions is None:
         raise ImportError(
@@ -202,13 +206,13 @@ async def _send_message(a2a_client: Any, request: Any) -> Any:
 
 
 async def _execute_a2a_send_with_retry(
-    a2a_client: Any,
-    request: Any,
-    agent_card: Any,
+    a2a_client: "A2AClientType",
+    request: "SendMessageRequest",
+    agent_card: Optional["AgentCard"],
     card_url: Optional[str],
     api_base: Optional[str],
     agent_name: Optional[str],
-) -> Any:
+) -> "SendMessageResponse":
     """Send an A2A message with retry logic for localhost URL errors."""
     a2a_response = None
     for _ in range(2):  # max 2 attempts: original + 1 retry
@@ -243,7 +247,7 @@ async def _execute_a2a_send_with_retry(
 
 
 async def _stream_messages(
-    a2a_client: Any, request: Any
+    a2a_client: "A2AClientType", request: "SendStreamingMessageRequest"
 ) -> AsyncIterator["SendStreamingMessageResponse"]:
     """Stream message events via a2a-sdk 1.x and yield JSON-RPC chunks."""
     if _a2a_conversions is None:
@@ -262,9 +266,9 @@ async def _stream_messages(
 
 
 async def _execute_a2a_stream_with_retry(
-    a2a_client: Any,
-    request: Any,
-    agent_card: Any,
+    a2a_client: "A2AClientType",
+    request: "SendStreamingMessageRequest",
+    agent_card: Optional["AgentCard"],
     card_url: Optional[str],
     api_base: Optional[str],
     agent_name: Optional[str],
@@ -538,7 +542,7 @@ async def asend_message_streaming(
     metadata: Optional[Dict[str, Any]] = None,
     proxy_server_request: Optional[Dict[str, Any]] = None,
     agent_extra_headers: Optional[Dict[str, str]] = None,
-    **kwargs: Any,
+    **kwargs: object,
 ) -> AsyncIterator[Any]:
     """
     Async: Send a streaming message to an A2A agent.
@@ -619,7 +623,7 @@ async def asend_message_streaming(
             )
         trace_id = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
         trace_id = trace_id or str(request.id)
-        extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
+        extra_headers: dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
         if agent_extra_headers:

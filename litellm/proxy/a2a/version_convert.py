@@ -20,7 +20,7 @@ The two wire shapes:
 """
 
 from types import ModuleType
-from typing import Callable, Dict, Literal, Optional, Union
+from typing import Callable, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -28,7 +28,7 @@ from litellm._logging import verbose_proxy_logger
 
 A2AVersion = Literal["0.3", "1.0"]
 RequestId = Optional[Union[str, int]]
-JsonDict = Dict[str, object]
+JsonDict = dict[str, object]
 
 _V1_SEND_ENVELOPE_KEYS = frozenset({"message", "task"})
 _V1_STREAM_ENVELOPE_KEYS = frozenset(
@@ -316,7 +316,7 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
         to_compat_subscribe_to_task_request,
     )
 
-    lowerings: Dict[str, Callable[[JsonDict], BaseModel]] = {
+    lowerings: dict[str, Callable[[JsonDict], BaseModel]] = {
         "tasks/get": lambda p: to_compat_get_task_request(
             _parse(ParseDict, p, pb2_v10.GetTaskRequest()), ""
         ).params,

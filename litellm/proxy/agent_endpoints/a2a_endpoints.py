@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -16,10 +16,6 @@ from pydantic import ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.databricks_oauth import (
-    DATABRICKS_OAUTH_PARAM,
-    resolve_databricks_app_auth_header,
-)
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -27,10 +23,19 @@ from litellm.proxy.a2a.version_convert import (
     normalize_request_params,
     normalize_stream_event,
 )
+from litellm.proxy.agent_endpoints.databricks_oauth import (
+    DATABRICKS_OAUTH_PARAM,
+    resolve_databricks_app_auth_header,
+)
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
-from litellm.proxy.utils import get_custom_url
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import get_custom_url
 from litellm.types.utils import all_litellm_params
+
+if TYPE_CHECKING:
+    from a2a.compat.v0_3.types import MessageSendParams
+
+    from litellm.types.agents import AgentResponse
 
 router = APIRouter()
 
@@ -49,7 +54,7 @@ _PASCAL_TO_WIRE: Dict[str, str] = {
 }
 
 
-def _build_message_send_params(params: dict) -> Any:
+def _build_message_send_params(params: dict) -> "MessageSendParams":
     """Build MessageSendParams from wire (0.3) or A2A 1.0 JSON-RPC params."""
     from a2a.compat.v0_3.types import MessageSendParams
 
@@ -68,7 +73,7 @@ def _build_message_send_params(params: dict) -> Any:
 
 
 def _served_version(
-    agent: Any, request: Request, original_method: Optional[str] = None
+    agent: "AgentResponse", request: Request, original_method: Optional[str] = None
 ) -> A2AVersion:
     """Protocol version LiteLLM serves for this agent.
 

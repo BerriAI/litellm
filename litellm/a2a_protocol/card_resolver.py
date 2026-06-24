@@ -48,7 +48,7 @@ def is_localhost_or_internal_url(url: Optional[str]) -> bool:
     return any(pattern in url_lower for pattern in LOCALHOST_URL_PATTERNS)
 
 
-def get_agent_card_url(agent_card: Any) -> Optional[str]:
+def get_agent_card_url(agent_card: "AgentCard") -> Optional[str]:
     """Return the agent endpoint URL from the resolved SDK card."""
     url = getattr(agent_card, "url", None)
     if url:
@@ -60,7 +60,7 @@ def get_agent_card_url(agent_card: Any) -> Optional[str]:
     return None
 
 
-def set_agent_card_url(agent_card: Any, url: str) -> None:
+def set_agent_card_url(agent_card: "AgentCard", url: str) -> None:
     """Set the agent endpoint URL on the resolved SDK card."""
     normalized = url.rstrip("/") + "/"
     if hasattr(agent_card, "url"):
