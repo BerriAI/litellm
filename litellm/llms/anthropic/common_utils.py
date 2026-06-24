@@ -1029,7 +1029,7 @@ def _sanitize_tool_use_id_content_block(block: Any) -> Any:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: List[Any]) -> List[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -1040,7 +1040,7 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: List[Any]) -> List[Any
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    out: List[Any] = []
+    out: list[Any] = []
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("content"), list):
             out.append(m)
