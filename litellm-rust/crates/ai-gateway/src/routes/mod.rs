@@ -4,7 +4,7 @@ pub mod gil;
 pub mod health;
 pub mod realtime;
 
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::Router as AxumRouter;
 
 use crate::state::AppState;
@@ -15,6 +15,6 @@ pub fn app(state: AppState) -> AxumRouter {
         .route("/health/liveness", get(health::liveness))
         .route("/health/readiness", get(health::readiness))
         .route("/health/gil", get(gil::status))
-        .route("/v1/realtime", post(realtime::invoke))
+        .route("/v1/realtime", get(realtime::handler))
         .with_state(state)
 }
