@@ -68,8 +68,20 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             verbose_logger.debug(f"Transformed request: {request_body}")
 
-            # Get endpoint URL
-            endpoint_url = api_base or self.get_anthropic_count_tokens_endpoint()
+            # Construct clean endpoint URL handling custom proxy destinations
+            if api_base:
+                if api_base.endswith("/messages/count_tokens"):
+                    endpoint_url = api_base
+                elif api_base.endswith("/v1/messages/count_tokens"):
+                    endpoint_url = api_base
+                elif api_base.endswith("/v1/messages"):
+                    endpoint_url = f"{api_base.rstrip('/')}/count_tokens"
+                elif api_base.endswith("/v1"):
+                    endpoint_url = f"{api_base.rstrip('/')}/messages/count_tokens"
+                else:
+                    endpoint_url = f"{api_base.rstrip('/')}/v1/messages/count_tokens"
+            else:
+                endpoint_url = self.get_anthropic_count_tokens_endpoint()
 
             verbose_logger.debug(f"Making request to: {endpoint_url}")
 

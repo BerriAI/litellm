@@ -63,11 +63,15 @@ class AnthropicTokenCounter(BaseTokenCounter):
             verbose_logger.warning("No Anthropic API key found for token counting")
             return None
 
+        # Resolve custom api_base from deployment configuration parameter or environment mapping
+        api_base = litellm_params.get("api_base") or os.getenv("ANTHROPIC_API_BASE")
+
         try:
             result = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )
