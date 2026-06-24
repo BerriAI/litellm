@@ -47,15 +47,22 @@ impl PythonAuthClient {
 
 #[axum::async_trait]
 impl KeyAuthenticator for PythonAuthClient {
-    async fn verify(&self, key: &str, route: &str) -> Result<UserApiKeyAuth, AuthError> {
+    async fn verify(
+        &self,
+        key: &str,
+        route: &str,
+        model: Option<&str>,
+    ) -> Result<UserApiKeyAuth, AuthError> {
         let response = self
             .http
             .post(&self.verify_url)
             .header(DATA_PLANE_KEY_HEADER, &self.data_plane_key)
-            .json(&serde_json::json!({ "api_key": key, "route": route }))
+            .json(&serde_json::json!({ "api_key": key, "route": route, "model": model }))
             .send()
             .await
-            .map_err(|err| AuthError::Upstream(err.to_string()))?;
+            // `without_url()` strips the target URL from the error — otherwise the
+            // internal proxy address would leak into AuthError::Upstream.
+            .map_err(|err| AuthError::Upstream(format!("network error: {}", err.without_url())))?;
 
         let status = response.status();
         if status == StatusCode::UNAUTHORIZED {
