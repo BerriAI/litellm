@@ -5,19 +5,26 @@
 //! driving typed events through the pure `OPENAI_REALTIME_CONFIG` transforms.
 //! Network, auth header, key resolution, and wire (de)serialization live here so
 //! the `transformation` module stays pure and typed.
+//!
+//! The dial and splice steps are factored out ([`dial_upstream`], [`splice`]) so
+//! the connection pool ([`crate::realtime_pool`]) can pre-establish an upstream,
+//! buffer its `session.created`, and later hand the live socket to the same
+//! splice loop a fresh dial uses.
 
 use std::time::Duration;
 
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use litellm_core::error::CoreError;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::CoreResult;
-use tokio_tungstenite::connect_async;
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use crate::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 
@@ -32,10 +39,16 @@ const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is b
 /// half-open upstream that keeps the socket open but stops sending).
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 
+/// The concrete upstream WebSocket type (TLS or plain). Shared by the dial path
+/// and the pool so warm sockets and fresh sockets are the exact same type.
+pub type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type UpstreamTx = SplitSink<UpstreamWs, Message>;
+pub(crate) type UpstreamRx = SplitStream<UpstreamWs>;
+
 /// Resolve the OpenAI API key from the explicit param or the environment.
 ///
 /// Blank/whitespace values are treated as absent (guard at resolution time).
-fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
+pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
     api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
@@ -48,28 +61,17 @@ fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
         .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
-/// Splice a client realtime stream to OpenAI: forward client events upstream
-/// (via `transform_realtime_request`) and backend events downstream (via
-/// `transform_realtime_response`). Returns when either side closes.
+/// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
 ///
-/// Generic over the client transport (typed events) so this crate stays
-/// framework-agnostic; the gateway adapts its axum socket to these.
-pub async fn realtime<In, Out>(
+/// This is the dial half of [`realtime`], factored out so the pool can
+/// pre-establish sockets ahead of any client. `api_key` here is already resolved
+/// (non-blank) — the pool resolves it once when it is created.
+pub(crate) async fn dial_upstream(
     model: &str,
-    api_key: Option<&str>,
+    api_key: &str,
     api_base: Option<&str>,
-    idle_timeout: Option<Duration>,
-    mut client_in: In,
-    mut client_out: Out,
-) -> CoreResult<()>
-where
-    In: Stream<Item = RealtimeEvent> + Unpin + Send,
-    Out: Sink<RealtimeEvent> + Unpin + Send,
-    <Out as Sink<RealtimeEvent>>::Error: std::fmt::Display,
-{
-    let config = &OPENAI_REALTIME_CONFIG;
-    let api_key = resolve_api_key(api_key)?;
-    let url = config.complete_url(api_base, model);
+) -> CoreResult<UpstreamWs> {
+    let url = OPENAI_REALTIME_CONFIG.complete_url(api_base, model);
 
     let mut request = url
         .as_str()
@@ -86,7 +88,71 @@ where
     let (upstream, _response) = connect_async(request)
         .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
-    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    Ok(upstream)
+}
+
+/// Read the next text frame from the upstream and decode it as a typed event.
+///
+/// Used by the pool to pre-read OpenAI's unprompted `session.created`. Returns an
+/// error on a non-text frame, a closed socket, or undecodable JSON so the pool can
+/// discard a misbehaving socket rather than warm it.
+pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> CoreResult<RealtimeEvent> {
+    loop {
+        let message = upstream_rx
+            .next()
+            .await
+            .ok_or_else(|| CoreError::Network("upstream closed before first event".to_string()))?
+            .map_err(|err| CoreError::Network(err.to_string()))?;
+        match message {
+            Message::Text(text) => {
+                return serde_json::from_str(&text)
+                    .map_err(|err| CoreError::InvalidResponse(err.to_string()));
+            }
+            // Ignore protocol frames (ping/pong) while waiting for the first event.
+            Message::Ping(_) | Message::Pong(_) => continue,
+            Message::Close(_) => {
+                return Err(CoreError::Network(
+                    "upstream closed before first event".to_string(),
+                ))
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// Splice an already-connected upstream to the client streams.
+///
+/// `prelude` is relayed to the client first (the pool passes the buffered
+/// `session.created` here; the fresh-dial path passes `None` and lets the upstream
+/// deliver it). Then a single select loop forwards both directions through the
+/// transforms until either side closes or the idle timeout fires.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn splice<In, Out>(
+    model: &str,
+    mut upstream_tx: UpstreamTx,
+    mut upstream_rx: UpstreamRx,
+    prelude: Option<RealtimeEvent>,
+    idle_timeout: Option<Duration>,
+    mut client_in: In,
+    mut client_out: Out,
+) -> CoreResult<()>
+where
+    In: Stream<Item = RealtimeEvent> + Unpin + Send,
+    Out: Sink<RealtimeEvent> + Unpin + Send,
+    <Out as Sink<RealtimeEvent>>::Error: std::fmt::Display,
+{
+    let config = &OPENAI_REALTIME_CONFIG;
+
+    // Relay a buffered backend event (warm handoff's session.created) first, so a
+    // warm session looks identical to a fresh one from the client's view.
+    if let Some(event) = prelude {
+        for outbound in config.transform_realtime_response(&event, model)?.events {
+            client_out
+                .send(outbound)
+                .await
+                .map_err(|err| CoreError::Network(err.to_string()))?;
+        }
+    }
 
     let idle = idle_timeout.unwrap_or(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS));
 
@@ -131,6 +197,69 @@ where
         }
     }
     Ok(())
+}
+
+/// Splice a client realtime stream to OpenAI: forward client events upstream
+/// (via `transform_realtime_request`) and backend events downstream (via
+/// `transform_realtime_response`). Returns when either side closes.
+///
+/// Generic over the client transport (typed events) so this crate stays
+/// framework-agnostic; the gateway adapts its axum socket to these. This is the
+/// fresh-dial path: dial, then splice. The pool's warm-handoff path skips the dial
+/// and calls [`splice`] directly with a buffered `session.created`.
+pub async fn realtime<In, Out>(
+    model: &str,
+    api_key: Option<&str>,
+    api_base: Option<&str>,
+    idle_timeout: Option<Duration>,
+    client_in: In,
+    client_out: Out,
+) -> CoreResult<()>
+where
+    In: Stream<Item = RealtimeEvent> + Unpin + Send,
+    Out: Sink<RealtimeEvent> + Unpin + Send,
+    <Out as Sink<RealtimeEvent>>::Error: std::fmt::Display,
+{
+    let api_key = resolve_api_key(api_key)?;
+    let upstream = dial_upstream(model, &api_key, api_base).await?;
+    let (upstream_tx, upstream_rx) = upstream.split();
+    splice(
+        model,
+        upstream_tx,
+        upstream_rx,
+        None,
+        idle_timeout,
+        client_in,
+        client_out,
+    )
+    .await
+}
+
+/// Splice a pre-warmed upstream (taken from [`crate::realtime_pool`]) to the
+/// client. Relays the buffered `session.created` first, then splices exactly like
+/// the fresh-dial path — so a warm session is indistinguishable from a fresh one.
+pub async fn realtime_warm<In, Out>(
+    model: &str,
+    handoff: crate::realtime_pool::WarmHandoff,
+    idle_timeout: Option<Duration>,
+    client_in: In,
+    client_out: Out,
+) -> CoreResult<()>
+where
+    In: Stream<Item = RealtimeEvent> + Unpin + Send,
+    Out: Sink<RealtimeEvent> + Unpin + Send,
+    <Out as Sink<RealtimeEvent>>::Error: std::fmt::Display,
+{
+    splice(
+        model,
+        handoff.tx,
+        handoff.rx,
+        Some(handoff.session_created),
+        idle_timeout,
+        client_in,
+        client_out,
+    )
+    .await
 }
 
 #[cfg(test)]
