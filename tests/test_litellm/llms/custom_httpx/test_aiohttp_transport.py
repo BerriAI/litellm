@@ -678,3 +678,80 @@ async def test_response_stream_closes_response_on_generator_exit():
     await iterator.aclose()
 
     assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_streams_do_not_exhaust_connector_pool():
+    """
+    End-to-end regression test for #30192 / PR #30271.
+
+    The earlier three unit tests assert ``mock_response.closed is True`` after
+    abnormal termination, which catches only a literal removal of the
+    ``finally`` block in ``AiohttpResponseStream.__aiter__``. The production
+    symptom (proxy permanently returning 408 ConnectTimeout after a traffic
+    spike) is a property of the real ``aiohttp.TCPConnector`` slot bookkeeping,
+    not of the mock. This test exercises that property directly:
+
+    1. Stand up a local aiohttp streaming server.
+    2. Build a transport whose session uses ``TCPConnector(limit=POOL_LIMIT)``.
+    3. Fire ``POOL_LIMIT`` streaming requests and cancel each one mid-stream
+       (simulating client disconnects / read timeouts during a spike).
+    4. Send a fresh normal request with a tight ``pool`` wait. With the bug,
+       every slot is permanently held by the cancelled streams and this last
+       request blocks until ``httpx.ConnectTimeout``. With the fix, the
+       ``finally`` block in ``__aiter__`` releases each slot and the probe
+       returns 200 immediately.
+
+    Mutation budget: this test fails if the ``finally`` block is removed, if
+    ``response.close()`` is replaced with a no-op, or if any new streaming
+    code path bypasses ``AiohttpResponseStream`` without releasing its slot.
+    """
+    from aiohttp import TCPConnector, web
+
+    pool_limit = 3
+
+    async def slow_stream(request: web.Request) -> web.StreamResponse:
+        response = web.StreamResponse(status=200)
+        await response.prepare(request)
+        try:
+            for i in range(1000):
+                await response.write(f"chunk{i}\n".encode())
+                await asyncio.sleep(0.02)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        return response
+
+    app = web.Application()
+    app.router.add_get("/stream", slow_stream)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    url = f"http://127.0.0.1:{port}/stream"
+
+    connector = TCPConnector(limit=pool_limit, force_close=False)
+    session = aiohttp.ClientSession(connector=connector)
+    transport = LiteLLMAiohttpTransport(client=session, owns_session=True)
+
+    try:
+        for _ in range(pool_limit):
+            req = httpx.Request("GET", url)
+            req.extensions["timeout"] = {"connect": 5.0, "read": 5.0, "pool": 5.0}
+            try:
+                resp = await transport.handle_async_request(req)
+                async for _chunk in resp.aiter_bytes():
+                    raise asyncio.CancelledError()
+            except asyncio.CancelledError:
+                pass
+
+        await asyncio.sleep(0.05)
+
+        probe = httpx.Request("GET", url)
+        probe.extensions["timeout"] = {"connect": 1.0, "read": 1.0, "pool": 1.0}
+        resp = await transport.handle_async_request(probe)
+        assert resp.status_code == 200
+        await resp.aclose()
+    finally:
+        await transport.aclose()
+        await runner.cleanup()
