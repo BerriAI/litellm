@@ -904,9 +904,12 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "mantle/": "mantle",
         }
 
-        # Check explicit routes first
+        # Check explicit routes first. Match each prefix only as a leading path
+        # segment so the `bedrock_mantle/` provider prefix is never mistaken for
+        # the `mantle/` invoke route (which would mangle
+        # `bedrock_mantle/openai.gpt-5.5` into `bedrock_openai.gpt-5.5`).
         for prefix, route_type in route_mappings.items():
-            if prefix in model:
+            if BedrockModelInfo._model_has_route_prefix(model, prefix):
                 return route_type
 
         # Check for nova spec prefixes (nova/ and nova-2/)
@@ -984,11 +987,23 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return "agentcore/" in model
 
     @staticmethod
+    def _model_has_route_prefix(model: str, prefix: str) -> bool:
+        """Whether a route prefix (e.g. ``mantle/``) appears as a leading path segment.
+
+        A route token is only valid at the start of the model id or immediately
+        after a ``/``. A plain substring check matches the ``bedrock_mantle/``
+        provider prefix against the ``mantle/`` route, so the body model gets
+        mangled to ``bedrock_openai.gpt-5.5``; anchoring to a segment boundary
+        keeps the bare model id intact.
+        """
+        return model.startswith(prefix) or f"/{prefix}" in model
+
+    @staticmethod
     def _explicit_mantle_route(model: str) -> bool:
         """
         Check if the model is an explicit mantle route (bedrock-mantle endpoint).
         """
-        return "mantle/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "mantle/")
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
