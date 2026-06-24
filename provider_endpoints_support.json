@@ -1131,6 +1131,24 @@
         "interactions": true
       }
     },
+    "gonkabroker": {
+      "display_name": "Gonka Broker (`gonkabroker`)",
+      "url": "https://docs.litellm.ai/docs/providers/gonkabroker",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "vertex_ai": {
       "display_name": "Google - Vertex AI (`vertex_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/vertex",
