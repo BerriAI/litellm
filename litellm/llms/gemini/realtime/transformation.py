@@ -75,15 +75,6 @@ _KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {
     map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
 }
 
-# Gemini Live native-audio model ids carry this marker (e.g.
-# ``gemini-2.5-flash-native-audio-preview-09-2025``). These models reject a
-# ``speechConfig`` on ``setup`` with a 1007 invalid-argument error, so it is
-# stripped in ``_finalize_gemini_live_setup``.
-_GEMINI_NATIVE_AUDIO_MODEL_MARKER = "native-audio"
-# Live preview models (e.g. ``gemini-3.1-flash-live-preview``) also reject
-# TEXT-only ``responseModalities`` and require AUDIO output.
-_GEMINI_FLASH_LIVE_MODEL_MARKER = "flash-live"
-
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
@@ -416,31 +407,27 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return normalized
 
     @staticmethod
+    def _model_cost_entry(model: str) -> dict:
+        entry = litellm.model_cost.get(model)
+        if entry is None:
+            stripped = model.split("/", 1)[-1]
+            entry = litellm.model_cost.get(stripped) or litellm.model_cost.get(
+                f"gemini/{stripped}"
+            )
+        return entry or {}
+
+    @staticmethod
     def _is_audio_only_live_model(model: str) -> bool:
-        """True for Gemini Live models that reject TEXT-only responseModalities."""
-        try:
-            model_info = litellm.get_model_info(model)
-            if model_info.get("gemini_native_audio") or model_info.get(
-                "gemini_audio_only_live"
-            ):
-                return True
-        except Exception:
-            pass
-        model_lower = model.lower()
-        return (
-            _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model_lower
-            or _GEMINI_FLASH_LIVE_MODEL_MARKER in model_lower
+        entry = GeminiRealtimeConfig._model_cost_entry(model)
+        return bool(
+            entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live")
         )
 
     @staticmethod
     def _is_native_audio_model(model: str) -> bool:
-        """True for native-audio models that also reject speechConfig on setup."""
-        try:
-            if litellm.get_model_info(model).get("gemini_native_audio"):
-                return True
-        except Exception:
-            pass
-        return _GEMINI_NATIVE_AUDIO_MODEL_MARKER in model.lower()
+        return bool(
+            GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio")
+        )
 
     @staticmethod
     def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
