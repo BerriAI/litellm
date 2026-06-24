@@ -263,3 +263,64 @@ def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
 
     assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling
+
+
+def test_route_prefix_matched_as_path_segment_not_substring():
+    """Route tokens like ``mantle/`` must match only at a path-segment boundary.
+
+    The ``bedrock_mantle/`` provider prefix contains the substring ``mantle/``;
+    a substring match misroutes ``bedrock_mantle/openai.gpt-5.5`` to the Claude
+    Mythos mantle config, whose request transform strips ``mantle/`` and mangles
+    the body model into ``bedrock_openai.gpt-5.5``. These assertions fail under
+    the old substring matching and pass once matching is anchored to ``startswith``
+    or a ``/`` boundary.
+    """
+    # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    )
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
+    )
+    assert (
+        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
+        is False
+    )
+
+    # A genuine mantle route still resolves, via the startswith branch...
+    assert (
+        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
+        == "mantle"
+    )
+    # ...and via the mid-path "/mantle/" branch (after the bedrock/ provider prefix).
+    assert (
+        BedrockModelInfo.get_bedrock_route(
+            "bedrock/mantle/anthropic.claude-mythos-preview"
+        )
+        == "mantle"
+    )
+
+
+def test_model_has_route_prefix_exercises_both_branches():
+    """``_model_has_route_prefix`` matches on ``startswith`` or a ``/`` boundary only."""
+    # startswith branch
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "mantle/anthropic.claude-mythos-preview", "mantle/"
+        )
+        is True
+    )
+    # f"/{prefix}" boundary branch
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "bedrock/mantle/anthropic.claude-mythos-preview", "mantle/"
+        )
+        is True
+    )
+    # neither branch: the token only appears glued to another segment
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "bedrock_mantle/openai.gpt-5.5", "mantle/"
+        )
+        is False
+    )
