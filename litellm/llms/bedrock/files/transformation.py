@@ -925,8 +925,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         if not buckets:
             raise ValueError(
-                "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or "
-                "AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+                "S3 bucket_name is required for Bedrock file content retrieval. "
+                "Set AWS_S3_BUCKET_NAME (and AWS_S3_OUTPUT_BUCKET_NAME if batch "
+                "outputs use a separate bucket), or retrieve via a model so the "
+                "deployment's s3_bucket_name is resolved through model-based routing."
             )
         return buckets
 
