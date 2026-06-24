@@ -28,6 +28,11 @@ const OCR_TIMEOUT_SECS: u64 = 600;
 const ERROR_BODY_MAX_CHARS: usize = 256;
 
 /// Process-wide async HTTP client (connection pool + TLS reused across calls).
+///
+/// The Python fallback path uses LiteLLM's standard `BaseLLMHTTPHandler`. This
+/// Rust path is opt-in and owns end-to-end OCR I/O, so it cannot call the
+/// Python handler directly; keep this route-scoped until litellm-rust has a
+/// shared HTTP abstraction.
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
