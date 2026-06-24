@@ -48,7 +48,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 
 | Endpoint | Existing | Status | Live e2e |
 |----------|----------|--------|----------|
-| `/spend/logs` (request_id / api_key) | `test_spend_management_endpoints.py` | covered | yes (primary read path) |
+| `/spend/logs` (request_id / api_key) | `test_spend_management_endpoints.py` | covered | yes (primary read path; `test_spend_logs_endpoint_returns_spend` asserts 200 + spend, never 5xx) |
 | `/spend/calculate` | `local_testing/test_spend_calculate_endpoint.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
 | `/spend/tags` | `test_spend_management_endpoints.py` | partial | yes (`test_spend_routes.py` route probe) |
 | whole spend GET surface (22 routes) | unit per-handler | partial | yes (`test_spend_routes.py` probes each for 404/5xx) |
@@ -66,6 +66,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_end_user_spend_attributed_on_row` | `end_user` attributed + costed |
 | `test_each_model_on_a_shared_key_gets_its_own_row` | per-model/provider rows, correct model + cost, distinct request_ids matching response id |
 | `test_spend_calculate_returns_nonzero_cost` | cost-map smoke (no batch wait) |
+| `test_spend_logs_endpoint_returns_spend` | `/spend/logs` returns 200 + the key's spend, never a 5xx (intermittent-500 regression) |
 | `test_spend_routes.py` (23) | no spend route 404s or 5xxs |
 
 ## Design + timing
