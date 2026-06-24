@@ -1039,11 +1039,20 @@ class CustomGuardrail(CustomLogger):
         # Mask the content
         return content_string[:start_index] + mask_string + content_string[end_index:]
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(
+        self, litellm_params: Union[LitellmParams, dict]
+    ) -> None:
         """
         Update the guardrails litellm params in memory
+
+        ``litellm_params`` may arrive as a plain dict (e.g. when read from the
+        DB and ``cast()`` to ``LitellmParams`` without actual conversion), so
+        handle both dict and pydantic-model inputs.
         """
-        for key, value in vars(litellm_params).items():
+        params = (
+            litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
+        )
+        for key, value in params.items():
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(
