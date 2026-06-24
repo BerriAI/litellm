@@ -85,6 +85,30 @@ def mock_auth():
 
 
 class TestProxySettingEndpoints:
+    def test_get_sso_settings_dict_from_db_record_shapes(self):
+        """Test SSO DB record normalization for empty, dict, and JSON string rows."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _get_sso_settings_dict_from_db_record,
+        )
+
+        assert _get_sso_settings_dict_from_db_record(None) == {}
+
+        dict_record = MagicMock()
+        dict_record.sso_settings = {"google_client_id": "dict_google_id"}
+        assert _get_sso_settings_dict_from_db_record(dict_record) == {
+            "google_client_id": "dict_google_id"
+        }
+
+        string_record = MagicMock()
+        string_record.sso_settings = json.dumps(
+            {"google_client_id": "string_google_id"}
+        )
+        assert _get_sso_settings_dict_from_db_record(string_record) == {
+            "google_client_id": "string_google_id"
+        }
+
     def test_get_internal_user_settings(self, mock_proxy_config, mock_auth):
         """Test getting the internal user settings"""
         response = client.get("/get/internal_user_settings")
@@ -397,6 +421,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -434,15 +459,17 @@ class TestProxySettingEndpoints:
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
         assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
+            settings["google_client_secret"] != new_sso_settings["google_client_secret"]
         )
+        assert "*" in settings["google_client_secret"]
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
         assert (
             settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
+            != new_sso_settings["microsoft_client_secret"]
         )
+        assert "*" in settings["microsoft_client_secret"]
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -466,6 +493,80 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def test_update_sso_settings_partial_update_preserves_existing_secrets(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test that omitted SSO fields keep their stored values during PATCH updates."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "existing_google_secret")
+
+        mock_prisma = MagicMock()
+        existing_sso_record = MagicMock()
+        existing_sso_record.sso_settings = {
+            "google_client_id": "existing_google_client_id",
+            "google_client_secret": "existing_google_secret",
+            "microsoft_client_secret": "existing_microsoft_secret",
+            "role_mappings": {
+                "provider": "google",
+                "group_claim": "groups",
+                "default_role": "internal_user",
+                "roles": {"internal_user": ["staff"]},
+            },
+            "team_mappings": {"team_ids_jwt_field": "teams"},
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=existing_sso_record
+        )
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_decrypt_and_set_db_env_variables",
+            lambda environment_variables: dict(environment_variables),
+        )
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        response = client.patch(
+            "/update/sso_settings", json={"ui_access_mode": "admin_only"}
+        )
+
+        assert response.status_code == 200
+        settings = response.json()["settings"]
+        assert settings["ui_access_mode"] == "admin_only"
+        assert settings["google_client_secret"] != "existing_google_secret"
+        assert "*" in settings["google_client_secret"]
+        assert settings["microsoft_client_secret"] != "existing_microsoft_secret"
+        assert "*" in settings["microsoft_client_secret"]
+        assert os.environ["GOOGLE_CLIENT_SECRET"] == "existing_google_secret"
+
+        call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
+        stored_sso_settings = json.loads(
+            call_args.kwargs["data"]["update"]["sso_settings"]
+        )
+        assert stored_sso_settings["ui_access_mode"] == "admin_only"
+        assert stored_sso_settings["google_client_id"] == "existing_google_client_id"
+        assert stored_sso_settings["google_client_secret"] == "existing_google_secret"
+        assert (
+            stored_sso_settings["microsoft_client_secret"]
+            == "existing_microsoft_secret"
+        )
+        assert stored_sso_settings["role_mappings"]["provider"] == "google"
+        assert stored_sso_settings["team_mappings"]["team_ids_jwt_field"] == "teams"
+
     def test_update_sso_settings_with_null_values_clears_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
@@ -479,6 +580,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
 
         env_var_entry = MagicMock()
@@ -558,6 +660,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         env_var_entry = MagicMock()
         env_var_entry.param_value = json.dumps(
@@ -628,6 +731,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
 
         env_var_entry = MagicMock()
@@ -705,6 +809,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -1351,6 +1456,7 @@ class TestProxySettingEndpoints:
         mock_prisma = MagicMock()
         upsert_mock = AsyncMock()
         mock_prisma.db.litellm_ssoconfig.upsert = upsert_mock
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -1430,6 +1536,7 @@ class TestProxySettingEndpoints:
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_ssoconfig = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
 
         env_var_entry = MagicMock()
         env_var_entry.param_value = json.dumps(
@@ -1481,6 +1588,7 @@ class TestProxySettingEndpoints:
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_ssoconfig = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
 
         env_var_entry = MagicMock()
         env_var_entry.param_value = {
@@ -1652,6 +1760,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()

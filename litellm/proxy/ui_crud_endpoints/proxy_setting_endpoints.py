@@ -35,6 +35,16 @@ _SSO_SENSITIVE_FIELDS: Set[str] = {
 }
 
 
+def _get_sso_settings_dict_from_db_record(
+    sso_db_record: Optional[Any],
+) -> Dict[str, Any]:
+    if sso_db_record is None or not sso_db_record.sso_settings:
+        return {}
+    if isinstance(sso_db_record.sso_settings, str):
+        return json.loads(sso_db_record.sso_settings)
+    return dict(sso_db_record.sso_settings)
+
+
 class IPAddress(BaseModel):
     ip: str
 
@@ -673,12 +683,8 @@ async def get_sso_settings():
         where={"id": "sso_config"}
     )
 
-    # Initialize with defaults
-    sso_settings_dict = {}
-
-    if sso_db_record and sso_db_record.sso_settings:
-        # Load settings from database
-        sso_settings_dict = dict(sso_db_record.sso_settings)
+    # Load settings from database
+    sso_settings_dict = _get_sso_settings_dict_from_db_record(sso_db_record)
 
     role_mappings_data = sso_settings_dict.pop("role_mappings", None)
     role_mappings = None
@@ -824,8 +830,30 @@ async def update_sso_settings(sso_config: SSOConfig):
     if "general_settings" not in config:
         config["general_settings"] = {}
 
-    # Update environment variables in config and in memory
-    sso_data = sso_config.model_dump()
+    existing_sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        where={"id": "sso_config"}
+    )
+    existing_sso_settings = _get_sso_settings_dict_from_db_record(
+        existing_sso_db_record
+    )
+    existing_structured_settings = {}
+    for structured_field in ("role_mappings", "team_mappings"):
+        if structured_field in existing_sso_settings:
+            existing_structured_settings[structured_field] = existing_sso_settings.pop(
+                structured_field
+            )
+
+    existing_sso_data = proxy_config._decrypt_and_set_db_env_variables(
+        environment_variables=existing_sso_settings
+    )
+    existing_sso_data.update(existing_structured_settings)
+
+    # Update environment variables in config and in memory. PATCH semantics:
+    # omitted fields keep their current stored value, explicit null/empty clears.
+    sso_data = {
+        **existing_sso_data,
+        **sso_config.model_dump(exclude_unset=True),
+    }
     for field_name, value in sso_data.items():
         if field_name in env_var_mapping:
             env_var_name = env_var_mapping[field_name]
@@ -891,7 +919,7 @@ async def update_sso_settings(sso_config: SSOConfig):
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        "settings": mask_sensitive_keys(sso_data, _SSO_SENSITIVE_FIELDS),
     }
 
 
