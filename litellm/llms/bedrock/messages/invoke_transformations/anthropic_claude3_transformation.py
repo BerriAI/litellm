@@ -564,6 +564,63 @@ class AmazonAnthropicClaudeMessagesConfig(
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
         optional_params["reasoning_effort"] = clamped["effort"]
 
+    def _extract_system_messages_from_messages(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Extract system messages from the messages array and merge them into the system parameter.
+        """
+        system_messages_to_add = []
+        messages_list = anthropic_messages_request.get("messages", [])
+        new_messages = []
+        system_messages_found = False
+        for msg in messages_list:
+            if isinstance(msg, dict) and msg.get("role") == "system":
+                system_messages_found = True
+                content = msg.get("content")
+                if isinstance(content, str):
+                    if content:
+                        if content.startswith("x-anthropic-billing-header:"):
+                            continue
+                        block = {"type": "text", "text": content}
+                        if "cache_control" in msg:
+                            block["cache_control"] = msg["cache_control"]
+                        system_messages_to_add.append(block)
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict):
+                            if item.get("type") == "text":
+                                text_val = item.get("text")
+                                if text_val:
+                                    if text_val.startswith(
+                                        "x-anthropic-billing-header:"
+                                    ):
+                                        continue
+                                    block = {"type": "text", "text": text_val}
+                                    if "cache_control" in item:
+                                        block["cache_control"] = item["cache_control"]
+                                    system_messages_to_add.append(block)
+            else:
+                new_messages.append(msg)
+
+        if system_messages_found:
+            anthropic_messages_request["messages"] = new_messages
+            if system_messages_to_add:
+                existing_system = anthropic_messages_request.get("system")
+                if existing_system is None:
+                    anthropic_messages_request["system"] = system_messages_to_add
+                elif isinstance(existing_system, str):
+                    if existing_system:
+                        anthropic_messages_request["system"] = [
+                            {"type": "text", "text": existing_system}
+                        ] + system_messages_to_add
+                    else:
+                        anthropic_messages_request["system"] = system_messages_to_add
+                elif isinstance(existing_system, list):
+                    anthropic_messages_request["system"] = (
+                        list(existing_system) + system_messages_to_add
+                    )
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -584,6 +641,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        # Extract system messages from messages list (Bedrock does not support system role in messages)
+        self._extract_system_messages_from_messages(anthropic_messages_request)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
