@@ -16,7 +16,7 @@ construction time (see ``handler.py``) so all normalization is isolated here
 and ``RealTimeStreaming`` stays provider-agnostic.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 
 class XAIRealtimeNormalizer:
@@ -252,7 +252,7 @@ class XAIRealtimeNormalizer:
     @staticmethod
     def _normalize_usage(
         usage: Any, *, empty_as_null: bool
-    ) -> dict[str, Any] | None:
+    ) -> Optional[dict[str, Any]]:
         """Coerce a usage object into the full OpenAI GA shape.
 
         ``empty_as_null=True`` for ``response.created`` (usage optional).
