@@ -21536,6 +21536,16 @@ export interface components {
             callback_name: string;
         };
         /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
          * CallbackLogRecord
          * @description A single finished logging event to replay through the callbacks.
          */
@@ -21562,11 +21572,14 @@ export interface components {
         };
         /**
          * CallbackLogsResponse
-         * @description Per-batch result: how many records replayed and how many failed.
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
          */
         CallbackLogsResponse: {
             /** Failed */
             failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
             /** Processed */
             processed: number;
         };
