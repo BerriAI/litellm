@@ -61,7 +61,9 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
-        self._providers: OrderedDict[tuple[tuple[str, tuple[tuple[str, str], ...]], ...], TracerProvider] = (OrderedDict())
+        self._providers: OrderedDict[
+            tuple[tuple[str, tuple[tuple[str, str], ...]], ...], TracerProvider
+        ] = OrderedDict()
 
     def tracer_for(
         self, default: Tracer, destinations: "tuple[OtelDestination, ...]"
