@@ -108,8 +108,13 @@ class TestClientCredentialsTokenFetch:
         ],
     )
     def test_missing_required_inputs_raise(self, missing):
-        with pytest.raises(OAuthClientCredentialsError):
+        with pytest.raises(OAuthClientCredentialsError) as exc_info:
             get_client_credentials_token(**missing)
+
+        message = exc_info.value.message
+        assert "litellm_params" in message
+        assert "os.environ/" in message
+        assert "CUSTOM_OAUTH_" not in message
 
     def test_response_without_access_token_raises(self):
         client = MagicMock()

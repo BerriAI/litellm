@@ -54,9 +54,10 @@ def get_client_credentials_token(
             status_code=401,
             message=(
                 "custom_oauth requires oauth_token_url, oauth_client_id and "
-                "oauth_client_secret (set them under litellm_params or via the "
-                "CUSTOM_OAUTH_TOKEN_URL / CUSTOM_OAUTH_CLIENT_ID / "
-                "CUSTOM_OAUTH_CLIENT_SECRET environment variables)."
+                "oauth_client_secret. Set them under litellm_params in your "
+                "config.yaml (use os.environ/MY_VAR syntax to reference "
+                "environment variables, e.g. "
+                "oauth_client_secret: os.environ/MY_OAUTH_SECRET)."
             ),
         )
 
