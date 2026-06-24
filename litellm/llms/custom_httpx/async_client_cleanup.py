@@ -3,6 +3,7 @@ Utility functions for cleaning up async HTTP clients to prevent resource leaks.
 """
 
 import asyncio
+import inspect
 
 
 async def close_litellm_async_clients():
@@ -46,13 +47,22 @@ async def close_litellm_async_clients():
                     # Silently ignore errors during cleanup
                     pass
 
-        # Handle any other objects with aclose method
-        elif hasattr(handler, "aclose"):
-            try:
-                await handler.aclose()
-            except Exception:
-                # Silently ignore errors during cleanup
-                pass
+        # Handle any other cached async client. Most expose aclose(), but some
+        # SDK clients -- notably the openai SDK's AsyncOpenAI / AsyncAzureOpenAI,
+        # which are cached here (set_cached_openai_client) and built on litellm's
+        # aiohttp transport -- name the async teardown close() instead. Accept
+        # either, guarding on iscoroutinefunction so sync close() methods
+        # (sync OpenAI / HTTPHandler) are left untouched.
+        else:
+            closer = getattr(handler, "aclose", None) or getattr(
+                handler, "close", None
+            )
+            if closer is not None and inspect.iscoroutinefunction(closer):
+                try:
+                    await closer()
+                except Exception:
+                    # Silently ignore errors during cleanup
+                    pass
 
     # Close the global base_llm_aiohttp_handler instance (issue #12443)
     # This is used by Gemini and other providers that use aiohttp
