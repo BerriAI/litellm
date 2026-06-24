@@ -403,20 +403,23 @@ def test_generic_cost_per_token_honors_non_standard_above_threshold():
         }
     )
 
-    prompt_tokens = 600000
-    completion_tokens = 1000
-    usage = Usage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
-    )
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-    assert round(prompt_cost, 10) == round(9e-6 * prompt_tokens, 10)
-    assert round(completion_cost, 10) == round(18e-6 * completion_tokens, 10)
+    try:
+        prompt_tokens = 600000
+        completion_tokens = 1000
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 10) == round(9e-6 * prompt_tokens, 10)
+        assert round(completion_cost, 10) == round(18e-6 * completion_tokens, 10)
+    finally:
+        litellm.model_cost.pop(model, None)
 
 
 def test_generic_cost_per_token_gpt55():
