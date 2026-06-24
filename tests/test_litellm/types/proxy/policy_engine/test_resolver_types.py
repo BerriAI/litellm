@@ -3,8 +3,10 @@ Tests for pipeline field on policy CRUD types (resolver_types.py).
 """
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.types.proxy.policy_engine.resolver_types import (
+    PolicyAttachmentCreateRequest,
     PolicyCreateRequest,
     PolicyDBResponse,
     PolicyUpdateRequest,
@@ -100,3 +102,33 @@ def test_policy_create_request_roundtrip():
     dumped = req.model_dump()
     restored = PolicyCreateRequest(**dumped)
     assert restored.pipeline == pipeline_data
+
+
+def test_policy_attachment_create_request_rejects_empty_specific_scope():
+    with pytest.raises(ValidationError, match="at least one non-empty selector"):
+        PolicyAttachmentCreateRequest(policy_name="pii-policy")
+
+
+def test_policy_attachment_create_request_rejects_empty_selector_list():
+    with pytest.raises(ValidationError, match="at least one non-empty selector"):
+        PolicyAttachmentCreateRequest(policy_name="pii-policy", teams=[])
+
+
+def test_policy_attachment_create_request_allows_explicit_global_scope():
+    request = PolicyAttachmentCreateRequest(
+        policy_name="pii-policy",
+        scope="*",
+    )
+
+    assert request.scope == "*"
+
+
+@pytest.mark.parametrize("selector_field", ["teams", "keys", "models", "tags"])
+def test_policy_attachment_create_request_allows_selector_scope(selector_field):
+    selector_value = f"{selector_field}-a"
+    request = PolicyAttachmentCreateRequest(
+        policy_name="pii-policy",
+        **{selector_field: [selector_value]},
+    )
+
+    assert getattr(request, selector_field) == [selector_value]
