@@ -1,7 +1,8 @@
-from unittest.mock import AsyncMock
 from io import BytesIO
+from unittest.mock import AsyncMock
 from zipfile import ZipFile
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -39,6 +40,24 @@ def test_should_not_register_agent_skills_endpoint_when_disabled():
     assert response.status_code == 404
 
 
+def test_should_handle_skills_endpoint_config_edge_cases():
+    from litellm.proxy.opencode_endpoints.skills_endpoints import (
+        OPENCODE_SKILLS_DEFAULT_PATH,
+        _agent_skills_config_enabled,
+        _one_line,
+        _opencode_config_enabled,
+        _opencode_path,
+    )
+
+    assert _opencode_config_enabled(None) is False
+    assert _agent_skills_config_enabled(None) is False
+    assert _opencode_path(None) == OPENCODE_SKILLS_DEFAULT_PATH
+    assert _opencode_path({"enabled": True, "opencode": "invalid"}) == (
+        OPENCODE_SKILLS_DEFAULT_PATH
+    )
+    assert _one_line(None) == ""
+
+
 def test_should_return_opencode_skills_index_when_enabled(monkeypatch):
     from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
@@ -66,6 +85,25 @@ def test_should_return_opencode_skills_index_when_enabled(monkeypatch):
         "skills": [{"name": "litellm_skill_writer", "files": ["SKILL.md"]}]
     }
     list_skills.assert_awaited_once_with(limit=1000, offset=0, user_api_key_dict=auth)
+
+
+def test_should_normalize_opencode_path_without_leading_slash(monkeypatch):
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "list_skills",
+        AsyncMock(return_value=[]),
+    )
+    client = _client(
+        {"enabled": True, "opencode": {"enabled": True, "path": "custom/skills"}},
+        auth=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    response = client.get("/custom/skills/index.json")
+
+    assert response.status_code == 200
+    assert response.json() == {"skills": []}
 
 
 def test_should_return_agent_skills_well_known_index_when_enabled(monkeypatch):
@@ -136,6 +174,71 @@ def test_should_serve_agent_skills_markdown_from_well_known_path(monkeypatch):
         "# Writer\n\n"
         "Use this skill to draft release notes.\n"
     )
+
+
+def test_should_return_opencode_404_when_skill_file_is_missing(monkeypatch):
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "list_skills",
+        AsyncMock(
+            return_value=[
+                LiteLLM_SkillsTable(skill_id="other_skill"),
+                LiteLLM_SkillsTable(skill_id="litellm_skill_writer"),
+            ]
+        ),
+    )
+    client = _client(
+        {"enabled": True, "opencode": {"enabled": True}},
+        auth=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    response = client.get("/opencode/skills/litellm_skill_writer/missing.txt")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Skill file not found"}
+
+
+def test_should_return_agent_404_when_skill_file_is_missing(monkeypatch):
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "list_skills",
+        AsyncMock(
+            return_value=[
+                LiteLLM_SkillsTable(skill_id="other_skill"),
+                LiteLLM_SkillsTable(skill_id="litellm_skill_writer"),
+            ]
+        ),
+    )
+    client = _client(
+        {"enabled": True, "agent_skills": {"enabled": True}},
+        auth=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    response = client.get("/.well-known/agent-skills/litellm-skill-writer/missing.txt")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Skill file not found"}
+
+
+def test_should_not_duplicate_routes_when_initialized_twice():
+    from litellm.proxy.opencode_endpoints.skills_endpoints import (
+        initialize_opencode_skills_endpoint,
+    )
+
+    app = FastAPI()
+    config = {"enabled": True, "opencode": {"enabled": True}}
+
+    initialize_opencode_skills_endpoint(app=app, skills_gateway_config=config)
+    initialize_opencode_skills_endpoint(app=app, skills_gateway_config=config)
+
+    route_paths = [getattr(route, "path", None) for route in app.routes]
+    assert route_paths.count("/opencode/skills") == 1
+    assert route_paths.count("/opencode/skills/index.json") == 1
+    assert route_paths.count("/opencode/skills/{skill_name}/{file_path:path}") == 1
 
 
 def test_should_serve_legacy_agent_skills_well_known_alias(monkeypatch):
@@ -294,3 +397,37 @@ def test_should_serve_zip_backed_skill_files_from_custom_path(monkeypatch):
     )
     assert reference.status_code == 200
     assert reference.text == "example"
+
+
+@pytest.mark.asyncio
+async def test_should_register_skills_endpoints_from_proxy_config_load(
+    tmp_path, monkeypatch
+):
+    from litellm.proxy import proxy_server
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings: {}\n"
+        "skills_gateway:\n"
+        "  enabled: true\n"
+        "  opencode:\n"
+        "    enabled: true\n"
+        "    path: /native/skills\n"
+        "  agent_skills:\n"
+        "    enabled: true\n"
+    )
+    app = FastAPI()
+    monkeypatch.setattr(proxy_server, "app", app)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    proxy_config = proxy_server.ProxyConfig()
+    await proxy_config.load_config(router=None, config_file_path=str(config_file))
+
+    route_paths = {getattr(route, "path", None) for route in app.routes}
+    assert "/native/skills" in route_paths
+    assert "/native/skills/index.json" in route_paths
+    assert "/.well-known/agent-skills/index.json" in route_paths
