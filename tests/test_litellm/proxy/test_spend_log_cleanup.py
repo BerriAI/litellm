@@ -119,7 +119,11 @@ def test_spend_log_cleanup_cron_scheduler_integration():
 
 
 @pytest.mark.asyncio
-async def test_should_delete_spend_logs():
+async def test_should_delete_spend_logs(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+
     # Test case 1: No retention set
     cleaner = SpendLogCleanup(general_settings={})
     assert cleaner._should_delete_spend_logs() is False
@@ -150,8 +154,25 @@ async def test_should_delete_spend_logs():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_old_spend_logs_batch_deletion():
+async def test_should_delete_spend_logs_requires_premium(monkeypatch):
+    """Spend log retention cleanup should be blocked for non-premium users."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", False)
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"}
+    )
+    assert cleaner._should_delete_spend_logs() is False
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_spend_logs_batch_deletion(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
 
     # Setup Prisma client
     mock_prisma_client = MagicMock()
@@ -190,10 +211,14 @@ async def test_cleanup_old_spend_logs_batch_deletion():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_old_spend_logs_retention_period_cutoff():
+async def test_cleanup_old_spend_logs_retention_period_cutoff(monkeypatch):
     """
     Test that logs are filtered using correct cutoff based on retention
     """
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+
     # Setup Prisma client
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
@@ -223,7 +248,7 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_drops_partitions_when_enabled_and_partitioned():
+async def test_cleanup_drops_partitions_when_enabled_and_partitioned(monkeypatch):
     """
     With use_spend_logs_partitioning enabled and a partitioned table, cleanup
     must reclaim disk by dropping partitions AND still delete expired rows the
@@ -231,6 +256,10 @@ async def test_cleanup_drops_partitions_when_enabled_and_partitioned():
     retention is never bypassed.
     """
     from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.execute_raw = AsyncMock(return_value=0)
@@ -261,13 +290,17 @@ async def test_cleanup_drops_partitions_when_enabled_and_partitioned():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_uses_delete_when_partitioning_not_enabled():
+async def test_cleanup_uses_delete_when_partitioning_not_enabled(monkeypatch):
     """
     Even against a partitioned table, the partition path must stay off until
     use_spend_logs_partitioning is explicitly enabled, so existing deployments
     see zero behavior change. The catalog must not even be queried.
     """
     from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0])
@@ -293,12 +326,16 @@ async def test_cleanup_uses_delete_when_partitioning_not_enabled():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_uses_delete_when_not_partitioned():
+async def test_cleanup_uses_delete_when_not_partitioned(monkeypatch):
     """
     With the feature enabled but the table not actually partitioned (script not
     run yet), cleanup must keep using the batched DELETE path.
     """
     from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0])
@@ -365,11 +402,15 @@ async def test_lock_not_released_when_not_acquired():
 
 
 @pytest.mark.asyncio
-async def test_integer_retention_treated_as_days():
+async def test_integer_retention_treated_as_days(monkeypatch):
     """
     An integer value for maximum_spend_logs_retention_period should be treated
     as days (e.g., 3 → '3d' → 259200 seconds).
     """
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+
     cleaner = SpendLogCleanup(
         general_settings={"maximum_spend_logs_retention_period": 3}
     )
@@ -378,10 +419,14 @@ async def test_integer_retention_treated_as_days():
     assert cleaner.retention_seconds == 3 * 86400  # 3 days in seconds
 
 
-def test_string_retention_still_works():
+def test_string_retention_still_works(monkeypatch):
     """
     String values like '3d', '24h', '3600s' should continue to parse correctly.
     """
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+
     cases = [
         ("3d", 3 * 86400),
         ("24h", 24 * 3600),
@@ -580,7 +625,9 @@ async def test_cleanup_releases_lock_after_persistent_batch_failures(monkeypatch
     """Even when batch deletion aborts due to consecutive failures, the pod lock
     must still be released so the next scheduled run isn't permanently blocked."""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+    import litellm.proxy.proxy_server as proxy_server_module
 
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
     monkeypatch.setattr(
         cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 2
     )
