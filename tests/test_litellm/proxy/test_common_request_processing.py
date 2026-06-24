@@ -2022,7 +2022,7 @@ class TestOverrideOpenAIResponseModel:
 
         assert response_obj.model == requested_model
 
-    def test_skips_model_override_for_search_response_object(self):
+    def test_skips_model_override_when_response_has_no_model_attribute(self):
         from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 
         response_obj = SearchResponse(
@@ -2037,20 +2037,6 @@ class TestOverrideOpenAIResponseModel:
         )
 
         assert not hasattr(response_obj, "model")
-
-    def test_skips_model_override_for_search_response_dict(self):
-        response_obj = {
-            "object": "search",
-            "results": [{"title": "t", "url": "http://x.com", "snippet": "s"}],
-        }
-
-        _override_openai_response_model(
-            response_obj=response_obj,
-            requested_model="my-search-tool",
-            log_context="test_context",
-        )
-
-        assert "model" not in response_obj
 
 
 class TestIsAzureModelRouterRequest:

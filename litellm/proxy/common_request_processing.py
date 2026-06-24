@@ -504,14 +504,6 @@ def _is_azure_model_router_request(model: str) -> bool:
     return "model-router" in model_lower or "model_router" in model_lower
 
 
-def _is_search_response(response_obj: Any) -> bool:
-    from litellm.llms.base_llm.search.transformation import SearchResponse
-
-    if isinstance(response_obj, SearchResponse):
-        return True
-    return isinstance(response_obj, dict) and response_obj.get("object") == "search"
-
-
 def _override_openai_response_model(
     *,
     response_obj: Any,
@@ -538,12 +530,8 @@ def _override_openai_response_model(
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     3. If this was a fastest_response batch completion, use the winning model's
        model group name instead of the comma-separated list the client sent.
-    4. Search API responses (`object: search`) — no `model` field in the spec.
     """
     if not requested_model:
-        return
-
-    if _is_search_response(response_obj):
         return
 
     hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
@@ -1702,8 +1690,8 @@ class ProxyBaseLLMRequestProcessing:
                         )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
-        # for OpenAI-compatible responses. Search responses omit `model` by spec.
-        if requested_model_from_client and not _is_search_response(response):
+        # for OpenAI-compatible responses.
+        if requested_model_from_client:
             _override_openai_response_model(
                 response_obj=response,
                 requested_model=requested_model_from_client,
