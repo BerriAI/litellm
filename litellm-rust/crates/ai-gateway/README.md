@@ -4,6 +4,18 @@ A minimal Axum service that fronts OpenAI's realtime API. Clients open a
 WebSocket to `GET /v1/realtime`; the gateway authenticates, selects a deployment,
 dials OpenAI upstream, and splices the two sockets frame-by-frame.
 
+## Crates
+
+`litellm-rust` is exactly three crates (a crate is a **layer**, not a route):
+
+| Crate | Role | Pure / I/O |
+|-------|------|------------|
+| litellm-core | Translation layer — types, route contracts (traits), provider transforms (modules under `providers/`), and the router. Builds requests/responses; no network. | Pure |
+| litellm-ai-gateway | Routes + host — the only crate that touches the network. HTTP/WebSocket I/O (modules under `io/`) plus the Axum server binary (behind the `server` feature). | I/O |
+| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — a thin adapter over litellm-ai-gateway's I/O. | Binding |
+
+Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
 - **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`

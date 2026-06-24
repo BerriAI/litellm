@@ -1,6 +1,6 @@
-use litellm_core::error::{json_type_name, CoreError, CoreResult};
-use litellm_core::ocr::transformation::OcrProviderConfig;
-use litellm_core::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::error::{json_type_name, CoreError, CoreResult};
+use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
 
 const SUPPORTED_OCR_PARAMS: &[&str] = &[
