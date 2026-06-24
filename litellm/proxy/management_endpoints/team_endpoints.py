@@ -2038,7 +2038,7 @@ async def update_team(
 
 def _initialize_budget_windows(
     budget_limits: Optional[Sequence[Union[BudgetLimitEntry, dict]]],
-) -> Optional[List[dict]]:
+) -> Optional[list[dict]]:
     """Stamp each budget window's reset_at and return plain dicts ready for JSON serialization. Returns None when there are no windows so callers can drop or skip the field."""
     if not budget_limits:
         return None
