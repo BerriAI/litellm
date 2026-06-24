@@ -848,6 +848,7 @@ class MCPServerManager:
             get_base_url as get_openapi_base_url,
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            build_openapi_auth_headers,
             load_openapi_spec_async,
             resolve_operation_params,
         )
@@ -856,44 +857,19 @@ class MCPServerManager:
         )
 
         try:
-            # Load OpenAPI spec (async to avoid "called from within a running event loop")
-            spec = await load_openapi_spec_async(spec_path)
-
-            # Use base_url from config if provided, otherwise extract from spec
-            if not base_url:
-                base_url = get_openapi_base_url(spec, spec_path)
-            verbose_logger.info(
-                f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
-            )
-
-            # Get server prefix for tool naming
-            server_prefix = get_server_prefix(server)
-
-            # Build headers from server configuration
-            headers: Dict[str, str] = {}
-
-            # Add authentication headers if configured
-            if server.authentication_token:
-                from litellm.types.mcp import MCPAuth
-
-                if server.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {server.authentication_token}"
-                elif server.auth_type == MCPAuth.api_key:
-                    headers["Authorization"] = f"ApiKey {server.authentication_token}"
-                elif server.auth_type == MCPAuth.basic:
-                    headers["Authorization"] = f"Basic {server.authentication_token}"
-                elif server.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {server.authentication_token}"
-
-            # Add any static headers from server config.
+            # Build headers from server configuration first so a spec hosted
+            # behind the same credential as its endpoints downloads with auth
+            # instead of returning 401.
             #
             # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
             # from each client MCP request; values are applied at call time via
             # `_request_extra_headers` in server.py (not baked in here).
             # `static_headers` is a dict of concrete headers to always send.
-            headers = (
+            headers: Dict[str, str] = (
                 merge_mcp_headers(
-                    extra_headers=headers,
+                    extra_headers=build_openapi_auth_headers(
+                        server.auth_type, server.authentication_token
+                    ),
                     static_headers=server.static_headers,
                 )
                 or {}
@@ -902,6 +878,24 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Using headers for OpenAPI tools (excluding sensitive values): {list(headers.keys())}"
             )
+
+            # Load OpenAPI spec (async to avoid "called from within a running event loop")
+            spec = await load_openapi_spec_async(  # any-ok: OpenAPI spec is arbitrary external JSON
+                spec_path, headers=headers
+            )
+
+            # Use base_url from config if provided, otherwise extract from spec
+            if not base_url:
+                base_url = get_openapi_base_url(
+                    spec,  # any-ok: OpenAPI spec is arbitrary external JSON
+                    spec_path,
+                )
+            verbose_logger.info(
+                f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
+            )
+
+            # Get server prefix for tool naming
+            server_prefix = get_server_prefix(server)
 
             # Extract and register tools from OpenAPI paths
             paths = spec.get("paths", {})

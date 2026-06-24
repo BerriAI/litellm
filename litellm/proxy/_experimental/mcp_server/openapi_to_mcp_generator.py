@@ -86,6 +86,29 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
+def build_openapi_auth_headers(
+    auth_type: Optional[str], auth_value: Optional[str]
+) -> Dict[str, str]:
+    """Map a configured MCP auth_type + token to upstream Authorization headers.
+
+    Shared by the spec fetch and the per-tool request builder so a protected
+    OpenAPI spec (one that requires the same credential as its endpoints) is
+    downloaded with auth instead of returning 401. ``auth_type`` is compared by
+    string value to avoid importing the ``MCPAuth`` enum into this module.
+    """
+    if not auth_value or not auth_type:
+        return {}
+    scheme = {
+        "bearer_token": "Bearer",
+        "api_key": "ApiKey",
+        "basic": "Basic",
+        "token": "token",
+    }.get(auth_type)
+    if scheme is None:
+        return {}
+    return {"Authorization": f"{scheme} {auth_value}"}
+
+
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
@@ -104,10 +127,14 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
+async def load_openapi_spec_async(
+    filepath: str, headers: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r = await async_safe_get(client, filepath)
+        r = await async_safe_get(  # any-ok: async_safe_get is an untyped (-> Any) shared helper
+            client, filepath, headers=headers or {}
+        )
         r.raise_for_status()
         return r.json()
 
