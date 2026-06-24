@@ -1,7 +1,9 @@
+import base64
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import unquote
 
 import httpx
@@ -34,7 +36,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders
+from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
@@ -876,6 +878,61 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return BedrockError(
             status_code=status_code, message=error_message, headers=headers
         )
+
+    def _get_trusted_credentials(self, litellm_params: dict) -> Mapping[str, Any]:
+        snapshot = litellm_params.get("_litellm_internal_model_credentials")
+        if isinstance(snapshot, type(MappingProxyType({}))):
+            return cast(Mapping[str, Any], snapshot)
+        return MappingProxyType({})
+
+    def _extract_s3_uri_from_file_id(self, file_id: str) -> str:
+        try:
+            padded = file_id + "=" * (-len(file_id) % 4)
+            decoded = base64.urlsafe_b64decode(padded).decode()
+            if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+                if "llm_output_file_id," in decoded:
+                    return decoded.split("llm_output_file_id,")[1].split(";")[0]
+        except Exception:
+            pass
+
+        if file_id.startswith("s3://"):
+            return file_id
+
+        raise ValueError("file_id must be a managed LiteLLM S3 file id")
+
+    def _get_configured_s3_buckets(self, litellm_params: dict) -> tuple[str, ...]:
+        trusted = self._get_trusted_credentials(litellm_params)
+
+        input_candidate = trusted.get("s3_bucket_name")
+        input_bucket = (
+            input_candidate
+            if isinstance(input_candidate, str) and input_candidate
+            else os.getenv("AWS_S3_BUCKET_NAME")
+        )
+
+        output_candidate = trusted.get("s3_output_bucket_name")
+        output_bucket = (
+            output_candidate
+            if isinstance(output_candidate, str) and output_candidate
+            else os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+        )
+
+        buckets = tuple(
+            dict.fromkeys(bucket for bucket in (input_bucket, output_bucket) if bucket)
+        )
+        if not buckets:
+            raise ValueError(
+                "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or "
+                "AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+            )
+        return buckets
+
+    def _resolve_s3_region(self, litellm_params: dict) -> str:
+        trusted = self._get_trusted_credentials(litellm_params)
+        trusted_region = trusted.get("s3_region_name")
+        if isinstance(trusted_region, str) and trusted_region:
+            return trusted_region
+        return self._get_aws_region_name(optional_params=litellm_params, model="")
 
     def transform_retrieve_file_request(
         self,

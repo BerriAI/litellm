@@ -2,11 +2,20 @@
 Test bedrock files transformation functionality
 """
 
+import base64
 import json
 import os
+from types import MappingProxyType
+from unittest.mock import patch
 from urllib.parse import unquote, urlparse
 
-from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
+import pytest
+
+from litellm.llms.bedrock.files.transformation import (
+    BedrockFilesConfig,
+    BedrockJsonlFilesTransformation,
+)
+from litellm.types.utils import SpecialEnums
 
 
 class TestBedrockFilesTransformation:
@@ -1173,3 +1182,87 @@ class TestBedrockFilesEmbeddingTransformation:
         assert not BedrockFilesConfig._is_embedding_record(
             {"url": "/v1/responses", "body": {"input": "x"}}
         )
+
+
+def _encode_unified_file_id(s3_uri: str) -> str:
+    unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json",
+        "unified-id",
+        "",
+        s3_uri,
+        "model-id",
+    )
+    return base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
+
+
+def _trusted(**creds) -> dict:
+    return {"_litellm_internal_model_credentials": MappingProxyType(dict(creds))}
+
+
+class TestBedrockFilesConfigResolution:
+    def setup_method(self):
+        self.config = BedrockFilesConfig()
+
+    def test_extract_direct_s3_uri(self):
+        assert (
+            self.config._extract_s3_uri_from_file_id(
+                "s3://b/litellm-batch-outputs/job/output.jsonl"
+            )
+            == "s3://b/litellm-batch-outputs/job/output.jsonl"
+        )
+
+    def test_extract_unified_managed_s3_uri(self):
+        file_id = _encode_unified_file_id(
+            "s3://b/litellm-batch-outputs/job/output.jsonl"
+        )
+        assert (
+            self.config._extract_s3_uri_from_file_id(file_id)
+            == "s3://b/litellm-batch-outputs/job/output.jsonl"
+        )
+
+    def test_extract_rejects_non_s3_file_id(self):
+        with pytest.raises(ValueError, match="managed LiteLLM S3 file id"):
+            self.config._extract_s3_uri_from_file_id("b/private.jsonl")
+
+    def test_buckets_prefer_trusted_snapshot_over_request(self):
+        params = {
+            "s3_bucket_name": "attacker-bucket",
+            **_trusted(s3_bucket_name="safe-bucket"),
+        }
+        with patch.dict(os.environ, {}, clear=True):
+            assert self.config._get_configured_s3_buckets(params) == ("safe-bucket",)
+
+    def test_buckets_include_output_bucket(self):
+        params = _trusted(
+            s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            assert self.config._get_configured_s3_buckets(params) == (
+                "in-bucket",
+                "out-bucket",
+            )
+
+    def test_buckets_fall_back_to_env(self):
+        with patch.dict(
+            os.environ,
+            {"AWS_S3_BUCKET_NAME": "env-in", "AWS_S3_OUTPUT_BUCKET_NAME": "env-out"},
+            clear=True,
+        ):
+            assert self.config._get_configured_s3_buckets({}) == ("env-in", "env-out")
+
+    def test_buckets_require_at_least_one(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValueError, match="S3 bucket_name is required"):
+                self.config._get_configured_s3_buckets({"s3_bucket_name": "ignored"})
+
+    def test_region_prefers_trusted_s3_region_name(self):
+        params = {
+            "aws_region_name": "us-east-1",
+            **_trusted(s3_region_name="eu-central-1"),
+        }
+        assert self.config._resolve_s3_region(params) == "eu-central-1"
+
+    def test_region_falls_back_to_aws_region_name(self):
+        assert self.config._resolve_s3_region(
+            {"aws_region_name": "ap-southeast-2"}
+        ) == ("ap-southeast-2")
