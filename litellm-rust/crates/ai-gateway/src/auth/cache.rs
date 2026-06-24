@@ -67,8 +67,10 @@ impl KeyCache {
             None => return None,
         };
         if expired {
+            // Drop the entry but leave its (now-stale) `order` slot — purging it
+            // here would be an O(n) scan on the hot `get` path under the lock.
+            // The stale slot is reconciled on the next `insert` (see below).
             inner.entries.remove(hash);
-            inner.order.retain(|h| h != hash);
             return None;
         }
         inner.entries.get(hash).map(|(auth, _)| auth.clone())
@@ -78,11 +80,13 @@ impl KeyCache {
     pub fn insert(&self, hash: [u8; 32], auth: UserApiKeyAuth) {
         let mut inner = self.inner.lock().expect("auth cache mutex poisoned");
 
-        // Refreshing an existing key: drop its old position so we don't double-count
-        // it in `order` (which would corrupt FIFO and the capacity check).
-        if inner.entries.contains_key(&hash) {
-            inner.order.retain(|h| h != &hash);
-        }
+        // Reconcile `order` so it tracks exactly the live entries: drop this key's
+        // prior slot (refresh) AND any stale slots left by expiry in `get`. This is
+        // the O(n) pass — kept off the hot `get` path and onto the cache-miss path.
+        // Take `order` out so the closure can read `entries` without aliasing.
+        let mut order = std::mem::take(&mut inner.order);
+        order.retain(|h| h != &hash && inner.entries.contains_key(h));
+        inner.order = order;
 
         while inner.entries.len() >= MAX_ENTRIES {
             match inner.order.pop_front() {
