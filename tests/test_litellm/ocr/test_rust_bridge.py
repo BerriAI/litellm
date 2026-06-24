@@ -124,6 +124,35 @@ class FakeOCRConfig:
         return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
 
 
+def build_prepared_request(
+    *,
+    logging_obj=None,
+    provider_config=None,
+    model="mistral-ocr-latest",
+    document=DOCUMENT,
+    api_key="sk-test",
+    api_base=None,
+    custom_llm_provider="mistral",
+    extra_headers=None,
+    optional_params=None,
+    litellm_params=None,
+    timeout=12.5,
+):
+    return ocr_main._PreparedOCRRequest(
+        model=model,
+        document=document,
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=extra_headers,
+        provider_config=provider_config or FakeOCRConfig(),
+        optional_params=optional_params or {},
+        litellm_params=litellm_params or {},
+        effective_timeout=timeout,
+        litellm_logging_obj=logging_obj or RecordingLogging(),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
@@ -231,18 +260,14 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
 
     response = ocr_main._run_rust_ocr(
         rust_ocr=bridge,
-        logging_obj=logging_obj,
-        provider_config=FakeOCRConfig(),
+        prepared_request=build_prepared_request(
+            logging_obj=logging_obj,
+            api_base="https://proxy.internal",
+            extra_headers={"x-trace-id": "trace-1"},
+            optional_params={"include_image_base64": True},
+            timeout=12.5,
+        ),
         resolve_api_key=lambda _name: None,
-        model="mistral-ocr-latest",
-        document=DOCUMENT,
-        api_key="sk-test",
-        api_base="https://proxy.internal",
-        custom_llm_provider="mistral",
-        extra_headers={"x-trace-id": "trace-1"},
-        optional_params={"include_image_base64": True},
-        litellm_params={},
-        timeout_seconds=12.5,
     )
 
     assert isinstance(response, OCRResponse)
@@ -267,20 +292,10 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
 
     ocr_main._run_rust_ocr(
         rust_ocr=bridge,
-        logging_obj=RecordingLogging(),
-        provider_config=FakeOCRConfig(),
+        prepared_request=build_prepared_request(api_key=None, timeout=None),
         resolve_api_key=lambda name: (
             "sk-from-vault" if name == "MISTRAL_API_KEY" else None
         ),
-        model="mistral-ocr-latest",
-        document=DOCUMENT,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider="mistral",
-        extra_headers=None,
-        optional_params={},
-        litellm_params={},
-        timeout_seconds=None,
     )
 
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
@@ -296,18 +311,13 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
 
     ocr_main._run_rust_ocr(
         rust_ocr=bridge,
-        logging_obj=RecordingLogging(),
-        provider_config=FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY"),
+        prepared_request=build_prepared_request(
+            provider_config=FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY"),
+            model="provider-ocr-model",
+            api_key=None,
+            timeout=None,
+        ),
         resolve_api_key=_resolver,
-        model="provider-ocr-model",
-        document=DOCUMENT,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider="mistral",
-        extra_headers=None,
-        optional_params={},
-        litellm_params={},
-        timeout_seconds=None,
     )
 
     assert resolver_calls == ["PROVIDER_OCR_API_KEY"]
@@ -324,18 +334,8 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
 
     ocr_main._run_rust_ocr(
         rust_ocr=bridge,
-        logging_obj=RecordingLogging(),
-        provider_config=FakeOCRConfig(),
+        prepared_request=build_prepared_request(api_key="sk-explicit", timeout=None),
         resolve_api_key=_resolver,
-        model="mistral-ocr-latest",
-        document=DOCUMENT,
-        api_key="sk-explicit",
-        api_base=None,
-        custom_llm_provider="mistral",
-        extra_headers=None,
-        optional_params={},
-        litellm_params={},
-        timeout_seconds=None,
     )
 
     assert bridge.calls[0]["api_key"] == "sk-explicit"
@@ -348,18 +348,14 @@ def test_run_rust_ocr_runs_pre_call_logging():
 
     ocr_main._run_rust_ocr(
         rust_ocr=RecordingBridge(),
-        logging_obj=logging_obj,
-        provider_config=FakeOCRConfig(),
+        prepared_request=build_prepared_request(
+            logging_obj=logging_obj,
+            api_base="https://api.mistral.ai/v1",
+            extra_headers={"x-trace-id": "trace-1"},
+            optional_params={"include_image_base64": True},
+            timeout=None,
+        ),
         resolve_api_key=lambda _name: None,
-        model="mistral-ocr-latest",
-        document=DOCUMENT,
-        api_key="sk-test",
-        api_base="https://api.mistral.ai/v1",
-        custom_llm_provider="mistral",
-        extra_headers={"x-trace-id": "trace-1"},
-        optional_params={"include_image_base64": True},
-        litellm_params={},
-        timeout_seconds=None,
     )
 
     assert logging_obj.pre_call_kwargs is not None
