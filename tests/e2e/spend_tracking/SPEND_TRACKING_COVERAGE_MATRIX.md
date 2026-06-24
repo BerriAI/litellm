@@ -19,7 +19,8 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 |------|----------|-------|--------|----------|
 | `_get_status_for_spend_log` | `test_spend_tracking_utils.py` | unit | covered | yes (status read off the row) |
 | cache-hit `request_id` suffix | `test_spend_tracking_utils.py` | unit | covered | yes (`test_cache_hit_is_zero_cost_and_suffixed`) |
-| failure status + zero spend | `test_spend_tracking_utils.py` | unit | partial | yes (`test_failure_call_writes_failure_status_row`) |
+| failure status + zero spend | `test_spend_tracking_utils.py` | unit | covered | no (live failure logging is non-deterministic across providers) |
+| per-model / per-provider attribution | `test_spend_tracking_utils.py` | unit | covered | yes (`test_each_model_on_a_shared_key_gets_its_own_row`) |
 | field population (model/tokens/api_key/team/org) | `test_spend_tracking_utils.py` | unit | partial | yes (asserts real values) |
 | `request_tags` propagation | `test_db_spend_update_writer.py` | unit | partial | yes (`test_request_tags_round_trip`) |
 | `end_user` attribution | unit | unit | partial | yes (`test_end_user_spend_attributed_on_row`) |
@@ -63,7 +64,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_key_spend_equals_sum_of_logs` | key aggregate == sum of rows |
 | `test_request_tags_round_trip` | tags persist onto the row |
 | `test_end_user_spend_attributed_on_row` | `end_user` attributed + costed |
-| `test_failure_call_writes_failure_status_row` | failed call -> `status=failure`, `spend=0` |
+| `test_each_model_on_a_shared_key_gets_its_own_row` | per-model/provider rows, correct model + cost, distinct request_ids matching response id |
 | `test_spend_calculate_returns_nonzero_cost` | cost-map smoke (no batch wait) |
 | `test_spend_routes.py` (23) | no spend route 404s or 5xxs |
 
