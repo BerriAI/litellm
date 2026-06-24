@@ -436,7 +436,9 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
+        litellm_params=LiteLLM_Params(
+            model="huggingface/*", custom_llm_provider="huggingface"
+        ),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
@@ -541,3 +543,77 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
     )
 
     assert "openai/gpt-4o-mini" in result
+
+
+def test_get_key_models_all_team_models_recursive_team():
+    """GH#30619: when key and team both have all-team-models,
+    the sentinel should expand to proxy_model_list."""
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames
+
+    user_api_key_dict = type(
+        "obj", (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": "team-1",
+            "team_models": [SpecialModelNames.all_team_models.value],
+        },
+    )()
+    proxy_model_list = ["model-a", "model-b"]
+    result = get_key_models(user_api_key_dict, proxy_model_list, {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b"}
+
+
+def test_get_key_models_all_team_models_keeps_mixed_team_entries():
+    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.proxy._types import SpecialModelNames
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": "team-1",
+            "team_models": [
+                SpecialModelNames.all_team_models.value,
+                "restricted-model",
+            ],
+        },
+    )()
+    result = get_key_models(user_api_key_dict, ["model-a", "model-b"], {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b", "restricted-model"}
+
+
+def test_get_team_models_all_team_models_expands():
+    """GH#30619: all-team-models in team_models should expand."""
+    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.proxy._types import SpecialModelNames
+
+    result = get_team_models(
+        [SpecialModelNames.all_team_models.value],
+        ["model-a", "model-b"],
+        {},
+    )
+    assert SpecialModelNames.all_team_models.value not in result
+    assert set(result) == {"model-a", "model-b"}
+
+
+def test_get_team_models_all_team_models_expands_with_access_groups():
+    """GH#30619: all-team-models with include_model_access_groups
+    should include access group keys."""
+    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.proxy._types import SpecialModelNames
+
+    result = get_team_models(
+        [SpecialModelNames.all_team_models.value],
+        ["model-a", "model-b"],
+        {"group-1": ["g1-model"], "group-2": ["g2-model"]},
+        include_model_access_groups=True,
+    )
+    assert SpecialModelNames.all_team_models.value not in result
+    assert "model-a" in result
+    assert "model-b" in result
+    assert "group-1" in result
+    assert "group-2" in result

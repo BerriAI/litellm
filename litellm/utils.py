@@ -192,6 +192,7 @@ from litellm.types.utils import (
     ProviderField,
     ProviderSpecificModelInfo,
     RawRequestTypedDict,
+    SandboxProviders,
     SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
@@ -301,6 +302,7 @@ if TYPE_CHECKING:
         BaseGoogleGenAIGenerateContentConfig,
     )
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.sandbox.transformation import BaseSandboxConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.llms.base_llm.text_to_speech.transformation import (
         BaseTextToSpeechConfig,
@@ -3189,7 +3191,7 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-    elif provider_config is not None:  # handles fireworks ai, and any future providers
+    elif provider_config is not None:  # custom audio transcription config
         supported_params = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
@@ -8913,8 +8915,6 @@ class ProviderConfigManager:
             )
 
             return AzureSpeechAudioTranscriptionConfig()
-        if litellm.LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
@@ -9728,6 +9728,24 @@ class ProviderConfigManager:
         if config_class is None:
             return None
         return config_class()
+
+    @staticmethod
+    def get_provider_sandbox_config(
+        provider: SandboxProviders,
+    ) -> BaseSandboxConfig | None:
+        """
+        Get sandbox (code execution) configuration for a given provider.
+        """
+        from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+        from litellm.llms.opensandbox.sandbox.transformation import (
+            OpenSandboxSandboxConfig,
+        )
+
+        if provider == SandboxProviders.E2B:
+            return E2BSandboxConfig()
+        if provider == SandboxProviders.OPENSANDBOX:
+            return OpenSandboxSandboxConfig()
+        return None
 
     @staticmethod
     def get_provider_text_to_speech_config(

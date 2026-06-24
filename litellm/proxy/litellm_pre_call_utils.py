@@ -108,6 +108,7 @@ def parse_cache_control(cache_control):
 
 LITELLM_METADATA_ROUTES = (
     "batches",
+    "bedrock",
     "/v1/messages",
     "responses",
     "files",
@@ -141,6 +142,20 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "service_callback",
     "logger_fn",
     "litellm_disabled_callbacks",
+    # Agentic-loop control fields. These bound or drive an interceptor's agentic
+    # loop (web search, compression, code interpreter) and are server-controlled.
+    # A client-supplied value would forge loop depth/cycle state, mark an
+    # interception as active (triggering sandbox code execution without the
+    # native tool ever being present), force the completed response to be
+    # re-wrapped as a synthetic stream the caller never asked for, or raise the
+    # loop ceiling to drive many upstream model calls and sandbox executions
+    # from a single request.
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_code_interpreter_interception_active",
+    "_code_interpreter_interception_converted_stream",
+    "_code_interpreter_interception_sandbox_key",
+    "max_agentic_loops",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (
@@ -1224,6 +1239,27 @@ class LiteLLMProxyRequestSetup:
         return tags
 
     @staticmethod
+    def pre_seed_litellm_metadata_for_route(
+        request_data: dict,
+        route: str,
+    ) -> None:
+        """Pre-seed ``litellm_metadata`` for routes that track tags there.
+
+        Routes in ``LITELLM_METADATA_ROUTES`` (e.g. Bedrock, ``/v1/messages``,
+        responses, batches, files) store request-scoped tag metadata in
+        ``litellm_metadata`` rather than the provider-facing ``metadata``
+        field. ``get_metadata_variable_name_from_kwargs`` picks the target
+        based on whether ``litellm_metadata`` is present, so it must be
+        seeded BEFORE any tag merge runs; otherwise header tags from
+        ``apply_client_tag_policy_pre_auth`` land in ``metadata`` while
+        key tags from ``apply_key_tags_pre_auth`` and the read in
+        ``_tag_max_budget_check`` resolve to ``litellm_metadata``, leaving
+        header tags invisible to per-tag budget enforcement.
+        """
+        if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
+            request_data.setdefault("litellm_metadata", {})
+
+    @staticmethod
     def apply_key_tags_pre_auth(
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1454,8 +1490,7 @@ async def add_litellm_data_to_request(
         _metadata_variable_name=_metadata_variable_name,
     )
 
-    # Add headers to metadata for guardrails to access (fixes #17477)
-    # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
+    # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(
         data[_metadata_variable_name], dict
     ):
