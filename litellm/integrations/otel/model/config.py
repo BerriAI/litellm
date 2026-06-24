@@ -1,6 +1,7 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
 from enum import Enum
+from functools import lru_cache
 from typing import Any, List
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -47,7 +48,12 @@ class _OTelV2Flag(BaseSettings):
     enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
 
 
+@lru_cache(maxsize=1)
 def is_otel_v2_enabled() -> bool:
+    # Resolved once at startup and cached: constructing the pydantic-settings
+    # model re-scans the environment and cost ~28us, which on the proxy hot path
+    # (auth, logging-callback setup) compounded into a measurable throughput
+    # regression. Tests that toggle the env must call ``is_otel_v2_enabled.cache_clear()``.
     return _OTelV2Flag().enabled
 
 

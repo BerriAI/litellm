@@ -104,6 +104,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
+        instruction: Optional[str] = None,
     ) -> Dict:
         """
         Map Cohere rerank params to IBM watsonx.ai rerank params

@@ -34,6 +34,12 @@ def _dest(**overrides) -> FocusMavvrikDestination:
     return FocusMavvrikDestination(prefix="mavvrik_focus_exports", config=config)
 
 
+def _patch_resp(status: int = 204) -> MagicMock:
+    r = MagicMock()
+    r.status_code = status
+    return r
+
+
 def test_missing_api_key_raises():
     with pytest.raises(ValueError, match="MAVVRIK_API_KEY"):
         FocusMavvrikDestination(
@@ -127,6 +133,8 @@ async def test_large_content_uploads_in_multiple_chunks():
     chunk2_resp = MagicMock()
     chunk2_resp.status_code = 200
 
+    patch_resp = _patch_resp(204)
+
     mock_http = MagicMock()
     mock_http.client = MagicMock()
     mock_http.client.request = AsyncMock(
@@ -136,6 +144,7 @@ async def test_large_content_uploads_in_multiple_chunks():
             init_resp,
             chunk1_resp,
             chunk2_resp,
+            patch_resp,
         ]
     )
     dest._http = mock_http
@@ -152,14 +161,19 @@ async def test_large_content_uploads_in_multiple_chunks():
         filename="usage.csv",
     )
 
-    # register + get_signed_url + init + 2 chunk PUTs = 5 calls
-    assert mock_http.client.request.call_count == 5
+    # register + get_signed_url + init + 2 chunk PUTs + PATCH = 6 calls
+    assert mock_http.client.request.call_count == 6
 
-    # Check Content-Range headers
-    put_calls = mock_http.client.request.call_args_list[3:]
+    # Check Content-Range headers on the chunk PUTs (calls 3 and 4)
+    put_calls = mock_http.client.request.call_args_list[3:5]
     assert "bytes" in put_calls[0].kwargs["headers"]["Content-Range"]
     assert "/*" in put_calls[0].kwargs["headers"]["Content-Range"]  # intermediate
     assert "/*" not in put_calls[1].kwargs["headers"]["Content-Range"]  # final
+
+    # Verify the PATCH call advanced metricsMarker
+    patch_call = mock_http.client.request.call_args_list[5]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert "metricsMarker" in patch_call.kwargs["json"]
 
 
 @pytest.mark.asyncio
@@ -180,12 +194,14 @@ async def test_deliver_calls_register_get_url_and_upload():
     upload_resp = MagicMock()
     upload_resp.status_code = 200
 
+    patch_resp = _patch_resp(204)
+
     mock_http = MagicMock()
     mock_http.client = MagicMock()
-    # All 4 calls go through self._http.client.request:
-    # 1. register, 2. get_signed_url, 3. GCS session init POST, 4. GCS PUT
+    # All 5 calls go through self._http.client.request:
+    # 1. register, 2. get_signed_url, 3. GCS session init POST, 4. GCS PUT, 5. PATCH marker
     mock_http.client.request = AsyncMock(
-        side_effect=[register_resp, signed_url_resp, init_resp, upload_resp]
+        side_effect=[register_resp, signed_url_resp, init_resp, upload_resp, patch_resp]
     )
     dest._http = mock_http
 
@@ -196,10 +212,14 @@ async def test_deliver_calls_register_get_url_and_upload():
     )
 
     assert dest._registered is True
-    assert mock_http.client.request.call_count == 4
+    assert mock_http.client.request.call_count == 5
     # Verify Content-Range header was set on the PUT
     put_call = mock_http.client.request.call_args_list[3]
     assert "Content-Range" in put_call.kwargs["headers"]
+    # Verify PATCH was called last with metricsMarker
+    patch_call = mock_http.client.request.call_args_list[4]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert "metricsMarker" in patch_call.kwargs["json"]
 
 
 @pytest.mark.asyncio
@@ -224,17 +244,19 @@ async def test_register_called_only_once_across_multiple_deliveries():
 
     mock_http = MagicMock()
     mock_http.client = MagicMock()
-    # First delivery:  register, get_signed_url, GCS init, GCS PUT
-    # Second delivery: get_signed_url, GCS init, GCS PUT  (register skipped)
+    # First delivery:  register, get_signed_url, GCS init, GCS PUT, PATCH
+    # Second delivery: get_signed_url, GCS init, GCS PUT, PATCH  (register skipped)
     mock_http.client.request = AsyncMock(
         side_effect=[
             register_resp,
             _signed_url_resp(),
             init_resp,
             upload_resp,
+            _patch_resp(204),
             _signed_url_resp(),
             init_resp,
             upload_resp,
+            _patch_resp(204),
         ]
     )
     dest._http = mock_http
@@ -243,8 +265,8 @@ async def test_register_called_only_once_across_multiple_deliveries():
     await dest.deliver(content=b"header\nrow1\n", time_window=window, filename="1.csv")
     await dest.deliver(content=b"header\nrow2\n", time_window=window, filename="2.csv")
 
-    # 7 total: register(1) + [get_url+init+put](2) × 2 deliveries
-    assert mock_http.client.request.call_count == 7
+    # 9 total: register(1) + [get_url+init+put+patch](4) × 2 deliveries
+    assert mock_http.client.request.call_count == 9
     # First call was register
     first_call = mock_http.client.request.call_args_list[0]
     assert first_call.kwargs["method"] == "POST"
@@ -749,3 +771,43 @@ async def test_gcs_session_cancelled_on_chunk_failure():
     delete_call = calls[4]
     assert delete_call.kwargs["method"] == "DELETE"
     assert "storage.googleapis.com/session" in delete_call.kwargs["url"]
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_marker_warns_on_non_410_error():
+    """_update_metrics_marker must log a warning on any >=400 (non-410) status but not raise."""
+    dest = _dest()
+
+    fail_resp = MagicMock()
+    fail_resp.status_code = 500
+    fail_resp.text = "Internal Server Error"
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(return_value=fail_resp)
+    dest._http = mock_http
+
+    # Must not raise — warning only
+    await dest._update_metrics_marker(1234567890)
+    assert mock_http.client.request.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_marker_raises_on_410():
+    """_update_metrics_marker must raise RuntimeError and reset _registered on 410."""
+    dest = _dest()
+    dest._registered = True
+
+    resp_410 = MagicMock()
+    resp_410.status_code = 410
+    resp_410.text = "Gone"
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(return_value=resp_410)
+    dest._http = mock_http
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await dest._update_metrics_marker(1234567890)
+
+    assert dest._registered is False

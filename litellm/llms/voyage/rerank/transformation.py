@@ -39,6 +39,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
+        instruction: Optional[str] = None,
     ) -> Dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
         optional_params: Dict[str, Any] = {"query": query, "documents": documents}

@@ -149,8 +149,8 @@ class MavvrikFocusLogger(FocusLogger):
 
         On each run:
         1. Register with Mavvrik → get metricsMarker (last successfully ingested date)
-        2. If metricsMarker is behind yesterday, catch up missed dates (capped at
-           _MAX_CATCHUP_DAYS to avoid runaway loops on long outages)
+        2. If metricsMarker is behind yesterday (or 0/None for a fresh connector),
+           catch up missed dates (capped at _MAX_CATCHUP_DAYS)
         3. Export yesterday (today's daily window)
 
         This ensures a failed export on day N is automatically retried on day N+1
@@ -177,13 +177,21 @@ class MavvrikFocusLogger(FocusLogger):
 
         last_ingested = _parse_metrics_marker(marker)
 
-        # Catch up missed dates, capped at _MAX_CATCHUP_DAYS
-        if last_ingested and last_ingested < yesterday:
-            # Never go further back than _MAX_CATCHUP_DAYS from yesterday
-            earliest_catchup = yesterday - timedelta(days=self._MAX_CATCHUP_DAYS - 1)
-            catch_up_date = max(last_ingested + timedelta(days=1), earliest_catchup)
+        # Catch up missed dates, capped at _MAX_CATCHUP_DAYS.
+        # last_ingested=None means metricsMarker=0 (fresh connector, never ingested) —
+        # treat the same as being _MAX_CATCHUP_DAYS behind so we export all available history.
+        earliest_catchup = yesterday - timedelta(days=self._MAX_CATCHUP_DAYS - 1)
+        if last_ingested is None or last_ingested < yesterday:
+            catch_up_date = (
+                earliest_catchup
+                if last_ingested is None
+                else max(last_ingested + timedelta(days=1), earliest_catchup)
+            )
 
-            if last_ingested + timedelta(days=1) < earliest_catchup:
+            if (
+                last_ingested is not None
+                and last_ingested + timedelta(days=1) < earliest_catchup
+            ):
                 verbose_proxy_logger.warning(
                     "Mavvrik FOCUS export: metricsMarker is more than %d days behind "
                     "(%s). Catching up from %s only; earlier data will not be re-exported.",
@@ -197,18 +205,24 @@ class MavvrikFocusLogger(FocusLogger):
                     "Mavvrik FOCUS export: catching up missed date %s",
                     catch_up_date.date(),
                 )
+                # Use now as end_time for catch-up windows too — rows for old dates
+                # may have been flushed to DB well after their calendar day ended.
+                catch_up_end = min(catch_up_date + timedelta(days=1), now)
                 window = FocusTimeWindow(
                     start_time=catch_up_date,
-                    end_time=catch_up_date + timedelta(days=1),
+                    end_time=catch_up_end,
                     frequency="daily",
                 )
                 await self._export_window(window=window, limit=None)
                 catch_up_date += timedelta(days=1)
 
-        # Export yesterday's window (the normal daily run)
+        # Export yesterday's window (the normal daily run).
+        # Use `now` as end_time so spend rows flushed after midnight are included.
+        # LiteLLM's DailyUserSpend rows for a given date keep getting updated_at
+        # bumped as the flush job runs; capping at midnight would miss those updates.
         window = FocusTimeWindow(
             start_time=yesterday,
-            end_time=yesterday + timedelta(days=1),
+            end_time=now,
             frequency="daily",
         )
         await self._export_window(window=window, limit=None)
@@ -253,6 +267,21 @@ class MavvrikFocusLogger(FocusLogger):
             )
             if type(cb) is MavvrikFocusLogger
         ]
+        if not loggers and "mavvrik" in litellm.callbacks:
+            # The logger is registered as the string "mavvrik" but hasn't been
+            # instantiated yet (lazy init happens on first LLM call). Force it now
+            # so the scheduler can register the daily export job at startup.
+            from litellm.litellm_core_utils.litellm_logging import (  # noqa: PLC0415
+                _init_custom_logger_compatible_class,
+            )
+
+            instance = _init_custom_logger_compatible_class(
+                logging_integration="mavvrik",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            if isinstance(instance, MavvrikFocusLogger):
+                loggers = [instance]
         if not loggers:
             verbose_proxy_logger.debug(
                 "No MavvrikFocusLogger registered; skipping scheduler"

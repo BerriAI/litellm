@@ -80,6 +80,7 @@ from litellm.constants import (
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
+    request_timeout_explicitly_set as request_timeout_explicitly_set,
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
@@ -1405,6 +1406,7 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .ocr.rust_bridge import use_litellm_rust
 from .rag.main import *
 from .sandbox.main import *
 from .search.main import *

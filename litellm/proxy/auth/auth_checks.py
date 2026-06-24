@@ -699,6 +699,11 @@ async def common_checks(
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+                request_data=request_body,
+                route=route,
+            )
+
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
                 user_api_key_dict=valid_token,
@@ -3684,9 +3689,18 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            # name the key in the error so operators don't have to reverse-map
+            # spend back to a key; key_name is the masked form (last 4 chars)
+            key_label = valid_token.key_alias or "key"
+            key_descriptor = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 

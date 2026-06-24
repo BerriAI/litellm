@@ -629,6 +629,7 @@ class ModelResponseIterator:
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
         Dict[str, Any],
+        Optional[str],
     ]:
         """
         Helper function to handle the content block delta
@@ -636,6 +637,7 @@ class ModelResponseIterator:
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields = {}
+        reasoning_content: Optional[str] = None
         content_block = ContentBlockDelta(**chunk)  # type: ignore
         thinking_blocks: List[
             Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
@@ -670,14 +672,24 @@ class ModelResponseIterator:
             thinking_content = content_block["delta"].get("thinking")
             if isinstance(thinking_content, str) and thinking_content:
                 self.reasoning_content_chunks.append(thinking_content)
-            thinking_blocks = [
-                ChatCompletionThinkingBlock(
-                    type="thinking",
-                    thinking=thinking_content or "",
-                    signature=str(content_block["delta"].get("signature") or ""),
-                )
-            ]
-            provider_specific_fields["thinking_blocks"] = thinking_blocks
+                reasoning_content = thinking_content
+
+            signature = content_block["delta"].get("signature")
+            if isinstance(signature, str) and signature:
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking="".join(
+                            cast(str, block["delta"].get("thinking"))
+                            for block in self.content_blocks
+                            if isinstance(block["delta"].get("thinking"), str)
+                        ),
+                        signature=signature,
+                    )
+                ]
+                provider_specific_fields["thinking_blocks"] = thinking_blocks
+                if reasoning_content is None:
+                    reasoning_content = ""
         elif (
             "content" in content_block["delta"]
             and content_block["delta"].get("type") == "compaction_delta"
@@ -688,25 +700,13 @@ class ModelResponseIterator:
                 "content": content_block["delta"]["content"],
             }
 
-        return text, tool_use, thinking_blocks, provider_specific_fields
-
-    def _handle_reasoning_content(
-        self,
-        thinking_blocks: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ],
-    ) -> Optional[str]:
-        """
-        Handle the reasoning content
-        """
-        reasoning_content = None
-        for block in thinking_blocks:
-            thinking_content = cast(Optional[str], block.get("thinking"))
-            if reasoning_content is None:
-                reasoning_content = ""
-            if thinking_content is not None:
-                reasoning_content += thinking_content
-        return reasoning_content
+        return (
+            text,
+            tool_use,
+            thinking_blocks,
+            provider_specific_fields,
+            reasoning_content,
+        )
 
     def _handle_redacted_thinking_content(
         self,
@@ -802,11 +802,8 @@ class ModelResponseIterator:
                     tool_use,
                     thinking_blocks,
                     provider_specific_fields,
+                    reasoning_content,
                 ) = self._content_block_delta_helper(chunk=chunk)
-                if thinking_blocks:
-                    reasoning_content = self._handle_reasoning_content(
-                        thinking_blocks=thinking_blocks
-                    )
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start

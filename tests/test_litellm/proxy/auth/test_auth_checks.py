@@ -1788,6 +1788,60 @@ async def test_reject_clientside_metadata_tags_allows_key_tags_without_client_ta
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+        "/v1/messages",
+    ],
+)
+async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metadata(
+    route,
+):
+    """GH#30629: on routes that track tags in litellm_metadata (bedrock, /v1/messages,
+    responses, ...) key-level tags must land in litellm_metadata, never in the
+    provider-facing metadata field (Bedrock rejects non-user_id metadata with HTTP 400).
+    The auth-time pre-seed keys off LITELLM_METADATA_ROUTES, so hardcoding a single route
+    or dropping the pre-seed makes apply_key_tags_pre_auth fall back to metadata; this
+    guards that regression.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {"messages": [{"role": "user", "content": "test"}]}
+
+    mock_request = MagicMock(spec=Request)
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        metadata={"tags": ["engineering"]},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        result = await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+        )
+
+    assert result is True
+    assert request_body["litellm_metadata"]["tags"] == ["engineering"]
+    assert "metadata" not in request_body
+
+
+@pytest.mark.asyncio
 async def test_virtual_key_soft_budget_check_with_user_obj():
     """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
     alert_triggered = False
@@ -3774,4 +3828,55 @@ async def test_inference_route_still_enforces_team_budget():
             proxy_logging_obj=AsyncMock(),
             valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
             request=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_error_names_the_key():
+    """BudgetExceededError for a virtual key must name the key (alias + masked key)
+    so operators don't have to reverse-map a spend figure back to a key."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_alias="payments-prod",
+        key_name="sk-...um_g",
+        max_budget=10.0,
+        spend=0.0,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=25.0),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    message = str(exc_info.value)
+    assert "payments-prod" in message
+    assert "sk-...um_g" in message
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_not_exceeded_does_not_raise():
+    """Spend below the configured budget must not raise."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_alias="payments-prod",
+        max_budget=10.0,
+        spend=0.0,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=1.0),
+    ):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
         )

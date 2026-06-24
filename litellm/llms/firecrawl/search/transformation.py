@@ -61,7 +61,13 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("FIRECRAWL_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("FIRECRAWL_API_KEY",),
+            base_env_var="FIRECRAWL_API_BASE",
+            default_api_base=self.FIRECRAWL_API_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "FIRECRAWL_API_KEY is not set. Set `FIRECRAWL_API_KEY` environment variable."

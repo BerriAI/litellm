@@ -461,6 +461,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
+        "/v1/mcp/tools",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -2975,6 +2976,10 @@ class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
     no_default_models = "no-default-models"
+
+
+class SpecialMCPServerNames(enum.Enum):
+    no_mcp_servers = "no-mcp-servers"
 
 
 class SpecialProxyStrings(enum.Enum):

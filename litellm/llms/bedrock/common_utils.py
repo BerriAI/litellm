@@ -601,6 +601,15 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     return model
 
 
+def is_bedrock_application_inference_profile_arn(model: str) -> bool:
+    """
+    An application inference profile ARN ends in an opaque id with no provider
+    substring, so the invoke path cannot resolve a provider from it. Such ARNs
+    must use the converse route, which needs no provider.
+    """
+    return ":application-inference-profile/" in model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
@@ -620,6 +629,31 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
     # e.g. "us.anthropic.claude-opus-4-6-v1[1m]" -> "us.anthropic.claude-opus-4-6-v1"
     model = re.sub(r"\[\w+\]$", "", model)
     return model
+
+
+MANTLE_MESSAGES_PATH = "/anthropic/v1/messages"
+
+
+def build_mantle_messages_url(
+    api_base: Optional[str],
+    aws_bedrock_runtime_endpoint: Optional[str],
+    region: str,
+) -> str:
+    """Build the bedrock-mantle Anthropic /messages URL.
+
+    Honors an explicit endpoint override (``api_base``, then
+    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
+    endpoints are reachable; otherwise falls back to the public regional host.
+    The mantle messages path is appended unless the override already carries it,
+    so callers can pass either the host or the full messages URL.
+    """
+    override = api_base or aws_bedrock_runtime_endpoint
+    if override:
+        base = override.rstrip("/")
+        if base.endswith(MANTLE_MESSAGES_PATH):
+            return base
+        return f"{base}{MANTLE_MESSAGES_PATH}"
+    return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 
 def get_bedrock_base_model(model: str) -> str:
@@ -889,6 +923,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if _model_after_bedrock.startswith(
             "nova-2/"
         ) or _model_after_bedrock.startswith("nova/"):
+            return "converse"
+
+        if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)
