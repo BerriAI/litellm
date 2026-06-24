@@ -253,8 +253,19 @@ impl RealtimePool {
                 let have = warm.get(&key).map(Vec::len).unwrap_or(0);
                 self.config.target_size.saturating_sub(have)
             };
-            for _ in 0..needed {
-                if let Ok(conn) = warm_one(&key).await {
+            if needed == 0 {
+                continue;
+            }
+            // Dial the missing sockets CONCURRENTLY. A sequential loop here makes
+            // a full refill cost `needed × handshake` (~needed × 350 ms), which
+            // can't keep up with a high connect rate — the pool drains faster
+            // than it refills and most connects miss. Firing the dials together
+            // refills in ~one handshake window, keeping warm supply ≈ peak
+            // concurrent connects so the sub-ms warm handoff becomes the median,
+            // not the lucky-hit tail.
+            let dials = (0..needed).map(|_| warm_one(&key));
+            for conn in futures_util::future::join_all(dials).await {
+                if let Ok(conn) = conn {
                     self.warm
                         .lock()
                         .unwrap()
