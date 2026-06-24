@@ -33,7 +33,7 @@ route/model permissions are enforced in exactly one place. A client presents
 - **Master key** (`LITELLM_MASTER_KEY`) → treated as proxy admin, checked locally
   (constant-time compare). No network call.
 - **Virtual key** (`sk-…`) → the gateway POSTs `{api_key, route, model}` to the proxy's
-  **`POST /internal/v1/auth/verify`**, which runs the proxy's real `user_api_key_auth`
+  **`POST /v1/rust_control_plane/authentication`**, which runs the proxy's real `user_api_key_auth`
   (key lookup, expiry, budget, rate-limit, and route **+ model** permissions via
   `can_key_call_model`) and returns the resolved identity. **By default every
   connection re-verifies** (no caching), so budget/block/rate-limit are enforced
@@ -50,7 +50,7 @@ Data plane → control plane is itself authenticated with a **dedicated data-pla
 without it. Set the **same** secret on both sides.
 
 ```text
-client ──Bearer sk-…──▶ ai-gateway ──POST /internal/v1/auth/verify──▶ LiteLLM proxy
+client ──Bearer sk-…──▶ ai-gateway ──POST /v1/rust_control_plane/authentication──▶ LiteLLM proxy
                          (X-LiteLLM-Data-Plane-Key)                    user_api_key_auth()
                          re-verify per connection (cache opt-in)   → UserAPIKeyAuth | 401
 ```
@@ -61,14 +61,14 @@ On the **LiteLLM proxy** (control plane) — expose the verify endpoint:
 
 ```bash
 export LITELLM_DATA_PLANE_KEY=<dedicated-secret>   # a NEW secret, not the master key
-litellm --config proxy_config.yaml                 # serves POST /internal/v1/auth/verify
+litellm --config proxy_config.yaml                 # serves POST /v1/rust_control_plane/authentication
 ```
 
 On the **gateway** (data plane) — point it at the proxy:
 
 ```bash
 export LITELLM_DATA_PLANE_KEY=<same-secret>
-export LITELLM_AUTH_VERIFY_URL=https://<proxy-host>/internal/v1/auth/verify
+export LITELLM_AUTH_VERIFY_URL=https://<proxy-host>/v1/rust_control_plane/authentication
 ./litellm-ai-gateway
 ```
 
@@ -117,7 +117,7 @@ overridden at deploy time (e.g. a Render secret file mounted at the same path).
 | `LITELLM_CONFIG_PATH` | yes (config mode) | — | Path to the config.yaml the gateway loads its `model_list` from. The Docker image defaults this to `/app/config.yaml`. |
 | `LITELLM_MASTER_KEY` | yes | — | Admin bearer token (checked locally, no proxy call). Unset ⇒ the master-key path is disabled. |
 | `LITELLM_DATA_PLANE_KEY` | for virtual keys | — | Dedicated secret the gateway sends as `X-LiteLLM-Data-Plane-Key` to authenticate itself to the proxy's verify endpoint. **Must match the proxy's `LITELLM_DATA_PLANE_KEY`.** Not the master key. |
-| `LITELLM_AUTH_VERIFY_URL` | for virtual keys | `http://localhost:4000/internal/v1/auth/verify` | The proxy's verify endpoint the gateway delegates virtual-key auth to. |
+| `LITELLM_AUTH_VERIFY_URL` | for virtual keys | `http://localhost:4000/v1/rust_control_plane/authentication` | The proxy's verify endpoint the gateway delegates virtual-key auth to. |
 | `LITELLM_AUTH_CACHE_TTL_SECS` | no | `0` | Verified-key cache TTL. **`0` = off (default)** → every connection re-verifies (budget/rate-limit enforced each time); cheap for realtime since auth is per-connection. Set `> 0` only for high-RPS per-request routes, trading budget/rate-limit freshness for fewer proxy calls. |
 | `OPENAI_API_KEY` | yes | — | Upstream OpenAI key. Referenced by config.yaml as `os.environ/OPENAI_API_KEY` for the gateway→OpenAI dial. |
 | `HOST` | no | `127.0.0.1` | **Set to `0.0.0.0` in any container/deploy** or external traffic is refused. |

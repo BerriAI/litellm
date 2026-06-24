@@ -1,14 +1,15 @@
-"""Unit tests for the internal data-plane auth endpoints."""
+"""Unit tests for the Rust control-plane auth endpoints."""
 
 import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.internal_auth_endpoints import (
+from litellm.proxy.rust_control_plane.auth_endpoints import (
     DATA_PLANE_KEY_ENV_VAR,
     DATA_PLANE_KEY_HEADER,
     VerifyKeyRequest,
     require_data_plane_key,
+    router,
     verify_key,
 )
 
@@ -21,7 +22,7 @@ def _make_request(headers: dict) -> Request:
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/internal/v1/auth/verify",
+        "path": "/v1/rust_control_plane/authentication",
         "headers": raw_headers,
     }
     return Request(scope)
@@ -77,6 +78,13 @@ def test_require_data_plane_key_passes_when_correct(monkeypatch):
     assert require_data_plane_key(request) is None
 
 
+def test_router_mounts_auth_verify_under_rust_control_plane():
+    assert any(
+        getattr(route, "path", None) == "/v1/rust_control_plane/authentication"
+        for route in router.routes
+    )
+
+
 @pytest.mark.asyncio
 async def test_verify_key_returns_model_dump(monkeypatch):
     expected_auth = UserAPIKeyAuth(
@@ -104,6 +112,7 @@ async def test_verify_key_returns_model_dump(monkeypatch):
     assert captured["api_key"] == "Bearer sk-test-key"
     # Validation runs against a synthetic request carrying the gateway's route...
     assert captured["request"].url.path == "/v1/realtime"
+    assert captured["request"].headers["authorization"] == "Bearer sk-test-key"
     # ...and the requested model in the body, so model-access checks enforce it.
     assert (await captured["request"].json())["model"] == "gpt-realtime"
     assert result == expected_auth.model_dump(exclude_none=True, mode="json")
@@ -127,6 +136,27 @@ async def test_verify_key_omits_model_when_absent(monkeypatch):
     await verify_key(body=body)
     # No model requested → empty body, not {"model": null}.
     assert (await captured["request"].json()) == {}
+
+
+@pytest.mark.asyncio
+async def test_verify_key_does_not_double_prefix_existing_bearer(monkeypatch):
+    captured = {}
+
+    async def fake_user_api_key_auth(request, api_key):
+        captured["api_key"] = api_key
+        captured["request"] = request
+        return UserAPIKeyAuth(api_key="hashed-key")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+        fake_user_api_key_auth,
+    )
+
+    body = VerifyKeyRequest(api_key="Bearer sk-test-key", route="/v1/realtime")
+    await verify_key(body=body)
+
+    assert captured["api_key"] == "Bearer sk-test-key"
+    assert captured["request"].headers["authorization"] == "Bearer sk-test-key"
 
 
 @pytest.mark.asyncio

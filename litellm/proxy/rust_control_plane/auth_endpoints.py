@@ -1,5 +1,5 @@
 """
-Internal data-plane auth endpoints.
+Rust control-plane auth endpoints.
 
 This module exposes the authentication seam used by the Rust ai-gateway
 (the data plane). The Rust gateway terminates client connections and needs to
@@ -68,7 +68,9 @@ class VerifyKeyRequest(BaseModel):
     model: Optional[str] = None
 
 
-def _synthetic_request(route: str, api_key: str, model: Optional[str]) -> Request:
+def _synthetic_request(
+    route: str, authorization_header: str, model: Optional[str]
+) -> Request:
     """
     Build a minimal ASGI request standing in for the client's real call, so
     ``user_api_key_auth`` evaluates the key against the intended data-plane
@@ -86,7 +88,7 @@ def _synthetic_request(route: str, api_key: str, model: Optional[str]) -> Reques
         "path": route,
         "raw_path": route.encode(),
         "headers": [
-            (b"authorization", f"Bearer {api_key}".encode()),
+            (b"authorization", authorization_header.encode()),
             (b"content-type", b"application/json"),
         ],
         "query_string": b"",
@@ -97,11 +99,11 @@ def _synthetic_request(route: str, api_key: str, model: Optional[str]) -> Reques
     return Request(scope, receive)
 
 
-router = APIRouter()
+router = APIRouter(prefix="/v1/rust_control_plane", tags=["rust control plane"])
 
 
 @router.post(
-    "/internal/v1/auth/verify",
+    "/authentication",
     dependencies=[Depends(require_data_plane_key)],
     # Internal data-plane route: keep it out of the public OpenAPI spec / docs
     # (and the generated UI schema.d.ts). It's not a client- or UI-facing API.
@@ -132,7 +134,7 @@ async def verify_key(body: VerifyKeyRequest) -> dict[str, Any]:
         body.api_key if body.api_key.startswith("Bearer ") else f"Bearer {body.api_key}"
     )
     synthetic_request = _synthetic_request(
-        route=body.route, api_key=bearer_key, model=body.model
+        route=body.route, authorization_header=bearer_key, model=body.model
     )
     try:
         auth = await user_api_key_auth(request=synthetic_request, api_key=bearer_key)

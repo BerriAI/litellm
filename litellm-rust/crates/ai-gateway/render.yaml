@@ -35,8 +35,8 @@ services:
       # must match the proxy's LITELLM_DATA_PLANE_KEY. NOT the master key.
       - key: LITELLM_DATA_PLANE_KEY
         sync: false
-      # The proxy's internal verify endpoint, e.g.
-      # https://<proxy-host>/internal/v1/auth/verify
+      # The proxy's Rust control-plane verify endpoint, e.g.
+      # https://<proxy-host>/v1/rust_control_plane/authentication
       - key: LITELLM_AUTH_VERIFY_URL
         sync: false
       # Referenced by config.yaml as os.environ/OPENAI_API_KEY for the upstream dial.

@@ -27,7 +27,7 @@ const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 4001;
 
 /// Default endpoint on the Python proxy that verifies virtual keys.
-const DEFAULT_AUTH_VERIFY_URL: &str = "http://localhost:4000/internal/v1/auth/verify";
+const DEFAULT_AUTH_VERIFY_URL: &str = "http://localhost:4000/v1/rust_control_plane/authentication";
 
 #[tokio::main]
 async fn main() {
