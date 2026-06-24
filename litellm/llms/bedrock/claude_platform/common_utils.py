@@ -1,14 +1,10 @@
-from typing import Literal, Optional, Protocol, Tuple
+from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
-
-
-class _SupportsGet(Protocol):
-    def get(self, key: str, default: object = None) -> object: ...
-
+from litellm.types.router import GenericLiteLLMParams
 
 CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
     "aws-external-anthropic"
@@ -80,7 +76,7 @@ def filter_claude_platform_request_body(
 
 
 def resolve_unsupported_override(
-    litellm_params: _SupportsGet,
+    litellm_params: Union[dict[str, object], GenericLiteLLMParams],
 ) -> Optional[frozenset[str]]:
     """Read ``claude_platform_unsupported_params`` from litellm_params.
 

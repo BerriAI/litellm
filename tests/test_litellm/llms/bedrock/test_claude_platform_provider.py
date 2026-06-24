@@ -5,6 +5,8 @@ import httpx
 import pytest
 from botocore.credentials import Credentials
 
+from litellm.types.router import GenericLiteLLMParams
+
 
 def _anthropic_response(url: str) -> httpx.Response:
     return httpx.Response(
@@ -237,7 +239,7 @@ def test_bedrock_claude_platform_messages_config_round_trips_native_body():
         model="claude_platform/claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         anthropic_messages_optional_request_params={"max_tokens": 10},
-        litellm_params={},
+        litellm_params=GenericLiteLLMParams(),
         headers=headers,
     )
 
@@ -370,7 +372,7 @@ def test_claude_platform_messages_strips_auth_params_from_request_body():
         model="claude_platform/claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         anthropic_messages_optional_request_params=input_params,
-        litellm_params={},
+        litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
@@ -444,7 +446,7 @@ def test_claude_platform_messages_strips_unsupported_context_management_param():
         model="claude_platform/claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         anthropic_messages_optional_request_params=input_params,
-        litellm_params={},
+        litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
@@ -526,7 +528,9 @@ def test_claude_platform_messages_unsupported_override_allows_context_management
             "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
             "max_tokens": 10,
         },
-        litellm_params={"claude_platform_unsupported_params": []},
+        litellm_params=GenericLiteLLMParams.model_validate(
+            {"claude_platform_unsupported_params": []}
+        ),
         headers={},
     )
 
