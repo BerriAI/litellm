@@ -127,3 +127,28 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
     assert captured["allow_env_credentials"] is False
     assert captured["cached_service_name"] == "langfuse"
     assert captured["cached_logging_obj"] is logger
+
+
+def test_dynamic_langfuse_credentials_are_passed_handles_none():
+    """Regression test: _dynamic_langfuse_credentials_are_passed must not crash when standard_callback_dynamic_params is None.
+
+    When Langfuse is configured via environment variables (no per-request dynamic params),
+    standard_callback_dynamic_params is None, not {}. The function must not raise
+    AttributeError: 'NoneType' object has no attribute 'get'.
+    """
+    # Should return False (no dynamic params passed), not raise AttributeError
+    result = LangFuseHandler._dynamic_langfuse_credentials_are_passed(None)
+    assert result is False
+
+
+def test_get_dynamic_langfuse_logging_config_handles_none():
+    """Regression test: get_dynamic_langfuse_logging_config must not crash when standard_callback_dynamic_params is None.
+
+    When Langfuse is configured via environment variables, standard_callback_dynamic_params is None.
+    The function should return a config with None values (relying on env var fallback downstream).
+    """
+    # Should not raise AttributeError
+    config = LangFuseHandler.get_dynamic_langfuse_logging_config(None)
+    assert config["langfuse_public_key"] is None
+    assert config["langfuse_secret"] is None
+    assert config["langfuse_host"] is None
