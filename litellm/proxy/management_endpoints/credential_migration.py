@@ -32,9 +32,13 @@ config rows, and the SSO config table.
 
 import json
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import PrismaClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _ALGO_AES_GCM,
     _ENCRYPTION_ALGORITHM_SETTING,
@@ -299,10 +303,13 @@ async def _migrate_callback_vars_table(
     table_name: Literal["team", "verification_token"],
     dry_run: bool,
 ) -> LocationReport:
-    """Migrate ``metadata.logging[*].callback_vars.<sensitive>`` on the team or
-    verification-token table. Reuses the proven ``decrypt_callback_vars`` /
-    ``encrypt_callback_vars`` transforms (which understand the selective,
-    prefix-marked shape and leave legacy plaintext alone until re-encrypted).
+    """Migrate callback-var credentials on the team or verification-token table.
+
+    Covers both shapes the ``decrypt_callback_vars`` / ``encrypt_callback_vars``
+    transforms understand: ``metadata.logging[*].callback_vars.<sensitive>`` and
+    the top-level ``metadata.callback_settings.callback_vars.<sensitive>``. Reuses
+    those proven transforms (selective, prefix-marked; legacy plaintext is left
+    alone until re-encrypted).
     """
     from litellm.proxy.common_utils.callback_utils import (
         _CALLBACK_VAR_ENCRYPTED_PREFIX,
@@ -322,7 +329,9 @@ async def _migrate_callback_vars_table(
     rows = await table.find_many()
     for row in rows or []:
         metadata = getattr(row, "metadata", None)
-        if not isinstance(metadata, dict) or "logging" not in metadata:
+        if not isinstance(metadata, dict) or (
+            "logging" not in metadata and "callback_settings" not in metadata
+        ):
             continue
 
         total = _count_callback_values(metadata)
@@ -365,6 +374,27 @@ async def _migrate_callback_vars_table(
     return report
 
 
+def _iter_callback_var_dicts(metadata: dict[str, object]):
+    """Yield each ``callback_vars`` dict in a metadata structure.
+
+    Mirrors ``_transform_callback_vars``: credentials live both under
+    ``logging[*].callback_vars`` and under the top-level
+    ``callback_settings.callback_vars``. Counting only the former would let the
+    walker report success while leaving ``callback_settings`` secrets in legacy
+    format at rest.
+    """
+    for entry in metadata.get("logging", []) or []:
+        if isinstance(entry, dict):
+            cvs = entry.get("callback_vars")
+            if isinstance(cvs, dict):
+                yield cvs
+    callback_settings = metadata.get("callback_settings")
+    if isinstance(callback_settings, dict):
+        cvs = callback_settings.get("callback_vars")
+        if isinstance(cvs, dict):
+            yield cvs
+
+
 def _count_callback_v2(metadata: dict[str, object]) -> int:
     """Count callback-var values carrying the ``v2:gcm:`` marker (allowing the
     ``litellm_enc::`` callback prefix in front of it)."""
@@ -373,12 +403,7 @@ def _count_callback_v2(metadata: dict[str, object]) -> int:
     )
 
     count = 0
-    for entry in metadata.get("logging", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        cvs = entry.get("callback_vars")
-        if not isinstance(cvs, dict):
-            continue
+    for cvs in _iter_callback_var_dicts(metadata):
         for v in cvs.values():
             if not isinstance(v, str):
                 continue
@@ -391,18 +416,13 @@ def _count_callback_v2(metadata: dict[str, object]) -> int:
 
 
 def _count_callback_values(metadata: dict[str, object]) -> int:
-    """Count every callback-var string value across all ``logging`` entries.
+    """Count every callback-var string value across both supported shapes.
 
     This is the ``scanned`` denominator for the callback-vars walker: one per
     field examined, regardless of whether it is plaintext, legacy, or v2.
     """
     count = 0
-    for entry in metadata.get("logging", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        cvs = entry.get("callback_vars")
-        if not isinstance(cvs, dict):
-            continue
+    for cvs in _iter_callback_var_dicts(metadata):
         for v in cvs.values():
             if isinstance(v, str):
                 count += 1
@@ -430,15 +450,21 @@ _COVERED_TABLE_SPECS = [
 
 
 def _iter_encrypted_strings(obj: object):
-    """Yield every string leaf in a nested dict/list/scalar structure."""
-    if isinstance(obj, str):
-        yield obj
-    elif isinstance(obj, dict):
-        for v in obj.values():
-            yield from _iter_encrypted_strings(v)
-    elif isinstance(obj, list):
-        for v in obj:
-            yield from _iter_encrypted_strings(v)
+    """Yield every string leaf in a nested dict/list/scalar structure.
+
+    Iterative (explicit stack) on purpose: recursion here is banned by the
+    code-quality recursive-function detector (unbounded nesting has caused CPU
+    spikes in the past), and an explicit stack walks arbitrary depth safely.
+    """
+    stack: list[object] = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            yield cur
+        elif isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
 
 
 def _classify_into_report(report: LocationReport, value: str) -> None:
@@ -558,9 +584,14 @@ async def _migrate_covered_tables(
     pre = {r.location: r for r in await _scan_covered_tables(prisma_client)}
 
     current_key = _get_salt_key()
+    if current_key is None:
+        raise RuntimeError(
+            "Cannot migrate covered tables: no salt key / master key is set. "
+            "Set LITELLM_SALT_KEY before migrating."
+        )
     await _rotate_master_key(
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
+        prisma_client=cast("PrismaClient", prisma_client),
+        user_api_key_dict=cast("UserAPIKeyAuth", user_api_key_dict),
         current_master_key=current_key,
         new_master_key=current_key,  # same key, algorithm-only switch
     )

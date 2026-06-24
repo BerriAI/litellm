@@ -316,6 +316,47 @@ async def test_callback_vars_walker_dry_run_reports_legacy(salt_key, monkeypatch
     client.db.litellm_teamtable.update.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_callback_vars_walker_migrates_callback_settings_shape(
+    salt_key, monkeypatch
+):
+    """Regression: credentials under ``metadata.callback_settings.callback_vars``
+    with no top-level ``logging`` key must be migrated, not skipped.
+
+    The walker previously early-continued on ``"logging" not in metadata``, so
+    this credential shape (which ``encrypt_callback_vars`` does encrypt) was left
+    in legacy format at rest while the migration still reported success.
+    """
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    legacy_meta = encrypt_callback_vars(
+        {
+            "callback_settings": {
+                "callback_vars": {"gcs_path_service_account": "sa-secret"}
+            }
+        }
+    )
+    _enable_aes(monkeypatch)
+    assert "logging" not in legacy_meta  # the shape that used to be skipped
+
+    team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
+    client = MagicMock()
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    client.db.litellm_teamtable.update = AsyncMock()
+
+    report = await cm._migrate_callback_vars_table(client, "team", dry_run=False)
+
+    assert report.migrated == 1
+    assert report.scanned == 1
+    client.db.litellm_teamtable.update.assert_awaited_once()
+    written = json.loads(
+        client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
+    )
+    inner = written["callback_settings"]["callback_vars"]["gcs_path_service_account"]
+    assert "v2:gcm:" in inner
+
+
 # --------------------------- covered-tables scanner ---------------------------
 
 

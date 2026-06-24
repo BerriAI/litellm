@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Literal, Optional
+from typing import Literal, Optional, cast
 
 from litellm._logging import verbose_proxy_logger
 
@@ -99,7 +99,7 @@ def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
             if _get_encryption_algorithm() == _ALGO_AES_GCM:
                 # AES path: the v2:gcm: output is already a base64url string, so it
                 # is returned directly with no extra base64 wrapper.
-                return _encrypt_aes_gcm(value=value, signing_key=signing_key)  # type: ignore
+                return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
             encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
@@ -129,7 +129,7 @@ def decrypt_value_helper(
             # Versioned AES-256-GCM values are detected before any base64 decode.
             # The prefix is the algorithm tag the legacy nacl format never carried.
             if value.startswith(_V2_GCM_PREFIX):
-                return _decrypt_aes_gcm(value=value, signing_key=signing_key)  # type: ignore
+                return _decrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
             # Try URL-safe base64 decoding first (new format)
             # Fall back to standard base64 decoding for backwards compatibility (old format)
