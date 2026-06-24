@@ -1,5 +1,5 @@
 //! A `CustomLogger` that ships finished events to the LiteLLM Python proxy's
-//! `/v1/callbacks/logs` endpoint.
+//! `/v1/rust_control_plane/logs` endpoint.
 //!
 //! The callback path is non-blocking: `log_success_event` / `log_failure_event`
 //! build a `LogRecord` and `try_send` it onto a bounded channel, returning a
@@ -16,8 +16,8 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
 use crate::constants::{
-    CALLBACK_LOGS_PATH, DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS,
-    DEFAULT_MAX_BATCH_SIZE, DEFAULT_PROXY_BASE_URL,
+    DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
+    DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH,
 };
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::{
@@ -80,7 +80,11 @@ impl LiteLLMPythonProxyAPILogger {
     pub fn start(base: String, master_key: String) -> Arc<Self> {
         let tunables = EgressTunables::from_env();
         let (sink, receiver) = mpsc::channel::<LogRecord>(tunables.channel_capacity);
-        let url = format!("{}{}", base.trim_end_matches('/'), CALLBACK_LOGS_PATH);
+        let url = format!(
+            "{}{}",
+            base.trim_end_matches('/'),
+            RUST_CONTROL_PLANE_LOGS_PATH
+        );
         let client = Client::new();
         tokio::spawn(worker_loop(
             receiver,

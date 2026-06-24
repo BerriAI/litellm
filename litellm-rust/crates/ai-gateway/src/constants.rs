@@ -9,9 +9,9 @@
 /// `LITELLM_PROXY_BASE_URL` is unset.
 pub(crate) const DEFAULT_PROXY_BASE_URL: &str = "http://localhost:4000";
 
-/// The logs ingest path appended to the proxy base. Not a tunable — it is the
-/// proxy's API contract.
-pub(crate) const CALLBACK_LOGS_PATH: &str = "/v1/callbacks/logs";
+/// The logs ingest path appended to the proxy base. Not a tunable; it is the
+/// proxy's API contract (the rust-control-plane router on the Python proxy).
+pub(crate) const RUST_CONTROL_PLANE_LOGS_PATH: &str = "/v1/rust_control_plane/logs";
 
 /// Default bounded channel depth for the log-egress worker.
 /// Override: `LITELLM_LOG_CHANNEL_CAPACITY`.
