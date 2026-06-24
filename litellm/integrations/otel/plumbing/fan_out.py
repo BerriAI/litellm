@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 _MAX_CACHED_PROCESSORS = 256
 
 
-def _processor_key(destination: "OtelDestination") -> tuple:
+def _processor_key(destination: OtelDestination) -> tuple:
     return (destination.endpoint, tuple(sorted(destination.headers.items())))
 
 
@@ -58,9 +58,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._owner = owner_callback_name
         # Built lazily so we avoid importing the providers module at class
         # definition time (which would create a circular import with routing).
-        self._processors: "OrderedDict[tuple, SpanProcessor]" = OrderedDict()
+        self._processors: OrderedDict[tuple, SpanProcessor] = OrderedDict()
 
-    def on_start(self, span: "Span", parent_context: Context | None = None) -> None:
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         return None
 
     def on_end(self, span: ReadableSpan) -> None:
@@ -115,7 +115,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 all_ok = False
         return all_ok
 
-    def _processor_for(self, destination: "OtelDestination") -> "SpanProcessor | None":
+    def _processor_for(self, destination: OtelDestination) -> SpanProcessor | None:
         key = _processor_key(destination)
         cached = self._processors.get(key)
         if cached is not None:
@@ -171,7 +171,7 @@ def _is_genai_span(span: ReadableSpan) -> bool:
 # Backend-specific Resource attributes required by the destination. Arize
 # rejects spans missing ``model_id`` (or the alternative ``arize.project.name``
 # span attribute); other backends accept the proxy's default Resource.
-def _destination_resource_attrs(destination: "OtelDestination") -> dict[str, str]:
+def _destination_resource_attrs(destination: OtelDestination) -> dict[str, str]:
     if destination.callback_name == "arize":
         project = os.environ.get("ARIZE_PROJECT_NAME")
         if project:
@@ -180,7 +180,7 @@ def _destination_resource_attrs(destination: "OtelDestination") -> dict[str, str
 
 
 def _with_destination_resource(
-    span: ReadableSpan, destination: "OtelDestination"
+    span: ReadableSpan, destination: OtelDestination
 ) -> ReadableSpan:
     """Return ``span`` with its Resource augmented by the destination's required
     attributes. The original span object is left untouched; a shallow wrapper
