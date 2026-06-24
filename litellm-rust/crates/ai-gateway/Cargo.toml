@@ -22,12 +22,13 @@ futures-util.workspace = true
 serde_json.workspace = true
 axum = { workspace = true, features = ["ws"], optional = true }
 serde = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 subtle = { workspace = true, optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [features]
 default = []
-server = ["dep:axum", "dep:subtle", "dep:serde"]
+server = ["dep:axum", "dep:subtle", "dep:serde", "dep:sha2"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
 python-config = ["dep:pyo3"]
