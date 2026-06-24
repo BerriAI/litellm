@@ -14,12 +14,17 @@ set -e
 ARGS_B64="$1"
 DECODED="$(echo "$ARGS_B64" | base64 -d)"
 mkdir -p /tmp/web
+# Remove any stale result so a fetcher can't read a previous run's output while
+# this run is still in flight (the served file 404s until the run completes).
+rm -f /tmp/web/result.txt
 
-# Run the leg; capture stdout (the SUMMARY + per-connection breakdown) to the
-# served file. wsbench prints no secrets. `|| true` so httpd still comes up to
+# Run the leg; capture stdout (the SUMMARY + per-connection breakdown) to a temp
+# file, then atomically move it into place so /result.txt only ever exists once
+# fully written. wsbench prints no secrets. `|| true` so httpd still comes up to
 # serve whatever was captured even if the run errors.
 # shellcheck disable=SC2086 -- intentional word-splitting of the flag list
-/usr/local/bin/wsbench $DECODED > /tmp/web/result.txt 2>&1 || true
-echo "__WSBENCH_DONE__" >> /tmp/web/result.txt
+/usr/local/bin/wsbench $DECODED > /tmp/web/result.partial 2>&1 || true
+echo "__WSBENCH_DONE__" >> /tmp/web/result.partial
+mv /tmp/web/result.partial /tmp/web/result.txt
 
 exec httpd -f -p "${PORT:-10000}" -h /tmp/web
