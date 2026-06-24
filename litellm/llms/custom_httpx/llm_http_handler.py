@@ -2,7 +2,6 @@ import asyncio
 import json
 import ssl
 from functools import lru_cache
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -18,6 +17,7 @@ from typing import (
     cast,
     get_type_hints,
 )
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
@@ -29,8 +29,8 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -109,6 +109,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
@@ -134,7 +135,6 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
-from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
