@@ -8558,6 +8558,10 @@ class ProviderConfigManager:
             ),
             LlmProviders.GRADIENT_AI: (lambda: litellm.GradientAIConfig(), False),
             LlmProviders.NSCALE: (lambda: litellm.NscaleConfig(), False),
+            LlmProviders.KLUSTER_AI: (
+                lambda: litellm.KlusterAIConfig(),
+                False,
+            ),
             LlmProviders.HEROKU: (lambda: litellm.HerokuChatConfig(), False),
             LlmProviders.OCI: (lambda: litellm.OCIChatConfig(), False),
             LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),

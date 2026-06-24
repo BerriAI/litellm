@@ -331,6 +331,9 @@ def get_llm_provider(
                     elif endpoint == litellm.NscaleConfig.API_BASE_URL:
                         custom_llm_provider = "nscale"
                         dynamic_api_key = litellm.NscaleConfig.get_api_key()
+                    elif endpoint == "api.kluster.ai/v1":
+                        custom_llm_provider = "kluster_ai"
+                        dynamic_api_key = litellm.KlusterAIConfig.get_api_key()
                     elif endpoint == "dashscope-intl.aliyuncs.com/compatible-mode/v1":
                         custom_llm_provider = "dashscope"
                         dynamic_api_key = get_secret_str("DASHSCOPE_API_KEY")
@@ -917,6 +920,13 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
+    elif custom_llm_provider == "kluster_ai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.KlusterAIConfig()._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
         )
     elif custom_llm_provider == "heroku":
