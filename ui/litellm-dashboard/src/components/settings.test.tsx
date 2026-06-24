@@ -1,7 +1,18 @@
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
 import Settings from "./settings";
+
+// Settings (and its CloudZero cost-tracking child) renders react-query hooks, so
+// every render must sit under a QueryClientProvider. Retries off so a failed
+// query surfaces immediately instead of hanging the test.
+const renderSettings = (props: Record<string, unknown>) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <Settings {...(props as any)} />
+    </QueryClientProvider>,
+  );
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -36,6 +47,13 @@ vi.mock("./email_settings", () => ({
 vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
   __esModule: true,
   default: () => <div>Mock CloudZero Cost Tracking</div>,
+}));
+
+// Settings now pulls logging-destination credentials via the useCredentials
+// react-query hook; the test renders <Settings> without a QueryClientProvider,
+// so stub the hook to a stable empty result instead of standing up a client.
+vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
+  useCredentials: () => ({ data: { credentials: [] }, refetch: vi.fn() }),
 }));
 
 // Polyfill ResizeObserver for components relying on it in tests
@@ -86,7 +104,7 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -94,7 +112,7 @@ describe("Settings", () => {
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
@@ -105,7 +123,7 @@ describe("Settings", () => {
   });
 
   it("should load callback configs from the backend when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
@@ -113,35 +131,31 @@ describe("Settings", () => {
   });
 
   it("should display edit modal with fields when edit is clicked", async () => {
+    // Use a config callback that is NOT a logging-destination backend (langfuse,
+    // arize, etc. are filtered from the table via NON_CALLBACK_LOGGING_IDS and
+    // edited through the destination flow instead). Datadog is a plain config
+    // callback, so it still renders a row with the legacy Test/Edit/Delete actions.
     const mockCallback = {
-      name: "langfuse",
+      name: "datadog",
       variables: {
-        LANGFUSE_PUBLIC_KEY: "test-public-key",
-        LANGFUSE_SECRET_KEY: "test-secret-key",
-        LANGFUSE_HOST: "https://test.langfuse.com",
-        SLACK_WEBHOOK_URL: null,
-        OPENMETER_API_KEY: null,
+        DD_API_KEY: "test-api-key",
+        DD_SITE: "us5.datadoghq.com",
       },
     };
 
     const mockCallbackConfig = {
-      id: "langfuse",
-      displayName: "Langfuse",
+      id: "datadog",
+      displayName: "Datadog",
       dynamic_params: {
-        LANGFUSE_PUBLIC_KEY: {
-          type: "text",
-          ui_name: "Public Key",
-          required: true,
-        },
-        LANGFUSE_SECRET_KEY: {
+        DD_API_KEY: {
           type: "password",
-          ui_name: "Secret Key",
+          ui_name: "API Key",
           required: true,
         },
-        LANGFUSE_HOST: {
+        DD_SITE: {
           type: "text",
-          ui_name: "Host",
-          required: false,
+          ui_name: "Site",
+          required: true,
         },
       },
     };
@@ -149,10 +163,10 @@ describe("Settings", () => {
     mockGetCallbacksCall.mockResolvedValue({
       callbacks: [mockCallback],
       available_callbacks: {
-        langfuse: {
-          litellm_callback_name: "langfuse",
-          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
-          ui_callback_name: "Langfuse",
+        datadog: {
+          litellm_callback_name: "datadog",
+          litellm_callback_params: ["DD_API_KEY", "DD_SITE"],
+          ui_callback_name: "Datadog",
         },
       },
       alerts: [],
@@ -160,14 +174,14 @@ describe("Settings", () => {
 
     mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
 
-    const { getByText, container } = render(<Settings {...defaultProps} />);
+    const { getByText, container } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
     await waitFor(() => {
-      expect(getByText("Langfuse")).toBeInTheDocument();
+      expect(getByText("Datadog")).toBeInTheDocument();
     });
 
     const actionsCell = container.querySelector('[class*="flex justify-end gap-2"]');
@@ -188,14 +202,13 @@ describe("Settings", () => {
     });
 
     await waitFor(() => {
-      expect(getByText("Public Key")).toBeInTheDocument();
-      expect(getByText("Secret Key")).toBeInTheDocument();
-      expect(getByText("Host")).toBeInTheDocument();
+      expect(getByText("API Key")).toBeInTheDocument();
+      expect(getByText("Site")).toBeInTheDocument();
     });
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
