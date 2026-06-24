@@ -17,6 +17,7 @@ mod state;
 use std::sync::Arc;
 
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
+use litellm_providers::realtime_pool::{upstream_key, PoolConfig, RealtimePool};
 
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
@@ -48,10 +49,31 @@ async fn main() {
     let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
     let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
 
+    let router = Arc::new(build_router());
+
+    // Build the pre-warmed realtime pool and register each deployment's upstream
+    // so the background replenisher starts warming it. `REALTIME_POOL_SIZE=0`
+    // yields a disabled pool → every connect fresh-dials (original behavior).
+    let pool_config = PoolConfig::from_env();
+    let realtime_pool = RealtimePool::spawn(pool_config);
+    if pool_config.enabled() {
+        register_deployments(&router, &realtime_pool);
+        eprintln!(
+            "realtime connection pool enabled: target {} warm sockets/key, max idle {}s",
+            pool_config.target_size,
+            pool_config.max_idle.as_secs()
+        );
+    } else {
+        eprintln!(
+            "realtime connection pool disabled (REALTIME_POOL_SIZE=0); fresh-dialing each connect"
+        );
+    }
+
     let state = AppState {
-        router: Arc::new(build_router()),
+        router,
         master_key,
         loggers: Arc::new(loggers),
+        realtime_pool,
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
@@ -64,6 +86,27 @@ async fn main() {
     axum::serve(listener, routes::app(state))
         .await
         .expect("server error");
+}
+
+/// Register every deployment's upstream key with the pool so the replenisher
+/// pre-warms it. Mirrors `service::run`'s key derivation (strip `openai/`, resolve
+/// api_key); deployments whose key can't be resolved are skipped (they fresh-dial
+/// and surface the auth error on the request path, as before).
+fn register_deployments(router: &Router, pool: &RealtimePool) {
+    for deployment in router.deployments() {
+        let params = &deployment.litellm_params;
+        let provider_model = params
+            .model
+            .strip_prefix("openai/")
+            .unwrap_or(&params.model);
+        if let Some(key) = upstream_key(
+            provider_model,
+            params.api_key.as_deref(),
+            params.api_base.as_deref(),
+        ) {
+            pool.register(key);
+        }
+    }
 }
 
 /// Resolve `PORT`, warning (rather than silently defaulting) on an invalid value.

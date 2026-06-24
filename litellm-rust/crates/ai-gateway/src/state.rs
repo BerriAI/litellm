@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use litellm_core::router::Router;
+use litellm_providers::realtime_pool::RealtimePool;
 
 use crate::integrations::custom_logger::CustomLogger;
 
@@ -13,4 +14,8 @@ pub struct AppState {
     pub master_key: Option<Arc<str>>,
     /// Logging callbacks fanned out at the end of each realtime session.
     pub loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    /// Pre-warmed upstream realtime connection pool. Disabled
+    /// (`RealtimePool::disabled()`) when `REALTIME_POOL_SIZE=0`, in which case
+    /// every realtime connect fresh-dials exactly as before.
+    pub realtime_pool: Arc<RealtimePool>,
 }

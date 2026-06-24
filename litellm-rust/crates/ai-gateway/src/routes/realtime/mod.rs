@@ -19,6 +19,7 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
+use litellm_providers::realtime_pool::RealtimePool;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
@@ -75,10 +76,11 @@ async fn handle(
     }
 
     let router = state.router.clone();
+    let pool = state.realtime_pool.clone();
     let loggers = state.loggers.clone();
     let master_key = state.master_key.clone();
     let model = query.model;
-    Ok(ws.on_upgrade(move |socket| bridge(socket, router, loggers, master_key, model)))
+    Ok(ws.on_upgrade(move |socket| bridge(socket, router, pool, loggers, master_key, model)))
 }
 
 /// Adapt the axum socket (text frames) to the typed-event `Stream`/`Sink` the
@@ -86,13 +88,14 @@ async fn handle(
 ///
 /// This is also the realtime-logging seam: every upstream→client event (the
 /// direction carrying `session.created` and `response.done` with usage) is fed
-/// to a [`RealTimeStreaming`] collector as it passes through `client_out`. The
+/// to a [`RealTimeStreaming`] collector via the splice's `observe` callback. The
 /// observe is O(1) and never buffers frames. When the splice returns (any of the
 /// three break paths — client disconnect, upstream close, idle timeout), we flush
 /// one logging payload to the registered callbacks.
 async fn bridge(
     socket: WebSocket,
     router: Arc<ModelRouter>,
+    pool: Arc<RealtimePool>,
     loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
     master_key: Option<Arc<str>>,
     model: String,
@@ -141,9 +144,11 @@ async fn bridge(
 
     // The observe closure borrows `&mut collector` for the duration of the
     // splice; the borrow ends when `run` returns, freeing the collector for the
-    // single post-session `log_messages` flush.
+    // single post-session `log_messages` flush. `run` picks a pooled (warm) or
+    // fresh upstream — observe fires on the upstream arm either way.
     let result = service::run(
         &router,
+        &pool,
         &model,
         None,
         |event: &RealtimeEvent| collector.observe(event),
