@@ -56,7 +56,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpecialMCPServerNames, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -2801,6 +2801,19 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+        # A key scoped to no MCP servers opts out of every MCP path. Enforce it
+        # here too, since toolset scoping replaces mcp_servers and would otherwise
+        # drop the sentinel. Checked before the admin branch, mirroring
+        # get_allowed_mcp_servers.
+        original_op = user_api_key_auth.object_permission
+        if original_op is not None and SpecialMCPServerNames.no_mcp_servers.value in (
+            original_op.mcp_servers or []
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="API key is scoped to no MCP servers; toolset access is denied.",
+            )
 
         # Access control: non-admin keys must have this toolset in their grant list.
         # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
