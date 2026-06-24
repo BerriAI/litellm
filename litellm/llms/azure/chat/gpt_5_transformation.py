@@ -20,18 +20,33 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
-        """Override to handle gpt5_series/ prefix used for Azure routing.
-
-        The parent class calls ``_supports_factory(model, custom_llm_provider=None)``
-        which fails to resolve ``gpt5_series/gpt-5.1`` to the correct Azure model
-        entry. Strip the prefix and prepend ``azure/`` so the lookup finds
-        ``azure/gpt-5.1`` in model_prices_and_context_window.json.
-        """
+        """Override to handle gpt5_series/ prefix and custom Azure deployment names."""
         if model.startswith(cls.GPT5_SERIES_ROUTE):
             model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
         elif not model.startswith("azure/"):
             model = "azure/" + model
-        return super()._supports_reasoning_effort_level(model, level)
+
+        if super()._supports_reasoning_effort_level(model, level):
+            return True
+
+        # Custom Azure deployment names (e.g. "azure/gpt-5.1_2025-11-13_global") are
+        # not registry keys; extract the canonical version prefix so capability lookups
+        # behave consistently with how base_model is honored elsewhere in litellm.
+        deployment_name = model.split("/", 1)[-1]
+        if deployment_name.startswith("gpt-5"):
+            rest = deployment_name[5:]
+            if rest and rest[0] == ".":
+                i = 1
+                while i < len(rest) and rest[i].isdigit():
+                    i += 1
+                canonical_name = "gpt-5" + rest[:i]
+            else:
+                canonical_name = "gpt-5"
+            canonical = "azure/" + canonical_name
+            if canonical != model:
+                return super()._supports_reasoning_effort_level(canonical, level)
+
+        return False
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
