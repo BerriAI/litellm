@@ -1,40 +1,54 @@
-//! Gateway authentication.
+//! Gateway authentication, as an axum **extractor** (the idiomatic pattern —
+//! keeps handlers clean and auth testable).
 //!
-//! For now this is a single **master key**: any caller presenting it as a bearer
-//! token may invoke the gateway. There is no per-key auth, budgets, or rate
-//! limits here — those are delegated to the Python proxy in a later phase.
+//! For now this is a single **master key**: any caller presenting it as
+//! `Authorization: Bearer <key>` may invoke the gateway. Per-key auth, budgets,
+//! and rate limits are delegated to the Python proxy in a later phase.
 //!
-//! Routes import [`authorize`] and call it before doing any work, so the auth
-//! policy lives in one place rather than being re-implemented per route.
+//! A handler opts in by adding [`RequireMasterKey`] to its arguments; auth then
+//! runs during extraction, before the handler body. Routes never re-implement it.
 
+use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::request::Parts;
+use axum::http::StatusCode;
 use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
 
-/// Require the configured master key as an `Authorization: Bearer <key>` token.
+/// Extractor that requires the configured master key as a bearer token.
 ///
-/// Fails closed: with no master key configured the gateway rejects every request
-/// with `500` (a permanent misconfiguration, not a transient outage). A
-/// missing/incorrect token is `401`. The comparison is constant-time.
-pub fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
-    let Some(expected) = state.master_key.as_deref() else {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "gateway auth not configured (set LITELLM_MASTER_KEY)".to_string(),
-        ));
-    };
-    let provided = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim);
-    match provided {
-        Some(token) if bool::from(token.as_bytes().ct_eq(expected.as_bytes())) => Ok(()),
-        _ => Err((
-            StatusCode::UNAUTHORIZED,
-            "missing or invalid bearer token".to_string(),
-        )),
+/// Rejections: `500` when no master key is configured (permanent
+/// misconfiguration, not a transient outage); `401` on a missing/incorrect
+/// token. The comparison is constant-time.
+pub struct RequireMasterKey;
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for RequireMasterKey {
+    type Rejection = (StatusCode, String);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let Some(expected) = state.master_key.as_deref() else {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "gateway auth not configured (set LITELLM_MASTER_KEY)".to_string(),
+            ));
+        };
+        let provided = parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::trim);
+        match provided {
+            Some(token) if bool::from(token.as_bytes().ct_eq(expected.as_bytes())) => Ok(Self),
+            _ => Err((
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid bearer token".to_string(),
+            )),
+        }
     }
 }
