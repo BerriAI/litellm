@@ -11,6 +11,8 @@
 
 use std::sync::Arc;
 
+use litellm_ai_gateway::auth::client::python::PythonAuthClient;
+use litellm_ai_gateway::auth::{KeyAuthenticator, KeyCache};
 use litellm_ai_gateway::io::realtime_pool::{upstream_key, PoolConfig, RealtimePool};
 use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
@@ -23,6 +25,9 @@ use litellm_ai_gateway::python;
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 4001;
+
+/// Default endpoint on the Python proxy that verifies virtual keys.
+const DEFAULT_AUTH_VERIFY_URL: &str = "http://localhost:4000/internal/v1/auth/verify";
 
 #[tokio::main]
 async fn main() {
@@ -59,10 +64,30 @@ async fn main() {
         );
     }
 
+    // v0 auth backend: delegate virtual-key verification to the Python proxy. The
+    // trait object (`Arc<dyn KeyAuthenticator>`) is the swap seam — a native Rust
+    // backend can replace this without touching routes or state.
+    let verify_url = std::env::var("LITELLM_AUTH_VERIFY_URL")
+        .ok()
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| DEFAULT_AUTH_VERIFY_URL.to_string());
+    let data_plane_key = std::env::var("LITELLM_DATA_PLANE_KEY").unwrap_or_default();
+    if data_plane_key.is_empty() {
+        eprintln!(
+            "warning: LITELLM_DATA_PLANE_KEY is not set; virtual-key verification will likely be rejected by the proxy"
+        );
+    }
+    let authenticator: Arc<dyn KeyAuthenticator> =
+        Arc::new(PythonAuthClient::new(verify_url, data_plane_key));
+    let key_cache = Arc::new(KeyCache::new());
+
     let state = AppState {
         router,
         master_key,
         realtime_pool,
+        authenticator,
+        key_cache,
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
