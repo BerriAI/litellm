@@ -39,3 +39,43 @@ def test_transform_request_drops_stream_chunk_size(config, model):
     )
 
     assert "stream_chunk_size" not in json.dumps(request_body)
+
+
+def test_transform_request_filters_internal_params():
+    """Internal params like skip_mcp_handler must not leak into the Bedrock
+    invoke request body. Regression for issue #30371."""
+    request_body = AmazonInvokeConfig().transform_request(
+        model="mistral.mistral-7b-instruct-v0:2",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"skip_mcp_handler": True, "max_tokens": 10},
+        litellm_params={},
+        headers={},
+    )
+
+    body_str = json.dumps(request_body)
+
+    # The internal param must not appear in the request body sent to Bedrock
+    assert "skip_mcp_handler" not in body_str
+
+    # Legitimate params must still be forwarded
+    assert "max_tokens" in body_str
+
+
+def test_transform_request_filters_internal_params_anthropic():
+    """Anthropic provider early-returns via its own transform_request.
+    Internal params must still be filtered. Regression for issue #30371."""
+    request_body = AmazonAnthropicClaudeConfig().transform_request(
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"skip_mcp_handler": True, "max_tokens": 10},
+        litellm_params={},
+        headers={},
+    )
+
+    body_str = json.dumps(request_body)
+
+    # The internal param must not appear in the request body sent to Bedrock
+    assert "skip_mcp_handler" not in body_str
+
+    # Legitimate params must still be forwarded
+    assert "max_tokens" in body_str
