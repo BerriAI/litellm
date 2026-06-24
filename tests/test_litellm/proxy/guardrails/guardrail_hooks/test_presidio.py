@@ -2242,6 +2242,109 @@ async def test_streaming_mixed_fail_closed_raises():
 
 
 @pytest.mark.asyncio
+async def test_streaming_masking_error_fail_closed_raises():
+    """With mask_pii_fail_closed=True, a non-GuardrailRaisedException error during
+    masking (analyzer/anonymizer transport, reconstruction) must fail closed, not
+    flush the buffered chunks unmasked (#30728 / veria-ai review)."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mask_pii_fail_closed=True,
+    )
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-err-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+
+    async def mock_stream():
+        yield model_chunk
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    with patch(
+        "litellm.main.stream_chunk_builder",
+        side_effect=RuntimeError("analyzer transport error"),
+    ):
+        with pytest.raises(GuardrailRaisedException):
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_user_api_key,
+                response=mock_stream(),
+                request_data={},
+            ):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_streaming_unreconstructable_fail_closed_raises():
+    """With mask_pii_fail_closed=True, a stream that cannot be reassembled into a
+    ModelResponse must fail closed rather than forward buffered chunks unmasked."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mask_pii_fail_closed=True,
+    )
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-err-2",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+
+    async def mock_stream():
+        yield model_chunk
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    with patch("litellm.main.stream_chunk_builder", return_value=None):
+        with pytest.raises(GuardrailRaisedException):
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_user_api_key,
+                response=mock_stream(),
+                request_data={},
+            ):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_streaming_masking_error_fails_open_when_flag_off():
+    """Default (mask_pii_fail_closed=False): a masking error still forwards the
+    buffered chunks (fail open) — the new fail-closed behavior is opt-in."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-open-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+
+    async def mock_stream():
+        yield model_chunk
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    collected = []
+    with patch(
+        "litellm.main.stream_chunk_builder",
+        side_effect=RuntimeError("analyzer transport error"),
+    ):
+        async for out in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(out)
+    assert model_chunk in collected
+
+
+@pytest.mark.asyncio
 async def test_streaming_unmask_path_bytes_passthrough():
     """
     Bytes chunks in the unmasking path should also pass through.
