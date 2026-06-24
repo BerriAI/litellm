@@ -2428,3 +2428,64 @@ async def test_prometheus_token_metrics_with_prometheus_config():
                 raise AssertionError(f"Metric {metric_name} not found in registry")
 
         print("✓ All token metrics validated successfully!")
+
+
+def test_set_llm_deployment_success_metrics_emits_zero_remaining(prometheus_logger):
+    """Regression: the remaining_requests / remaining_tokens gauges used to be
+    guarded by a truthy check (`if remaining_requests:`). When the upstream
+    provider reported 0 (the user had actually exhausted their quota), the
+    metric was silently dropped — exactly the moment alerting needs it.
+
+    This test feeds 0 for both headers and asserts the gauges are still set
+    to 0. Pre-fix, `.set(...)` was never called.
+    """
+    prometheus_logger.litellm_remaining_requests_metric = MagicMock()
+    prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
+    prometheus_logger.litellm_deployment_success_responses = MagicMock()
+    prometheus_logger.litellm_deployment_total_requests = MagicMock()
+    prometheus_logger.litellm_deployment_latency_per_output_token = MagicMock()
+    prometheus_logger.set_deployment_healthy = MagicMock()
+    prometheus_logger.litellm_overhead_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["hidden_params"]["additional_headers"] = {
+        "x_ratelimit_remaining_requests": 0,
+        "x_ratelimit_remaining_tokens": 0,
+    }
+    standard_logging_payload["model_group"] = "my_custom_model_group"
+    standard_logging_payload["hidden_params"]["litellm_overhead_time_ms"] = 100
+
+    request_kwargs = {
+        "model": "gpt-5-mini",
+        "litellm_params": {
+            "custom_llm_provider": "openai",
+            "metadata": {"model_info": {"id": "model-123"}},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    enum_values = UserAPIKeyLabelValues(
+        requested_model=standard_logging_payload["model_group"],
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
+
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    prometheus_logger.set_llm_deployment_success_metrics(
+        request_kwargs=request_kwargs,
+        start_time=start_time,
+        end_time=end_time,
+        output_tokens=10,
+        enum_values=enum_values,
+    )
+
+    # Both gauges must be set with the literal 0 — not skipped.
+    prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(0)
+    prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(0)
