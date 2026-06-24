@@ -1766,6 +1766,15 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 )
 
+                # BYOK: inject the caller's stored per-user key so the protocol
+                # tools-list path authenticates the same way execute_mcp_tool
+                # does. Without this a BYOK server lists with the shared token,
+                # which is None, so the upstream rejects the listing.
+                if server.is_byok and not server_auth_header:
+                    server_auth_header = await _get_byok_credential(
+                        server, user_api_key_auth
+                    )
+
                 # Prefer server-stored per-user OAuth when configured, so a stale
                 # Authorization header from the MCP client cannot override Redis/DB
                 # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).

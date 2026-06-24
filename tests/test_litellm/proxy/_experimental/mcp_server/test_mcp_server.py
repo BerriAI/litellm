@@ -944,6 +944,86 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
 
 
 @pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_injects_byok_credential():
+    """The protocol tools-list path must inject the caller's stored per-user
+    BYOK credential as the upstream auth header, mirroring execute_mcp_tool.
+    Without the injection the BYOK server lists with the shared token (None)."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="byok_user")
+    set_auth_context(user_api_key_auth)
+
+    byok_server = MagicMock()
+    byok_server.name = "byok_server"
+    byok_server.alias = "byok"
+    byok_server.allowed_tools = None
+    byok_server.disallowed_tools = None
+    byok_server.server_id = "byok_server"
+    byok_server.server_name = "byok_server"
+    byok_server.auth_type = "authorization"
+    byok_server.extra_headers = None
+    byok_server.is_byok = True
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["byok_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: byok_server
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
+
+    captured = {}
+
+    async def mock_get_tools_from_server(
+        server,
+        mcp_auth_header=None,
+        extra_headers=None,
+        add_prefix=True,
+        raw_headers=None,
+        **kwargs,
+    ):
+        captured["mcp_auth_header"] = mcp_auth_header
+        tool = MagicMock()
+        tool.name = "byok_tool"
+        tool.description = "BYOK tool"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with (
+        patch.object(
+            mcp_server_module,
+            "_get_byok_credential",
+            AsyncMock(return_value="user-stored-byok-key"),
+        ) as mock_byok,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        result = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=["byok_server"],
+        )
+
+    assert len(result) == 1
+    assert result[0].name == "byok_tool"
+    # The per-user BYOK key was looked up for this user+server...
+    mock_byok.assert_awaited_once_with(byok_server, user_api_key_auth)
+    # ...and injected as the upstream auth header for the listing call.
+    assert captured["mcp_auth_header"] == "user-stored-byok-key"
+
+
+@pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     """Test that _get_tools_from_mcp_servers handles all servers failing gracefully"""
     try:
