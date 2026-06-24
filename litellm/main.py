@@ -2056,6 +2056,11 @@ def _complete_custom_oauth(
     timeout = ctx.timeout
 
     headers = headers or litellm.headers or {}
+    request_timeout: Union[float, httpx.Timeout] = (
+        timeout
+        if isinstance(timeout, httpx.Timeout)
+        else float(timeout) if timeout is not None else litellm.request_timeout
+    )
 
     try:
         response = base_llm_http_handler.completion(
@@ -2070,7 +2075,7 @@ def _complete_custom_oauth(
             optional_params=optional_params,
             litellm_params=litellm_params,
             shared_session=shared_session,
-            timeout=timeout,
+            timeout=request_timeout,
             client=client,
             custom_llm_provider=custom_llm_provider,
             encoding=_get_encoding(),
