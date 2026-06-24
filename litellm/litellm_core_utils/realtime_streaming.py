@@ -105,17 +105,6 @@ class RealTimeStreaming:
         # Gemini Live rejects a follow-up BidiGenerateContentSetup once any
         # content (realtimeInput / clientContent / toolResponse) has been sent.
         self._content_sent_after_setup: bool = False
-        # Pipecat sends two session.update messages: the first on connection has
-        # only audio/VAD config (no tools), and the second (from _create_response)
-        # adds tools + system instruction.  Gemini only accepts setup before any
-        # content, so we must include tools in the FIRST setup we send.
-        # Strategy: cache the first setup internally without forwarding it to
-        # Gemini.  Buffer any non-audio messages that arrive in the meantime.
-        # When the second session.update (with tools) arrives, transformation.py
-        # merges it with the cached first setup and we send the merged result as
-        # the actual initial setup to Gemini.
-        self._gemini_setup_deferred: bool = False
-        self._gemini_pre_setup_buffer: list[str] = []
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
@@ -378,52 +367,9 @@ class RealTimeStreaming:
                             "Dropping follow-up setup after content was already sent to backend"
                         )
                         continue
-                    setup_has_tools = bool(
-                        msg_obj.get("setup", {}).get("tools")
-                        or msg_obj.get("setup", {}).get("systemInstruction")
-                    )
-                    if not setup_has_tools and litellm.gemini_live_defer_setup:
-                        # Setup without tools: cache it so the transformer can
-                        # merge the next session.update on top (tools + system
-                        # instruction), but don't forward to Gemini yet. Gemini
-                        # rejects ANY setup message once content has been sent,
-                        # so we must include tools in the very first message.
-                        self._cache_session_configuration_request(msg)
-                        if not self._gemini_setup_deferred:
-                            self._gemini_setup_deferred = True
-                            verbose_logger.debug(
-                                "Gemini Realtime: Deferring initial setup (no tools yet)"
-                            )
-                        continue
-                    # Setup WITH tools: this is the one we actually send to
-                    # Gemini as the authoritative initial setup.  Flush any
-                    # non-audio messages that arrived while we were deferring.
                     await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
                     self._cache_session_configuration_request(msg)
                     sent = True
-                    if self._gemini_setup_deferred:
-                        self._gemini_setup_deferred = False
-                        for buffered in self._gemini_pre_setup_buffer:
-                            await self.backend_ws.send(buffered)  # type: ignore[union-attr, attr-defined]
-                            try:
-                                bobj = json.loads(buffered)
-                            except (json.JSONDecodeError, TypeError):
-                                bobj = {}
-                            if any(
-                                k in bobj
-                                for k in (
-                                    "realtimeInput",
-                                    "clientContent",
-                                    "toolResponse",
-                                )
-                            ):
-                                self._content_sent_after_setup = True
-                        self._gemini_pre_setup_buffer = []
-                elif isinstance(msg_obj, dict) and self._gemini_setup_deferred:
-                    # Tools setup not received yet — buffer this non-audio
-                    # message rather than sending it to Gemini (which hasn't
-                    # received a setup message yet and would reject it).
-                    self._gemini_pre_setup_buffer.append(msg)
                 else:
                     if isinstance(msg_obj, dict) and any(
                         key in msg_obj
