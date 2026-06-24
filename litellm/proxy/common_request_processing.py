@@ -196,7 +196,7 @@ def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[
     return vector_store_ids
 
 
-def _collect_response_code_interpreter_container_ids(data: Dict[str, Any]) -> set[str]:
+def _collect_response_code_interpreter_container_ids(data: dict[str, Any]) -> set[str]:
     container_ids: set[str] = set()
     tools = data.get("tools")
     if not isinstance(tools, list):
@@ -232,7 +232,7 @@ async def _authorize_response_file_search_vector_stores(
 
 
 async def _authorize_response_code_interpreter_containers(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     container_ids = _collect_response_code_interpreter_container_ids(data)

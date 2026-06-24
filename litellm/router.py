@@ -4479,27 +4479,15 @@ class Router:
         return response
 
     @staticmethod
-    def _decode_responses_api_tool_container_ids(kwargs: Dict[str, Any]) -> None:
+    def _decode_responses_api_tool_container_ids(
+        kwargs: dict[str, Any], custom_llm_provider: Optional[str] = None
+    ) -> None:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        decoded_container_payload = None
+        ResponsesAPIRequestUtils.set_custom_llm_provider_if_missing(kwargs, custom_llm_provider)
         request_tools = kwargs.get("tools")
-        if isinstance(request_tools, list):
-            for tool in request_tools:
-                if not isinstance(tool, dict) or tool.get("type") != "code_interpreter":
-                    continue
-                container_id = tool.get("container")
-                if not isinstance(container_id, str):
-                    continue
-                decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
-                original_id = decoded.get("response_id", container_id)
-                if original_id != container_id:
-                    decoded_container_payload = decoded
-                    break
-
-        tools = ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(
-            request_tools
-        )
+        decoded_container_payload = ResponsesAPIRequestUtils.get_decoded_container_payload_from_tools(request_tools)
+        tools = ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(request_tools)
         if tools is not request_tools:
             kwargs["tools"] = tools
         if decoded_container_payload is None:
@@ -5551,9 +5539,7 @@ class Router:
                 **kwargs,
             ):
                 if call_type == "responses":
-                    if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                        kwargs["custom_llm_provider"] = custom_llm_provider
-                    self._decode_responses_api_tool_container_ids(kwargs)
+                    self._decode_responses_api_tool_container_ids(kwargs, custom_llm_provider)
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
             return sync_wrapper
@@ -5657,8 +5643,7 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "aresponses":
-                if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                    kwargs["custom_llm_provider"] = custom_llm_provider
+                self._decode_responses_api_tool_container_ids(kwargs, custom_llm_provider)
                 return await self._aresponses_with_streaming_fallbacks(
                     original_function=original_function,
                     **kwargs,

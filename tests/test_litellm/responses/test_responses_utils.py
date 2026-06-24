@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -163,6 +164,27 @@ class TestResponsesAPIRequestUtils:
             )
         )
         assert plain_tuple_result == list(plain_tuple)
+
+    def test_decode_container_ids_in_tool_objects_for_request(self):
+        encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="azure-deployment-id",
+            container_id="cntr_native_123",
+        )
+        tool = SimpleNamespace(
+            type="code_interpreter", container=encoded_container_id
+        )
+        tools = [tool]
+
+        updated_tools = (
+            ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(tools)
+        )
+
+        assert updated_tools is not tools
+        assert isinstance(updated_tools, list)
+        assert updated_tools[0] is not tool
+        assert updated_tools[0].container == "cntr_native_123"
+        assert tool.container == encoded_container_id
 
     def test_update_responses_api_response_id_with_model_id_handles_dict(self):
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
