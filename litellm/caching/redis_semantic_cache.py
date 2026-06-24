@@ -124,6 +124,9 @@ class RedisSemanticCache(BaseCache):
         self._llmcache = value
 
     def _build_llmcache(self) -> Any:
+        # CustomTextVectorizer probes its embedding dimension at construction by
+        # embedding "dimension test", so the first cache request issues one extra
+        # billable embedding on top of the request's own.
         from redisvl.extensions.llmcache import SemanticCache  # type: ignore[import-not-found, import-untyped]
         from redisvl.utils.vectorize import CustomTextVectorizer  # type: ignore[import-not-found, import-untyped]
 
@@ -307,7 +310,9 @@ class RedisSemanticCache(BaseCache):
             return dict_method()
         return value
 
-    def _get_embedding(self, prompt: str, **kwargs: Any) -> List[float]:
+    def _get_embedding(
+        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> List[float]:
         """
         Routes through the proxy Router when the embedding model is a Router
         deployment so per-deployment auth (e.g. Bedrock aws_role_name) applies,
@@ -329,7 +334,7 @@ class RedisSemanticCache(BaseCache):
                     model=self.embedding_model,
                     input=prompt,
                     cache={"no-store": True, "no-cache": True},
-                    metadata=build_router_embedding_metadata(kwargs.get("metadata")),
+                    metadata=build_router_embedding_metadata(metadata),
                 ),
             )
         else:
@@ -393,7 +398,9 @@ class RedisSemanticCache(BaseCache):
 
             value_str = str(value)
 
-            prompt_embedding = self._get_embedding(prompt, **kwargs)
+            prompt_embedding = self._get_embedding(
+                prompt, metadata=kwargs.get("metadata")
+            )
 
             store_kwargs: dict[str, Any] = {
                 "vector": prompt_embedding,
@@ -432,7 +439,9 @@ class RedisSemanticCache(BaseCache):
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            prompt_embedding = self._get_embedding(prompt, **kwargs)
+            prompt_embedding = self._get_embedding(
+                prompt, metadata=kwargs.get("metadata")
+            )
             check_kwargs: dict[str, Any] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
@@ -476,13 +485,15 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error retrieving from Redis semantic cache: {str(e)}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
-    async def _get_async_embedding(self, prompt: str, **kwargs) -> List[float]:
+    async def _get_async_embedding(
+        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> List[float]:
         """
         Asynchronously generate an embedding for the given prompt.
 
         Args:
             prompt: The text to generate an embedding for
-            **kwargs: Additional arguments that may contain metadata
+            metadata: Request metadata forwarded to the Router embedding call
 
         Returns:
             List[float]: The embedding vector
@@ -502,7 +513,7 @@ class RedisSemanticCache(BaseCache):
                     model=self.embedding_model,
                     input=prompt,
                     cache={"no-store": True, "no-cache": True},
-                    metadata=build_router_embedding_metadata(kwargs.get("metadata")),
+                    metadata=build_router_embedding_metadata(metadata),
                 )
             else:
                 embedding_response = await litellm.aembedding(
@@ -536,7 +547,9 @@ class RedisSemanticCache(BaseCache):
             value_str = str(value)
 
             # Generate embedding for the value (response) to cache
-            prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
+            prompt_embedding = await self._get_async_embedding(
+                prompt, metadata=kwargs.get("metadata")
+            )
 
             store_kwargs: dict[str, Any] = {
                 "vector": prompt_embedding,
@@ -576,7 +589,9 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             # Generate embedding for the prompt
-            prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
+            prompt_embedding = await self._get_async_embedding(
+                prompt, metadata=kwargs.get("metadata")
+            )
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.

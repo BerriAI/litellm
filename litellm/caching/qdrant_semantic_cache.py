@@ -12,7 +12,7 @@ import ast
 import asyncio
 import json
 import os
-from typing import Any, Dict, cast
+from typing import Any, Dict, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -220,7 +220,9 @@ class QdrantSemanticCache(BaseCache):
         cached_key = payload.get(self.CACHE_KEY_FIELD_NAME)
         return cached_key is not None and str(cached_key) == str(key)
 
-    def _get_embedding(self, prompt: str, **kwargs: Any) -> Any:
+    def _get_embedding(
+        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Embed via the proxy Router when it serves the model, else direct."""
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
@@ -236,7 +238,7 @@ class QdrantSemanticCache(BaseCache):
                 model=self.embedding_model,
                 input=prompt,
                 cache={"no-store": True, "no-cache": True},
-                metadata=build_router_embedding_metadata(kwargs.get("metadata")),
+                metadata=build_router_embedding_metadata(metadata),
             )
         return litellm.embedding(
             model=self.embedding_model,
@@ -244,7 +246,9 @@ class QdrantSemanticCache(BaseCache):
             cache={"no-store": True, "no-cache": True},
         )
 
-    async def _get_async_embedding(self, prompt: str, **kwargs: Any) -> Any:
+    async def _get_async_embedding(
+        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> Any:
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
         except ImportError:
@@ -259,7 +263,7 @@ class QdrantSemanticCache(BaseCache):
                 model=self.embedding_model,
                 input=prompt,
                 cache={"no-store": True, "no-cache": True},
-                metadata=build_router_embedding_metadata(kwargs.get("metadata")),
+                metadata=build_router_embedding_metadata(metadata),
             )
 
         return await litellm.aembedding(
@@ -279,7 +283,7 @@ class QdrantSemanticCache(BaseCache):
         # create an embedding for prompt
         embedding_response = cast(
             EmbeddingResponse,
-            self._get_embedding(prompt, **kwargs),
+            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
         )
 
         # get the embedding
@@ -318,7 +322,7 @@ class QdrantSemanticCache(BaseCache):
         # convert to embedding
         embedding_response = cast(
             EmbeddingResponse,
-            self._get_embedding(prompt, **kwargs),
+            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
         )
 
         # get the embedding
@@ -390,7 +394,9 @@ class QdrantSemanticCache(BaseCache):
         # get the prompt
         messages = kwargs["messages"]
         prompt = get_str_from_messages(messages)
-        embedding_response = await self._get_async_embedding(prompt, **kwargs)
+        embedding_response = await self._get_async_embedding(
+            prompt, metadata=kwargs.get("metadata")
+        )
 
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
@@ -426,7 +432,9 @@ class QdrantSemanticCache(BaseCache):
         messages = kwargs["messages"]
         prompt = get_str_from_messages(messages)
 
-        embedding_response = await self._get_async_embedding(prompt, **kwargs)
+        embedding_response = await self._get_async_embedding(
+            prompt, metadata=kwargs.get("metadata")
+        )
 
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]

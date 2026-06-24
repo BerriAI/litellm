@@ -37,6 +37,16 @@ def test_resolve_returns_none_when_model_list_is_none():
     assert resolve_embedding_router("sem-embed", router, None) is None
 
 
+def test_resolve_skips_entries_missing_model_name():
+    router = MagicMock()
+    model_list = [
+        {"litellm_params": {"model": "bedrock/x"}},
+        {"model_name": "sem-embed"},
+    ]
+    assert resolve_embedding_router("sem-embed", router, model_list) is router
+    assert resolve_embedding_router("other", router, [{"litellm_params": {}}]) is None
+
+
 def test_build_metadata_preserves_request_fields_and_adds_flag():
     md = build_router_embedding_metadata(
         {"user_api_key": "sk-x", "user_api_key_team_id": "team-1", "trace_id": "t-1"}
