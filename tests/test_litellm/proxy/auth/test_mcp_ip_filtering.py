@@ -60,7 +60,11 @@ class TestIsInternalIp:
 
 
 class TestMCPClientIPExtraction:
-    def test_fails_closed_when_xff_enabled_without_trusted_proxy_ranges(self):
+    def test_public_direct_peer_spoofing_xff_stays_external(self):
+        # A caller connecting directly to the gateway (public direct peer) with
+        # use_x_forwarded_for on but no mcp_trusted_proxy_ranges cannot spoof an
+        # internal X-Forwarded-For to reach available_on_public_internet=false
+        # servers: the forged XFF is ignored and the real public peer is used.
         request = MagicMock(spec=Request)
         request.client = MagicMock()
         request.client.host = "203.0.113.5"
@@ -71,17 +75,14 @@ class TestMCPClientIPExtraction:
             general_settings={"use_x_forwarded_for": True},
         )
 
-        # XFF is untrusted (no mcp_trusted_proxy_ranges) so it must be ignored,
-        # and we must not trust the direct peer either: fail closed so the caller
-        # is classified as external and is_internal_ip("") is False.
-        assert result == ""
+        assert result == "203.0.113.5"
         assert IPAddressUtils.is_internal_ip(result) is False
 
-    def test_private_proxy_peer_does_not_grant_internal_access(self):
-        # Regression: behind an internal reverse proxy with use_x_forwarded_for
-        # enabled but mcp_trusted_proxy_ranges unset, the direct peer is the
-        # proxy's private IP. Returning it would mis-classify an external caller
-        # as internal and expose available_on_public_internet=false servers.
+    def test_external_client_behind_private_proxy_stays_external(self):
+        # Behind an internal reverse proxy (private direct peer) with XFF on but
+        # no mcp_trusted_proxy_ranges, an external client (public XFF) is still
+        # classified external by its forwarded address, so it cannot reach
+        # internal-only servers.
         request = MagicMock(spec=Request)
         request.client = MagicMock()
         request.client.host = "10.0.0.7"
@@ -92,8 +93,29 @@ class TestMCPClientIPExtraction:
             general_settings={"use_x_forwarded_for": True},
         )
 
-        assert result == ""
+        assert result == "8.8.8.8"
         assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_internal_client_behind_private_proxy_without_trusted_ranges_is_internal(
+        self,
+    ):
+        # LIT-3964 regression: an internal client reaching the gateway through a
+        # private reverse proxy (private direct peer, internal XFF) with
+        # use_x_forwarded_for on but no mcp_trusted_proxy_ranges must be
+        # classified internal. Returning "" here (the regressed behaviour) made
+        # is_internal_ip("") False, so every internal-only MCP server 404'd.
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.1"
+        request.headers = {"x-forwarded-for": "10.0.0.9"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True},
+        )
+
+        assert result == "10.0.0.9"
+        assert IPAddressUtils.is_internal_ip(result) is True
 
     def test_honours_xff_from_trusted_proxy(self):
         request = MagicMock(spec=Request)
@@ -160,6 +182,32 @@ class TestMCPServerIPFiltering:
         manager = _make_manager([priv])
 
         result = manager.filter_server_ids_by_ip(["priv"], client_ip=None)
+        assert result == ["priv"]
+
+    @patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"use_x_forwarded_for": True},
+    )
+    @patch("litellm.public_mcp_servers", [])
+    def test_internal_client_behind_proxy_can_reach_internal_only_server(self):
+        # LIT-3964 end-to-end: the rest/oauth paths extract the client IP via
+        # get_mcp_client_ip and feed it straight into filter_server_ids_by_ip.
+        # With use_x_forwarded_for on, no mcp_trusted_proxy_ranges, a private
+        # proxy peer and an internal forwarded client, the internal-only server
+        # must survive the filter instead of 404ing.
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([priv])
+
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.1"
+        request.headers = {"x-forwarded-for": "10.0.0.9"}
+        client_ip = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True},
+        )
+
+        result = manager.filter_server_ids_by_ip(["priv"], client_ip=client_ip)
         assert result == ["priv"]
 
 

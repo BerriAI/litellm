@@ -204,15 +204,26 @@ class IPAddressUtils:
                 request, general_settings=general_settings
             ):
                 direct_ip = request.client.host if request.client else None
-                if general_settings.get("mcp_trusted_proxy_ranges"):
-                    # Direct connection isn't in any configured trusted CIDR.
+                # The X-Forwarded-For header is not trustworthy when either the
+                # operator configured mcp_trusted_proxy_ranges and this direct
+                # peer is not one of them, or no ranges are configured and the
+                # peer is a public address (an untrusted caller connecting to us
+                # directly and spoofing XFF). Classify by the direct connection.
+                untrusted_peer = bool(
+                    general_settings.get("mcp_trusted_proxy_ranges")
+                ) or (
+                    direct_ip is not None
+                    and not IPAddressUtils.is_internal_ip(direct_ip)
+                )
+                if untrusted_peer:
                     verbose_proxy_logger.warning(
-                        "XFF header from untrusted IP %s, ignoring", direct_ip
+                        "Untrusted X-Forwarded-For from %s, ignoring", direct_ip
                     )
                     return direct_ip
-                # XFF enabled but no trusted proxy ranges configured: the direct
-                # peer is typically the reverse proxy's own (private) IP, so
-                # returning it would mis-classify external callers as internal.
-                # Fail closed for access control.
-                return ""
+                # No trusted ranges configured and an internal (or unknown)
+                # direct peer: a private reverse proxy in front of the gateway,
+                # so honour X-Forwarded-For (parsed below). Set
+                # mcp_trusted_proxy_ranges to validate the proxy explicitly.
+                # Failing closed here made every internal-only MCP server return
+                # 404 behind a load balancer (LIT-3964).
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
