@@ -4,7 +4,6 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth import internal_auth_endpoints
 from litellm.proxy.auth.internal_auth_endpoints import (
     DATA_PLANE_KEY_ENV_VAR,
     DATA_PLANE_KEY_HEADER,
@@ -96,12 +95,13 @@ async def test_verify_key_returns_model_dump(monkeypatch):
         fake_user_api_key_auth,
     )
 
-    request = _make_request({})
-    body = VerifyKeyRequest(api_key="sk-test-key")
-    result = await verify_key(body=body, request=request)
+    body = VerifyKeyRequest(api_key="sk-test-key", route="/v1/realtime")
+    result = await verify_key(body=body)
 
-    assert captured["api_key"] == "sk-test-key"
-    assert captured["request"] is request
+    # The key is forwarded WITH the Bearer prefix (user_api_key_auth strips it).
+    assert captured["api_key"] == "Bearer sk-test-key"
+    # Validation runs against a synthetic request carrying the gateway's route.
+    assert captured["request"].url.path == "/v1/realtime"
     assert result == expected_auth.model_dump(exclude_none=True, mode="json")
     assert result["user_id"] == "user-123"
 
@@ -121,10 +121,9 @@ async def test_verify_key_401_on_proxy_exception(monkeypatch):
         fake_user_api_key_auth,
     )
 
-    request = _make_request({})
-    body = VerifyKeyRequest(api_key="sk-bad-key")
+    body = VerifyKeyRequest(api_key="sk-bad-key", route="/v1/realtime")
     with pytest.raises(HTTPException) as exc_info:
-        await verify_key(body=body, request=request)
+        await verify_key(body=body)
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "invalid api key"
 
@@ -139,10 +138,9 @@ async def test_verify_key_401_on_http_exception(monkeypatch):
         fake_user_api_key_auth,
     )
 
-    request = _make_request({})
-    body = VerifyKeyRequest(api_key="sk-bad-key")
+    body = VerifyKeyRequest(api_key="sk-bad-key", route="/v1/realtime")
     with pytest.raises(HTTPException) as exc_info:
-        await verify_key(body=body, request=request)
+        await verify_key(body=body)
     assert exc_info.value.status_code == 401
     # Internals must not leak.
     assert exc_info.value.detail == "invalid api key"
