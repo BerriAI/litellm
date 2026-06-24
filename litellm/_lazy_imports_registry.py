@@ -287,6 +287,7 @@ LLM_CONFIG_NAMES = (
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
+    "ParasailConfig",
     "PerplexityChatConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
@@ -1101,6 +1102,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "LmStudioEmbeddingConfig",
     ),
     "NscaleConfig": (".llms.nscale.chat.transformation", "NscaleConfig"),
+    "ParasailConfig": (
+        ".llms.parasail.chat.transformation",
+        "ParasailConfig",
+    ),
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",

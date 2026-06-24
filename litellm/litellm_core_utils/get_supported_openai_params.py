@@ -271,6 +271,8 @@ def get_supported_openai_params(
         return litellm.PerplexityChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nscale":
         return litellm.NscaleConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "parasail":
+        return litellm.ParasailConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "anyscale":
         return [
             "temperature",
