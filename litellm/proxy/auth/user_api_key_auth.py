@@ -2734,9 +2734,9 @@ async def _return_user_api_key_auth_obj(
         user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
     else:
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
 
 
 def get_api_key_from_custom_header(

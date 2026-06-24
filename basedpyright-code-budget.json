@@ -1,30 +1,30 @@
 {
   "reportAny": {
-    "baseline": 24989,
+    "baseline": 25403,
     "slack": 2500
   },
   "reportArgumentType": {
-    "baseline": 1934,
+    "baseline": 1814,
     "slack": 180
   },
   "reportAssignmentType": {
-    "baseline": 220,
+    "baseline": 216,
     "slack": 22
   },
   "reportAttributeAccessIssue": {
-    "baseline": 346,
+    "baseline": 340,
     "slack": 35
   },
   "reportCallIssue": {
-    "baseline": 87,
+    "baseline": 82,
     "slack": 10
   },
   "reportConstantRedefinition": {
-    "baseline": 39,
+    "baseline": 40,
     "slack": 4
   },
   "reportDeprecated": {
-    "baseline": 217,
+    "baseline": 128,
     "slack": 22
   },
   "reportDuplicateImport": {
@@ -32,19 +32,19 @@
     "slack": 3
   },
   "reportExplicitAny": {
-    "baseline": 6931,
+    "baseline": 7045,
     "slack": 700
   },
   "reportFunctionMemberAccess": {
-    "baseline": 7,
+    "baseline": 11,
     "slack": 3
   },
   "reportGeneralTypeIssues": {
-    "baseline": 151,
+    "baseline": 152,
     "slack": 15
   },
   "reportIncompatibleMethodOverride": {
-    "baseline": 52,
+    "baseline": 53,
     "slack": 5
   },
   "reportIncompatibleVariableOverride": {
@@ -60,7 +60,7 @@
     "slack": 3
   },
   "reportInvalidTypeForm": {
-    "baseline": 23,
+    "baseline": 36,
     "slack": 3
   },
   "reportInvalidTypeVarUse": {
@@ -72,15 +72,15 @@
     "slack": 3
   },
   "reportMissingParameterType": {
-    "baseline": 3933,
+    "baseline": 3958,
     "slack": 390
   },
   "reportMissingTypeArgument": {
-    "baseline": 10612,
+    "baseline": 10694,
     "slack": 1000
   },
   "reportMissingTypeStubs": {
-    "baseline": 27,
+    "baseline": 7,
     "slack": 10
   },
   "reportOperatorIssue": {
@@ -88,7 +88,7 @@
     "slack": 3
   },
   "reportOptionalCall": {
-    "baseline": 4,
+    "baseline": 5,
     "slack": 3
   },
   "reportOptionalIterable": {
@@ -96,7 +96,7 @@
     "slack": 3
   },
   "reportOptionalMemberAccess": {
-    "baseline": 724,
+    "baseline": 735,
     "slack": 72
   },
   "reportOptionalOperand": {
@@ -108,11 +108,11 @@
     "slack": 3
   },
   "reportPossiblyUnboundVariable": {
-    "baseline": 52,
+    "baseline": 53,
     "slack": 10
   },
   "reportPrivateUsage": {
-    "baseline": 1625,
+    "baseline": 1680,
     "slack": 160
   },
   "reportRedeclaration": {
@@ -120,7 +120,7 @@
     "slack": 3
   },
   "reportReturnType": {
-    "baseline": 126,
+    "baseline": 131,
     "slack": 100
   },
   "reportTypedDictNotRequiredAccess": {
@@ -132,31 +132,31 @@
     "slack": 3
   },
   "reportUnknownArgumentType": {
-    "baseline": 30603,
+    "baseline": 34986,
     "slack": 3000
   },
   "reportUnknownLambdaType": {
-    "baseline": 75,
+    "baseline": 81,
     "slack": 10
   },
   "reportUnknownMemberType": {
-    "baseline": 27037,
+    "baseline": 32278,
     "slack": 2500
   },
   "reportUnknownParameterType": {
-    "baseline": 13612,
+    "baseline": 14892,
     "slack": 1000
   },
   "reportUnknownVariableType": {
-    "baseline": 21445,
+    "baseline": 25327,
     "slack": 2000
   },
   "reportUnnecessaryCast": {
-    "baseline": 118,
+    "baseline": 122,
     "slack": 10
   },
   "reportUnnecessaryComparison": {
-    "baseline": 683,
+    "baseline": 686,
     "slack": 100
   },
   "reportUnnecessaryContains": {
@@ -164,31 +164,35 @@
     "slack": 3
   },
   "reportUnnecessaryIsInstance": {
-    "baseline": 808,
+    "baseline": 811,
     "slack": 80
   },
   "reportUntypedBaseClass": {
-    "baseline": 110,
+    "baseline": 118,
     "slack": 11
   },
+  "reportUntypedClassDecorator": {
+    "baseline": 3,
+    "slack": 3
+  },
   "reportUntypedFunctionDecorator": {
-    "baseline": 22,
+    "baseline": 689,
     "slack": 3
   },
   "reportUnusedClass": {
-    "baseline": 22,
+    "baseline": 23,
     "slack": 3
   },
   "reportUnusedFunction": {
-    "baseline": 137,
+    "baseline": 133,
     "slack": 10
   },
   "reportUnusedImport": {
-    "baseline": 670,
+    "baseline": 595,
     "slack": 50
   },
   "reportUnusedVariable": {
-    "baseline": 865,
+    "baseline": 147,
     "slack": 50
   }
 }
