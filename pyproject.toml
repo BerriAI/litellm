@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.84.9"
+version = "1.84.10"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -23,7 +23,7 @@ dependencies = [
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
-    "aiohttp>=3.10,<4.0",
+    "aiohttp>=3.14.1,<4.0",
     "pydantic>=2.10.0,<3.0.0",
     "jsonschema>=4.0.0,<5.0",
 ]
@@ -49,7 +49,7 @@ proxy = [
     "fastapi-sso==0.19.0",
     "PyJWT==2.12.0",
     "python-multipart==0.0.27",
-    "cryptography==46.0.7",
+    "cryptography==48.0.1",
     "pynacl==1.6.2",
     "websockets==15.0.1",
     "boto3==1.43.1",
@@ -82,10 +82,10 @@ utils = [
 ]
 caching = ["diskcache==5.6.3"]
 semantic-router = [
-    "semantic-router==0.1.12; python_version < '3.14'",
-    "aurelio-sdk==0.0.19; python_version < '3.14'",
+    "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
+    "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
 ]
-mlflow = ["mlflow==3.11.1"]
+mlflow = ["mlflow>=3.11.1,<4.0"]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
@@ -153,7 +153,7 @@ dev = [
     "parameterized==0.9.0",
     "openapi-core==0.22.0; python_version < '3.14'",
     "pytest-timeout==2.4.0",
-    "vcrpy==8.1.1",
+    "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
 ]
 proxy-dev = [
@@ -178,7 +178,7 @@ ci = [
     "pytest-codspeed==4.3.0",
     "pytest-retry==1.7.0",
     "pyarrow==22.0.0",
-    "langchain==1.2.10",
+    "langchain==1.3.9",
     "lunary==1.4.36; python_version == '3.10'",
     "lunary==1.4.37; python_version >= '3.11'",
     "logfire==4.6.0",
@@ -196,11 +196,8 @@ ci = [
     "pyright==1.1.408",
     "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
-    "langgraph==1.0.10",
-    # langgraph-prebuilt 1.0.9 imports ExecutionInfo/ServerInfo from
-    # langgraph.runtime, which is not exported until langgraph 1.1.0.
-    # Pin to 1.0.8 so it pairs correctly with langgraph==1.0.10.
-    "langgraph-prebuilt==1.0.8",
+    "langgraph>=1.2.4,<1.3.0",
+    "langgraph-prebuilt>=1.1.0,<1.3.0",
     "claude-agent-sdk==0.1.44",
 ]
 healthcheck = [
@@ -242,7 +239,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.84.9"
+version = "1.84.10"
 version_files = [
     "pyproject.toml:^version",
 ]
