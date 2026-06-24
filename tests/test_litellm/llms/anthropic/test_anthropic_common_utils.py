@@ -1329,6 +1329,52 @@ class TestAnthropicThinkingSignatureSelfHeal:
         out = strip_empty_text_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
+    def test_sanitize_tool_use_ids_in_anthropic_messages(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "functions.Bash:0",
+                        "content": "ok",
+                    }
+                ],
+            },
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(msgs)
+        assert out[0]["content"][0]["id"] == "functions_Bash_0"
+        assert out[1]["content"][0]["tool_use_id"] == "functions_Bash_0"
+        assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+    def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+        from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
+
+        base = "call_abc123"
+        sig = "CiIBDDnWx+/a=="
+        assert (
+            normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}")
+            == base
+        )
+
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
 
