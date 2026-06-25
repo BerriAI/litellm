@@ -1,7 +1,10 @@
 import asyncio
+import base64
 import contextvars
 import importlib
+import os
 from functools import partial
+from io import BufferedReader, BytesIO
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -70,6 +73,13 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
+from litellm.ocr.rust_bridge import (
+    RustAimageEdit,
+    RustImageEdit,
+    load_rust_aimage_edit,
+    load_rust_image_edit,
+)
+
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
 
@@ -83,6 +93,194 @@ def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
         _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
     assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
     return _ImageEditRequestUtils_cache
+
+
+def _timeout_to_seconds(
+    timeout: Optional[Union[float, httpx.Timeout]],
+) -> Optional[float]:
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        read_timeout = timeout.read
+        if read_timeout is None:
+            return None
+        return float(read_timeout)
+    return float(timeout)
+
+
+def _read_file_content(file_value: Any) -> bytes:
+    if isinstance(file_value, bytes):
+        return file_value
+    if isinstance(file_value, bytearray):
+        return bytes(file_value)
+    if isinstance(file_value, (BufferedReader, BytesIO)):
+        current_pos = file_value.tell()
+        file_value.seek(0)
+        data = file_value.read()
+        file_value.seek(current_pos)
+        return data
+    if hasattr(file_value, "read"):
+        current_pos = getattr(file_value, "tell", lambda: 0)()
+        if hasattr(file_value, "seek"):
+            file_value.seek(0)
+        data = file_value.read()
+        if hasattr(file_value, "seek"):
+            file_value.seek(current_pos)
+        if isinstance(data, str):
+            return data.encode()
+        return bytes(data)
+    if isinstance(file_value, (str, os.PathLike)) and os.path.exists(file_value):
+        with open(file_value, "rb") as file:
+            return file.read()
+    if isinstance(file_value, str):
+        return file_value.encode()
+    raise TypeError(
+        f"Unsupported image file type for Rust image_edit: {type(file_value)}"
+    )
+
+
+def _filename_for_file(file_value: Any, default: str) -> str:
+    name = getattr(file_value, "name", None)
+    if isinstance(name, str) and name:
+        return os.path.basename(name)
+    if isinstance(file_value, (str, os.PathLike)) and os.path.exists(file_value):
+        return os.path.basename(os.fspath(file_value))
+    return default
+
+
+def _rust_image_file_part(file_value: Any, default_filename: str) -> Dict[str, object]:
+    filename = default_filename
+    content_type: Optional[str] = None
+    raw_file = file_value
+
+    if isinstance(file_value, tuple):
+        if len(file_value) >= 1 and file_value[0] is not None:
+            filename = str(file_value[0])
+        if len(file_value) >= 2:
+            raw_file = file_value[1]
+        if len(file_value) >= 3 and file_value[2] is not None:
+            content_type = str(file_value[2])
+
+    filename = filename or _filename_for_file(raw_file, default_filename)
+    content_type = content_type or _get_ImageEditRequestUtils().get_image_content_type(
+        raw_file
+    )
+    return {
+        "filename": filename,
+        "content_type": content_type,
+        "data_base64": base64.b64encode(_read_file_content(raw_file)).decode("ascii"),
+    }
+
+
+def _rust_image_file_parts(images: List[FileTypes]) -> List[Dict[str, object]]:
+    return [
+        _rust_image_file_part(image, f"image-{index}.png")
+        for index, image in enumerate(images)
+        if image is not None
+    ]
+
+
+def _prepare_rust_image_edit_params(
+    image_edit_optional_params: ImageEditOptionalRequestParams,
+    non_default_params: Dict[str, Any],
+) -> tuple[Dict[str, object], Optional[Dict[str, object]]]:
+    optional_params: Dict[str, object] = dict(image_edit_optional_params)
+    optional_params.update(non_default_params)
+    mask = optional_params.pop("mask", None)
+    mask_part = _rust_image_file_part(mask, "mask.png") if mask is not None else None
+    return optional_params, mask_part
+
+
+def _run_rust_image_edit(
+    rust_image_edit: RustImageEdit,
+    *,
+    model: str,
+    images: List[FileTypes],
+    prompt: Optional[str],
+    api_key: Optional[str],
+    api_base: Optional[str],
+    custom_llm_provider: str,
+    extra_headers: Optional[Dict[str, Any]],
+    optional_params: Dict[str, object],
+    mask: Optional[Dict[str, object]],
+    timeout: Optional[Union[float, httpx.Timeout]],
+    logging_obj: LiteLLMLoggingObj,
+) -> ImageResponse:
+    image_parts = _rust_image_file_parts(images)
+    logging_obj.pre_call(
+        input=prompt,
+        api_key="",
+        additional_args={
+            "complete_input_dict": {
+                "model": model,
+                "prompt": prompt,
+                **optional_params,
+            },
+            "api_base": api_base,
+            "headers": extra_headers or {},
+        },
+    )
+    return ImageResponse(
+        **rust_image_edit(
+            model=model,
+            images=image_parts,
+            prompt=prompt,
+            mask=mask,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=cast(Optional[dict[str, object]], extra_headers),
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
+    )
+
+
+async def _run_rust_aimage_edit(
+    rust_aimage_edit: RustAimageEdit,
+    *,
+    model: str,
+    images: List[FileTypes],
+    prompt: Optional[str],
+    api_key: Optional[str],
+    api_base: Optional[str],
+    custom_llm_provider: str,
+    extra_headers: Optional[Dict[str, Any]],
+    optional_params: Dict[str, object],
+    mask: Optional[Dict[str, object]],
+    timeout: Optional[Union[float, httpx.Timeout]],
+    logging_obj: LiteLLMLoggingObj,
+) -> ImageResponse:
+    image_parts = _rust_image_file_parts(images)
+    logging_obj.pre_call(
+        input=prompt,
+        api_key="",
+        additional_args={
+            "complete_input_dict": {
+                "model": model,
+                "prompt": prompt,
+                **optional_params,
+            },
+            "api_base": api_base,
+            "headers": extra_headers or {},
+        },
+    )
+    return ImageResponse(
+        **(
+            await rust_aimage_edit(
+                model=model,
+                images=image_parts,
+                prompt=prompt,
+                mask=mask,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=cast(Optional[dict[str, object]], extra_headers),
+                optional_params=optional_params,
+                timeout_seconds=_timeout_to_seconds(timeout),
+            )
+        )
+    )
 
 
 ##### Image Generation #######################
@@ -791,6 +989,8 @@ def image_edit(
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
         _is_async = kwargs.pop("async_call", False) is True
+        api_key_param: Optional[str] = kwargs.get("api_key")
+        api_base_param: Optional[str] = kwargs.get("api_base")
 
         # add images / or return a single image
         images = (
@@ -809,9 +1009,10 @@ def image_edit(
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
-        model, custom_llm_provider, _, _ = get_llm_provider(
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base_param,
         )
 
         # Check for custom provider
@@ -867,6 +1068,81 @@ def image_edit(
                     client=custom_client,
                 )
 
+        local_vars.update(kwargs)
+        if custom_llm_provider == "vllm":
+            image_edit_optional_params = (
+                _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
+                    local_vars
+                )
+            )
+            rust_optional_params, rust_mask = _prepare_rust_image_edit_params(
+                image_edit_optional_params=image_edit_optional_params,
+                non_default_params=non_default_params,
+            )
+            resolved_api_key = (
+                api_key_param or dynamic_api_key or get_secret_str("VLLM_API_KEY")
+            )
+            resolved_api_base = api_base or get_secret_str("VLLM_API_BASE")
+
+            if _is_async:
+                rust_aimage_edit = load_rust_aimage_edit()
+                if rust_aimage_edit is not None:
+                    litellm_logging_obj.update_from_kwargs(
+                        kwargs=kwargs,
+                        model=model,
+                        user=user,
+                        optional_params=dict(rust_optional_params),
+                        litellm_params={
+                            **rust_optional_params,
+                            "litellm_call_id": litellm_call_id,
+                            "model_info": model_info,
+                        },
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    return _run_rust_aimage_edit(
+                        rust_aimage_edit=rust_aimage_edit,
+                        model=model,
+                        images=images,
+                        prompt=prompt,
+                        api_key=resolved_api_key,
+                        api_base=resolved_api_base,
+                        custom_llm_provider=custom_llm_provider,
+                        extra_headers=extra_headers,
+                        optional_params=rust_optional_params,
+                        mask=rust_mask,
+                        timeout=timeout,
+                        logging_obj=litellm_logging_obj,
+                    )
+            else:
+                rust_image_edit = load_rust_image_edit()
+                if rust_image_edit is not None:
+                    litellm_logging_obj.update_from_kwargs(
+                        kwargs=kwargs,
+                        model=model,
+                        user=user,
+                        optional_params=dict(rust_optional_params),
+                        litellm_params={
+                            **rust_optional_params,
+                            "litellm_call_id": litellm_call_id,
+                            "model_info": model_info,
+                        },
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    return _run_rust_image_edit(
+                        rust_image_edit=rust_image_edit,
+                        model=model,
+                        images=images,
+                        prompt=prompt,
+                        api_key=resolved_api_key,
+                        api_base=resolved_api_base,
+                        custom_llm_provider=custom_llm_provider,
+                        extra_headers=extra_headers,
+                        optional_params=rust_optional_params,
+                        mask=rust_mask,
+                        timeout=timeout,
+                        logging_obj=litellm_logging_obj,
+                    )
+
         # get provider config
         image_edit_provider_config: Optional[BaseImageEditConfig] = (
             ProviderConfigManager.get_provider_image_edit_config(
@@ -878,7 +1154,6 @@ def image_edit(
         if image_edit_provider_config is None:
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
-        local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: (
             ImageEditOptionalRequestParams

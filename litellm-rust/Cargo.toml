@@ -16,10 +16,11 @@ litellm-core = { path = "crates/core" }
 litellm-providers = { path = "crates/providers" }
 pyo3 = "0.23.5"
 pyo3-async-runtimes = { version = "0.23.0", features = ["tokio-runtime"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+base64 = "0.22"

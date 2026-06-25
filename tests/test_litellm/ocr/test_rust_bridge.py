@@ -213,9 +213,13 @@ def build_prepared_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
+    rust_bridge.use_litellm_rust(
+        False, ocr=None, aocr=None, image_edit=None, aimage_edit=None
+    )
     yield
-    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
+    rust_bridge.use_litellm_rust(
+        False, ocr=None, aocr=None, image_edit=None, aimage_edit=None
+    )
 
 
 @pytest.fixture
