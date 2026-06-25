@@ -969,6 +969,7 @@ class Router:
     ):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
         self._validate_routing_strategy(routing_strategy)
+        self._reset_custom_routing_strategy()
 
         self._unregister_router_selectors(
             [
@@ -12199,6 +12200,11 @@ class Router:
             "async_get_available_deployment",
             CustomRoutingStrategy.async_get_available_deployment,
         )
+
+    def _reset_custom_routing_strategy(self) -> None:
+        for attr in ("get_available_deployment", "async_get_available_deployment"):
+            if attr in self.__dict__:
+                delattr(self, attr)
 
     def flush_cache(self):
         litellm.cache = None

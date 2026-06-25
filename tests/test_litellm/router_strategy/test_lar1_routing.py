@@ -365,6 +365,18 @@ async def test_update_settings_switches_to_lar1_routing():
     assert result["model_info"]["type"] == "local"
 
 
+def test_update_settings_switching_from_lar1_restores_default_selectors():
+    router = Router(model_list=_model_list(), routing_strategy="lar1")
+
+    router.update_settings(routing_strategy="simple-shuffle")
+
+    assert router.routing_strategy == "simple-shuffle"
+    assert "get_available_deployment" not in router.__dict__
+    assert "async_get_available_deployment" not in router.__dict__
+    result = router.get_available_deployment(model="agent-router")
+    assert result["model_name"] == "agent-router"
+
+
 @pytest.mark.asyncio
 async def test_update_settings_routing_strategy_args_relinks_lar1():
     router = Router(model_list=_model_list(), routing_strategy="lar1")

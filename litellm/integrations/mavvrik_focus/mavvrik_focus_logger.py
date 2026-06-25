@@ -132,19 +132,17 @@ class MavvrikFocusLogger(FocusLogger):
                 window.start_time.date(),
                 window.end_time.date(),
             )
+        payload = b""
         if data.is_empty():
             verbose_proxy_logger.debug(
                 "Mavvrik FOCUS export: no usage data for window %s", window
             )
-            return
-        normalized = engine._transformer.transform(data)
-        if normalized.is_empty():
-            return
-        payload = engine._serializer.serialize(normalized)
-        if not payload:
-            return
+        else:
+            normalized = engine._transformer.transform(data)
+            if not normalized.is_empty():
+                payload = engine._serializer.serialize(normalized)
         await engine._destination.deliver(
-            content=payload,
+            content=payload or b"",
             time_window=window,
             filename=engine._build_filename(window),
         )
