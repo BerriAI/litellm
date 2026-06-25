@@ -32,6 +32,10 @@ FAKE_OCR_RESPONSE: dict[str, object] = {
 }
 
 
+class CapturedException(Exception):
+    pass
+
+
 class RecordingBridge:
     """A fake ``RustOcr`` callable that records the args it was handed."""
 
@@ -94,6 +98,36 @@ class RecordingAsyncBridge:
             }
         )
         return dict(FAKE_OCR_RESPONSE)
+
+
+class RaisingBridge:
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise RuntimeError("bridge failed")
+
+
+class RaisingAsyncBridge:
+    async def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise RuntimeError("bridge failed")
 
 
 class RecordingLogging:
@@ -302,7 +336,10 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         "api_key": "sk-test",
         "api_base": "https://proxy.internal",
         "custom_llm_provider": "mistral",
-        "extra_headers": {"x-trace-id": "trace-1"},
+        "extra_headers": {
+            "Authorization": "Bearer sk-test",
+            "x-trace-id": "trace-1",
+        },
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
     }
@@ -413,9 +450,31 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
+    assert call["extra_headers"] == {
+        "Authorization": "Bearer sk-test",
+        "x-trace-id": "trace-1",
+    }
     # Raw OCR params ride along in optional_params; Rust filters to supported keys.
     assert call["optional_params"].get("include_image_base64") is True
+
+
+def test_ocr_exception_type_uses_resolved_provider_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+
+    def fake_exception_type(**kwargs: object) -> CapturedException:
+        captured.update(kwargs)
+        return CapturedException("wrapped")
+
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+    litellm.use_litellm_rust(True, ocr=RaisingBridge())
+
+    with pytest.raises(CapturedException):
+        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert captured["model"] == "mistral-ocr-latest"
+    assert captured["custom_llm_provider"] == "mistral"
 
 
 @pytest.mark.asyncio
@@ -436,8 +495,31 @@ async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
+    assert call["extra_headers"] == {
+        "Authorization": "Bearer sk-test",
+        "x-trace-id": "trace-1",
+    }
     assert call["optional_params"].get("include_image_base64") is True
+
+
+@pytest.mark.asyncio
+async def test_aocr_exception_type_uses_resolved_provider_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+
+    def fake_exception_type(**kwargs: object) -> CapturedException:
+        captured.update(kwargs)
+        return CapturedException("wrapped")
+
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+    litellm.use_litellm_rust(True, aocr=RaisingAsyncBridge())
+
+    with pytest.raises(CapturedException):
+        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert captured["model"] == "mistral-ocr-latest"
+    assert captured["custom_llm_provider"] == "mistral"
 
 
 def test_ocr_forwards_timeout_to_rust(fake_bridge):

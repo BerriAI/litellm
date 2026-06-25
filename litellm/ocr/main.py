@@ -53,7 +53,6 @@ class _PreparedOCRRequest:
 class _PreparedRustOCRCall:
     api_key: Optional[str]
     headers: dict[str, object]
-    complete_url: str
 
 
 def _timeout_to_seconds(
@@ -211,7 +210,6 @@ def _prepare_rust_ocr_call(
     return _PreparedRustOCRCall(
         api_key=resolved_api_key,
         headers=cast(dict[str, object], resolved_headers),
-        complete_url=resolved_complete_url,
     )
 
 
@@ -239,7 +237,7 @@ def _run_rust_ocr(
             api_key=prepared.api_key,
             api_base=prepared_request.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=prepared_request.extra_headers,
+            extra_headers=prepared.headers,
             optional_params=prepared_request.optional_params,
             timeout_seconds=_timeout_to_seconds(prepared_request.effective_timeout),
         )
@@ -262,7 +260,7 @@ async def _run_rust_aocr(
             api_key=prepared.api_key,
             api_base=prepared_request.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=prepared_request.extra_headers,
+            extra_headers=prepared.headers,
             optional_params=prepared_request.optional_params,
             timeout_seconds=_timeout_to_seconds(prepared_request.effective_timeout),
         )
@@ -350,6 +348,9 @@ async def aocr(
             extra_headers=extra_headers,
             kwargs=kwargs,
         )
+        model = prepared.model
+        custom_llm_provider = prepared.custom_llm_provider
+        local_vars.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
         if prepared.custom_llm_provider == "mistral" and rust_ocr_enabled():
             rust_aocr = load_rust_aocr()
@@ -487,6 +488,9 @@ def ocr(
             extra_headers=extra_headers,
             timeout=timeout,
         )
+        model = prepared.model
+        custom_llm_provider = prepared.custom_llm_provider
+        local_vars.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
         # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
         if prepared.custom_llm_provider == "mistral" and rust_ocr_enabled():
