@@ -448,7 +448,6 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
             ]
             mock_db.litellm_verificationtoken.find_many.assert_awaited_once_with(
                 where={"user_id": "internal-user-123"},
-                select={"token": True},
             )
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],

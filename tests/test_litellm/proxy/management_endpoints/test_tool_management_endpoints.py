@@ -157,10 +157,6 @@ async def test_resolve_team_id_does_not_use_select_kwarg():
     _resolve_team_id_to_object_permission_id must call find_unique without a select=
     argument so that the full row is returned and getattr(row, 'object_permission_id', None) works.
     """
-    import sys, os
-    sys.path.insert(0, os.path.abspath("../../.."))
-    from unittest.mock import AsyncMock, MagicMock, patch
-
     from litellm.proxy.management_endpoints.tool_management_endpoints import (
         _resolve_team_id_to_object_permission_id,
     )
@@ -182,3 +178,34 @@ async def test_resolve_team_id_does_not_use_select_kwarg():
     call_kwargs = mock_table.find_unique.call_args[1]
     assert "select" not in call_kwargs, "select= kwarg is not supported by prisma-client-py"
     assert result == "perm-uuid-123"
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_id_race_condition_recovery_does_not_use_select_kwarg():
+    """Race-condition recovery path also must not pass select= to find_unique.
+
+    When the initial find_unique returns None (row not yet visible), the function
+    retries. Both the initial and recovery calls must be free of the select= kwarg.
+    """
+    from litellm.proxy.management_endpoints.tool_management_endpoints import (
+        _resolve_team_id_to_object_permission_id,
+    )
+
+    mock_row = MagicMock()
+    mock_row.object_permission_id = "perm-uuid-recovery"
+
+    mock_table = MagicMock()
+    # first call returns None (simulates race), second returns the row
+    mock_table.find_unique = AsyncMock(side_effect=[None, mock_row])
+
+    mock_prisma = MagicMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.tool_management_endpoints.TeamRepository"
+    ) as MockRepo:
+        MockRepo.return_value.table = mock_table
+        result = await _resolve_team_id_to_object_permission_id(mock_prisma, "team-abc")
+
+    assert result == "perm-uuid-recovery"
+    for call in mock_table.find_unique.call_args_list:
+        assert "select" not in call[1], "select= kwarg must not be passed on recovery path"
