@@ -20,6 +20,24 @@ def test_bedrock_normalize_checks_keeps_empty_known_check_config():
     }
 
 
+def test_bedrock_normalize_checks_warns_on_unknown_keys(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = BedrockGuardrail._normalize_checks({"contentFilter": {}, "typo_key": True})
+    assert result == {"contentFilter": {}}
+    assert any("typo_key" in m for m in caplog.messages)
+
+
+def test_bedrock_normalize_checks_all_unknown_returns_none_with_warning(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = BedrockGuardrail._normalize_checks({"snake_case_typo": True})
+    assert result is None
+    assert any("snake_case_typo" in m for m in caplog.messages)
+
+
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_pii_masking():
     # Create proper mock objects
