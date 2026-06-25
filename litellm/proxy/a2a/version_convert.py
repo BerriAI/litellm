@@ -407,9 +407,12 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
 
 
 def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
-    from google.protobuf.json_format import MessageToDict
-
-    from a2a.compat.v0_3.conversions import ParseDict, pb2_v10, types_v03
+    from a2a.compat.v0_3.conversions import (
+        MessageToDict,
+        ParseDict,
+        pb2_v10,
+        types_v03,
+    )
 
     proto = pb2_v10.ListTasksRequest()
     _parse(ParseDict, params, proto)
@@ -444,7 +447,9 @@ def _proto_task_state_name_to_0_3(
 def _flatten_create_push_notification_params(params: JsonDict) -> JsonDict:
     """Merge 1.x create envelope fields (parent/configId/config) into flat pb fields."""
     flat = dict(params)
-    nested = flat.pop("config", None) or flat.pop("pushNotificationConfig", None)
+    config = flat.pop("config", None)
+    push_config = flat.pop("pushNotificationConfig", None)
+    nested = config if config is not None else push_config
     if not isinstance(nested, dict):
         return params
     parent = flat.pop("parent", None)

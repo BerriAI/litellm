@@ -143,6 +143,23 @@ def test_request_params_lowering_create_push_notification_config_preserves_task_
     assert out["pushNotificationConfig"]["id"] == "cfg-1"
 
 
+def test_flatten_create_push_notification_drops_redundant_envelope_key():
+    from litellm.proxy.a2a.version_convert import (
+        _flatten_create_push_notification_params,
+    )
+
+    flat = _flatten_create_push_notification_params(
+        {
+            "parent": "tasks/task-1",
+            "config": {"url": "https://chosen.example.com"},
+            "pushNotificationConfig": {"url": "https://ignored.example.com"},
+        }
+    )
+    assert flat["url"] == "https://chosen.example.com"
+    assert "pushNotificationConfig" not in flat
+    assert "config" not in flat
+
+
 def test_request_params_lowering_list_tasks_to_0_3():
     out = normalize_request_params(
         {
