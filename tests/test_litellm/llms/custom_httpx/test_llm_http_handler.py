@@ -878,6 +878,117 @@ async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
     assert sent == _json.dumps(request_body)
 
 
+def _make_anthropic_thinking_modified_400(error_message: str) -> httpx.HTTPStatusError:
+    """Build an httpx.HTTPStatusError that mimics Anthropic's 400 response."""
+    import json as _json
+
+    err_body = _json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": error_message,
+            },
+        }
+    )
+    response = Mock(spec=httpx.Response)
+    response.status_code = 400
+    response.text = err_body
+    return httpx.HTTPStatusError("bad", request=Mock(), response=response)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_post_recovers_from_modified_thinking_blocks():
+    r"""Regression test for the opencode / Claude-Code 'thinking blocks ... cannot
+    be modified' 400 that bricks an extended-thinking session.
+
+    Before the fix, ``AnthropicMessagesConfig.should_retry_anthropic_messages_on_http_error``
+    only matched the ``Invalid \`signature\` in \`thinking\` block`` variant, so this
+    error bubbled up to the caller (e.g. opencode) and crashed the agent.  The
+    fix recognises both patterns as recoverable: strip thinking / redacted_thinking
+    blocks from the request and retry once."""
+    import json as _json
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    handler = BaseLLMHTTPHandler()
+    request_body = {
+        "model": "claude-opus-4-5-20251101",
+        "messages": [
+            {"role": "user", "content": "ping"},
+            {
+                "role": "assistant",
+                "content": [
+                    # Two thinking blocks that look like the corrupted state the
+                    # client persisted to disk -- they will be stripped on retry.
+                    {
+                        "type": "thinking",
+                        "thinking": "older plan",
+                        "signature": "sig-old",
+                    },
+                    {
+                        "type": "thinking",
+                        "thinking": "newer plan",
+                        "signature": "sig-new",
+                    },
+                    {"type": "text", "text": "hello"},
+                ],
+            },
+            {"role": "user", "content": "again"},
+        ],
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+
+    err_resp = Mock()
+    err_resp.raise_for_status = Mock(
+        side_effect=_make_anthropic_thinking_modified_400(
+            "messages.1.content.488: `thinking` or `redacted_thinking` blocks "
+            "in the latest assistant message cannot be modified. These blocks "
+            "must remain as they were in the original response."
+        )
+    )
+    ok_resp = Mock()
+    ok_resp.raise_for_status = Mock(return_value=None)
+    http_client = Mock()
+    http_client.post = AsyncMock(side_effect=[err_resp, ok_resp])
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=http_client,
+        request_url="http://x/v1/messages",
+        headers={},
+        signed_json_body=None,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=AnthropicMessagesConfig(),
+        litellm_params=GenericLiteLLMParams(),
+        api_key="k",
+        model="claude-opus-4-5-20251101",
+    )
+
+    assert http_client.post.await_count == 2
+    retry_body = _json.loads(http_client.post.await_args_list[1].kwargs["data"])
+
+    # Retry must drop the extended-thinking config and strip thinking blocks
+    # from the persisted assistant message, while leaving the surrounding
+    # user messages and the assistant text content intact.
+    assert "thinking" not in retry_body
+    assistant_msg = retry_body["messages"][1]
+    assert assistant_msg["role"] == "assistant"
+    assert all(
+        block["type"] not in ("thinking", "redacted_thinking")
+        for block in assistant_msg["content"]
+    )
+    assert any(block["type"] == "text" for block in assistant_msg["content"])
+    assert retry_body["messages"][0]["content"] == "ping"
+    assert retry_body["messages"][-1]["content"] == "again"
+
+
 @pytest.mark.asyncio
 async def test_anthropic_post_retry_reserializes_mutated_body():
     """On a retryable HTTP error the body is mutated + re-signed; the prebuilt

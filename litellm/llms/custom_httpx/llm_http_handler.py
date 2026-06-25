@@ -1982,11 +1982,16 @@ class BaseLLMHTTPHandler:
                     )
                 )
                 if should_retry and not hit_max_attempt:
+                    _err_text = getattr(e.response, "text", None)
+                    if not isinstance(_err_text, str):
+                        _err_text = ""
                     verbose_logger.debug(
-                        "Anthropic /v1/messages: invalid thinking signature; "
-                        "stripping thinking blocks and retrying (attempt %s/%s).",
+                        "Anthropic /v1/messages: recoverable thinking-block error; "
+                        "stripping thinking blocks and retrying (attempt %s/%s). "
+                        "Cause: %s",
                         attempt_idx + 2,
                         max_attempts,
+                        _err_text[:500],
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(
                         e=e, request_data=request_body

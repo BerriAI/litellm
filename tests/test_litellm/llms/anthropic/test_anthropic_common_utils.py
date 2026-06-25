@@ -1166,6 +1166,61 @@ class TestAnthropicThinkingSignatureSelfHeal:
             is False
         )
 
+    def test_is_anthropic_thinking_blocks_modified_error_positive(self):
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_thinking_blocks_modified_error,
+        )
+
+        raw = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.1.content.488: `thinking` or `redacted_thinking` '
+            "blocks in the latest assistant message cannot be modified. These "
+            'blocks must remain as they were in the original response."},'
+            '"request_id":"req_011CXVnWn4RVUr9hksVHoruj"}'
+        )
+        assert is_anthropic_thinking_blocks_modified_error(raw) is True
+
+        # Variant that uses just "must remain" without "cannot be modified".
+        must_remain_only = (
+            "messages.13.content.1: thinking blocks must remain as they were "
+            "in the original response."
+        )
+        assert is_anthropic_thinking_blocks_modified_error(must_remain_only) is True
+
+    def test_is_anthropic_thinking_blocks_modified_error_negative(self):
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_thinking_blocks_modified_error,
+        )
+
+        assert is_anthropic_thinking_blocks_modified_error("") is False
+        # The signature-mismatch error must not be misclassified here.
+        sig_error = "messages.3.content.3: Invalid `signature` in `thinking` block"
+        assert is_anthropic_thinking_blocks_modified_error(sig_error) is False
+        # Unrelated 400 must not match.
+        assert (
+            is_anthropic_thinking_blocks_modified_error(
+                "messages: text content blocks must be non-empty"
+            )
+            is False
+        )
+
+    def test_is_anthropic_recoverable_thinking_block_error_covers_both(self):
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_recoverable_thinking_block_error,
+        )
+
+        sig_error = "messages.3.content.3: Invalid `signature` in `thinking` block"
+        modified_error = (
+            "messages.1.content.488: `thinking` or `redacted_thinking` blocks "
+            "in the latest assistant message cannot be modified."
+        )
+        unrelated_error = "rate limit exceeded"
+
+        assert is_anthropic_recoverable_thinking_block_error(sig_error) is True
+        assert is_anthropic_recoverable_thinking_block_error(modified_error) is True
+        assert is_anthropic_recoverable_thinking_block_error(unrelated_error) is False
+        assert is_anthropic_recoverable_thinking_block_error("") is False
+
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
             strip_thinking_blocks_from_anthropic_messages,

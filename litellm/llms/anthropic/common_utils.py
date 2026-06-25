@@ -916,6 +916,49 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     )
 
 
+def is_anthropic_thinking_blocks_modified_error(error_text: str) -> bool:
+    """
+    Detect Anthropic 400 when thinking/redacted_thinking blocks in the assistant
+    history have been altered, reordered, or lost between turns.
+
+    Clients that persist thinking blocks to disk and replay them (e.g. opencode,
+    Claude Code) routinely corrupt these blocks via JSON round-tripping, repair
+    routines, or concurrent writers from background sub-agents.  Anthropic then
+    rejects the next call because thinking block signatures cover their original
+    byte content.  See https://github.com/anthropics/claude-code/issues/22278 and
+    related opencode reports.
+
+    Example API message:
+        messages.N.content.M: `thinking` or `redacted_thinking` blocks in the
+        latest assistant message cannot be modified. These blocks must remain as
+        they were in the original response.
+    """
+    if not error_text:
+        return False
+    lower = error_text.lower()
+    return (
+        "thinking" in lower
+        and "block" in lower
+        and ("cannot be modified" in lower or "must remain" in lower)
+    )
+
+
+def is_anthropic_recoverable_thinking_block_error(error_text: str) -> bool:
+    """
+    True when an Anthropic 400 can be recovered by stripping all thinking and
+    redacted_thinking content blocks from prior assistant messages and retrying.
+
+    Covers two known error patterns that share the same fix:
+    1. Invalid `signature` in `thinking` block (signature mismatch after a
+       deployment / credential change).
+    2. `thinking` or `redacted_thinking` blocks ... cannot be modified
+       (client-side corruption of stored thinking blocks).
+    """
+    return is_anthropic_invalid_thinking_signature_error(
+        error_text
+    ) or is_anthropic_thinking_blocks_modified_error(error_text)
+
+
 def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
     """
     Return a new message list with thinking / redacted_thinking content blocks removed
