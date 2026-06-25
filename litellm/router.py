@@ -9737,6 +9737,7 @@ class Router:
             "context_window_fallbacks",
             "retry_policy",
             "model_group_retry_policy",
+            "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
         ]
