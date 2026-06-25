@@ -93,7 +93,7 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pymodule]
-fn litellm_python_bridge(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())
