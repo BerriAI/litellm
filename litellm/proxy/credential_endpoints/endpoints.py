@@ -47,24 +47,41 @@ async def _caller_team_admin_ids(
     """Set of team_ids the caller is team-admin of.
 
     Empty when the caller has no user_id, no DB connection, or no admin
-    membership on any team. Used by the team-admin self-assignment path to
-    decide which team_ids the caller may grant on a destination.
+    membership on any team.
+
+    Reads the caller's team_id list off ``LiteLLM_UserTable.teams`` (cached
+    array of team_ids the user belongs to) and fetches only those rows from
+    the team table -- the lookup is proportional to the caller's team count,
+    not the workspace's. ``members_with_roles`` is a Postgres JSON column so
+    Prisma can't filter on the admin role; that match is done in Python.
     """
     if user_api_key_dict.user_id is None or prisma_client is None:
         return frozenset()
     try:
-        rows = await prisma_client.db.litellm_teamtable.find_many()  # type: ignore[attr-defined]
+        user_row = await prisma_client.db.litellm_usertable.find_unique(  # type: ignore[attr-defined]
+            where={"user_id": user_api_key_dict.user_id}
+        )
     except Exception:
-        verbose_proxy_logger.exception("team-admin lookup failed")
+        verbose_proxy_logger.exception("team-admin lookup (user fetch) failed")
+        return frozenset()
+    user_team_ids = list(getattr(user_row, "teams", None) or []) if user_row else []
+    if not user_team_ids:
+        return frozenset()
+    try:
+        teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[attr-defined]
+            where={"team_id": {"in": user_team_ids}}
+        )
+    except Exception:
+        verbose_proxy_logger.exception("team-admin lookup (teams fetch) failed")
         return frozenset()
     return frozenset(
         team.team_id
-        for team in rows
+        for team in teams
         if any(
             isinstance(member, dict)
             and member.get("user_id") == user_api_key_dict.user_id
             and member.get("role") == "admin"
-            for member in (team.members_with_roles or [])
+            for member in (getattr(team, "members_with_roles", None) or [])
         )
     )
 

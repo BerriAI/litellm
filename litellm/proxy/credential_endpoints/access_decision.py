@@ -111,18 +111,19 @@ def decide_credential_patch(
     patch_teams = _teams_set(patch_access)
 
     removed = existing_teams - patch_teams
-    if removed:
+    foreign_removed = removed - caller_team_admin_ids
+    if foreign_removed:
         return Deny(
-            "team-admin may not remove existing team grants: "
-            + ", ".join(sorted(removed))
+            "team-admin may only revoke their own team grants; foreign team_ids: "
+            + ", ".join(sorted(foreign_removed))
         )
 
     added = patch_teams - existing_teams
-    foreign = added - caller_team_admin_ids
-    if foreign:
+    foreign_added = added - caller_team_admin_ids
+    if foreign_added:
         return Deny(
             "team-admin may only grant their own team_ids: "
-            + ", ".join(sorted(foreign))
+            + ", ".join(sorted(foreign_added))
         )
 
     return Allow()

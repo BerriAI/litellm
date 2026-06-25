@@ -1466,10 +1466,8 @@ async def generate_key_fn(
     """
     try:
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_logging_exporter_assignment,
+            validate_key_logging_exporter_assignment,
         )
-
-        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
@@ -1568,6 +1566,19 @@ async def generate_key_fn(
             user_api_key_dict=user_api_key_dict,
             data=data,
             route=KeyManagementRoutes.KEY_GENERATE,
+        )
+
+        # Team-admin of the key's team may write `metadata.logging_exporters`
+        # on team-owned keys (mirrors how they already manage that team's keys'
+        # budgets/models/limits). Personal keys (no team_table) stay strict.
+        _is_team_admin_of_key_team = team_table is not None and any(
+            member.user_id == user_api_key_dict.user_id and member.role == "admin"
+            for member in team_table.members_with_roles
+        )
+        validate_key_logging_exporter_assignment(
+            metadata=data.metadata,
+            user_api_key_dict=user_api_key_dict,
+            is_team_admin_of_key_team=_is_team_admin_of_key_team,
         )
 
         if team_table is not None:
@@ -2516,10 +2527,8 @@ async def update_key_fn(
     ```
     """
     from litellm.proxy.management_endpoints.logging_exporter_validation import (
-        validate_logging_exporter_assignment,
+        validate_key_logging_exporter_assignment,
     )
-
-    validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
     from litellm.proxy.proxy_server import (
         llm_router,
         premium_user,
@@ -2548,6 +2557,32 @@ async def update_key_fn(
         existing_key_row = await _get_and_validate_existing_key(
             token=data.key,
             prisma_client=prisma_client,
+        )
+
+        # logging-exporters validation runs once the key's team is known so a
+        # team-admin of that team can attach destinations to the key
+        _key_team_id = getattr(existing_key_row, "team_id", None)
+        _is_team_admin_of_key_team = False
+        if _key_team_id is not None:
+            try:
+                _key_team = await get_team_object(
+                    team_id=_key_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                    check_db_only=True,
+                )
+                _is_team_admin_of_key_team = any(
+                    member.user_id == user_api_key_dict.user_id
+                    and member.role == "admin"
+                    for member in _key_team.members_with_roles
+                )
+            except Exception:
+                _is_team_admin_of_key_team = False
+        validate_key_logging_exporter_assignment(
+            metadata=data.metadata,
+            user_api_key_dict=user_api_key_dict,
+            is_team_admin_of_key_team=_is_team_admin_of_key_team,
         )
 
         await _validate_update_key_data(

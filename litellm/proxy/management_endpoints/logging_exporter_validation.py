@@ -134,3 +134,31 @@ def validate_team_logging_exporter_assignment(
             },
         )
     _validate_exporters_shape_and_names(metadata.get(LOGGING_EXPORTERS_KEY))
+
+
+def validate_key_logging_exporter_assignment(
+    metadata: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+    is_team_admin_of_key_team: bool,
+) -> None:
+    """``metadata.logging_exporters`` validator for ``/key/generate`` and ``/key/update``.
+
+    Proxy admins always pass. A team-admin of the key's team may write the
+    field on a team-owned key, mirroring how team-admins already manage that
+    team's keys (budgets, models, rate limits). Personal (non-team) keys stay
+    proxy-admin only because there's no team to delegate the decision to.
+    """
+    if not isinstance(metadata, dict) or LOGGING_EXPORTERS_KEY not in metadata:
+        return
+    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    if not (is_proxy_admin or is_team_admin_of_key_team):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "Only the proxy admin or a team admin of the key's team can "
+                    "assign logging exporters on a key"
+                )
+            },
+        )
+    _validate_exporters_shape_and_names(metadata.get(LOGGING_EXPORTERS_KEY))

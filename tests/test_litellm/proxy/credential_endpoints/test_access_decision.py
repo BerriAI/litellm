@@ -150,20 +150,61 @@ class TestTeamAdminDeny:
         assert isinstance(d, Deny)
         assert "team-foreign" in d.reason
 
-    def test_removing_existing_grant(self):
+    def test_removing_foreign_team_grant(self):
+        """team-admin may NOT remove a team they don't admin."""
         d = _decision(
             patch_info={
                 "access": {"teams": ["team-A", "team-T"]},
             },
         )
         assert isinstance(d, Deny)
+        # team-B was removed and the caller doesn't admin team-B.
         assert "team-B" in d.reason
 
-    def test_replacing_teams_wholesale(self):
+    def test_replacing_teams_wholesale_with_foreign_remaining(self):
+        """Wholesale replacement that removes foreign grants is rejected."""
         d = _decision(patch_info={"access": {"teams": ["team-T"]}})
         assert isinstance(d, Deny)
-        # Removed team-A and team-B; either should appear in the reason.
+        # team-A and team-B were both dropped; the caller admins neither.
         assert "team-A" in d.reason or "team-B" in d.reason
+
+
+class TestTeamAdminRevoke:
+    """A team-admin may revoke their OWN team's grant; never another's."""
+
+    def test_revoking_own_team_is_allowed(self):
+        existing = {
+            **_EXISTING_INFO,
+            "access": {"teams": ["team-A", "team-T"]},
+        }
+        d = _decision(
+            existing_info=existing,
+            patch_info={"access": {"teams": ["team-A"]}},
+        )
+        assert isinstance(d, Allow)
+
+    def test_revoking_own_team_when_only_grant(self):
+        """Saving an empty teams list when the caller was the sole grant."""
+        existing = {**_EXISTING_INFO, "access": {"teams": ["team-T"]}}
+        d = _decision(
+            existing_info=existing,
+            patch_info={"access": {"teams": []}},
+        )
+        assert isinstance(d, Allow)
+
+    def test_revoke_attempt_on_foreign_team_denied(self):
+        """A patch that removes a foreign team is still rejected, even if
+        the caller is also revoking their own."""
+        existing = {
+            **_EXISTING_INFO,
+            "access": {"teams": ["team-A", "team-B", "team-T"]},
+        }
+        d = _decision(
+            existing_info=existing,
+            patch_info={"access": {"teams": ["team-A"]}},  # drops team-B AND team-T
+        )
+        assert isinstance(d, Deny)
+        assert "team-B" in d.reason
 
 
 class TestTeamAdminMultipleTeams:

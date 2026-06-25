@@ -341,6 +341,41 @@ async def test_team_admin_can_append_own_team_to_access(
 
 
 @pytest.mark.asyncio
+async def test_team_admin_can_revoke_own_team_grant(
+    _connected_db, _patch_team_admin_lookup, monkeypatch
+):
+    """A team-admin saving an access list without their own team_id revokes it."""
+    existing = CredentialItem(
+        credential_name="dest",
+        credential_values={"langfuse_host": "h"},
+        credential_info={
+            "credential_type": "logging",
+            "description": "tenant Langfuse",
+            "host": "https://cloud.langfuse.com",
+            "access": {"teams": ["team-existing", "team-T"]},
+        },
+    )
+    monkeypatch.setattr(litellm, "credential_list", [existing])
+    _connected_db.find_by_name = AsyncMock(return_value=existing)
+    _connected_db.update_by_name = AsyncMock()
+    _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=CredentialItem(
+            credential_name="dest",
+            credential_values={},
+            credential_info={"access": {"teams": ["team-existing"]}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_team_admin_of(["team-T"]),
+    )
+    assert result["success"] is True
+    _connected_db.update_by_name.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_team_admin_cannot_grant_foreign_team(
     _connected_db, _patch_team_admin_lookup, monkeypatch
 ):

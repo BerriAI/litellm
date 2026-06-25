@@ -14,6 +14,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     is_admin_gated_credential_info,
     validate_credential_access,
+    validate_key_logging_exporter_assignment,
     validate_logging_exporter_assignment,
     validate_team_logging_exporter_assignment,
 )
@@ -202,4 +203,69 @@ def test_team_validator_noop_when_absent(_registry):
         metadata=None,
         user_api_key_dict=_member(),
         is_team_admin=False,
+    )
+
+
+# --- key-scoped validator (LIT-3850 follow-up) ------------------------------
+
+
+def test_key_validator_team_admin_of_key_team_passes(_registry):
+    """team-admin of the key's team may write metadata.logging_exporters."""
+    validate_key_logging_exporter_assignment(
+        metadata={"logging_exporters": ["langfuse-eu"]},
+        user_api_key_dict=_member(),
+        is_team_admin_of_key_team=True,
+    )
+
+
+def test_key_validator_proxy_admin_always_passes(_registry):
+    validate_key_logging_exporter_assignment(
+        metadata={"logging_exporters": ["langfuse-eu"]},
+        user_api_key_dict=_admin(),
+        is_team_admin_of_key_team=False,
+    )
+
+
+def test_key_validator_non_team_admin_is_forbidden(_registry):
+    """A non-admin who isn't team-admin of the key's team is rejected."""
+    with pytest.raises(HTTPException) as exc:
+        validate_key_logging_exporter_assignment(
+            metadata={"logging_exporters": ["langfuse-eu"]},
+            user_api_key_dict=_member(),
+            is_team_admin_of_key_team=False,
+        )
+    assert exc.value.status_code == 403
+
+
+def test_key_validator_personal_key_rejects_non_admin(_registry):
+    """A personal key (no team) means is_team_admin_of_key_team=False; only admin passes."""
+    with pytest.raises(HTTPException) as exc:
+        validate_key_logging_exporter_assignment(
+            metadata={"logging_exporters": ["langfuse-eu"]},
+            user_api_key_dict=_member(),
+            is_team_admin_of_key_team=False,
+        )
+    assert exc.value.status_code == 403
+
+
+def test_key_validator_unknown_credential_rejected_even_for_team_admin(_registry):
+    with pytest.raises(HTTPException) as exc:
+        validate_key_logging_exporter_assignment(
+            metadata={"logging_exporters": ["does-not-exist"]},
+            user_api_key_dict=_member(),
+            is_team_admin_of_key_team=True,
+        )
+    assert exc.value.status_code == 400
+
+
+def test_key_validator_noop_when_absent(_registry):
+    validate_key_logging_exporter_assignment(
+        metadata={"other": 1},
+        user_api_key_dict=_member(),
+        is_team_admin_of_key_team=False,
+    )
+    validate_key_logging_exporter_assignment(
+        metadata=None,
+        user_api_key_dict=_member(),
+        is_team_admin_of_key_team=False,
     )
