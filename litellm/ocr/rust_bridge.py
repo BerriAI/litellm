@@ -11,7 +11,7 @@ can import it statically without forming an import cycle.
 
 from __future__ import annotations
 
-from typing import Final, Protocol, cast
+from typing import Awaitable, Final, Protocol, cast
 
 
 class RustOcr(Protocol):
@@ -23,9 +23,29 @@ class RustOcr(Protocol):
         document: dict[str, object],
         api_key: str | None,
         api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-    ) -> dict[str, object]: ...
+    ) -> dict[str, object]:
+        raise NotImplementedError
+
+
+class RustAocr(Protocol):
+    """Signature of the compiled ``litellm_python_bridge.aocr`` entrypoint."""
+
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> Awaitable[dict[str, object]]:
+        raise NotImplementedError
 
 
 class _Unset:
@@ -36,21 +56,27 @@ _UNSET: Final[_Unset] = _Unset()
 
 _rust_ocr_enabled = False
 _rust_ocr_impl: RustOcr | None = None
+_rust_aocr_impl: RustAocr | None = None
 
 
 def use_litellm_rust(
-    enabled: bool = True, *, ocr: RustOcr | None | _Unset = _UNSET
+    enabled: bool = True,
+    *,
+    ocr: RustOcr | None | _Unset = _UNSET,
+    aocr: RustAocr | None | _Unset = _UNSET,
 ) -> None:
     """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
 
-    ``ocr`` injects the bridge callable; when omitted the compiled extension is
-    loaded on demand and any previously injected bridge is preserved. Pass
-    ``ocr=None`` explicitly to clear a prior injection.
+    ``ocr`` and ``aocr`` inject bridge callables; when omitted the compiled
+    extension is loaded on demand and any previously injected bridge is
+    preserved. Pass ``None`` explicitly to clear a prior injection.
     """
-    global _rust_ocr_enabled, _rust_ocr_impl
+    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
     _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
+    if not isinstance(aocr, _Unset):
+        _rust_aocr_impl = aocr
 
 
 def rust_ocr_enabled() -> bool:
@@ -72,3 +98,14 @@ def load_rust_ocr() -> RustOcr | None:
     except ImportError:
         return None
     return cast(RustOcr, litellm_python_bridge.ocr)
+
+
+def load_rust_aocr() -> RustAocr | None:
+    """Return the async Rust OCR callable, or ``None`` when unavailable."""
+    if _rust_aocr_impl is not None:
+        return _rust_aocr_impl
+    try:
+        import litellm_python_bridge
+    except ImportError:
+        return None
+    return cast(RustAocr, getattr(litellm_python_bridge, "aocr", None))

@@ -101,6 +101,12 @@ class BaseOCRConfig:
         """
         return []
 
+    def get_api_key_env_var(self) -> Optional[str]:
+        """
+        Return the provider-specific API key environment variable name, if any.
+        """
+        return None
+
     def map_ocr_params(
         self,
         non_default_params: dict,
