@@ -42,7 +42,6 @@ pub(super) fn ocr_provider_config(
         "azure_ai" if is_azure_document_intelligence_model(model) => {
             Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
         }
-        "azure_ai/doc-intelligence" => Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG),
         "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
         "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
         "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),

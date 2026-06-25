@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use litellm_core::error::CoreError;
+use litellm_core::get_llm_provider_logic::{get_custom_llm_provider, CustomLlmProvider};
 use litellm_core::ocr::transformation::{OcrAuthStrategy, OcrResponseHandling};
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
@@ -60,7 +61,7 @@ pub struct OcrRequest<'a> {
     pub document: Value,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
-    pub custom_llm_provider: &'a str,
+    pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
@@ -71,9 +72,15 @@ pub struct OcrRequest<'a> {
 ///
 /// Async: intended to be awaited directly by the Python bridge's async entrypoint.
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
-    let model = request.model;
-    let config = ocr_provider_config(request.custom_llm_provider, model)
-        .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.to_string()))?;
+    let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
+        .unwrap_or(CustomLlmProvider {
+            model: request.model,
+            custom_llm_provider: "mistral",
+        });
+    let model = provider_info.model.to_string();
+    let custom_llm_provider = provider_info.custom_llm_provider.to_string();
+    let config = ocr_provider_config(&custom_llm_provider, &model)
+        .ok_or_else(|| CoreError::InvalidProvider(custom_llm_provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let headers = string_headers(request.extra_headers)?;
@@ -83,7 +90,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         .transpose()?;
     let url = config.complete_url(
         request.api_base,
-        model,
+        &model,
         &request.optional_params,
         &env_lookup,
     )?;
@@ -94,7 +101,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         request.document
     };
     let body = config
-        .transform_ocr_request(model, document, filtered_params)?
+        .transform_ocr_request(&model, document, filtered_params)?
         .data;
     let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
 
@@ -130,7 +137,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             poll_document_intelligence(&operation_url, &url, &upstream_headers, request.timeout)
                 .await?;
         return Ok(config
-            .transform_ocr_response(model, response_json)?
+            .transform_ocr_response(&model, response_json)?
             .into_json());
     }
 
@@ -150,7 +157,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
 
     Ok(config
-        .transform_ocr_response(model, response_json)?
+        .transform_ocr_response(&model, response_json)?
         .into_json())
 }
 
@@ -296,7 +303,7 @@ mod tests {
             }),
             api_key: Some("sk-for-rust-fallback"),
             api_base: Some(&format!("http://{addr}")),
-            custom_llm_provider: "mistral",
+            custom_llm_provider: Some("mistral"),
             extra_headers: Some(headers),
             optional_params: Map::new(),
             timeout: Some(Duration::from_secs(5)),
@@ -354,14 +361,14 @@ mod tests {
         });
 
         let response = ocr(OcrRequest {
-            model: "prebuilt-read",
+            model: "doc-intelligence/prebuilt-read",
             document: json!({
                 "type": "document_url",
                 "document_url": "https://example.com/doc.pdf"
             }),
             api_key: Some("di-key"),
             api_base: Some(&format!("http://{addr}")),
-            custom_llm_provider: "azure_ai/doc-intelligence",
+            custom_llm_provider: Some("azure_ai"),
             extra_headers: None,
             optional_params: Map::new(),
             timeout: Some(Duration::from_secs(5)),

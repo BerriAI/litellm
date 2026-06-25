@@ -96,7 +96,6 @@ fn ocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -111,7 +110,7 @@ fn ocr(
             document,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
-            custom_llm_provider: &custom_llm_provider,
+            custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
             timeout,
@@ -138,7 +137,6 @@ fn aocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -153,7 +151,7 @@ fn aocr(
             document,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
-            custom_llm_provider: &custom_llm_provider,
+            custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
             timeout,
