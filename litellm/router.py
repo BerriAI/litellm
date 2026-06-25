@@ -324,7 +324,6 @@ class Router:
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
-        lar1_settings: Optional[dict] = None,
         routing_groups: Optional[List[Union[RoutingGroup, dict]]] = None,
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
@@ -653,11 +652,11 @@ class Router:
             self.routing_strategy = "lar1"
             from litellm.router_strategy.lar1_routing import LAR1RoutingStrategy
 
-            lar1_config = lar1_settings or {}
+            lar1_args = routing_strategy_args or {}
             thresholds = {
-                "low": lar1_config.get("confidence_threshold_low", 0.3),
-                "medium": lar1_config.get("confidence_threshold_medium", 0.5),
-                "high": lar1_config.get("confidence_threshold_high", 0.7),
+                "low": lar1_args.get("confidence_threshold_low", 0.3),
+                "medium": lar1_args.get("confidence_threshold_medium", 0.5),
+                "high": lar1_args.get("confidence_threshold_high", 0.7),
             }
             self.set_custom_routing_strategy(
                 LAR1RoutingStrategy(

@@ -33,7 +33,7 @@ model_list:
 
 router_settings:
   routing_strategy: lar1
-  lar1_settings:
+  routing_strategy_args:
     confidence_threshold_low: 0.3
     confidence_threshold_medium: 0.5
     confidence_threshold_high: 0.7
