@@ -35,6 +35,7 @@ fn http_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(OCR_TIMEOUT_SECS))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("failed to build reqwest client")
     })
@@ -383,6 +384,67 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("ocp-apim-subscription-key: di-key"),
             "{poll_request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_intelligence_post_does_not_follow_redirects_with_credentials() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        let redirect_url = format!("http://{addr}/leak");
+
+        let server = tokio::spawn(async move {
+            let (mut post_socket, _) = listener.accept().await.expect("accepts post request");
+            let post_request = read_http_headers(&mut post_socket).await;
+            let post_response = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nlocation: {redirect_url}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            );
+            post_socket
+                .write_all(post_response.as_bytes())
+                .await
+                .expect("writes redirect response");
+
+            let second_connection =
+                tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+            (post_request, second_connection.is_ok())
+        });
+
+        let error = ocr(OcrRequest {
+            model: "prebuilt-read",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("di-key"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: "azure_ai/doc-intelligence",
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect_err("redirect is returned to caller");
+
+        assert_eq!(
+            error,
+            CoreError::Http {
+                status: 307,
+                body: "".to_string()
+            }
+        );
+
+        let (post_request, followed_redirect) = server.await.expect("server task completes");
+        assert!(
+            post_request
+                .to_ascii_lowercase()
+                .contains("ocp-apim-subscription-key: di-key"),
+            "{post_request}"
+        );
+        assert!(
+            !followed_redirect,
+            "credentialed DI POST followed redirect: {post_request}"
         );
     }
 
