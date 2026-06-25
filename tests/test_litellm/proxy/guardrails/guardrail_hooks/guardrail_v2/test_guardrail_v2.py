@@ -9,7 +9,7 @@ from litellm.proxy.guardrails.guardrail_hooks.guardrail_v2.guardrail_v2 import (
 )
 
 
-def _guardrail(verdict, capture=None):
+def _guardrail(verdict, capture=None, event_hook="pre_call"):
     """A GuardrailV2 whose engine call is dependency-injected to return a canned
     verdict, so the test runs without the compiled bridge."""
 
@@ -22,6 +22,7 @@ def _guardrail(verdict, capture=None):
         guardrail_type="openai_moderation",
         params={"api_key": "sk-test"},
         guardrail_name="t",
+        event_hook=event_hook,
     )
     guardrail._apply_guardrail_fn = fake_apply
     return guardrail
@@ -75,7 +76,43 @@ def test_batch_marker_does_not_leak_into_request_body():
         )
     )
     assert all(not k.startswith("_litellm_rust_guardrail_batch") for k in rd)
-    assert rd.get("metadata", {}).get("_litellm_rust_guardrail_batch_request") is True
+    # Marker is scoped by hook phase (event_hook), not just input_type.
+    assert (
+        rd.get("metadata", {}).get("_litellm_rust_guardrail_batch_request_pre_call")
+        is True
+    )
+
+
+def test_pre_call_marker_does_not_suppress_during_call_guardrail():
+    """A pre_call guardrail marking the request must not cause a during_call
+    guardrail to be skipped; that would bypass the later-phase check."""
+    calls = {"during": 0}
+
+    pre = _guardrail({"action": "pass"}, event_hook="pre_call")
+
+    during = GuardrailV2(
+        guardrail_type="openai_moderation",
+        params={"api_key": "sk-test"},
+        guardrail_name="t-during",
+        event_hook="during_call",
+    )
+
+    def during_apply(_request_json: str) -> str:
+        calls["during"] += 1
+        return json.dumps({"verdict": {"action": "pass"}})
+
+    during._apply_guardrail_fn = during_apply
+
+    rd: dict = {}
+    asyncio.run(
+        pre.apply_guardrail({"texts": ["hi"]}, request_data=rd, input_type="request")
+    )
+    asyncio.run(
+        during.apply_guardrail({"texts": ["hi"]}, request_data=rd, input_type="request")
+    )
+    assert (
+        calls["during"] == 1
+    ), "during_call guardrail was skipped by the pre_call marker"
 
 
 def test_streaming_overrides_are_forwarded():

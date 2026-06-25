@@ -182,18 +182,31 @@ class GuardrailV2(CustomGuardrail):
         # whole set; the rest are no-ops so the batch is applied exactly once. The
         # marker lives in litellm metadata (not the top-level request dict) so it
         # is never forwarded to the upstream provider as a request parameter.
+        #
+        # The marker is scoped by hook phase (event_hook), not just input_type:
+        # pre_call and during_call both use input_type="request", so a marker keyed
+        # only on input_type would let a pre_call batch suppress a during_call
+        # guardrail and bypass that later-phase check. For an ambiguous hook
+        # (None / list / tag-based Mode) we skip dedup entirely and let each
+        # guardrail run, which is safe (never a bypass) if slightly redundant.
         metadata = rd.get("metadata")
         if metadata is None:
             metadata = rd.get("litellm_metadata")
         if metadata is None:
             metadata = {}
             rd["metadata"] = metadata
-        marker = f"_litellm_rust_guardrail_batch_{input_type}"
-        if metadata.get(marker):
+        phase = getattr(self.event_hook, "value", self.event_hook)
+        marker = (
+            f"_litellm_rust_guardrail_batch_{input_type}_{phase}"
+            if isinstance(phase, str)
+            else None
+        )
+        if marker is not None and metadata.get(marker):
             out: GenericGuardrailAPIInputs = {}
             out.update(inputs)
             return out
-        metadata[marker] = True
+        if marker is not None:
+            metadata[marker] = True
 
         batch = self._collect_batch(rd, input_type)
         request_body = rd.get("body") or {}
