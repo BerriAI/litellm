@@ -14,6 +14,7 @@ use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -40,6 +41,7 @@ pub struct UserApiKeyAuth {
     pub models: Vec<String>,
     pub tpm_limit: Option<i64>,
     pub rpm_limit: Option<i64>,
+    pub budget_reservation: Option<Value>,
 }
 
 impl UserApiKeyAuth {
@@ -132,17 +134,25 @@ impl FromRequestParts<AppState> for UserApiKeyAuth {
         let model = requested_model(parts.uri.query())
             .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
         let model = model.as_deref();
+        let use_auth_cache = route != "/v1/realtime";
 
         // Virtual key: serve from cache, else verify via the (swappable) backend
         // and cache the result keyed by (route, model, key) hash.
         let hash = key_hash(token, route, model);
-        if let Some(cached) = state.key_cache.get(&hash) {
-            return Ok(cached);
+        if use_auth_cache {
+            if let Some(cached) = state.key_cache.get(&hash) {
+                return Ok(cached);
+            }
         }
 
         match state.authenticator.verify(token, route, model).await {
             Ok(auth) => {
-                state.key_cache.insert(hash, auth.clone());
+                // Budget reservations are request-scoped admission state. Reusing
+                // one from the auth cache would let later sessions bypass a fresh
+                // reservation and then reconcile the same reservation twice.
+                if use_auth_cache && auth.budget_reservation.is_none() {
+                    state.key_cache.insert(hash, auth.clone());
+                }
                 Ok(auth)
             }
             Err(AuthError::Unauthorized) => {
@@ -176,7 +186,9 @@ mod tests {
     use crate::io::realtime_pool::RealtimePool;
     use axum::http::Request;
     use litellm_core::router::Router;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     /// Stub authenticator so tests never touch the network. Records nothing; just
     /// returns a fixed identity (or unauthorized) per construction.
@@ -201,18 +213,34 @@ mod tests {
     }
 
     fn test_state(master_key: Option<&str>, authenticator: Arc<dyn KeyAuthenticator>) -> AppState {
+        test_state_with_cache(master_key, authenticator, Arc::new(KeyCache::new()))
+    }
+
+    fn test_state_with_cache(
+        master_key: Option<&str>,
+        authenticator: Arc<dyn KeyAuthenticator>,
+        key_cache: Arc<KeyCache>,
+    ) -> AppState {
         AppState {
             router: Arc::new(Router::new(vec![])),
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
             authenticator,
-            key_cache: Arc::new(KeyCache::new()),
+            key_cache,
         }
     }
 
     async fn extract(state: &AppState, header: Option<&str>) -> Result<UserApiKeyAuth, StatusCode> {
-        let mut builder = Request::builder().uri("/");
+        extract_uri(state, header, "/").await
+    }
+
+    async fn extract_uri(
+        state: &AppState,
+        header: Option<&str>,
+        uri: &str,
+    ) -> Result<UserApiKeyAuth, StatusCode> {
+        let mut builder = Request::builder().uri(uri);
         if let Some(value) = header {
             builder = builder.header(AUTHORIZATION, value);
         }
@@ -255,13 +283,113 @@ mod tests {
                 ..UserApiKeyAuth::default()
             }),
         });
-        let state = test_state(Some("sk-master"), stub);
+        let state = test_state_with_cache(
+            Some("sk-master"),
+            stub,
+            Arc::new(KeyCache::with_ttl(Duration::from_secs(60))),
+        );
 
         let auth = extract(&state, Some("Bearer sk-virtual")).await.unwrap();
         assert_eq!(auth.user_id.as_deref(), Some("u-1"));
         // Second call should be served from cache (same identity).
         let cached = extract(&state, Some("Bearer sk-virtual")).await.unwrap();
         assert_eq!(cached.user_id.as_deref(), Some("u-1"));
+    }
+
+    #[tokio::test]
+    async fn auth_with_budget_reservation_is_not_cached() {
+        struct CountingAuthenticator {
+            calls: AtomicUsize,
+        }
+
+        #[axum::async_trait]
+        impl KeyAuthenticator for CountingAuthenticator {
+            async fn verify(
+                &self,
+                _key: &str,
+                _route: &str,
+                _model: Option<&str>,
+            ) -> Result<UserApiKeyAuth, AuthError> {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(UserApiKeyAuth {
+                    user_id: Some(format!("u-{call}")),
+                    budget_reservation: Some(serde_json::json!({
+                        "reserved_cost": 0.5,
+                        "entries": [{"counter_key": "spend:key:hashed-key"}],
+                        "finalized": false,
+                        "input_cost": 0.1
+                    })),
+                    ..UserApiKeyAuth::default()
+                })
+            }
+        }
+
+        let authenticator = Arc::new(CountingAuthenticator {
+            calls: AtomicUsize::new(0),
+        });
+        let state = test_state_with_cache(
+            Some("sk-master"),
+            authenticator.clone(),
+            Arc::new(KeyCache::with_ttl(Duration::from_secs(60))),
+        );
+
+        let first = extract(&state, Some("Bearer sk-virtual")).await.unwrap();
+        let second = extract(&state, Some("Bearer sk-virtual")).await.unwrap();
+
+        assert_eq!(first.user_id.as_deref(), Some("u-1"));
+        assert_eq!(second.user_id.as_deref(), Some("u-2"));
+        assert_eq!(authenticator.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn realtime_auth_bypasses_cache() {
+        struct CountingAuthenticator {
+            calls: AtomicUsize,
+        }
+
+        #[axum::async_trait]
+        impl KeyAuthenticator for CountingAuthenticator {
+            async fn verify(
+                &self,
+                _key: &str,
+                _route: &str,
+                _model: Option<&str>,
+            ) -> Result<UserApiKeyAuth, AuthError> {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(UserApiKeyAuth {
+                    user_id: Some(format!("u-{call}")),
+                    ..UserApiKeyAuth::default()
+                })
+            }
+        }
+
+        let authenticator = Arc::new(CountingAuthenticator {
+            calls: AtomicUsize::new(0),
+        });
+        let state = test_state_with_cache(
+            Some("sk-master"),
+            authenticator.clone(),
+            Arc::new(KeyCache::with_ttl(Duration::from_secs(60))),
+        );
+
+        let first = extract_uri(
+            &state,
+            Some("Bearer sk-virtual"),
+            "/v1/realtime?model=gpt-realtime",
+        )
+        .await
+        .unwrap();
+        let second = extract_uri(
+            &state,
+            Some("Bearer sk-virtual"),
+            "/v1/realtime?model=gpt-realtime",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.user_id.as_deref(), Some("u-1"));
+        assert_eq!(second.user_id.as_deref(), Some("u-2"));
+        assert_eq!(authenticator.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -290,7 +418,13 @@ mod tests {
             "blocked": false,
             "models": ["gpt-4o", "gpt-4o-mini"],
             "tpm_limit": 1000,
-            "rpm_limit": 60
+            "rpm_limit": 60,
+            "budget_reservation": {
+                "reserved_cost": 0.5,
+                "entries": [{"counter_key": "spend:key:hashed-abc"}],
+                "finalized": false,
+                "input_cost": 0.1
+            }
         });
 
         let auth: UserApiKeyAuth = serde_json::from_value(body).unwrap();
@@ -306,6 +440,13 @@ mod tests {
         assert_eq!(auth.models, vec!["gpt-4o", "gpt-4o-mini"]);
         assert_eq!(auth.tpm_limit, Some(1000));
         assert_eq!(auth.rpm_limit, Some(60));
+        assert_eq!(
+            auth.budget_reservation
+                .as_ref()
+                .and_then(|reservation| reservation.get("reserved_cost"))
+                .and_then(Value::as_f64),
+            Some(0.5)
+        );
     }
 
     #[test]

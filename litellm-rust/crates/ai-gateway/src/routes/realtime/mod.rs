@@ -63,6 +63,7 @@ fn request_metadata_for_auth(auth: &UserApiKeyAuth, master_key: Option<&str>) ->
         user_api_key_hash,
         user_api_key_user_id: auth.user_id.clone(),
         user_api_key_team_id: auth.team_id.clone(),
+        user_api_key_budget_reservation: auth.budget_reservation.clone(),
     }
 }
 
@@ -185,6 +186,12 @@ mod tests {
                 api_key: Some("hashed-key".to_string()),
                 user_id: Some("user-1".to_string()),
                 team_id: Some("team-1".to_string()),
+                budget_reservation: Some(serde_json::json!({
+                    "reserved_cost": 0.5,
+                    "entries": [{"counter_key": "spend:key:hashed-key"}],
+                    "finalized": false,
+                    "input_cost": 0.1
+                })),
                 ..UserApiKeyAuth::default()
             },
             Some("sk-master"),
@@ -193,6 +200,14 @@ mod tests {
         assert_eq!(metadata.user_api_key_hash.as_deref(), Some("hashed-key"));
         assert_eq!(metadata.user_api_key_user_id.as_deref(), Some("user-1"));
         assert_eq!(metadata.user_api_key_team_id.as_deref(), Some("team-1"));
+        assert_eq!(
+            metadata
+                .user_api_key_budget_reservation
+                .as_ref()
+                .and_then(|reservation| reservation.get("reserved_cost"))
+                .and_then(serde_json::Value::as_f64),
+            Some(0.5)
+        );
     }
 
     #[test]

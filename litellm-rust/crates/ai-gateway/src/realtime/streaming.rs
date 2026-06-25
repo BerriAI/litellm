@@ -174,6 +174,10 @@ impl RealTimeStreaming {
                 user_api_key_hash: self.metadata.user_api_key_hash.clone(),
                 user_api_key_user_id: self.metadata.user_api_key_user_id.clone(),
                 user_api_key_team_id: self.metadata.user_api_key_team_id.clone(),
+                user_api_key_budget_reservation: self
+                    .metadata
+                    .user_api_key_budget_reservation
+                    .clone(),
                 ..Default::default()
             },
             messages: None,
@@ -252,6 +256,12 @@ mod tests {
                 user_api_key_hash: Some("hash123".to_string()),
                 user_api_key_user_id: Some("user-1".to_string()),
                 user_api_key_team_id: Some("team-1".to_string()),
+                user_api_key_budget_reservation: Some(serde_json::json!({
+                    "reserved_cost": 0.5,
+                    "entries": [{"counter_key": "spend:key:hash123"}],
+                    "finalized": false,
+                    "input_cost": 0.1
+                })),
             },
         );
 
@@ -282,6 +292,15 @@ mod tests {
         assert_eq!(
             payload.metadata.user_api_key_hash.as_deref(),
             Some("hash123")
+        );
+        assert_eq!(
+            payload
+                .metadata
+                .user_api_key_budget_reservation
+                .as_ref()
+                .and_then(|reservation| reservation.get("reserved_cost"))
+                .and_then(Value::as_f64),
+            Some(0.5)
         );
 
         streaming.log_messages(SessionStatus::Success);
@@ -318,6 +337,10 @@ mod tests {
         assert!(
             json.contains("\"response_cost\""),
             "missing response_cost: {json}"
+        );
+        assert!(
+            !json.contains("user_api_key_budget_reservation"),
+            "missing reservation should be omitted: {json}"
         );
         assert_eq!(payload.response_cost, 0.0042);
     }

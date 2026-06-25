@@ -87,7 +87,7 @@ def test_router_mounts_auth_verify_under_rust_control_plane():
 
 
 @pytest.mark.asyncio
-async def test_synthetic_request_skips_budget_reservation():
+async def test_synthetic_request_allows_budget_reservation():
     request = _synthetic_request(
         route="/v1/realtime",
         authorization_header="Bearer sk-test-key",
@@ -95,7 +95,7 @@ async def test_synthetic_request_skips_budget_reservation():
     )
 
     assert request.url.path == "/v1/realtime"
-    assert request.state.skip_budget_reservation is True
+    assert getattr(request.state, "skip_budget_reservation", False) is False
     assert (await request.json()) == {"model": "gpt-realtime"}
 
 
@@ -131,6 +131,39 @@ async def test_verify_key_returns_model_dump(monkeypatch):
     assert (await captured["request"].json())["model"] == "gpt-realtime"
     assert result == expected_auth.model_dump(exclude_none=True, mode="json")
     assert result["user_id"] == "user-123"
+
+
+@pytest.mark.asyncio
+async def test_verify_key_returns_budget_reservation(monkeypatch):
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:hashed-key"}],
+        "finalized": False,
+        "input_cost": 0.1,
+    }
+    expected_auth = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="user-123",
+        budget_reservation=budget_reservation,
+    )
+
+    async def fake_user_api_key_auth(request, api_key):
+        return expected_auth
+
+    monkeypatch.setattr(
+        "litellm.proxy.rust_control_plane_endpoints.auth_endpoints.user_api_key_auth",
+        fake_user_api_key_auth,
+    )
+
+    body = VerifyKeyRequest(
+        api_key="sk-test-key", route="/v1/realtime", model="gpt-realtime"
+    )
+    result = await verify_key(body=body)
+
+    assert "budget_reservation" not in expected_auth.model_dump(
+        exclude_none=True, mode="json"
+    )
+    assert result["budget_reservation"] == budget_reservation
 
 
 @pytest.mark.asyncio

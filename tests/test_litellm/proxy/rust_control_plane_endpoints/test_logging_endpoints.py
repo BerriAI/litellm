@@ -17,6 +17,12 @@ from litellm.types.proxy.callback_logs_endpoints import (
 )
 
 REQ_ID = "cb-logs-unit-test-1"
+BUDGET_RESERVATION = {
+    "reserved_cost": 0.5,
+    "entries": [{"counter_key": "spend:key:rust-gateway-test-key"}],
+    "finalized": False,
+    "input_cost": 0.1,
+}
 
 
 def _sample_payload(**overrides):
@@ -37,6 +43,7 @@ def _sample_payload(**overrides):
             "user_api_key_hash": "rust-gateway-test-key",
             "user_api_key_user_id": "user-cb-logs-test",
             "user_api_key_team_id": "team-cb-logs-test",
+            "user_api_key_budget_reservation": BUDGET_RESERVATION,
         },
         "messages": [{"role": "user", "content": "hi"}],
     }
@@ -63,6 +70,7 @@ def test_build_logging_obj_seeds_model_call_details():
     assert md["user_api_key"] == "rust-gateway-test-key"
     assert md["user_api_key_user_id"] == "user-cb-logs-test"
     assert md["user_api_key_team_id"] == "team-cb-logs-test"
+    assert md["user_api_key_budget_reservation"] is BUDGET_RESERVATION
 
 
 def test_response_obj_carries_usage():

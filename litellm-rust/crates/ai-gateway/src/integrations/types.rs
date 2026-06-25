@@ -26,6 +26,7 @@ pub struct RequestMetadata {
     pub user_api_key_hash: Option<String>,
     pub user_api_key_user_id: Option<String>,
     pub user_api_key_team_id: Option<String>,
+    pub user_api_key_budget_reservation: Option<Value>,
 }
 
 /// A logging-callback failure (e.g. a custom logger raised). Mirrors the Python
@@ -140,6 +141,8 @@ pub struct StandardLoggingMetadata {
     pub user_api_key_org_id: Option<String>, // -> SpendLogs.organization_id
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_api_key_end_user_id: Option<String>, // -> SpendLogs.end_user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_api_key_budget_reservation: Option<Value>, // -> budget reservation reconciliation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spend_logs_metadata: Option<HashMap<String, Value>>,
 }

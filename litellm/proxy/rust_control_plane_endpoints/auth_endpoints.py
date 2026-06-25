@@ -78,12 +78,7 @@ def _synthetic_request(
         "client": ("127.0.0.1", 0),
         "server": ("127.0.0.1", 4000),
     }
-    request = Request(scope, receive)
-    # Admission checks only. Realtime spend is reconciled later through callback
-    # logs, so optimistic reservation here would have no request lifecycle to
-    # release it.
-    request.state.skip_budget_reservation = True
-    return request
+    return Request(scope, receive)
 
 
 @router.post(
@@ -124,4 +119,7 @@ async def verify_key(body: VerifyKeyRequest) -> dict[str, Any]:
             raise
         raise HTTPException(status_code=401, detail="invalid api key")
 
-    return auth.model_dump(exclude_none=True, mode="json")
+    auth_response = auth.model_dump(exclude_none=True, mode="json")
+    if auth.budget_reservation is not None:
+        auth_response["budget_reservation"] = auth.budget_reservation
+    return auth_response

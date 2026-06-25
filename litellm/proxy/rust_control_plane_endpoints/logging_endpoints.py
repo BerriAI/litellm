@@ -94,6 +94,9 @@ class CallbackLogsReplayer:
             "user_api_key_team_id": metadata.get("user_api_key_team_id"),
             "user_api_key_org_id": metadata.get("user_api_key_org_id"),
             "user_api_key_end_user_id": metadata.get("user_api_key_end_user_id"),
+            "user_api_key_budget_reservation": metadata.get(
+                "user_api_key_budget_reservation"
+            ),
             "spend_logs_metadata": metadata.get("spend_logs_metadata"),
         }
 
