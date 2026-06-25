@@ -206,9 +206,9 @@ def test_estimate_tokens_never_zero_for_short_rows():
 
 def test_output_models_uses_model_name_override():
     # model_name short-circuits: content is ignored entirely.
-    assert bu._get_batch_models_from_file_content(
-        [_success_row(model="ignored")], model_name="forced-model"
-    ) == ["forced-model"]
+    assert bu._get_batch_models_from_file_content([_success_row(model="ignored")], model_name="forced-model") == [
+        "forced-model"
+    ]
 
 
 def test_output_models_collects_from_successful_only():
@@ -451,16 +451,11 @@ def test_cost_from_content_model_info_path(monkeypatch):
 
 def test_batch_cost_calculator_generic_path(monkeypatch):
     monkeypatch.setattr(bu, "_get_batch_job_cost_from_file_content", lambda **kw: 4.2)
-    assert (
-        bu._batch_cost_calculator([], custom_llm_provider="openai", model_name="gpt-4o")
-        == 4.2
-    )
+    assert bu._batch_cost_calculator([], custom_llm_provider="openai", model_name="gpt-4o") == 4.2
 
 
 def test_batch_cost_calculator_vertex_disable_transform_path(monkeypatch):
-    monkeypatch.setattr(
-        litellm, "disable_vertex_batch_output_transformation", True, raising=False
-    )
+    monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", True, raising=False)
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
@@ -473,9 +468,7 @@ def test_batch_cost_calculator_vertex_disable_transform_path(monkeypatch):
         lambda **kw: pytest.fail("generic path should not run"),
     )
 
-    cost = bu._batch_cost_calculator(
-        [], custom_llm_provider="vertex_ai", model_name="gemini-2.0-flash-001"
-    )
+    cost = bu._batch_cost_calculator([], custom_llm_provider="vertex_ai", model_name="gemini-2.0-flash-001")
     assert cost == 9.9
 
 
@@ -547,13 +540,7 @@ def test_vertex_usage_total_token_fallback(monkeypatch):
     import litellm.cost_calculator as cc
 
     monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (0.0, 0.0))
-    responses = [
-        {
-            "response": {
-                "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 4}
-            }
-        }
-    ]
+    responses = [{"response": {"usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 4}}}]
 
     _, usage = bu.calculate_vertex_ai_batch_cost_and_usage(responses, "gemini-x")
     assert usage.total_tokens == 12
@@ -631,17 +618,13 @@ def _batch(output_file_id):
 @pytest.mark.asyncio
 async def test_output_file_content_vertex_raises():
     with pytest.raises(ValueError, match="Vertex AI does not support"):
-        await bu._get_batch_output_file_content_as_dictionary(
-            _batch("of"), custom_llm_provider="vertex_ai"
-        )
+        await bu._get_batch_output_file_content_as_dictionary(_batch("of"), custom_llm_provider="vertex_ai")
 
 
 @pytest.mark.asyncio
 async def test_output_file_content_no_output_file_id_raises():
     with pytest.raises(ValueError, match="Output file id is None"):
-        await bu._get_batch_output_file_content_as_dictionary(
-            _batch(None), custom_llm_provider="openai"
-        )
+        await bu._get_batch_output_file_content_as_dictionary(_batch(None), custom_llm_provider="openai")
 
 
 @pytest.mark.asyncio
@@ -693,9 +676,7 @@ async def test_output_file_content_unified_file_id_extraction(monkeypatch):
         lambda fid: "litellm_proxy;llm_output_file_id,real-file-99;rest",
     )
 
-    await bu._get_batch_output_file_content_as_dictionary(
-        _batch("encoded-blob"), custom_llm_provider="openai"
-    )
+    await bu._get_batch_output_file_content_as_dictionary(_batch("encoded-blob"), custom_llm_provider="openai")
 
     assert captured["file_id"] == "real-file-99"
 
@@ -712,9 +693,7 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
     async def fake_get_content(batch, custom_llm_provider, litellm_params=None):
         return rows
 
-    monkeypatch.setattr(
-        bu, "_get_batch_output_file_content_as_dictionary", fake_get_content
-    )
+    monkeypatch.setattr(bu, "_get_batch_output_file_content_as_dictionary", fake_get_content)
     monkeypatch.setattr(bu, "_batch_cost_calculator", lambda **kw: 3.3)
     monkeypatch.setattr(
         bu,
@@ -722,9 +701,7 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
         lambda **kw: Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
 
-    cost, usage, models = await bu._handle_completed_batch(
-        _batch("of"), custom_llm_provider="openai"
-    )
+    cost, usage, models = await bu._handle_completed_batch(_batch("of"), custom_llm_provider="openai")
 
     assert cost == 3.3
     assert usage.total_tokens == 15
@@ -744,9 +721,7 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
 
 
 def test_total_usage_vertex_disable_transform_path(monkeypatch):
-    monkeypatch.setattr(
-        litellm, "disable_vertex_batch_output_transformation", True, raising=False
-    )
+    monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", True, raising=False)
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
@@ -756,7 +731,5 @@ def test_total_usage_vertex_disable_transform_path(monkeypatch):
         ),
     )
 
-    usage = bu._get_batch_job_total_usage_from_file_content(
-        [], custom_llm_provider="vertex_ai", model_name="gemini-x"
-    )
+    usage = bu._get_batch_job_total_usage_from_file_content([], custom_llm_provider="vertex_ai", model_name="gemini-x")
     assert usage.total_tokens == 3
