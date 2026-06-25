@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -40,6 +41,23 @@ EndpointType = Any
 
 
 class VertexPassthroughLoggingHandler:
+    @staticmethod
+    def _custom_pricing_kwargs(
+        logging_obj: LiteLLMLoggingObj,
+    ) -> dict[str, bool | str | None]:
+        """Forward per-deployment custom pricing (model_info) to the cost calculator.
+
+        Mirrors the Anthropic passthrough handler so vertex_ai passthrough honors
+        model_info pricing (registered under the router deployment's model_info.id)
+        instead of falling back to the built-in litellm.model_cost map only.
+        """
+        return {
+            "custom_pricing": use_custom_pricing_for_model(
+                litellm_params=getattr(logging_obj, "litellm_params", None)
+            ),
+            "router_model_id": logging_obj.get_router_model_id(),
+        }
+
     @staticmethod
     def vertex_passthrough_handler(
         httpx_response: httpx.Response,
@@ -74,6 +92,7 @@ class VertexPassthroughLoggingHandler:
                 model=model,
                 custom_llm_provider="vertex_ai",
                 call_type="create_video",
+                **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj),
             )
 
             # Set response_cost in _hidden_params to prevent recalculation
@@ -294,6 +313,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_prediction_response,
             model=model,
             custom_llm_provider="vertex_ai",
+            **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj),
         )
 
         kwargs["response_cost"] = response_cost
@@ -371,6 +391,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_embedding_response,
             model=model,
             custom_llm_provider=custom_llm_provider,
+            **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj),
         )
 
         kwargs["response_cost"] = response_cost
@@ -593,6 +614,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_model_response,
             model=model,
             custom_llm_provider="vertex_ai",
+            **VertexPassthroughLoggingHandler._custom_pricing_kwargs(logging_obj),
         )
 
         kwargs["response_cost"] = response_cost
