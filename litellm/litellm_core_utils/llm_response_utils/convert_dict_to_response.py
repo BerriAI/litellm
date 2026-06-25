@@ -333,9 +333,15 @@ def convert_to_streaming_response(
 
     if "usage" in response_object and response_object["usage"] is not None:
         setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+        model_response_object.usage.completion_tokens = response_object["usage"].get(
+            "completion_tokens", 0
+        )  # type: ignore
+        model_response_object.usage.prompt_tokens = response_object["usage"].get(
+            "prompt_tokens", 0
+        )  # type: ignore
+        model_response_object.usage.total_tokens = response_object["usage"].get(
+            "total_tokens", 0
+        )  # type: ignore
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
@@ -848,9 +854,15 @@ def convert_to_model_response_object(
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+                model_response_object.usage.completion_tokens = response_object[
+                    "usage"
+                ].get("completion_tokens", 0)  # type: ignore
+                model_response_object.usage.prompt_tokens = response_object[
+                    "usage"
+                ].get("prompt_tokens", 0)  # type: ignore
+                model_response_object.usage.total_tokens = response_object["usage"].get(
+                    "total_tokens", 0
+                )  # type: ignore
 
             if start_time is not None and end_time is not None:
                 model_response_object._response_ms = (  # type: ignore

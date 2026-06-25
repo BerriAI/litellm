@@ -66,9 +66,7 @@ def log_db_metrics(func):
             elif (
                 # in litellm custom callbacks kwargs is passed as arg[0]
                 # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
-                args is not None
-                and len(args) > 1
-                and isinstance(args[1], dict)
+                args is not None and len(args) > 1 and isinstance(args[1], dict)
             ):
                 passed_kwargs = args[1]
                 parent_otel_span = _get_parent_otel_span_from_kwargs(

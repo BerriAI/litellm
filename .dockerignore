@@ -49,6 +49,8 @@ build/
 *.egg-info/
 .DS_Store
 **/node_modules
+litellm-rust/target/
+litellm/rust_bridge/_native*.so
 *.log
 .env
 .env.local

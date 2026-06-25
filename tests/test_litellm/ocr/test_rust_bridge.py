@@ -1,7 +1,7 @@
 """Tests for the optional Rust-backed OCR path (``litellm/ocr/rust_bridge.py``)."""
 
 import importlib
-import sys
+import builtins
 import types
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 # explicitly via importlib rather than attribute traversal.
 ocr_main = importlib.import_module("litellm.ocr.main")
 rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
+rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
 MODEL = "mistral/mistral-ocr-latest"
 DOCUMENT = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
@@ -80,8 +81,10 @@ class FakeOCRConfig:
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
     rust_bridge.use_litellm_rust(False, ocr=None)
+    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
     rust_bridge.use_litellm_rust(False, ocr=None)
+    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
 @pytest.fixture
@@ -106,6 +109,44 @@ def test_load_rust_ocr_returns_injected_impl():
     assert rust_bridge.load_rust_ocr() is bridge
 
 
+def test_native_bridge_loader_returns_none_when_extension_absent(monkeypatch):
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "litellm.rust_bridge" and "_native" in fromlist:
+            raise ImportError
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert rust_bridge_loader.get_native_bridge() is None
+
+
+def test_native_bridge_loader_caches_absent_extension(monkeypatch):
+    real_import = builtins.__import__
+    attempts = 0
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        nonlocal attempts
+        if name == "litellm.rust_bridge" and "_native" in fromlist:
+            attempts += 1
+            raise ImportError
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert attempts == 1
+
+
+def test_native_bridge_available_reflects_loader(monkeypatch):
+    fake_module = types.ModuleType("litellm.rust_bridge._native")
+    monkeypatch.setattr(rust_bridge_loader, "get_native_bridge", lambda: fake_module)
+
+    assert rust_bridge_loader.native_bridge_available() is True
+
+
 def test_toggle_without_ocr_arg_preserves_injected_impl():
     """Regression: routine enable/disable calls must not clobber a prior injection.
 
@@ -122,7 +163,12 @@ def test_toggle_without_ocr_arg_preserves_injected_impl():
     assert rust_bridge.load_rust_ocr() is bridge
 
 
-def test_explicit_ocr_none_clears_injected_impl():
+def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: None,
+    )
     bridge = RecordingBridge()
     litellm.use_litellm_rust(True, ocr=bridge)
 
@@ -130,20 +176,29 @@ def test_explicit_ocr_none_clears_injected_impl():
     assert rust_bridge.load_rust_ocr() is None
 
 
-def test_load_rust_ocr_none_when_extension_absent():
+def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
     """With no injected impl and no compiled wheel, the loader returns None so the
     caller degrades to the Python path instead of raising ImportError."""
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: None,
+    )
     litellm.use_litellm_rust(True)  # no impl injected; extension isn't built in CI
     assert rust_bridge.load_rust_ocr() is None
 
 
 def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
-    """With no injected impl but a compiled ``litellm_python_bridge`` importable,
+    """With no injected impl but a packaged ``litellm.rust_bridge._native`` importable,
     the loader returns the extension's ``ocr`` callable. The native wheel isn't
-    built in CI, so stand in a fake module via ``sys.modules``."""
-    fake_module = types.ModuleType("litellm_python_bridge")
+    built in CI, so stand in a fake module via the bridge loader."""
+    fake_module = types.ModuleType("litellm.rust_bridge._native")
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "litellm_python_bridge", fake_module)
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: fake_module,
+    )
 
     litellm.use_litellm_rust(True)  # enabled, no impl injected -> import the extension
     assert rust_bridge.load_rust_ocr() is fake_module.ocr
@@ -317,6 +372,7 @@ def test_ocr_does_not_route_to_rust_when_disabled():
 def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
     """Rust enabled but no bridge available (no injected impl, no compiled wheel):
     ocr() must degrade to the Python HTTP handler instead of raising."""
+    monkeypatch.setattr(ocr_main, "load_rust_ocr", lambda: None)
     litellm.use_litellm_rust(True)  # enabled, but load_rust_ocr() returns None in CI
 
     captured = {}

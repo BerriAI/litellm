@@ -65,7 +65,9 @@ class AgentRegistry:
             # create a stable hash id for config item
             config_hash = self._create_agent_id(agent_config_item)
 
-            self.register_agent(agent_config=AgentResponse(agent_id=config_hash, **agent_config_item))  # type: ignore
+            self.register_agent(
+                agent_config=AgentResponse(agent_id=config_hash, **agent_config_item)
+            )  # type: ignore
 
     def load_agents_from_db_and_config(
         self,
@@ -79,7 +81,12 @@ class AgentRegistry:
                 if not isinstance(agent_config_item, dict):
                     raise ValueError("agent_config must be a list of dictionaries")
 
-                self.register_agent(agent_config=AgentResponse(agent_id=self._create_agent_id(agent_config_item), **agent_config_item))  # type: ignore
+                self.register_agent(
+                    agent_config=AgentResponse(
+                        agent_id=self._create_agent_id(agent_config_item),
+                        **agent_config_item,
+                    )
+                )  # type: ignore
 
         if db_agents:
             for db_agent in db_agents:

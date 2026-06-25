@@ -72,9 +72,9 @@ _AIOHTTP_SUPPORTS_SOCKET_FACTORY = (
 )
 
 
-def _build_aiohttp_keepalive_socket_factory() -> (
-    Optional[Callable[[Tuple[Any, ...]], socket.socket]]
-):
+def _build_aiohttp_keepalive_socket_factory() -> Optional[
+    Callable[[Tuple[Any, ...]], socket.socket]
+]:
     """
     Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
 
@@ -719,7 +719,14 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "PUT",
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                content=request_content,  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -780,7 +787,14 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "PATCH",
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                content=request_content,  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -841,7 +855,14 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "DELETE",
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                content=request_content,  # type: ignore
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -888,7 +909,13 @@ class AsyncHTTPHandler:
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
         req = client.build_request(
-            "POST", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+            "POST",
+            url,
+            data=request_data,
+            json=json,
+            params=params,
+            headers=headers,
+            content=request_content,  # type: ignore
         )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -1200,7 +1227,14 @@ class HTTPHandler:
                 )
             else:
                 req = self.client.build_request(
-                    "POST", url, data=request_data, json=json, params=params, headers=headers, files=files, content=request_content  # type: ignore
+                    "POST",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    files=files,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1235,11 +1269,24 @@ class HTTPHandler:
 
             if timeout is not None:
                 req = self.client.build_request(
-                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "PATCH",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "PATCH",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1274,11 +1321,24 @@ class HTTPHandler:
 
             if timeout is not None:
                 req = self.client.build_request(
-                    "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "PUT",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PUT", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "PUT",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             return response
@@ -1312,11 +1372,24 @@ class HTTPHandler:
 
             if timeout is not None:
                 req = self.client.build_request(
-                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "DELETE",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "DELETE",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
