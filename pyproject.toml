@@ -234,7 +234,7 @@ healthcheck = [
 ]
 
 [build-system]
-requires = ["maturin>=1.9.4,<2"]
+requires = ["maturin==1.9.4"]
 build-backend = "maturin"
 
 [tool.maturin]
