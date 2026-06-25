@@ -724,6 +724,54 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count=masked_entity_count,
             )
 
+    async def _mask_tool_call_arguments(
+        self,
+        messages: List[Any],
+        presidio_config: Optional[dict],
+        data: dict,
+    ) -> None:
+        """Mask PII in tool_call/function_call arguments across all messages."""
+        tool_tasks: List[Any] = []
+        tool_targets: List[Any] = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            for tool_call in m.get("tool_calls") or []:
+                function = (
+                    tool_call.get("function")
+                    if isinstance(tool_call, dict)
+                    else None
+                )
+                if isinstance(function, dict) and isinstance(
+                    function.get("arguments"), str
+                ):
+                    tool_tasks.append(
+                        self.check_pii(
+                            text=function["arguments"],
+                            output_parse_pii=self.output_parse_pii,
+                            presidio_config=presidio_config,
+                            request_data=data,
+                        )
+                    )
+                    tool_targets.append((function, "arguments"))
+            function_call = m.get("function_call")
+            if isinstance(function_call, dict) and isinstance(
+                function_call.get("arguments"), str
+            ):
+                tool_tasks.append(
+                    self.check_pii(
+                        text=function_call["arguments"],
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=presidio_config,
+                        request_data=data,
+                    )
+                )
+                tool_targets.append((function_call, "arguments"))
+        if tool_tasks:
+            tool_results = await asyncio.gather(*tool_tasks)
+            for (container, key), result in zip(tool_targets, tool_results):
+                container[key] = result
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -813,6 +861,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     ] = r  # replace content with redacted string
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
+
+            await self._mask_tool_call_arguments(messages, presidio_config, data)
 
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
@@ -994,6 +1044,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         break
         return text
 
+    async def _mask_nested_strings(
+        self,
+        obj: Any,
+        mode: Literal["mask", "unmask"],
+        pii_tokens: Dict[str, str],
+        presidio_config: Optional[dict],
+        request_data: dict,
+    ) -> Any:
+        """Recursively mask/unmask every string leaf in a JSON-like structure."""
+        if isinstance(obj, str):
+            if mode == "unmask":
+                return self._unmask_pii_text(obj, pii_tokens)
+            return await self.check_pii(
+                text=obj,
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
+        if isinstance(obj, dict):
+            for key in list(obj.keys()):
+                obj[key] = await self._mask_nested_strings(
+                    obj[key], mode, pii_tokens, presidio_config, request_data
+                )
+            return obj
+        if isinstance(obj, list):
+            for i, item in enumerate(obj):
+                obj[i] = await self._mask_nested_strings(
+                    item, mode, pii_tokens, presidio_config, request_data
+                )
+            return obj
+        return obj
+
     @staticmethod
     def _is_anthropic_message_response(response: Any) -> bool:
         """Check if the response is an Anthropic native message dict."""
@@ -1028,20 +1110,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return response
 
         for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
+            if not isinstance(block, dict):
                 continue
-            text_value = block.get("text")
-            if text_value is None:
-                continue
-            if mode == "unmask":
-                block["text"] = self._unmask_pii_text(text_value, pii_tokens)
-            elif mode == "mask":
-                block["text"] = await self.check_pii(
-                    text=text_value,
-                    output_parse_pii=False,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
+            block_type = block.get("type")
+            if block_type == "text":
+                text_value = block.get("text")
+                if text_value is None:
+                    continue
+                if mode == "unmask":
+                    block["text"] = self._unmask_pii_text(text_value, pii_tokens)
+                elif mode == "mask":
+                    block["text"] = await self.check_pii(
+                        text=text_value,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+            elif block_type == "tool_use":
+                tool_input = block.get("input")
+                if isinstance(tool_input, (dict, list)):
+                    await self._mask_nested_strings(
+                        tool_input, mode, pii_tokens, presidio_config, request_data
+                    )
 
         return response
 
