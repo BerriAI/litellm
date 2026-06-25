@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Callable
 
 import pytest
@@ -49,6 +50,8 @@ from lifecycle import ResourceManager
 pytestmark = pytest.mark.e2e
 
 CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
+BATCH_CANCEL_DELAY_SECONDS = 2
+BATCH_TERMINAL_BEFORE_CANCEL = {"failed", "cancelled", "expired"}
 
 
 def render_jsonl(model: str) -> bytes:
@@ -185,6 +188,16 @@ def test_batch_lifecycle(
     assert fetched.status, "retrieved batch has no status"
 
     if cap.can_cancel:
+        time.sleep(BATCH_CANCEL_DELAY_SECONDS)
+        pre_cancel = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
+        assert (
+            pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL
+        ), (
+            f"batch reached {pre_cancel.status!r} before cancel; "
+            "provider likely rejected the input"
+        )
+        if pre_cancel.status == "completed":
+            return
         cancelled = unwrap(client.cancel_batch(batch.id, key=key, provider=provider))
         assert cancelled.id == batch.id
         assert cancelled.object == "batch"

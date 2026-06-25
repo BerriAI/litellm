@@ -49,10 +49,15 @@ class Capability:
 
     @property
     def jsonl_model(self) -> str:
-        """The model name to embed in the input JSONL. Model-routed scenarios let
-        litellm rewrite it to the deployment's real model, so the litellm name is
-        fine; provider_fallback has no mapping, so the real provider model is needed."""
-        return self.raw_model if self.scenario == "provider_fallback" else self.model
+        """Model name embedded in the uploaded JSONL ``body.model``.
+
+        Only the unified upload path rewrites JSONL on upload
+        (``target_model_names`` → ``llm_router.acreate_file`` →
+        ``replace_model_in_jsonl``), so that scenario can use the LiteLLM alias
+        and rely on the proxy to swap it to the deployment model. Every other
+        scenario uploads raw JSONL with no rewrite, so the provider's real
+        deployment name is required or create fails upstream validation."""
+        return self.model if self.scenario == "unified" else self.raw_model
 
 
 PROVIDERS: tuple[Provider, ...] = (
