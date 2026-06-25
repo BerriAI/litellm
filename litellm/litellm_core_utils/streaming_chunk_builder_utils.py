@@ -585,6 +585,20 @@ class ChunkProcessor:
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
+        # cursor/placeholder; the real value only arrives in `message_delta`.
+        # If a stream is cancelled before `message_delta` lands, the last-wins
+        # accumulator below leaves completion_tokens stuck at 1 — which then
+        # bypasses the `completion_tokens or token_counter(...)` fallback in
+        # calculate_usage() because 1 is truthy. Track two signals that the
+        # value we ended up with is NOT a stale cursor:
+        #   (1) value > 1 directly  (definitely not a placeholder)
+        #   (2) we received >=2 completion-bearing usage events  (Anthropic
+        #       emits 1 in BOTH message_start AND message_delta for legitimate
+        #       single-token replies, so seeing the value twice is positive
+        #       evidence that message_delta arrived).
+        saw_non_cursor_completion = False
+        completion_usage_updates = 0
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
@@ -617,6 +631,12 @@ class ChunkProcessor:
                     and usage_chunk_dict["completion_tokens"] > 0
                 ):
                     completion_tokens = usage_chunk_dict["completion_tokens"]
+                    completion_usage_updates += 1
+                    if (
+                        usage_chunk_dict["completion_tokens"] > 1
+                        or completion_usage_updates >= 2
+                    ):
+                        saw_non_cursor_completion = True
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     usage_chunk_dict["cache_creation_input_tokens"] > 0
                     or cache_creation_input_tokens is None
@@ -666,6 +686,31 @@ class ChunkProcessor:
                     )
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+
+        # See `saw_non_cursor_completion` comment above. If the only completion
+        # update we ever saw was the Anthropic message_start cursor (=1), reset
+        # to 0 here so calculate_usage()'s `or token_counter(text=...)` fallback
+        # estimates from the actually-received completion text instead of trusting
+        # the placeholder. Gated on custom_llm_provider == "anthropic" so the
+        # heuristic (which encodes Anthropic's specific message_start SSE shape)
+        # does not silently affect other providers that may legitimately report
+        # completion_tokens=1 from a single usage event.
+        custom_llm_provider: Optional[str] = None
+        if chunks:
+            first_chunk = chunks[0]
+            if isinstance(first_chunk, dict):
+                hp = first_chunk.get("_hidden_params")
+            else:
+                hp = getattr(first_chunk, "_hidden_params", None)
+            if isinstance(hp, dict):
+                custom_llm_provider = hp.get("custom_llm_provider")
+
+        if (
+            custom_llm_provider == "anthropic"
+            and completion_tokens == 1
+            and not saw_non_cursor_completion
+        ):
+            completion_tokens = 0
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
