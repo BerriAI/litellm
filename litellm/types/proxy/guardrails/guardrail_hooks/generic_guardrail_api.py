@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TYPE_CHECKING, TypedDict
 
 from litellm.types.llms.openai import (
@@ -10,6 +10,18 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import ChatCompletionMessageToolCall
+
+
+class GuardrailToolParam(BaseModel):
+    """A tool forwarded verbatim to the guardrail for inspection.
+
+    Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
+    and stash their config in tool-specific keys, so only ``type`` is required and
+    ``extra="allow"`` preserves the rest instead of stripping it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    type: str
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
@@ -65,7 +77,7 @@ class GenericGuardrailAPIRequest(BaseModel):
     )
     structured_messages: Optional[List[AllMessageValues]] = None
     images: Optional[List[str]] = None
-    tools: Optional[List[ChatCompletionToolParam]] = None
+    tools: Optional[List[GuardrailToolParam]] = None
     texts: Optional[List[str]] = None
     request_data: GenericGuardrailAPIMetadata
     request_headers: Optional[Dict[str, str]] = Field(
