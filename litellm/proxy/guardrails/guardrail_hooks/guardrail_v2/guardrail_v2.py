@@ -176,15 +176,23 @@ class GuardrailV2(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        rd = request_data or {}
+        rd = request_data if request_data is not None else {}
         # The first Rust guardrail invoked for this request/input_type runs the
-        # whole set; the rest are no-ops so the batch is applied exactly once.
+        # whole set; the rest are no-ops so the batch is applied exactly once. The
+        # marker lives in litellm metadata (not the top-level request dict) so it
+        # is never forwarded to the upstream provider as a request parameter.
+        metadata = rd.get("metadata")
+        if metadata is None:
+            metadata = rd.get("litellm_metadata")
+        if metadata is None:
+            metadata = {}
+            rd["metadata"] = metadata
         marker = f"_litellm_rust_guardrail_batch_{input_type}"
-        if rd.get(marker):
+        if metadata.get(marker):
             out: GenericGuardrailAPIInputs = {}
             out.update(inputs)
             return out
-        rd[marker] = True
+        metadata[marker] = True
 
         batch = self._collect_batch(rd, input_type)
         request_body = rd.get("body") or {}

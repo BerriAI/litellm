@@ -63,6 +63,20 @@ def test_request_carries_batch_params_and_inputs():
     assert request["input_type"] == "request"
 
 
+def test_batch_marker_does_not_leak_into_request_body():
+    # The dedup marker must live in litellm metadata, never as a top-level request
+    # key, or it gets forwarded to the provider as an unknown parameter.
+    guardrail = _guardrail({"action": "pass"})
+    rd: dict = {}
+    asyncio.run(
+        guardrail.apply_guardrail(
+            {"texts": ["hi"]}, request_data=rd, input_type="request"
+        )
+    )
+    assert all(not k.startswith("_litellm_rust_guardrail_batch") for k in rd)
+    assert rd.get("metadata", {}).get("_litellm_rust_guardrail_batch_request") is True
+
+
 def test_streaming_overrides_are_forwarded():
     guardrail = GuardrailV2(
         guardrail_type="openai_moderation",
