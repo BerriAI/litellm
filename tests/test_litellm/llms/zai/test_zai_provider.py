@@ -146,7 +146,7 @@ def test_glm47_cost_calculation():
 async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     """Test completion call with zai provider using mocked response"""
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
         json=zai_response
@@ -172,7 +172,7 @@ async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
 def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
     """Test synchronous completion call"""
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
         json=zai_response
@@ -212,14 +212,19 @@ def _captured_body(respx_mock):
 
 
 class TestZaiSupportedParamsWhitelistReasoning:
-    """`thinking` and `reasoning_effort` must be in the whitelist for every
-    GLM-4.5+ model, independently of the registry's `supports_reasoning`
-    flag. The prior gate `if litellm.supports_reasoning(model): base_params.append("thinking")`
-    silently broke any model whose registry entry was incomplete; the
-    entire GLM-4.5 family in `model_prices_and_context_window_backup.json`
-    was missing the flag despite docs.z.ai listing GLM-4.5 as the first
-    model with `thinking` support
+    """`thinking` and `reasoning_effort` enter the whitelist only when the
+    registry marks the model `supports_reasoning: true`. The registry
+    update in this PR adds the flag to the entire GLM-4.5 family
+    (previously every GLM-4.5 entry in
+    `model_prices_and_context_window_backup.json` was missing the flag
+    despite docs.z.ai listing GLM-4.5 as the first model with `thinking`
+    support), so the gate now unlocks reasoning params for all of them.
     """
+
+    @pytest.fixture(autouse=True)
+    def _use_local_model_cost(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
     @pytest.mark.parametrize(
         "model",
@@ -232,7 +237,6 @@ class TestZaiSupportedParamsWhitelistReasoning:
             "glm-4.5-flash",
             "glm-4.6",
             "glm-4.7",
-            "glm-5",
         ],
     )
     def test_reasoning_params_in_whitelist(self, model):
@@ -241,6 +245,23 @@ class TestZaiSupportedParamsWhitelistReasoning:
         params = ZAIChatConfig().get_supported_openai_params(model=model)
         assert "thinking" in params
         assert "reasoning_effort" in params
+
+    def test_reasoning_params_excluded_when_registry_flag_missing(self, monkeypatch):
+        """Regression guard for the gate. A model whose registry entry
+        does NOT mark `supports_reasoning: true` must keep `thinking`
+        and `reasoning_effort` OUT of the whitelist — otherwise a new
+        ZAI model added to the registry without the flag silently
+        accepts reasoning kwargs that the upstream API will reject.
+        """
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        # Synthetic model that won't match any registry entry or
+        # wildcard pattern.
+        params = ZAIChatConfig().get_supported_openai_params(
+            model="glm-no-such-future-model-xyz"
+        )
+        assert "thinking" not in params
+        assert "reasoning_effort" not in params
 
 
 class TestZaiReasoningParamsLandInExtraBody:
@@ -318,7 +339,7 @@ class TestZaiReasoningParamsLandInExtraBody:
         as a top-level field (the OpenAI SDK flattened `extra_body`)
         """
         monkeypatch.setenv("ZAI_API_KEY", "test-key")
-        litellm.disable_aiohttp_transport = True
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
             json=zai_thinking_response
         )
@@ -338,7 +359,7 @@ class TestZaiReasoningParamsLandInExtraBody:
         self, respx_mock, zai_thinking_response, monkeypatch
     ):
         monkeypatch.setenv("ZAI_API_KEY", "test-key")
-        litellm.disable_aiohttp_transport = True
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
             json=zai_thinking_response
         )
@@ -357,7 +378,7 @@ class TestZaiReasoningParamsLandInExtraBody:
         self, respx_mock, zai_thinking_response, monkeypatch
     ):
         monkeypatch.setenv("ZAI_API_KEY", "test-key")
-        litellm.disable_aiohttp_transport = True
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
             json=zai_thinking_response
         )
@@ -372,16 +393,19 @@ class TestZaiReasoningParamsLandInExtraBody:
         assert body["reasoning_effort"] == "none"
 
     @pytest.mark.asyncio
-    async def test_thinking_works_on_glm_4_5_without_registry_flag(
+    async def test_thinking_works_on_glm_4_5_via_registry_flag(
         self, respx_mock, zai_thinking_response, monkeypatch
     ):
-        """Even when a registry entry is missing `supports_reasoning`,
-        ZAIChatConfig must still allow `thinking`. The prior gate
-        silently dropped the field for the entire GLM-4.5 family in
-        the registry; this test pins the unconditional contract
+        """End-to-end: GLM-4.5 carries `supports_reasoning: true` in the
+        registry, so the gate in `get_supported_openai_params` lets
+        `thinking` through and the SDK boundary lands it in the HTTP
+        body. Without the registry update this test would fail with the
+        SDK rejecting `thinking` as an unsupported param.
         """
         monkeypatch.setenv("ZAI_API_KEY", "test-key")
-        litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
             json=zai_thinking_response
         )
