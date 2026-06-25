@@ -57,7 +57,7 @@ async def test_completion_sagemaker(sync_mode):
         print("testing sagemaker")
         if sync_mode is True:
             response = litellm.completion(
-                model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+                model="sagemaker/litellm-ci-textgen",
                 messages=[
                     {"role": "user", "content": "hi"},
                 ],
@@ -67,7 +67,7 @@ async def test_completion_sagemaker(sync_mode):
             )
         else:
             response = await litellm.acompletion(
-                model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+                model="sagemaker/litellm-ci-textgen",
                 messages=[
                     {"role": "user", "content": "hi"},
                 ],
@@ -158,7 +158,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
     "model",
     [
         # "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
-        "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+        "sagemaker/litellm-ci-textgen",
     ],
 )
 # @pytest.mark.flaky(retries=3, delay=1)
@@ -218,7 +218,7 @@ async def test_completion_sagemaker_stream(sync_mode, model):
     "model",
     [
         # "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
-        "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+        "sagemaker/litellm-ci-textgen",
     ],
 )
 async def test_completion_sagemaker_streaming_bad_request(sync_mode, model):
@@ -256,7 +256,7 @@ async def test_acompletion_sagemaker_non_stream():
             "id": "cmpl-mockid",
             "object": "text_completion",
             "created": 1629800000,
-            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "model": "sagemaker/litellm-ci-textgen",
             "choices": [
                 {
                     "text": "This is a mock response from SageMaker.",
@@ -282,7 +282,7 @@ async def test_acompletion_sagemaker_non_stream():
     ) as mock_post:
         # Act: Call the litellm.acompletion function
         response = await litellm.acompletion(
-            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            model="sagemaker/litellm-ci-textgen",
             messages=[
                 {"role": "user", "content": "hi"},
             ],
@@ -302,7 +302,7 @@ async def test_acompletion_sagemaker_non_stream():
         assert args_to_sagemaker == expected_payload
         assert (
             kwargs["url"]
-            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/litellm-ci-textgen/invocations"
         )
 
 
@@ -316,7 +316,7 @@ async def test_completion_sagemaker_non_stream():
             "id": "cmpl-mockid",
             "object": "text_completion",
             "created": 1629800000,
-            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "model": "sagemaker/litellm-ci-textgen",
             "choices": [
                 {
                     "text": "This is a mock response from SageMaker.",
@@ -342,7 +342,7 @@ async def test_completion_sagemaker_non_stream():
     ) as mock_post:
         # Act: Call the litellm.acompletion function
         response = litellm.completion(
-            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            model="sagemaker/litellm-ci-textgen",
             messages=[
                 {"role": "user", "content": "hi"},
             ],
@@ -362,7 +362,7 @@ async def test_completion_sagemaker_non_stream():
         assert args_to_sagemaker == expected_payload
         assert (
             kwargs["url"]
-            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/litellm-ci-textgen/invocations"
         )
 
 
@@ -377,7 +377,7 @@ async def test_completion_sagemaker_prompt_template_non_stream():
             "id": "cmpl-mockid",
             "object": "text_completion",
             "created": 1629800000,
-            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "model": "sagemaker/litellm-ci-textgen",
             "choices": [
                 {
                     "text": "This is a mock response from SageMaker.",
@@ -433,7 +433,7 @@ async def test_completion_sagemaker_non_stream_with_aws_params():
             "id": "cmpl-mockid",
             "object": "text_completion",
             "created": 1629800000,
-            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "model": "sagemaker/litellm-ci-textgen",
             "choices": [
                 {
                     "text": "This is a mock response from SageMaker.",
@@ -459,7 +459,7 @@ async def test_completion_sagemaker_non_stream_with_aws_params():
     ) as mock_post:
         # Act: Call the litellm.acompletion function
         response = litellm.completion(
-            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            model="sagemaker/litellm-ci-textgen",
             messages=[
                 {"role": "user", "content": "hi"},
             ],
@@ -482,5 +482,5 @@ async def test_completion_sagemaker_non_stream_with_aws_params():
         assert args_to_sagemaker == expected_payload
         assert (
             kwargs["url"]
-            == "https://runtime.sagemaker.us-west-5.amazonaws.com/endpoints/jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+            == "https://runtime.sagemaker.us-west-5.amazonaws.com/endpoints/litellm-ci-textgen/invocations"
         )

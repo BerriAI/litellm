@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sys
@@ -43,6 +44,9 @@ from litellm.llms.bedrock.image_generation.image_handler import (
     BedrockImagePreparedRequest,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+
+# Base64 placeholder used for mocked Bedrock image responses (a 1x1 PNG).
+_MOCK_BEDROCK_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 
 @pytest.mark.parametrize(
@@ -528,17 +532,34 @@ def test_backward_compatibility_regular_nova_model():
 
 
 def test_amazon_titan_image_gen():
-    """Test Amazon Titan image generation with cost tracking."""
-    from litellm import image_generation
+    """Test Amazon Titan image generation with cost tracking.
+
+    The Bedrock CI account is not entitled to amazon.titan-image-generator, so
+    the network call is mocked and only the transform + cost-tracking path is
+    exercised.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     # Use v2 as v1 has reached end of life
     model_id = "bedrock/amazon.titan-image-generator-v2:0"
 
-    response = litellm.image_generation(
-        model=model_id,
-        prompt="A serene mountain landscape at sunset with a lake reflection",
-        aws_region_name="us-east-1",
-    )
+    mock_payload = {"images": [_MOCK_BEDROCK_IMAGE_B64]}
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_payload
+    mock_response.text = json.dumps(mock_payload)
+    mock_response.headers = {}
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=mock_response):
+        response = litellm.image_generation(
+            model=model_id,
+            prompt="A serene mountain landscape at sunset with a lake reflection",
+            aws_region_name="us-east-1",
+            aws_access_key_id="fake-access-key-id",
+            aws_secret_access_key="fake-secret-access-key",
+            client=client,
+        )
 
     print(f"response cost: {response._hidden_params['response_cost']}")
 
