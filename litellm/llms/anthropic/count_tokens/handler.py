@@ -2,7 +2,9 @@ import os
 import httpx
 from typing import List, Dict, Any, Optional, Union
 import litellm
-from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountTokensConfig
+from litellm.llms.anthropic.count_tokens.transformation import (
+    AnthropicCountTokensConfig,
+)
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.anthropic.common_utils import AnthropicError
@@ -75,7 +77,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 verbose_logger.error(f"Anthropic API error: {error_text}")
                 raise AnthropicError(
                     status_code=response.status_code,
-                    message=f"CountTokens processing error: {error_text}"
+                    message=f"CountTokens processing error: {error_text}",
                 )
 
             return response.json()
@@ -85,6 +87,5 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         except Exception as e:
             verbose_logger.error(f"Unexpected error in CountTokens handler: {str(e)}")
             raise AnthropicError(
-                status_code=500,
-                message=f"CountTokens processing error: {str(e)}"
+                status_code=500, message=f"CountTokens processing error: {str(e)}"
             )
