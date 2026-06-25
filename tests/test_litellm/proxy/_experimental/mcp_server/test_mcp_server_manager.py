@@ -2970,14 +2970,17 @@ class TestMCPServerManager:
             object_permission_id="perm_no_mcp",
         )
 
-        with patch.object(
-            manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
-        ), patch.object(
-            MCPRequestHandler,
-            "get_allowed_mcp_servers",
-            new_callable=AsyncMock,
-            return_value=["leaked-server"],
-        ) as mock_inner:
+        with (
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
         assert result == []
@@ -4734,6 +4737,92 @@ class TestCreateMcpClientV2Graft:
 
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
+
+
+class TestResolveOauth2HeadersForToolCall:
+    """The call_tool path must inject the user's stored OAuth token, not the
+    caller's Authorization header (which is the LiteLLM admission key on the
+    standard auth path and produces an upstream 401 if forwarded)."""
+
+    def _oauth_server(self) -> MCPServer:
+        return MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+
+    @pytest.mark.asyncio
+    async def test_stored_token_overrides_caller_authorization(self):
+        """Regression: with an Authorization header present (the LiteLLM key),
+        the stored per-user OAuth token must still be looked up and win."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        caller_headers = {"Authorization": "Bearer sk-litellm-admission-key"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(
+                return_value={"Authorization": "Bearer upstream-oauth-token"}
+            ),
+        ):
+            resolved = await manager._resolve_oauth2_headers_for_tool_call(
+                mcp_server=self._oauth_server(),
+                oauth2_headers=caller_headers,
+                user_api_key_auth=UserAPIKeyAuth(user_id="user-1"),
+            )
+
+        assert resolved == {"Authorization": "Bearer upstream-oauth-token"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_caller_headers_when_no_stored_token(self):
+        """Passthrough cold-start: no stored token, so the caller's bearer (the
+        upstream token) is preserved."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        caller_headers = {"Authorization": "Bearer upstream-passthrough-token"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value=None),
+        ):
+            resolved = await manager._resolve_oauth2_headers_for_tool_call(
+                mcp_server=self._oauth_server(),
+                oauth2_headers=caller_headers,
+                user_api_key_auth=UserAPIKeyAuth(user_id="user-1"),
+            )
+
+        assert resolved == caller_headers
+
+    @pytest.mark.asyncio
+    async def test_non_oauth_server_returns_caller_headers_unchanged(self):
+        """Non per-user-OAuth servers must not trigger a DB lookup."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="bearer-server",
+            name="bearer-server",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+        )
+        caller_headers = {"Authorization": "Bearer something"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(side_effect=AssertionError("DB lookup must not run")),
+        ):
+            resolved = await manager._resolve_oauth2_headers_for_tool_call(
+                mcp_server=server,
+                oauth2_headers=caller_headers,
+                user_api_key_auth=UserAPIKeyAuth(user_id="user-1"),
+            )
+
+        assert resolved == caller_headers
 
 
 if __name__ == "__main__":

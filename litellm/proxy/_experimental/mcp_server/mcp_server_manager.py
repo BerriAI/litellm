@@ -3676,12 +3676,15 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]],
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> Optional[Dict[str, str]]:
-        """Look up per-user OAuth headers when the client did not supply a token."""
-        if (
-            not mcp_server.needs_user_oauth_token
-            or oauth2_headers
-            or user_api_key_auth is None
-        ):
+        """Prefer the user's stored per-user OAuth token over the caller's Authorization.
+
+        On the standard auth path the caller's ``Authorization`` is the LiteLLM
+        admission key, not the upstream OAuth token, so forwarding it upstream
+        produces a 401. The stored token must win whenever it exists; the caller
+        header is only a fallback for the passthrough cold-start where the bearer
+        genuinely is the upstream token. Mirrors the list_tools path.
+        """
+        if not mcp_server.needs_user_oauth_token or user_api_key_auth is None:
             return oauth2_headers
 
         user_id = getattr(user_api_key_auth, "user_id", None)
