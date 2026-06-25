@@ -1916,38 +1916,21 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
 def test_router_cooldown_api_connection_error():
     from litellm.router_utils.cooldown_handlers import _is_cooldown_required
 
-    try:
-        _ = litellm.completion(
-            model="vertex_ai/gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError as e:
-        assert (
-            _is_cooldown_required(
-                litellm_router_instance=Router(),
-                model_id="",
-                exception_status=e.code,
-                exception_str=str(e),
-            )
-            is False
-        )
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gemini-1.5-pro",
-                "litellm_params": {"model": "vertex_ai/gemini-1.5-pro"},
-            }
-        ]
+    error = litellm.APIConnectionError(
+        message="Cannot connect to host calormen:11434",
+        llm_provider="ollama",
+        model="ollama_chat/gemma3:12b",
     )
 
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
+    assert (
+        _is_cooldown_required(
+            litellm_router_instance=Router(),
+            model_id="dead-deployment",
+            exception_status=error.status_code,
+            exception_str=str(error),
         )
-    except litellm.APIConnectionError:
-        pass
+        is True
+    )
 
 
 def test_router_correctly_reraise_error():

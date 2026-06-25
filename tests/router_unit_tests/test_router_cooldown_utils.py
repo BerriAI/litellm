@@ -18,6 +18,7 @@ from litellm.router_utils.cooldown_handlers import (
     _should_run_cooldown_logic,
     _should_cooldown_deployment,
     cast_exception_status_to_int,
+    _get_cooldown_deployments,
     _is_cooldown_required,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -414,6 +415,79 @@ def test_is_cooldown_required_empty_string_exception_status(testing_litellm_rout
     assert (
         result is False
     ), "Should not require cooldown when exception_status is empty string"
+
+
+def test_api_connection_error_requires_cooldown(testing_litellm_router):
+    error = litellm.APIConnectionError(
+        message="Cannot connect to host calormen:11434",
+        llm_provider="ollama",
+        model="ollama_chat/gemma3:12b",
+    )
+
+    assert (
+        _is_cooldown_required(
+            litellm_router_instance=testing_litellm_router,
+            model_id="dead-deployment",
+            exception_status=error.status_code,
+            exception_str=str(error),
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_api_connection_error_cooldown_filters_failed_deployment():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "local-model",
+                "litellm_params": {
+                    "model": "ollama_chat/gemma3:12b",
+                    "api_base": "http://dead-host:11434",
+                },
+                "model_info": {"id": "dead-deployment"},
+            },
+            {
+                "model_name": "local-model",
+                "litellm_params": {
+                    "model": "ollama_chat/gemma3:12b",
+                    "api_base": "http://healthy-host:11434",
+                },
+                "model_info": {"id": "healthy-deployment"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        allowed_fails=0,
+        cooldown_time=60,
+    )
+    error = litellm.APIConnectionError(
+        message="Cannot connect to host dead-host:11434",
+        llm_provider="ollama",
+        model="ollama_chat/gemma3:12b",
+    )
+
+    did_cooldown = router.deployment_callback_on_failure(
+        kwargs={
+            "exception": error,
+            "litellm_params": {
+                "metadata": {"model_group": "local-model"},
+                "model_info": {"id": "dead-deployment"},
+            },
+        },
+        completion_response=None,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    assert did_cooldown is True
+    assert "dead-deployment" in _get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    selected = router.get_available_deployment(model="local-model")
+    assert selected is not None
+    assert selected["model_info"]["id"] == "healthy-deployment"
 
 
 def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_router):
