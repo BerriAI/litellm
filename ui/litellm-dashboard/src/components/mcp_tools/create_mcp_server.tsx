@@ -29,8 +29,9 @@ import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
 
 interface CreateMCPServerProps {
@@ -134,6 +135,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     status: oauthStatus,
     error: oauthError,
     tokenResponse: oauthTokenResponse,
+    reset: resetOAuthFlow,
   } = useMcpOAuthFlow({
     accessToken,
     getCredentials: () => form.getFieldValue("credentials"),
@@ -554,12 +556,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [formValues.server_name]);
 
-  // Clear formValues when modal closes to reset child components
+  // Clear form, tools, and OAuth state when the modal closes so a previous server's
+  // authorization, credentials, or tool list never bleed into the next "Add New MCP
+  // Server" session, including when a parent dismisses the modal without routing
+  // through handleCancel or handleCreate.
   React.useEffect(() => {
     if (!isModalVisible) {
+      form.resetFields();
       setFormValues({});
+      setOauthAccessToken(null);
+      clearTools();
+      resetOAuthFlow();
     }
-  }, [isModalVisible]);
+  }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
 
@@ -578,7 +587,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </button>
           )}
           <img
-            src={mcpLogoImg}
+            src={resolveLogoSrc(mcpLogoImg)}
             alt="MCP Logo"
             className="w-8 h-8 object-contain"
             style={{

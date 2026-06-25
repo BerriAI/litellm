@@ -1089,7 +1089,9 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         mock_client_constructor,
     ):
         # Call list_tools
-        tools = await test_manager.list_tools(user_api_key_auth=MagicMock())
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        tools = await test_manager.list_tools(user_api_key_auth=UserAPIKeyAuth())
         # Should only return tools from server_a
         assert len(tools) == 1
         # The server should use the server_name as prefix since no alias is provided

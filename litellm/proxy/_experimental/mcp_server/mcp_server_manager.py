@@ -56,6 +56,16 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
+from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+    Error,
+    Ok,
+    UpstreamCredentialProvider,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+    raise_public,
+    to_server_spec,
+    to_subject,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -72,6 +82,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     parse_admin_env_vars,
     split_server_prefix_from_name,
+    strip_known_server_prefix,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -80,6 +91,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPTransport,
     MCPTransportType,
+    SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -354,6 +366,52 @@ def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
     ]
 
 
+def _normalize_mcp_server_cost_info(mcp_info: MCPInfo) -> None:
+    """Coerce ``mcp_server_cost_info`` numeric fields to ``float`` at ingest.
+
+    YAML 1.1 parses scientific notation without a decimal point (e.g.
+    ``7e-05``) as a string, and ``MCPServerCostInfo`` is a TypedDict with no
+    runtime validation, so string-typed costs flow through to the UI and
+    crash its ``.toFixed`` formatting. Values that cannot be coerced are
+    dropped with a warning instead of failing the server load.
+    """
+    cost_info = mcp_info.get("mcp_server_cost_info")
+    if not isinstance(cost_info, dict):
+        return
+
+    server_name = mcp_info.get("server_name")
+    normalized = dict(cost_info)
+
+    default_cost = normalized.get("default_cost_per_query")
+    if default_cost is not None:
+        try:
+            normalized["default_cost_per_query"] = float(default_cost)
+        except (TypeError, ValueError):
+            verbose_logger.warning(
+                "MCP server '%s' has non-numeric default_cost_per_query %r; ignoring it",
+                server_name,
+                default_cost,
+            )
+            del normalized["default_cost_per_query"]
+
+    tool_costs = normalized.get("tool_name_to_cost_per_query")
+    if isinstance(tool_costs, dict):
+        normalized_tool_costs = {}
+        for tool_name, cost in tool_costs.items():
+            try:
+                normalized_tool_costs[tool_name] = float(cost)
+            except (TypeError, ValueError):
+                verbose_logger.warning(
+                    "MCP server '%s' has non-numeric cost %r for tool '%s'; ignoring it",
+                    server_name,
+                    cost,
+                    tool_name,
+                )
+        normalized["tool_name_to_cost_per_query"] = normalized_tool_costs
+
+    mcp_info["mcp_server_cost_info"] = normalized
+
+
 def _create_sampling_callback(user_api_key_auth: Optional[Any] = None):
     """
     Create a sampling callback for MCP ClientSession.
@@ -464,7 +522,8 @@ class MCPServerManager:
             return "client_credentials"
         return None
 
-    def __init__(self):
+    def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
+        self._cred_provider = cred_provider or UpstreamCredentialProvider()
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
         """
@@ -621,6 +680,7 @@ class MCPServerManager:
                 mcp_info["server_name"] = server_name
             if "description" not in mcp_info and server_config.get("description"):
                 mcp_info["description"] = server_config.get("description")
+            _normalize_mcp_server_cost_info(mcp_info)
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
@@ -1091,6 +1151,7 @@ class MCPServerManager:
             mcp_info["server_name"] = mcp_server.server_name or mcp_server.server_id
         if "description" not in mcp_info and mcp_server.description:
             mcp_info["description"] = mcp_server.description
+        _normalize_mcp_server_cost_info(mcp_info)
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
@@ -1301,6 +1362,17 @@ class MCPServerManager:
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
         try:
+            # The key explicitly opted out of every MCP server. Return zero before
+            # layering on allow_all_keys servers so the opt-out is absolute.
+            key_object_permission = (
+                user_api_key_auth.object_permission if user_api_key_auth else None
+            )
+            if key_object_permission is not None and (
+                SpecialMCPServerNames.no_mcp_servers.value
+                in (key_object_permission.mcp_servers or [])
+            ):
+                return []
+
             # Check if object_permission.mcp_servers is explicitly set
             has_explicit_object_permission = False
             if user_api_key_auth and user_api_key_auth.object_permission:
@@ -1373,8 +1445,11 @@ class MCPServerManager:
                     "No allowed MCP Servers found for user api key auth."
                 )
             return list(combined_servers)
-        except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
+        except Exception:  # noqa: BLE001
+            verbose_logger.exception(
+                "Failed to get allowed MCP servers; team-level object_permission "
+                "grants may be dropped. Falling back to global servers only."
+            )
             return allow_all_server_ids
 
     async def resolve_toolset_tool_permissions(
@@ -1407,7 +1482,8 @@ class MCPServerManager:
             for toolset in toolsets:
                 for tool in toolset.tools:
                     raw_name = tool["tool_name"]
-                    unprefixed, _ = split_server_prefix_from_name(raw_name)
+                    server = self.get_mcp_server_by_id(tool["server_id"])
+                    unprefixed = strip_known_server_prefix(raw_name, server)
                     tool_permissions.setdefault(tool["server_id"], [])
                     if unprefixed not in tool_permissions[tool["server_id"]]:
                         tool_permissions[tool["server_id"]].append(unprefixed)
@@ -1879,11 +1955,19 @@ class MCPServerManager:
         Returns:
             Configured MCP client instance.
         """
-        auth_value = await resolve_mcp_auth(
-            server, mcp_auth_header, subject_token=subject_token
-        )
-
         transport = server.transport or MCPTransport.sse
+        spec = None if transport == MCPTransport.stdio else to_server_spec(server)
+        # A per-request override is the caller-supplied credential v1 turns into the upstream
+        # auth, so it must win; defer those to v1 (this defer falls away once the per-user modes
+        # stop writing mcp_auth_header). An inbound header already in extra_headers is handled on
+        # the v2 path below, not here.
+        if spec is not None and mcp_auth_header:
+            spec = None
+        auth_value = (
+            await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token)
+            if spec is None
+            else None
+        )
 
         # Create sampling and elicitation callbacks for this client
         sampling_cb = (
@@ -1953,6 +2037,43 @@ class MCPServerManager:
         else:
             # For HTTP/SSE transports
             server_url = server.url or ""
+
+            if spec is not None:
+                match await self._cred_provider.resolve_credentials(
+                    to_subject(user_api_key_auth, subject_token), spec
+                ):
+                    case Ok(auth):
+                        resolved_auth = auth
+                        # Do not override an Authorization already supplied via extra_headers
+                        # (a guardrail hook such as the JWT signer, static_headers, or a
+                        # forwarded caller header): v1 applies those last, so they win. NoOpAuth
+                        # has no header_name and so never skips.
+                        header_name = getattr(resolved_auth, "header_name", None)
+                        if (
+                            header_name
+                            and extra_headers
+                            and any(
+                                key.lower() == header_name.lower()
+                                for key in extra_headers
+                            )
+                        ):
+                            resolved_auth = None
+                    case Error(err):
+                        raise_public(err)
+                return MCPClient(
+                    server_url=server_url,
+                    transport_type=transport,
+                    auth_type=server.auth_type,
+                    timeout=(
+                        server.timeout
+                        if server.timeout is not None
+                        else MCP_CLIENT_TIMEOUT
+                    ),
+                    extra_headers=extra_headers,
+                    resolved_auth=resolved_auth,
+                    sampling_callback=sampling_cb,
+                    elicitation_callback=elicitation_cb,
+                )
 
             # Create SigV4 auth if configured
             aws_auth = None
@@ -2729,28 +2850,40 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
-        For pass-through MCP servers (``MCPServer.is_oauth_passthrough``) an
+        For OAuth pass-through and upstream-delegated OAuth2 MCP servers, an
         upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
         instead of being swallowed to an empty tool list. That lets the
         single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
         challenge so standards-compliant MCP clients trigger the upstream
-        OAuth flow. Non-pass-through servers keep today's swallow-and-log
-        behaviour so the multi-server ``/mcp`` aggregator doesn't get
-        tainted by a single bad server.
+        OAuth flow. Other servers keep today's swallow-and-log behaviour so
+        the multi-server ``/mcp`` aggregator doesn't get tainted by a single
+        bad server.
 
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
-            server: Optional MCPServer; when pass-through, auth errors are
-                re-raised as :class:`MCPUpstreamAuthError`.
+            server: Optional MCPServer; when upstream auth is delegated, auth
+                errors are re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
-        is_passthrough = bool(server is not None and server.is_oauth_passthrough)
+        should_surface_upstream_auth = bool(
+            server is not None
+            and (
+                server.is_oauth_passthrough
+                or (
+                    server.auth_type == MCPAuth.oauth2
+                    and getattr(server, "delegate_auth_to_upstream", False) is True
+                    and not server.has_client_credentials
+                )
+            )
+        )
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools(raise_on_error=is_passthrough)
+                tools = await client.list_tools(
+                    raise_on_error=should_surface_upstream_auth
+                )
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -2767,12 +2900,12 @@ class MCPServerManager:
             )
             return []
         except Exception as e:
-            if is_passthrough:
+            if should_surface_upstream_auth:
                 auth_info = _extract_upstream_auth_failure(e)
                 if auth_info is not None:
                     status_code, www_authenticate = auth_info
                     verbose_logger.info(
-                        f"Upstream auth failure from pass-through MCP server "
+                        f"Upstream auth failure from MCP server "
                         f"{server_name}: HTTP {status_code}"
                     )
                     raise MCPUpstreamAuthError(
@@ -3295,7 +3428,7 @@ class MCPServerManager:
             )
         )
 
-    async def _call_regular_mcp_tool(  # noqa: PLR0915
+    async def _call_regular_mcp_tool(
         self,
         mcp_server: MCPServer,
         original_tool_name: str,

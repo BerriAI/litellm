@@ -88,13 +88,23 @@ class TenantTracerCache:
         return get_tracer(provider, self._tracer_name)
 
     def _config_with_headers(self, headers: Mapping[str, str]) -> OpenTelemetryV2Config:
-        """Clone the config, replacing OTLP exporter headers with ``headers``."""
+        """Clone the config, stamping ``headers`` onto the credential's own exporter.
+
+        ``headers`` are the per-request credentials of ``self._callback_name`` (the
+        integration that built this cache), so they apply only to the exporter that
+        integration contributed (``spec.owner``). A request that carries one
+        tenant's Arize key must never rewrite the headers of a co-configured
+        Langfuse or self-hosted collector exporter, which would leak that key to a
+        different backend.
+        """
         header_str = ",".join(f"{key}={value}" for key, value in headers.items())
+        header_update: dict[str, str] = {"headers": header_str}
         exporters = [
             (
-                spec
-                if spec.kind.lower() in _NON_OTLP_KINDS
-                else spec.model_copy(update={"headers": header_str})
+                spec.model_copy(update=header_update)
+                if spec.owner == self._callback_name
+                and spec.kind.lower() not in _NON_OTLP_KINDS
+                else spec
             )
             for spec in self._config.exporters
         ]
