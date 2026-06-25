@@ -1,3 +1,8 @@
+# pyright: reportUnknownArgumentType=false
+# a2a-sdk's compat conversions (pb2_v10, ParseDict, MessageToDict, to_compat_*)
+# are protobuf-generated/untyped, so every conversion call here takes Unknown-typed
+# arguments. This module is the A2A 0.3<->1.0 boundary; the rule is off file-wide
+# rather than scattering per-line ignores across every SDK call.
 """
 Normalize A2A JSON-RPC payloads to the protocol version LiteLLM serves for an agent.
 

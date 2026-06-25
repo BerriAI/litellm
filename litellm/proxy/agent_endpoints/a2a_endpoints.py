@@ -1,3 +1,8 @@
+# pyright: reportUnknownArgumentType=false
+# This module forwards JSON-RPC payloads through the untyped a2a-sdk compat
+# conversions (pb2_v10/ParseDict/MessageToDict/to_compat_*), so SDK and decoded-JSON
+# values flow in as Unknown. The rule is off file-wide rather than scattering per-line
+# ignores across every SDK and JSON-RPC call.
 """
 A2A Protocol endpoints for LiteLLM Proxy.
 

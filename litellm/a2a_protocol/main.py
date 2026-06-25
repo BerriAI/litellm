@@ -1,3 +1,8 @@
+# pyright: reportUnknownArgumentType=false
+# a2a-sdk (and its protobuf-generated compat conversions) ships no usable types for
+# the call surface used here, so SDK calls take Unknown-typed arguments. This module
+# is dedicated to the A2A SDK boundary; the rule is off file-wide instead of
+# scattering per-line ignores across every SDK call.
 """
 LiteLLM A2A SDK functions.
 
