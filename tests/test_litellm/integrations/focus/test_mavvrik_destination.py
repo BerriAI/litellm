@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -89,11 +89,27 @@ def test_initializes_with_not_registered():
 
 
 @pytest.mark.asyncio
-async def test_deliver_skips_empty_content():
+async def test_deliver_skips_upload_but_advances_marker_for_empty_content():
     dest = _dest()
+
+    register_resp = MagicMock()
+    register_resp.status_code = 200
+    register_resp.json.return_value = {"metricsMarker": 0}
+
+    patch_resp = _patch_resp(204)
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(side_effect=[register_resp, patch_resp])
+    dest._http = mock_http
+
     await dest.deliver(content=b"", time_window=_make_window(), filename="usage.csv")
-    # _registered still False — _ensure_registered was never called
-    assert dest._registered is False
+
+    assert dest._registered is True
+    assert mock_http.client.request.call_count == 2
+    patch_call = mock_http.client.request.call_args_list[1]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert "metricsMarker" in patch_call.kwargs["json"]
 
 
 @pytest.mark.asyncio
@@ -118,9 +134,7 @@ async def test_large_content_uploads_in_multiple_chunks():
 
     signed_url_resp = MagicMock()
     signed_url_resp.status_code = 200
-    signed_url_resp.json.return_value = {
-        "url": "https://storage.googleapis.com/upload?sig=x"
-    }
+    signed_url_resp.json.return_value = {"url": "https://storage.googleapis.com/upload?sig=x"}
 
     init_resp = MagicMock()
     init_resp.status_code = 200
@@ -365,9 +379,7 @@ async def test_deliver_raises_on_non_gcs_session_uri():
     signed_url_resp = MagicMock()
     signed_url_resp.status_code = 200
     # signed URL is valid GCS
-    signed_url_resp.json.return_value = {
-        "url": "https://storage.googleapis.com/upload?sig=abc"
-    }
+    signed_url_resp.json.return_value = {"url": "https://storage.googleapis.com/upload?sig=abc"}
 
     # Location header points to a non-GCS host
     init_resp = MagicMock()
@@ -377,9 +389,7 @@ async def test_deliver_raises_on_non_gcs_session_uri():
     mock_http = MagicMock()
     mock_http.client = MagicMock()
     # register, get_signed_url, GCS session init (returns bad Location)
-    mock_http.client.request = AsyncMock(
-        side_effect=[register_resp, signed_url_resp, init_resp]
-    )
+    mock_http.client.request = AsyncMock(side_effect=[register_resp, signed_url_resp, init_resp])
     dest._http = mock_http
 
     with pytest.raises(ValueError, match="GCS endpoint"):
@@ -568,10 +578,7 @@ async def test_run_scheduled_export_no_catchup_when_marker_is_current():
 
     # Only one call — yesterday's normal run, no catch-up
     assert db_mock.get_usage_data.call_count == 1
-    assert (
-        db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date()
-        == yesterday.date()
-    )
+    assert db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date() == yesterday.date()
 
 
 @pytest.mark.asyncio
@@ -768,9 +775,7 @@ async def test_gcs_session_cancelled_on_chunk_failure():
 
     signed_url_resp = MagicMock()
     signed_url_resp.status_code = 200
-    signed_url_resp.json.return_value = {
-        "url": "https://storage.googleapis.com/upload?sig=x"
-    }
+    signed_url_resp.json.return_value = {"url": "https://storage.googleapis.com/upload?sig=x"}
 
     init_resp = MagicMock()
     init_resp.status_code = 200
