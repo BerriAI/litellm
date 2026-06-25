@@ -21,7 +21,11 @@ from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-from .chunked_evaluation import DEFAULT_MAX_CONCURRENCY, evaluate_segments
+from .chunked_evaluation import (
+    DEFAULT_MAX_CONCURRENCY,
+    WindowConfig,
+    evaluate_segments,
+)
 from .client_cache import ClientBuildSpec, get_or_create_client, load_sdk
 from .credentials import CredentialConfig, resolve_credentials
 from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
@@ -252,6 +256,7 @@ class WonderFenceGuardrail(CustomGuardrail):
                 segments,
                 evaluate,
                 max_concurrency=self._connection_pool_limit or DEFAULT_MAX_CONCURRENCY,
+                windows=WindowConfig(text_segment_count=len(texts)),
             )
             n_text = len(texts)
             n_tool = len(tool_segments)

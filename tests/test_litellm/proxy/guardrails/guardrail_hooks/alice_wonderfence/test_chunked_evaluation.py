@@ -8,6 +8,7 @@ import pytest
 from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.chunked_evaluation import (
     MAX_PROMPT_CHARS,
     SegmentVerdict,
+    WindowConfig,
     _split_text,
     evaluate_segments,
 )
@@ -186,7 +187,9 @@ async def test_block_phrase_split_across_chunk_boundary_is_detected():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCK ME" in text else "")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=6)
+    verdicts = await evaluate_segments(
+        [segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6)
+    )
     assert verdicts[0].action == "BLOCK"
 
 
@@ -199,7 +202,9 @@ async def test_no_overlap_window_lets_boundary_phrase_evade():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCK ME" in text else "")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=0)
+    verdicts = await evaluate_segments(
+        [segment], evaluate, max_chars=12, windows=WindowConfig(overlap=0)
+    )
     assert verdicts[0].action == ""
 
 
@@ -229,5 +234,88 @@ async def test_boundary_window_mask_is_surfaced_as_detect_not_dropped():
             _result("MASK", action_text="[X]") if "SECRET HERE" in text else _result("")
         )
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=6)
+    verdicts = await evaluate_segments(
+        [segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6)
+    )
     assert verdicts[0].action == "DETECT"
+
+
+# ----------------------------- cross-segment overlap (split across adjacent texts) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_block_phrase_split_across_adjacent_text_segments_is_detected():
+    """A blocked phrase split across two adjacent prompt-text segments (e.g. two
+    content parts of one message, which the model concatenates) is caught by the
+    cross-segment window even though neither segment contains it whole. Fails
+    without cross-segment windows -> the phrase evades scanning."""
+
+    async def evaluate(text):
+        return _result("BLOCK" if "BLOCKME" in text else "")
+
+    verdicts = await evaluate_segments(
+        ["BLOCK", "ME"], evaluate, windows=WindowConfig(text_segment_count=2)
+    )
+    assert verdicts[0].action == "BLOCK"
+
+
+@pytest.mark.asyncio
+async def test_without_text_segment_count_split_phrase_evades():
+    """Control: with no declared text segments there is no cross-segment window,
+    so the same split phrase is seen by neither segment. Demonstrates the gap the
+    cross-segment window closes."""
+
+    async def evaluate(text):
+        return _result("BLOCK" if "BLOCKME" in text else "")
+
+    verdicts = await evaluate_segments(["BLOCK", "ME"], evaluate)
+    assert [v.action for v in verdicts] == ["", ""]
+
+
+@pytest.mark.asyncio
+async def test_cross_segment_window_stays_within_text_segments():
+    """Only the first text_segment_count segments are paired; a trailing
+    non-text segment (tool-call args, tool/function definition) is never joined
+    with the last prompt text, so a phrase straddling that junction does not
+    block."""
+
+    async def evaluate(text):
+        return _result("BLOCK" if "BLOCKME" in text else "")
+
+    verdicts = await evaluate_segments(
+        ["BLOCK", "ME"], evaluate, windows=WindowConfig(text_segment_count=1)
+    )
+    assert [v.action for v in verdicts] == ["", ""]
+
+
+@pytest.mark.asyncio
+async def test_cross_segment_window_surfaces_mask_as_detect_without_masking():
+    """A cross-segment window cannot redact across the segment boundary, so a
+    MASK on it surfaces as DETECT and never rewrites the segment text."""
+
+    async def evaluate(text):
+        return (
+            _result("MASK", action_text="[X]") if "SECRETHERE" in text else _result("")
+        )
+
+    verdicts = await evaluate_segments(
+        ["SECRET", "HERE"], evaluate, windows=WindowConfig(text_segment_count=2)
+    )
+    assert verdicts[0].action == "DETECT"
+    assert verdicts[0].masked_text is None
+
+
+@pytest.mark.asyncio
+async def test_cross_segment_window_joins_segment_tail_and_head():
+    """The window spans the junction (tail of one segment + head of the next),
+    catching a phrase that lives only across the boundary of longer segments."""
+
+    async def evaluate(text):
+        return _result("BLOCK" if "a bomb" in text else "")
+
+    verdicts = await evaluate_segments(
+        ["how to make a b", "omb please"],
+        evaluate,
+        windows=WindowConfig(overlap=6, text_segment_count=2),
+    )
+    assert verdicts[0].action == "BLOCK"

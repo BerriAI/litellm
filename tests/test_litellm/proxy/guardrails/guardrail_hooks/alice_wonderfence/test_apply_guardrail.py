@@ -463,9 +463,10 @@ async def test_apply_guardrail_evaluates_every_text_without_structured_messages(
         request_data=make_request_data(),
         input_type="request",
     )
-    assert client.evaluate_prompt.call_count == 3
     prompts = {c.kwargs["prompt"] for c in client.evaluate_prompt.call_args_list}
-    assert prompts == {"t1", "t2", "t3"}
+    assert {"t1", "t2", "t3"} <= prompts
+    # Adjacent text segments also get a cross-segment junction window each.
+    assert {"t1t2", "t2t3"} <= prompts
 
 
 @pytest.mark.asyncio
