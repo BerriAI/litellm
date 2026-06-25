@@ -98,10 +98,16 @@ class TestMCPClientIPExtraction:
             )
 
         warning = next(
-            record.getMessage()
-            for record in caplog.records
-            if "mcp_trusted_proxy_ranges" in record.getMessage()
+            (
+                record.getMessage()
+                for record in caplog.records
+                if "mcp_trusted_proxy_ranges" in record.getMessage()
+            ),
+            None,
         )
+        assert (
+            warning is not None
+        ), "Expected a warning containing 'mcp_trusted_proxy_ranges' but none was logged"
 
         assert "fails closed" in warning
         assert "treated as external" in warning
