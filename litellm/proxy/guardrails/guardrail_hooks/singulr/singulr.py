@@ -6,33 +6,28 @@ Calls the Singulr Guard API to scan messages.
 
 import json
 import os
+from typing import Any, Literal, Optional, cast
+
 import httpx
-from typing import (
-    Any,
-    Dict,
-    Literal,
-    Optional,
-    Type,
-    cast,
-)
+
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
-from litellm.litellm_core_utils.litellm_logging import (
-    Logging as LiteLLMLoggingObj,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 _DEFAULT_API_BASE = "http://localhost:8000"
 _GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
@@ -78,7 +73,7 @@ class SingulrGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
             SingulrGuardrailConfigModel,
         )
@@ -90,13 +85,13 @@ class SingulrGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         if input_type == "request":
             from litellm.proxy.guardrails._content_utils import (
                 build_inspection_messages,
             )
 
-            messages = build_inspection_messages(cast(Dict[str, Any], request_data))
+            messages = build_inspection_messages(cast(dict[str, Any], request_data))
             last_assistant_idx = next(
                 (
                     i
@@ -139,7 +134,7 @@ class SingulrGuardrail(CustomGuardrail):
         prompt = "\n".join(texts) if texts else ""
         return {"prompt": prompt} if prompt else {}
 
-    def _build_headers(self) -> Dict[str, str]:
+    def _build_headers(self) -> dict[str, str]:
         return dict(
             (header, value)
             for header, value in (
@@ -154,7 +149,7 @@ class SingulrGuardrail(CustomGuardrail):
             if value
         )
 
-    async def _call_api(self, payload: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _call_api(self, payload: dict[str, str]) -> Optional[dict[str, Any]]:
         endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
@@ -166,7 +161,7 @@ class SingulrGuardrail(CustomGuardrail):
                 timeout=30,
             )
             response.raise_for_status()
-            result: Dict[str, Any] = response.json()
+            result: dict[str, Any] = response.json()
             verbose_proxy_logger.debug("Singulr: result=%s", result)
             return result
 
