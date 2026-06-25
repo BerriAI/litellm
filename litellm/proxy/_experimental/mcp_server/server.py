@@ -300,6 +300,7 @@ if MCP_AVAILABLE:
         is_tool_name_prefixed,
         normalize_server_name,
         split_server_prefix_from_name,
+        strip_known_server_prefix,
     )
 
     ######################################################
@@ -2109,20 +2110,18 @@ if MCP_AVAILABLE:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        if allowed_tool_names is not None:
-            # Strip prefix from tool names before comparing
-            # Tools are stored in DB without prefix, but come from MCP server with prefix
-            filtered_tools = []
-            for t in tools:
-                # Get tool name without server prefix
-                unprefixed_tool_name, _ = split_server_prefix_from_name(t.name)
-                if unprefixed_tool_name in allowed_tool_names:
-                    filtered_tools.append(t)
-        else:
-            # No restrictions, return all tools
-            filtered_tools = tools
+        if allowed_tool_names is None:
+            return tools
 
-        return filtered_tools
+        # Tools arrive prefixed with the server's own prefix; strip exactly that
+        # prefix (resolved from the server) rather than the first separator, so a
+        # prefix containing the separator still reduces to the stored bare name.
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        return [
+            t
+            for t in tools
+            if strip_known_server_prefix(t.name, server) in allowed_tool_names
+        ]
 
     async def _merge_toolset_permissions(
         user_api_key_auth: Optional[UserAPIKeyAuth],

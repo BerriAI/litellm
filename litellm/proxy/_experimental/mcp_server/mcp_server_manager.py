@@ -82,6 +82,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     parse_admin_env_vars,
     split_server_prefix_from_name,
+    strip_known_server_prefix,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -1481,7 +1482,8 @@ class MCPServerManager:
             for toolset in toolsets:
                 for tool in toolset.tools:
                     raw_name = tool["tool_name"]
-                    unprefixed, _ = split_server_prefix_from_name(raw_name)
+                    server = self.get_mcp_server_by_id(tool["server_id"])
+                    unprefixed = strip_known_server_prefix(raw_name, server)
                     tool_permissions.setdefault(tool["server_id"], [])
                     if unprefixed not in tool_permissions[tool["server_id"]]:
                         tool_permissions[tool["server_id"]].append(unprefixed)
