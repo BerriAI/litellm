@@ -8,11 +8,19 @@ external callers only see servers with available_on_public_internet=True.
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import Request
+from pydantic import ValidationError
 
 import litellm.proxy.auth.ip_address_utils as ip_mod
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy._types import ConfigGeneralSettings
+from litellm.proxy.auth.ip_address_utils import (
+    IPAddressUtils,
+    _HopCount,
+    _HopCountInvalid,
+    _HopCountUnset,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -167,6 +175,222 @@ class TestMCPClientIPExtraction:
         )
 
         assert result == "203.0.113.5"
+
+
+def _make_request(client_host, xff):
+    request = MagicMock(spec=Request)
+    request.client = MagicMock()
+    request.client.host = client_host
+    request.headers = {"x-forwarded-for": xff}
+    return request
+
+
+class TestExtractClientIpFromXffHops:
+    def test_single_hop_picks_rightmost(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "10.0.0.99, 203.0.113.9", num_trusted_hops=1
+            )
+            == "203.0.113.9"
+        )
+
+    def test_two_hops_picks_second_from_right(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "10.0.0.99, 203.0.113.9, 172.16.0.1", num_trusted_hops=2
+            )
+            == "203.0.113.9"
+        )
+
+    def test_whitespace_and_empty_entries_are_ignored(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                " 1.1.1.1 ,  , 203.0.113.9 ", num_trusted_hops=1
+            )
+            == "203.0.113.9"
+        )
+
+    def test_chain_shorter_than_hops_returns_none(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "203.0.113.9", num_trusted_hops=2
+            )
+            is None
+        )
+
+    def test_zero_or_negative_hops_returns_none(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "203.0.113.9", num_trusted_hops=0
+            )
+            is None
+        )
+
+    def test_invalid_selected_entry_returns_none(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "not-an-ip, 10.0.0.1", num_trusted_hops=2
+            )
+            is None
+        )
+
+
+class TestResolveNumTrustedHops:
+    def test_unset_is_unset(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(None) == _HopCountUnset()
+
+    def test_int_value(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(2) == _HopCount(2)
+
+    def test_numeric_string_is_coerced(self):
+        assert IPAddressUtils._resolve_num_trusted_hops("3") == _HopCount(3)
+
+    def test_zero_is_invalid_not_disabled(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(0) == _HopCountInvalid()
+
+    def test_non_numeric_value_is_invalid(self):
+        assert IPAddressUtils._resolve_num_trusted_hops("abc") == _HopCountInvalid()
+
+    def test_below_minimum_warns_so_misconfig_is_visible(self):
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+        ) as mock_logger:
+            assert IPAddressUtils._resolve_num_trusted_hops(0) == _HopCountInvalid()
+            assert IPAddressUtils._resolve_num_trusted_hops(-3) == _HopCountInvalid()
+        assert mock_logger.warning.call_count == 2
+
+    def test_unset_does_not_warn(self):
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+        ) as mock_logger:
+            assert IPAddressUtils._resolve_num_trusted_hops(None) == _HopCountUnset()
+        mock_logger.warning.assert_not_called()
+
+    def test_valid_value_does_not_warn(self):
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+        ) as mock_logger:
+            assert IPAddressUtils._resolve_num_trusted_hops(2) == _HopCount(2)
+        mock_logger.warning.assert_not_called()
+
+
+class TestConfigGeneralSettingsHopsValidation:
+    """mcp_xff_num_trusted_hops must reject sub-minimum values at config-parse time."""
+
+    @pytest.mark.parametrize("bad_value", [0, -1])
+    def test_below_minimum_is_rejected(self, bad_value):
+        with pytest.raises(ValidationError):
+            ConfigGeneralSettings(mcp_xff_num_trusted_hops=bad_value)
+
+    def test_valid_value_and_unset_are_accepted(self):
+        assert (
+            ConfigGeneralSettings(mcp_xff_num_trusted_hops=1).mcp_xff_num_trusted_hops
+            == 1
+        )
+        assert ConfigGeneralSettings().mcp_xff_num_trusted_hops is None
+
+
+class TestXffTrustedHopsAccessControl:
+    def test_spoofed_internal_leftmost_is_defeated(self):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 1,
+            },
+        )
+
+        assert result == "203.0.113.9"
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_genuine_internal_client_is_preserved(self):
+        request = _make_request("10.0.0.5", "10.0.0.50")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 1,
+            },
+        )
+
+        assert result == "10.0.0.50"
+        assert IPAddressUtils.is_internal_ip(result) is True
+
+    def test_two_hops_skips_proxy_appended_addresses(self):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9, 172.16.0.1")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 2,
+            },
+        )
+
+        assert result == "203.0.113.9"
+
+    def test_short_chain_fails_closed(self):
+        request = _make_request("10.0.0.5", "203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 2,
+            },
+        )
+
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_hops_without_trusted_ranges_still_fails_closed(self):
+        request = _make_request("203.0.113.5", "10.0.0.99, 8.8.8.8")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_xff_num_trusted_hops": 1,
+            },
+        )
+
+        assert result == ""
+
+    def test_unset_hops_keeps_legacy_leftmost_behavior(self):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+        )
+
+        assert result == "10.0.0.99, 203.0.113.9"
+
+    @pytest.mark.parametrize("bad_value", [0, -1, "abc", 1.5])
+    def test_invalid_hops_config_fails_closed_not_legacy(self, bad_value):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": bad_value,
+            },
+        )
+
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
 
 
 class TestXffPresentButDisabledWarning:
