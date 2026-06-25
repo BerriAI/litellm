@@ -158,6 +158,34 @@ def test_request_params_lowering_list_tasks_to_0_3():
     assert out["status"] == "completed"
 
 
+@pytest.mark.parametrize(
+    "proto_status, expected",
+    [
+        ("TASK_STATE_COMPLETED", "completed"),
+        ("TASK_STATE_INPUT_REQUIRED", "input-required"),
+        ("TASK_STATE_AUTH_REQUIRED", "auth-required"),
+        ("TASK_STATE_CANCELED", "canceled"),
+    ],
+)
+def test_list_tasks_status_filter_lowers_to_0_3_wire_value(proto_status, expected):
+    out = normalize_request_params(
+        {"status": proto_status},
+        "1.0",
+        method="tasks/list",
+    )
+    assert out["status"] == expected
+
+
+def test_list_tasks_unspecified_status_is_dropped():
+    out = normalize_request_params(
+        {"contextId": "ctx-1", "status": "TASK_STATE_UNSPECIFIED"},
+        "1.0",
+        method="tasks/list",
+    )
+    assert "status" not in out
+    assert out["contextId"] == "ctx-1"
+
+
 def test_list_tasks_result_round_trip_preserves_task_ids():
     rpc = _rpc(
         {

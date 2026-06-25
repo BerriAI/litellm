@@ -409,24 +409,36 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
 def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
     from google.protobuf.json_format import MessageToDict
 
-    from a2a.compat.v0_3.conversions import (
-        ParseDict,
-        _CORE_TO_COMPAT_TASK_STATE,
-        pb2_v10,
-    )
+    from a2a.compat.v0_3.conversions import ParseDict, pb2_v10, types_v03
 
     proto = pb2_v10.ListTasksRequest()
     _parse(ParseDict, params, proto)
     lowered = MessageToDict(proto, preserving_proto_field_name=False)
-    if proto.status != pb2_v10.TaskState.TASK_STATE_UNSPECIFIED:
-        compat_state = _CORE_TO_COMPAT_TASK_STATE.get(proto.status)
-        if compat_state is not None:
-            lowered["status"] = compat_state.value
-        else:
-            lowered.pop("status", None)
-    else:
+    status_name = str(pb2_v10.TaskState.Name(proto.status))
+    valid_0_3_values = frozenset(str(member.value) for member in types_v03.TaskState)
+    compat_status = _proto_task_state_name_to_0_3(status_name, valid_0_3_values)
+    if compat_status is None:
         lowered.pop("status", None)
+    else:
+        lowered["status"] = compat_status
     return lowered
+
+
+def _proto_task_state_name_to_0_3(
+    name: str, valid_0_3_values: frozenset[str]
+) -> Optional[str]:
+    """Map a 1.0 protobuf ``TaskState`` enum name to its 0.3 wire string.
+
+    The ``TASK_STATE_<NAME>`` enum names line up with the 0.3 wire values once the
+    prefix is dropped and underscores become dashes, so no private SDK mapping is
+    needed. The result is validated against the 0.3 enum's own values; an unspecified
+    or unrecognized state yields ``None`` so the status filter is dropped.
+    """
+    base = name.removeprefix("TASK_STATE_")
+    if base == "UNSPECIFIED":
+        return None
+    candidate = base.lower().replace("_", "-")
+    return candidate if candidate in valid_0_3_values else None
 
 
 def _flatten_create_push_notification_params(params: JsonDict) -> JsonDict:
