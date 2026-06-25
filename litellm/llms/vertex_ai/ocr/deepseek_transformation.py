@@ -3,7 +3,7 @@ Vertex AI DeepSeek OCR transformation implementation.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict
 
 import httpx
 
@@ -38,16 +38,16 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         super().__init__()
         self.vertex_base = VertexBase()
 
-    def get_api_key_env_var(self) -> Optional[str]:
+    def get_api_key_env_var(self) -> str | None:
         return VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR
 
     def validate_environment(
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -89,10 +89,10 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """

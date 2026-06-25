@@ -732,3 +732,26 @@ def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
 
     assert captured.get("called") is True  # Python path was used
     assert isinstance(response, OCRResponse)
+
+
+def test_ocr_provider_configs_expose_api_key_env_vars():
+    from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
+        AzureDocumentIntelligenceOCRConfig,
+    )
+    from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
+    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+    from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
+        VertexAIDeepSeekOCRConfig,
+    )
+    from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+
+    assert BaseOCRConfig().get_api_key_env_var() is None
+    assert MistralOCRConfig().get_api_key_env_var() == "MISTRAL_API_KEY"
+    assert AzureAIOCRConfig().get_api_key_env_var() == "AZURE_AI_API_KEY"
+    assert (
+        AzureDocumentIntelligenceOCRConfig().get_api_key_env_var()
+        == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+    )
+    assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
+    assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"

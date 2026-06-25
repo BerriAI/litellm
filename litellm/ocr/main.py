@@ -9,7 +9,7 @@ import os
 import re
 from dataclasses import dataclass
 from io import IOBase
-from typing import Any, Callable, Coroutine, Optional, Union, cast
+from typing import Any, Callable, Coroutine, Union, cast
 
 import httpx
 
@@ -38,10 +38,10 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 class _PreparedOCRRequest:
     model: str
     document: dict[str, Any]
-    api_key: Optional[str]
-    api_base: Optional[str]
+    api_key: str | None
+    api_base: str | None
     custom_llm_provider: str
-    extra_headers: Optional[dict[str, object]]
+    extra_headers: dict[str, object] | None
     provider_config: BaseOCRConfig
     optional_params: dict[str, object]
     litellm_params: dict[str, object]
@@ -51,8 +51,8 @@ class _PreparedOCRRequest:
 
 @dataclass
 class _PreparedRustOCRCall:
-    api_key: Optional[str]
-    api_base: Optional[str]
+    api_key: str | None
+    api_base: str | None
     headers: dict[str, object]
     optional_params: dict[str, object]
 
@@ -66,8 +66,8 @@ _RUST_OCR_PROVIDERS = {
 
 
 def _timeout_to_seconds(
-    timeout: Optional[Union[float, httpx.Timeout]],
-) -> Optional[float]:
+    timeout: Union[float, httpx.Timeout] | None,
+) -> float | None:
     """Convert the Python OCR timeout to a single seconds value for the Rust bridge.
 
     The Rust HTTP client takes one duration; ``httpx.Timeout`` carries separate
@@ -84,15 +84,15 @@ def _timeout_to_seconds(
 def _prepare_ocr_request(
     model: str,
     document: dict[str, Any],
-    api_key: Optional[str],
-    api_base: Optional[str],
-    timeout: Optional[Union[float, httpx.Timeout]],
-    custom_llm_provider: Optional[str],
-    extra_headers: Optional[dict[str, Any]],
+    api_key: str | None,
+    api_base: str | None,
+    timeout: Union[float, httpx.Timeout] | None,
+    custom_llm_provider: str | None,
+    extra_headers: dict[str, Any] | None,
     kwargs: dict[str, Any],
 ) -> _PreparedOCRRequest:
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
-    litellm_call_id = cast(Optional[str], kwargs.get("litellm_call_id", None))
+    litellm_call_id = cast(str | None, kwargs.get("litellm_call_id", None))
 
     if not isinstance(document, dict):
         raise ValueError(
@@ -173,7 +173,7 @@ def _prepare_ocr_request(
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(Optional[dict[str, object]], extra_headers),
+        extra_headers=cast(dict[str, object] | None, extra_headers),
         provider_config=ocr_provider_config,
         optional_params=cast(dict[str, object], optional_params),
         litellm_params=dict(litellm_params),
@@ -188,7 +188,7 @@ def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
 
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
-    resolve_secret: Callable[[str], Optional[str]],
+    resolve_secret: Callable[[str], str | None],
 ) -> dict[str, object]:
     optional_params = dict(prepared_request.optional_params)
     if prepared_request.custom_llm_provider == "vertex_ai":
@@ -214,8 +214,8 @@ def _rust_bridge_optional_params(
 
 def _rust_bridge_api_base(
     prepared_request: _PreparedOCRRequest,
-    resolve_secret: Callable[[str], Optional[str]],
-) -> Optional[str]:
+    resolve_secret: Callable[[str], str | None],
+) -> str | None:
     if prepared_request.api_base is not None:
         return prepared_request.api_base
     if prepared_request.custom_llm_provider == "azure_ai/doc-intelligence":
@@ -232,7 +232,7 @@ def _rust_bridge_api_base(
 
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], Optional[str]],
+    resolve_api_key: Callable[[str], str | None],
 ) -> _PreparedRustOCRCall:
     provider_config = prepared_request.provider_config
     api_key_env_var = provider_config.get_api_key_env_var()
@@ -280,7 +280,7 @@ def _prepare_rust_ocr_call(
 def _run_rust_ocr(
     rust_ocr: RustOcr,
     prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], Optional[str]],
+    resolve_api_key: Callable[[str], str | None],
 ) -> OCRResponse:
     """Run the Mistral OCR call through the Rust bridge and wrap the result.
 
@@ -311,7 +311,7 @@ def _run_rust_ocr(
 async def _run_rust_aocr(
     rust_aocr: RustAocr,
     prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], Optional[str]],
+    resolve_api_key: Callable[[str], str | None],
 ) -> OCRResponse:
     prepared = _prepare_rust_ocr_call(
         prepared_request=prepared_request,
@@ -335,11 +335,11 @@ async def _run_rust_aocr(
 async def aocr(
     model: str,
     document: dict[str, Any],
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[dict[str, Any]] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: Union[float, httpx.Timeout] | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
     **kwargs,
 ) -> OCRResponse:
     """
@@ -536,7 +536,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
 
     file_bytes: bytes
     mime_type: str = "application/octet-stream"
-    file_name: Optional[str] = None
+    file_name: str | None = None
 
     if isinstance(file_input, str):
         # Bare strings are rejected here. The OCR ``document`` accepts a
@@ -606,11 +606,11 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
 def ocr(
     model: str,
     document: dict[str, Any],
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[dict[str, Any]] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: Union[float, httpx.Timeout] | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
     **kwargs,
 ) -> Union[OCRResponse, Coroutine[Any, Any, OCRResponse]]:
     """

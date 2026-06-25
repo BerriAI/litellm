@@ -2,7 +2,7 @@
 Vertex AI Mistral OCR transformation implementation.
 """
 
-from typing import Dict, Optional
+from typing import Dict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -34,16 +34,16 @@ class VertexAIOCRConfig(MistralOCRConfig):
         super().__init__()
         self.vertex_base = VertexBase()
 
-    def get_api_key_env_var(self) -> Optional[str]:
+    def get_api_key_env_var(self) -> str | None:
         return VERTEX_AI_OCR_API_KEY_ENV_VAR
 
     def validate_environment(
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -85,10 +85,10 @@ class VertexAIOCRConfig(MistralOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
