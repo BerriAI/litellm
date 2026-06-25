@@ -17,6 +17,14 @@ from litellm.proxy.auth.auth_utils import _get_request_ip_address
 # behaviour see an actionable message in their logs the first time it triggers.
 _warned_xff_without_trusted_ranges = False
 
+# Error for the inverse footgun: requests arrive with an X-Forwarded-For header
+# but use_x_forwarded_for is off, so the real client IP is silently dropped and
+# "internal network only" access control trusts the load balancer's IP instead.
+# Logged once per misconfiguration window (not per-request) so a flood of crafted
+# XFF headers can't spam the logs; re-arms whenever use_x_forwarded_for is observed
+# enabled, so a later rollback to disabled warns again.
+_warned_xff_present_but_disabled = False
+
 
 class IPAddressUtils:
     """Static utilities for IP-based MCP access control."""
@@ -197,6 +205,28 @@ class IPAddressUtils:
             general_settings = {}
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
+
+        global _warned_xff_present_but_disabled
+        if use_xff:
+            _warned_xff_present_but_disabled = False
+        elif "x-forwarded-for" in request.headers:
+            if not _warned_xff_present_but_disabled:
+                verbose_proxy_logger.error(
+                    "Received a request with an X-Forwarded-For header but "
+                    "use_x_forwarded_for is not enabled. The real client IP is "
+                    "being ignored and the direct peer's IP (typically your load "
+                    "balancer / reverse proxy) is used for MCP access control. "
+                    "Because that peer almost always falls within "
+                    "general_settings.mcp_internal_ip_ranges, every external caller "
+                    "is treated as internal and 'available_on_public_internet: "
+                    "false' MCP servers are effectively exposed. Set "
+                    "use_x_forwarded_for: true (and mcp_trusted_proxy_ranges to "
+                    "your proxy CIDRs) in general_settings to honor the real "
+                    "client IP. Not failing the request: if there is no load "
+                    "balancer, a crafted X-Forwarded-For header must not be able "
+                    "to take down the service."
+                )
+                _warned_xff_present_but_disabled = True
 
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
