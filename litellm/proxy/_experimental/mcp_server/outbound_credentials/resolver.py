@@ -99,6 +99,16 @@ class UpstreamCredentialProvider:
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
 
+    async def has_user_token(self, subject: Subject, server: ServerSpec) -> bool:
+        """Whether a usable per-user token exists for this server (the preemptive 401's check).
+
+        Reads from the same per-user store as the ``authorization_code`` arm, so the discovery
+        challenge and the egress agree on whether the user is authorized. Returns a typed ``bool``
+        (no ``httpx.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
+        store, so it reads as False without a per-mode branch here.
+        """
+        return await self._authz_token(subject, server) is not None
+
     def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
         match config.key_source:
             case SharedKey() as source:

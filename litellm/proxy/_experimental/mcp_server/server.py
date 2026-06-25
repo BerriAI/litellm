@@ -3420,12 +3420,6 @@ if MCP_AVAILABLE:
                 # If no stored token exists, fail fast with 401 so clients can
                 # kick off PKCE/interactive OAuth flow immediately.
                 if server.needs_user_oauth_token:
-                    stored_oauth_headers = await _get_user_oauth_extra_headers_from_db(
-                        server=server,
-                        user_api_key_auth=user_api_key_auth,
-                    )
-                    if stored_oauth_headers:
-                        continue
                     if getattr(server, "delegate_auth_to_upstream", False) is True:
                         # Delegate-auth servers run upstream PKCE: challenge with
                         # the proxied resource_metadata (RFC 9728), not the
@@ -3440,6 +3434,12 @@ if MCP_AVAILABLE:
                             detail="Unauthorized",
                             headers={"www-authenticate": www_authenticate},
                         )
+                    # The v2 resolver owns the existence check, so every authorization_code
+                    # resolution (egress and this discovery challenge) runs through it.
+                    if await global_mcp_server_manager.has_user_oauth_token(
+                        server, user_api_key_auth
+                    ):
+                        continue
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)

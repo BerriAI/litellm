@@ -3680,6 +3680,22 @@ class MCPServerManager:
 
         return mcp_server
 
+    async def has_user_oauth_token(
+        self, server: MCPServer, user_api_key_auth: Optional[UserAPIKeyAuth]
+    ) -> bool:
+        """Whether the v2 resolver can produce a per-user token for this server right now.
+
+        This is the preemptive 401's existence check, routed through the same resolver that drives
+        the egress so every authorization_code resolution (egress and the discovery challenge) runs
+        through v2. Returns False for a server the resolver does not own (a None spec).
+        """
+        spec = to_server_spec(server)
+        if spec is None:
+            return False
+        return await self._cred_provider.has_user_token(
+            to_subject(user_api_key_auth, None), spec
+        )
+
     async def _resolve_oauth2_headers_for_tool_call(
         self,
         mcp_server: MCPServer,
