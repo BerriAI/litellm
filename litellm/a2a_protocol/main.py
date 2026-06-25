@@ -7,7 +7,16 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 import datetime
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
