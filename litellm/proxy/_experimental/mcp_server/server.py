@@ -3500,7 +3500,19 @@ if MCP_AVAILABLE:
                     if stored_oauth_headers:
                         continue
                     if getattr(server, "delegate_auth_to_upstream", False) is True:
-                        continue
+                        # Delegate-auth servers run upstream PKCE: challenge with
+                        # the proxied resource_metadata (RFC 9728), not the
+                        # gateway authorization_uri below which would authorize
+                        # against the gateway instead of the upstream IdP.
+                        www_authenticate = _get_passthrough_www_authenticate(
+                            scope=scope,
+                            server_name=server_name,
+                        )
+                        raise HTTPException(
+                            status_code=401,
+                            detail="Unauthorized",
+                            headers={"www-authenticate": www_authenticate},
+                        )
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)
