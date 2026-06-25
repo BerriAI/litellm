@@ -229,10 +229,10 @@ def _is_allowed_to_make_key_request(
         return True
 
     if user_id is not None:
-        assert (
-            user_id == user_api_key_dict.user_id
-        ), "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
-            user_id, user_api_key_dict.user_id
+        assert user_id == user_api_key_dict.user_id, (
+            "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
+                user_id, user_api_key_dict.user_id
+            )
         )
 
     if team_id is not None:
@@ -382,7 +382,9 @@ def _personal_key_generation_check(
     ):
         return True
 
-    _personal_key_generation = litellm.key_generation_settings["personal_key_generation"]  # type: ignore
+    _personal_key_generation = litellm.key_generation_settings[
+        "personal_key_generation"
+    ]  # type: ignore
 
     _personal_key_membership_check(
         user_api_key_dict,
@@ -874,6 +876,8 @@ async def _common_key_generation_helper(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
+        is_proxy_admin=user_api_key_dict.user_role
+        == LitellmUserRoles.PROXY_ADMIN.value,
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
@@ -961,9 +965,7 @@ async def _common_key_generation_helper(
 
     response = GenerateKeyResponse(**response)
 
-    response.token = (
-        response.token_id
-    )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
+    response.token = response.token_id  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
 
     asyncio.create_task(
         KeyManagementEventHooks.async_key_generated_hook(
@@ -2050,12 +2052,14 @@ async def _process_single_key_update(
 
     # Check team member permissions
     if prisma_client is not None:
-        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            route=KeyManagementRoutes.KEY_UPDATE,
-            prisma_client=prisma_client,
-            existing_key_row=existing_key_row,
-            user_api_key_cache=user_api_key_cache,
+        await (
+            TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                route=KeyManagementRoutes.KEY_UPDATE,
+                prisma_client=prisma_client,
+                existing_key_row=existing_key_row,
+                user_api_key_cache=user_api_key_cache,
+            )
         )
 
     # Custom key update hook
@@ -2164,6 +2168,7 @@ async def _validate_mcp_servers_for_key_update(
     existing_key_row: Any,
     prisma_client: Any,
     user_api_key_cache: Any,
+    is_proxy_admin: bool,
 ) -> Optional[dict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
@@ -2186,6 +2191,7 @@ async def _validate_mcp_servers_for_key_update(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
+        is_proxy_admin=is_proxy_admin,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
@@ -2422,6 +2428,7 @@ async def _validate_update_key_data(
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            is_proxy_admin=_is_proxy_admin,
         )
         if normalized_object_permission is not None:
             data.object_permission = LiteLLM_ObjectPermissionBase(
@@ -2963,12 +2970,14 @@ async def bulk_update_team_keys(
                 models=[],
             )
         )
-        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            route=KeyManagementRoutes.KEY_UPDATE,
-            prisma_client=prisma_client,
-            existing_key_row=auth_anchor,
-            user_api_key_cache=user_api_key_cache,
+        await (
+            TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                route=KeyManagementRoutes.KEY_UPDATE,
+                prisma_client=prisma_client,
+                existing_key_row=auth_anchor,
+                user_api_key_cache=user_api_key_cache,
+            )
         )
 
     # Block metadata.allowed_passthrough_routes for non-admins — the runtime
@@ -3975,10 +3984,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
-                await VerificationTokenRepository(prisma_client).table.find_many(
-                    where={"token": {"in": tokens}}
-                )
+            _keys_being_deleted: List[
+                LiteLLM_VerificationToken
+            ] = await VerificationTokenRepository(prisma_client).table.find_many(
+                where={"token": {"in": tokens}}
             )
 
             if len(_keys_being_deleted) == 0:
@@ -4665,12 +4674,14 @@ async def regenerate_key_fn(
             )
 
         # check if user has permission to regenerate key
-        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            route=KeyManagementRoutes.KEY_REGENERATE,
-            prisma_client=prisma_client,
-            existing_key_row=_key_in_db,
-            user_api_key_cache=user_api_key_cache,
+        await (
+            TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                route=KeyManagementRoutes.KEY_REGENERATE,
+                prisma_client=prisma_client,
+                existing_key_row=_key_in_db,
+                user_api_key_cache=user_api_key_cache,
+            )
         )
 
         # check if user has ownership permission to regenerate key
@@ -5987,7 +5998,8 @@ async def block_key(
         )
 
     record = await VerificationTokenRepository(prisma_client).table.update(
-        where={"token": hashed_token}, data={"blocked": True}  # type: ignore
+        where={"token": hashed_token},
+        data={"blocked": True},  # type: ignore
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
@@ -6101,7 +6113,8 @@ async def unblock_key(
         )
 
     record = await VerificationTokenRepository(prisma_client).table.update(
-        where={"token": hashed_token}, data={"blocked": False}  # type: ignore
+        where={"token": hashed_token},
+        data={"blocked": False},  # type: ignore
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB

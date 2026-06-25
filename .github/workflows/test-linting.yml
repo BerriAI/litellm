@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -50,10 +50,10 @@ jobs:
         run: |
           uv sync --frozen
 
-      - name: Check Black formatting
+      - name: Check ruff format
         run: |
           cd litellm
-          uv run --no-sync black --check --exclude '/enterprise/' .
+          uv run --no-sync ruff format --check --line-length 88 --exclude '/enterprise/' .
           cd ..
 
       - name: Debug - Check file state

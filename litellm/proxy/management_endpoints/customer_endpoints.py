@@ -342,7 +342,8 @@ async def new_end_user(
                 budget_record = await BudgetRepository(prisma_client).table.create(
                     data={
                         **_new_budget.model_dump(exclude_unset=True),
-                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                        "created_by": user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,  # type: ignore
                         "updated_by": user_api_key_dict.user_id
                         or litellm_proxy_admin_name,
                     }
@@ -563,10 +564,14 @@ async def update_end_user(
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
+            if (
+                v is not None
+                and v
+                not in (
+                    [],
+                    {},
+                    0,
+                )
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
 
@@ -655,7 +660,9 @@ async def update_end_user(
             update_end_user_table_data["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update customer, user_id condition block.")
             response = await EndUserRepository(prisma_client).table.update(
-                where={"user_id": data.user_id}, data=update_end_user_table_data, include={"litellm_budget_table": True, "object_permission": True}  # type: ignore
+                where={"user_id": data.user_id},
+                data=update_end_user_table_data,
+                include={"litellm_budget_table": True, "object_permission": True},  # type: ignore
             )
             if response is None:
                 raise ValueError(

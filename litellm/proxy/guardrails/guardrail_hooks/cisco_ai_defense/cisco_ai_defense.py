@@ -531,7 +531,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 self.guardrail_name,
                 type(all_chunks[0]).__name__,
             )
-            yield f'data: {json.dumps({"error": {"message": "Cisco AI Defense: unsupported streaming format — response withheld for safety", "type": "guardrail_unsupported_stream", "code": 400, "guardrail": self.guardrail_name}})}\n\n'
+            yield f"data: {json.dumps({'error': {'message': 'Cisco AI Defense: unsupported streaming format — response withheld for safety', 'type': 'guardrail_unsupported_stream', 'code': 400, 'guardrail': self.guardrail_name}})}\n\n"
             return
 
         assembled = stream_chunk_builder(chunks=all_chunks)
@@ -546,7 +546,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 self.guardrail_name,
                 type(assembled).__name__,
             )
-            yield f'data: {json.dumps({"error": {"message": "Cisco AI Defense: unsupported streaming format — response withheld for safety", "type": "guardrail_unsupported_stream", "code": 400, "guardrail": self.guardrail_name}})}\n\n'
+            yield f"data: {json.dumps({'error': {'message': 'Cisco AI Defense: unsupported streaming format — response withheld for safety', 'type': 'guardrail_unsupported_stream', 'code': 400, 'guardrail': self.guardrail_name}})}\n\n"
             return
 
         response_messages = self._extract_response_messages(assembled)
@@ -586,14 +586,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return
         except Exception as exc:
             verbose_proxy_logger.error(
-                "Cisco AI Defense guardrail (%s): streaming response "
-                "scan failed: %s",
+                "Cisco AI Defense guardrail (%s): streaming response scan failed: %s",
                 self.guardrail_name,
                 exc,
             )
             error_obj = {
                 "message": (
-                    "Cisco AI Defense streaming scan failed — response " "withheld."
+                    "Cisco AI Defense streaming scan failed — response withheld."
                 ),
                 "type": "guardrail_scan_error",
                 "code": 500,
@@ -932,8 +931,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             ) from exc
         except httpx.TimeoutException as exc:
             raise CiscoAIDefenseGuardrailAPIError(
-                f"Cisco AI Defense {surface} API call timed out after "
-                f"{self.timeout}s"
+                f"Cisco AI Defense {surface} API call timed out after {self.timeout}s"
             ) from exc
         except httpx.RequestError as exc:
             raise CiscoAIDefenseGuardrailAPIError(
@@ -1178,8 +1176,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
             if redacted:
                 verbose_proxy_logger.info(
-                    "Cisco AI Defense guardrail (%s): redaction applied "
-                    "(event_id=%s)",
+                    "Cisco AI Defense guardrail (%s): redaction applied (event_id=%s)",
                     context.surface,
                     verdict.event_id,
                 )

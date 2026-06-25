@@ -154,7 +154,10 @@ def create_mock_gcs_client():
 
     This function is idempotent - it only initializes mocks once, even if called multiple times.
     """
-    global _original_async_handler_get, _original_async_handler_delete, _mocks_initialized
+    global \
+        _original_async_handler_get, \
+        _original_async_handler_delete, \
+        _mocks_initialized
 
     # Use factory for POST handler
     _create_mock_gcs_post()
@@ -179,7 +182,7 @@ def create_mock_gcs_client():
         verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.delete")
 
     verbose_logger.debug(
-        f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms"
+        f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms"
     )
     verbose_logger.debug("[GCS MOCK] GCS mock client initialization complete")
 
