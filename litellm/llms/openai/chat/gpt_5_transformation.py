@@ -1,6 +1,6 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 import litellm
 from litellm.utils import (
@@ -107,8 +107,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         custom_llm_provider: str,
         responses_api_model_info: dict,
-        tools: Optional[List[Any]],
-        reasoning_effort: Optional[Any],
+        tools: Optional[List],
+        reasoning_effort: Optional[Union[str, dict]],
         optional_params: dict,
     ) -> None:
         import litellm
