@@ -1,9 +1,10 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_core::error::CoreError;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict};
+use pyo3::types::{PyAny, PyBytes, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
@@ -181,10 +182,110 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(stats.into_any().unbind())
 }
 
+fn core_error_to_runtime(err: CoreError) -> PyErr {
+    PyRuntimeError::new_err(err.to_string())
+}
+
+fn realtime_payload_to_py(
+    py: Python<'_>,
+    payload: litellm_providers::realtime::RealtimePayload,
+) -> PyResult<Py<PyAny>> {
+    match payload {
+        litellm_providers::realtime::RealtimePayload::Text(text) => {
+            Ok(text.into_pyobject(py)?.into_any().unbind())
+        }
+        litellm_providers::realtime::RealtimePayload::Binary(bytes) => {
+            Ok(PyBytes::new(py, &bytes).into_any().unbind())
+        }
+    }
+}
+
+#[pyclass]
+struct RustRealtimeUpstream {
+    inner: Arc<litellm_providers::realtime::UpstreamHandle>,
+}
+
+#[pymethods]
+impl RustRealtimeUpstream {
+    fn send<'py>(
+        &self,
+        py: Python<'py>,
+        message: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let payload = if let Ok(text) = message.extract::<String>() {
+            litellm_providers::realtime::RealtimePayload::Text(text)
+        } else if let Ok(bytes) = message.extract::<Vec<u8>>() {
+            litellm_providers::realtime::RealtimePayload::Binary(bytes)
+        } else {
+            return Err(PyValueError::new_err(
+                "realtime message must be str or bytes",
+            ));
+        };
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner
+                .send_payload(payload)
+                .await
+                .map_err(core_error_to_runtime)
+        })
+    }
+
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            match inner.recv_payload().await {
+                Ok(Some(payload)) => Python::with_gil(|py| realtime_payload_to_py(py, payload)),
+                Ok(None) => Err(PyStopAsyncIteration::new_err("upstream closed")),
+                Err(err) => Err(core_error_to_runtime(err)),
+            }
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.close().await.map_err(core_error_to_runtime)
+        })
+    }
+
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.recv(py)
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (url, headers, max_size=None))]
+fn realtime_connect<'py>(
+    py: Python<'py>,
+    url: String,
+    headers: Bound<'py, PyDict>,
+    max_size: Option<usize>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let headers_vec: Vec<(String, String)> = headers
+        .iter()
+        .map(|(key, value)| Ok((key.extract::<String>()?, value.extract::<String>()?)))
+        .collect::<PyResult<_>>()?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let upstream = litellm_providers::realtime::dial_url(&url, &headers_vec, max_size)
+            .await
+            .map_err(core_error_to_runtime)?;
+        Ok(RustRealtimeUpstream {
+            inner: Arc::new(litellm_providers::realtime::UpstreamHandle::new(upstream)),
+        })
+    })
+}
+
 #[pymodule]
 fn litellm_python_bridge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    module.add_function(wrap_pyfunction!(realtime_connect, module)?)?;
+    module.add_class::<RustRealtimeUpstream>()?;
     Ok(())
 }
