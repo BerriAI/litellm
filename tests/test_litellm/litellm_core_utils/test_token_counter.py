@@ -91,10 +91,37 @@ def test_token_counter_normal_plus_function_calling():
         },
     ]
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-    assert tokens == 80
+    assert tokens == 82
 
 
 # test_token_counter_normal_plus_function_calling()
+
+
+def test_token_counter_counts_tool_call_function_name():
+    """The function name in an assistant tool_calls message is real prompt content,
+    so token_counter must count it; two messages differing only in the function name
+    length must not produce the same token count"""
+
+    def msg(name):
+        return [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": name, "arguments": "{}"},
+                    }
+                ],
+            }
+        ]
+
+    short = token_counter(model="gpt-3.5-turbo", messages=msg("f"))
+    longer = token_counter(
+        model="gpt-3.5-turbo", messages=msg("search_internet_for_recent_news")
+    )
+    assert longer > short
 
 
 @pytest.mark.parametrize(

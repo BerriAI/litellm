@@ -463,9 +463,11 @@ def _count_messages(
                 if isinstance(value, List):
                     for tool_call in value:
                         if "function" in tool_call:
-                            function_arguments = tool_call["function"].get(
-                                "arguments", []
+                            function = tool_call["function"]
+                            num_tokens += params.count_function(
+                                str(function.get("name", ""))
                             )
+                            function_arguments = function.get("arguments", [])
                             num_tokens += params.count_function(str(function_arguments))
                         else:
                             raise ValueError(
