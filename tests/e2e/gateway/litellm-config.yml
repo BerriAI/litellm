@@ -26,6 +26,9 @@ general_settings:
   control_plane_url: os.environ/CONTROL_PLANE_URL
   alerts: ["email"]
 
+  proxy_budget_rescheduler_min_time: 15
+  proxy_budget_rescheduler_max_time: 20
+  
 # fallbacks: [{"gpt-4": ["anthropic.claude-3-5-sonnet-20240620-v1:0"]}] #Configure fallbacks for context window exeeded errors (In this example, we will fall back to Claude Sonnet if over 8000 tokens, which is gpt-4's limit)
   # default_fallbacks: ["anthropic.claude-3-haiku-20240307-v1:0"] #Configure fallbacks for any error for every model (the above fallback configurations override this one)
 # environment_variables:
