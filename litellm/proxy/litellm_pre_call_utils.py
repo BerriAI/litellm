@@ -205,13 +205,15 @@ _CLIENT_PRICING_CONTROL_FIELDS = frozenset(CustomPricingLiteLLMParams.model_fiel
 _CLIENT_PRICING_METADATA_FIELDS = frozenset({"model_info"})
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY = "allow_client_pricing_override"
 
-# custom_oauth credentials (token endpoint + client id/secret/scope) are
-# deployment configuration: a client request that overrode oauth_token_url could
-# redirect a configured deployment's client_secret to an attacker, so they are
-# stripped from request bodies and only honored from the deployment's
-# litellm_params. The SDK path never passes through here and is unaffected.
+# OAuth client-credentials fields (the enabling flag plus token endpoint and
+# client id/secret/scope) are deployment configuration: a client request that
+# turned on oauth_client_credentials or overrode oauth_token_url could redirect a
+# configured deployment's client_secret to an attacker, so they are stripped from
+# request bodies and only honored from the deployment's litellm_params. The SDK
+# path never passes through here and is unaffected.
 _CLIENT_OAUTH_CONTROL_FIELDS = frozenset(
     {
+        "oauth_client_credentials",
         "oauth_token_url",
         "oauth_client_id",
         "oauth_client_secret",
@@ -369,7 +371,7 @@ def _strip_client_pricing_overrides(data: Dict[str, Any]) -> None:
 
 
 def _strip_client_oauth_overrides(data: dict[str, Any]) -> None:
-    """Drop custom_oauth credential fields from a client request body.
+    """Drop OAuth client-credentials fields from a client request body.
 
     These are deployment configuration; a client-supplied ``oauth_token_url``
     combined with a configured ``oauth_client_secret`` would let a caller
@@ -391,7 +393,7 @@ def _strip_client_oauth_overrides(data: dict[str, Any]) -> None:
                 metadata.pop(field, None)
     if stripped:
         verbose_proxy_logger.debug(
-            "Stripped client-supplied custom_oauth credential fields from request "
+            "Stripped client-supplied OAuth client-credentials fields from request "
             "body: %s. These are deployment configuration only.",
             ", ".join(stripped),
         )
@@ -1523,8 +1525,8 @@ async def add_litellm_data_to_request(
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
 
-    # custom_oauth credentials are deployment-only; never honor them from a
-    # client request body (prevents secret exfiltration via a redirected
+    # OAuth client-credentials fields are deployment-only; never honor them from
+    # a client request body (prevents secret exfiltration via a redirected
     # oauth_token_url).
     _strip_client_oauth_overrides(data)
 

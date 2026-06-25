@@ -2032,68 +2032,6 @@ def _complete_gigachat(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     return response
 
 
-def _complete_custom_oauth(
-    ctx: _CompletionDispatchContext,
-) -> _CompletionDispatchResult:
-    # base_llm_http_handler is required so the config's validate_environment can
-    # fetch and inject the OAuth2 bearer token; the default openai-compatible
-    # path assumes a static api_key and would skip it.
-    acompletion = ctx.acompletion
-    api_base = ctx.api_base
-    api_key = ctx.api_key
-    client = ctx.client
-    custom_llm_provider = ctx.custom_llm_provider
-    headers = ctx.headers
-    litellm_params = ctx.litellm_params
-    logging = ctx.logging
-    messages = ctx.messages
-    model = ctx.model
-    model_response = ctx.model_response
-    optional_params = ctx.optional_params
-    provider_config = ctx.provider_config
-    shared_session = ctx.shared_session
-    stream = ctx.stream
-    timeout = ctx.timeout
-
-    headers = headers or litellm.headers or {}
-    request_timeout: Union[float, httpx.Timeout] = (
-        timeout
-        if isinstance(timeout, httpx.Timeout)
-        else float(timeout) if timeout is not None else litellm.request_timeout
-    )
-
-    try:
-        response = base_llm_http_handler.completion(
-            model=model,
-            messages=messages,
-            headers=headers,
-            model_response=model_response,
-            api_key=api_key,
-            api_base=api_base,
-            acompletion=acompletion,
-            logging_obj=logging,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            shared_session=shared_session,
-            timeout=request_timeout,
-            client=client,
-            custom_llm_provider=custom_llm_provider,
-            encoding=_get_encoding(),
-            stream=stream,
-            provider_config=provider_config,
-        )
-    except Exception as e:
-        logging.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=str(e),
-            additional_args={"headers": headers},
-        )
-        raise e
-
-    return response
-
-
 def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
@@ -2382,6 +2320,16 @@ def _complete_custom_openai(
         or litellm.openai_key
         or get_secret("OPENAI_API_KEY")
     )
+
+    from litellm.llms.openai_like.oauth_authenticator import (
+        resolve_client_credentials_token,
+    )
+
+    oauth_api_key = resolve_client_credentials_token(
+        cast("dict[str, object]", litellm_params)
+    )
+    if oauth_api_key is not None:
+        api_key = oauth_api_key
 
     headers = headers or litellm.headers
 
@@ -5340,6 +5288,7 @@ def completion(  # type: ignore
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
             aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            oauth_client_credentials=kwargs.get("oauth_client_credentials", False),
             oauth_token_url=kwargs.get("oauth_token_url"),
             oauth_client_id=kwargs.get("oauth_client_id"),
             oauth_client_secret=kwargs.get("oauth_client_secret"),
@@ -5506,8 +5455,6 @@ def completion(  # type: ignore
             # A2A (Agent-to-Agent) Protocol
             # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
             response = _complete_a2a(_dispatch_ctx)
-        elif custom_llm_provider == "custom_oauth":
-            response = _complete_custom_oauth(_dispatch_ctx)
         elif custom_llm_provider == "gigachat":
             # GigaChat - Sber AI's LLM (Russia)
             response = _complete_gigachat(_dispatch_ctx)

@@ -1,9 +1,10 @@
-"""custom_oauth deployment credentials must not be forwarded to a
+"""OAuth client-credentials deployment config must not be forwarded to a
 client-redirected api_base.
 
 Regression for the security finding on PR #31026: when a deployment permits
-clientside api_base override, the router must clear the admin's OAuth fields so
-the bearer token litellm mints with them is never sent to the caller's endpoint.
+clientside api_base override, the router must clear the admin's OAuth flag and
+fields so the bearer token litellm mints with them is never sent to the caller's
+endpoint.
 """
 
 from litellm.router_utils.clientside_credential_handler import (
@@ -12,6 +13,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 
 _OAUTH_FIELDS = (
+    "oauth_client_credentials",
     "oauth_token_url",
     "oauth_client_id",
     "oauth_client_secret",
@@ -21,8 +23,9 @@ _OAUTH_FIELDS = (
 
 def _deployment_params() -> dict:
     return {
-        "model": "custom_oauth/gpt-4o",
+        "model": "openai/gpt-4o",
         "api_base": "https://gateway.internal/v1",
+        "oauth_client_credentials": True,
         "oauth_token_url": "https://idp.internal/oauth/token",
         "oauth_client_id": "admin-id",
         "oauth_client_secret": "admin-secret",

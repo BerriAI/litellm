@@ -176,8 +176,5 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
-  },
-  "custom_oauth": {
-    "auth": "oauth2_client_credentials"
   }
 }

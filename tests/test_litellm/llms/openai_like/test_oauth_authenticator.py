@@ -1,6 +1,6 @@
-"""
-Tests for the custom_oauth provider: OAuth2 client_credentials token fetch +
-caching, and bearer injection through the dynamic JSON-provider config.
+"""Tests for the oauth_client_credentials flag: OAuth2 client_credentials token
+fetch + caching, the litellm_params resolver, and bearer injection on the
+OpenAI-compatible completion path.
 
 Regression coverage for https://github.com/BerriAI/litellm/issues/12367
 """
@@ -10,12 +10,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from litellm.llms.openai_like.dynamic_config import create_config_class
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.oauth_authenticator import (
     OAuthClientCredentialsError,
     _token_cache,
     get_client_credentials_token,
+    resolve_client_credentials_token,
 )
 
 
@@ -217,87 +216,72 @@ class TestClientCredentialsTokenFetch:
         c2.post.assert_called_once()
 
 
-class TestCustomOAuthJSONConfig:
-    def test_registered_with_oauth_auth_and_no_static_endpoint(self):
-        provider = JSONProviderRegistry.get("custom_oauth")
-        assert provider is not None
-        assert provider.auth == "oauth2_client_credentials"
-        assert provider.base_url is None
-        assert provider.api_key_env is None
-
-    def test_provider_resolution(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        model, provider, _api_key, api_base = get_llm_provider(
-            model="custom_oauth/gpt-4o",
-            custom_llm_provider=None,
-            api_base="https://gateway.test/v1",
-            api_key=None,
-        )
-        assert model == "gpt-4o"
-        assert provider == "custom_oauth"
-        assert api_base == "https://gateway.test/v1"
-
-    def test_provider_config_manager_returns_dynamic_config(self):
-        from litellm import LlmProviders
-        from litellm.utils import ProviderConfigManager
-
-        config = ProviderConfigManager.get_provider_chat_config(
-            model="gpt-4o", provider=LlmProviders.CUSTOM_OAUTH
-        )
-        assert config is not None
-        assert config.custom_llm_provider == "custom_oauth"
-
-    def test_get_complete_url_requires_api_base(self):
-        config = create_config_class(JSONProviderRegistry.get("custom_oauth"))()
-        with pytest.raises(ValueError):
-            config.get_complete_url(
-                api_base=None,
-                api_key=None,
-                model="gpt-4o",
-                optional_params={},
-                litellm_params={},
-            )
-
-
-class TestValidateEnvironment:
-    def test_oauth_bearer_injected_from_litellm_params(self):
-        config = create_config_class(JSONProviderRegistry.get("custom_oauth"))()
-        client = _token_client(access_token="tok-ve")
-
+class TestResolveClientCredentialsToken:
+    def test_flag_on_with_creds_returns_token(self):
+        client = _token_client(access_token="tok-r")
         with patch(
             "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
             return_value=client,
         ):
-            headers = config.validate_environment(
-                headers={},
-                model="gpt-4o",
-                messages=[{"role": "user", "content": "hi"}],
-                optional_params={},
-                litellm_params={
+            token = resolve_client_credentials_token(
+                {
+                    "oauth_client_credentials": True,
                     "oauth_token_url": "https://idp.test/token",
-                    "oauth_client_id": "cid-ve",
-                    "oauth_client_secret": "secret-ve",
-                    "oauth_scope": "scope-ve",
-                },
+                    "oauth_client_id": "cid-r",
+                    "oauth_client_secret": "secret-r",
+                    "oauth_scope": "scope-r",
+                }
             )
 
-        assert headers["Authorization"] == "Bearer tok-ve"
-        assert headers["Content-Type"] == "application/json"
+        assert token == "tok-r"
         data = client.post.call_args.kwargs["data"]
-        assert data["client_id"] == "cid-ve"
-        assert data["client_secret"] == "secret-ve"
-        assert data["scope"] == "scope-ve"
+        assert data["client_id"] == "cid-r"
+        assert data["client_secret"] == "secret-r"
+        assert data["scope"] == "scope-r"
 
-    def test_oauth_env_vars_are_not_consulted(self, monkeypatch):
-        # OAuth creds are deployment configuration (litellm_params) only. The
-        # CUSTOM_OAUTH_* env vars must never mint a token, otherwise an admin's
-        # env-configured credential could be forwarded to a client-redirected
-        # api_base (the clear-on-override step has nothing to clear from env).
+    def test_flag_absent_returns_none_without_fetch(self):
+        # Creds present but no flag -> OAuth must not engage; the deployment keeps
+        # its configured api_key. Kills a mutant that triggers on creds presence.
+        client = _token_client()
+        with patch(
+            "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
+            return_value=client,
+        ):
+            result = resolve_client_credentials_token(
+                {
+                    "oauth_token_url": "https://idp.test/token",
+                    "oauth_client_id": "cid",
+                    "oauth_client_secret": "secret",
+                }
+            )
+
+        assert result is None
+        client.post.assert_not_called()
+
+    def test_flag_false_returns_none(self):
+        assert (
+            resolve_client_credentials_token({"oauth_client_credentials": False})
+            is None
+        )
+
+    def test_flag_on_missing_cred_raises(self):
+        with pytest.raises(OAuthClientCredentialsError):
+            resolve_client_credentials_token(
+                {
+                    "oauth_client_credentials": True,
+                    "oauth_token_url": "https://idp.test/token",
+                    "oauth_client_id": "cid",
+                }
+            )
+
+    def test_env_vars_are_not_consulted(self, monkeypatch):
+        # Creds live ONLY in env; the resolver reads litellm_params exclusively, so
+        # with the flag on but creds absent from litellm_params it must raise and
+        # never mint a token from env. This is the exfiltration path the security
+        # review closed: env-configured creds bypassing the clear-on-override.
         monkeypatch.setenv("CUSTOM_OAUTH_TOKEN_URL", "https://idp.env/token")
         monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_ID", "cid-env")
         monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_SECRET", "secret-env")
-        config = create_config_class(JSONProviderRegistry.get("custom_oauth"))()
         client = _token_client(access_token="tok-env")
 
         with patch(
@@ -305,30 +289,22 @@ class TestValidateEnvironment:
             return_value=client,
         ):
             with pytest.raises(OAuthClientCredentialsError):
-                config.validate_environment(
-                    headers={},
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": "hi"}],
-                    optional_params={},
-                    litellm_params={},
-                )
+                resolve_client_credentials_token({"oauth_client_credentials": True})
 
         client.post.assert_not_called()
 
-    def test_no_bearer_after_clientside_base_override_clear(self, monkeypatch):
-        # End-to-end: a client api_base override makes the router clear the
-        # deployment's oauth_* from litellm_params; with no env fallback, no
-        # bearer is minted from admin creds for the client-controlled upstream.
+    def test_no_token_after_clientside_base_override_clear(self):
+        # End-to-end with the router: a client api_base override clears the
+        # deployment's oauth_client_credentials flag + creds, so the resolver
+        # returns None (graceful fallback to the configured api_key) and no admin
+        # bearer is minted for the client-controlled upstream.
         from litellm.router_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
-        monkeypatch.setenv("CUSTOM_OAUTH_TOKEN_URL", "https://idp.env/token")
-        monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_ID", "cid-env")
-        monkeypatch.setenv("CUSTOM_OAUTH_CLIENT_SECRET", "secret-env")
-
         cleared = get_dynamic_litellm_params(
             {
+                "oauth_client_credentials": True,
                 "oauth_token_url": "https://idp.internal/token",
                 "oauth_client_id": "admin-id",
                 "oauth_client_secret": "admin-secret",
@@ -337,87 +313,80 @@ class TestValidateEnvironment:
             {"api_base": "https://client.example/v1"},
         )
 
-        config = create_config_class(JSONProviderRegistry.get("custom_oauth"))()
         client = _token_client(access_token="tok-leak")
         with patch(
             "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
             return_value=client,
         ):
-            with pytest.raises(OAuthClientCredentialsError):
-                config.validate_environment(
-                    headers={},
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": "hi"}],
-                    optional_params={},
-                    litellm_params=cleared,
-                )
+            assert resolve_client_credentials_token(cleared) is None
 
         client.post.assert_not_called()
 
-    def test_non_oauth_provider_still_uses_api_key_bearer(self):
-        # Regression: existing JSON providers keep the inherited api_key -> Bearer path.
-        config = create_config_class(JSONProviderRegistry.get("publicai"))()
-        headers = config.validate_environment(
-            headers={},
-            model="gpt-4",
-            messages=[{"role": "user", "content": "hi"}],
-            optional_params={},
-            litellm_params={},
-            api_key="sk-publicai",
-        )
-        assert headers["Authorization"] == "Bearer sk-publicai"
 
-
-class TestCompletionRouting:
-    def test_custom_oauth_routes_to_base_handler_with_oauth_params(self):
-        """Regression: completion() must route custom_oauth through
-        base_llm_http_handler (the default openai-compatible path needs a static
-        api_key and would never run the OAuth validate_environment), and the
-        per-model oauth_* must reach litellm_params. Mocked at the handler so it
-        asserts routing + propagation without real network."""
+class TestCompletionInjection:
+    def test_flag_injects_minted_token_as_api_key(self):
+        # End-to-end through litellm.completion on a plain openai/ model: the flag
+        # plus oauth_* in litellm_params mint a bearer that overrides the
+        # configured api_key, which the OpenAI SDK then sends as Authorization:
+        # Bearer. Fails if the injection in _complete_custom_openai is removed or
+        # the flag stops reaching litellm_params.
         import litellm
         import litellm.main as main_mod
         from litellm.types.utils import ModelResponse
 
+        token_client = _token_client(access_token="tok-e2e")
         fake = ModelResponse()
-        with patch.object(
-            main_mod.base_llm_http_handler, "completion", return_value=fake
-        ) as handler:
+        with (
+            patch(
+                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
+                return_value=token_client,
+            ),
+            patch.object(
+                main_mod.openai_chat_completions, "completion", return_value=fake
+            ) as chat,
+        ):
             litellm.completion(
-                model="custom_oauth/m",
+                model="openai/gpt-4o",
                 messages=[{"role": "user", "content": "hi"}],
                 api_base="https://gateway.test/v1",
+                api_key="sk-should-be-overridden",
+                oauth_client_credentials=True,
                 oauth_token_url="https://idp.test/token",
-                oauth_client_id="cid",
-                oauth_client_secret="sec",
-                oauth_scope="sc",
+                oauth_client_id="cid-e2e",
+                oauth_client_secret="secret-e2e",
+                oauth_scope="scope-e2e",
             )
 
-        handler.assert_called_once()
-        kwargs = handler.call_args.kwargs
-        assert kwargs["custom_llm_provider"] == "custom_oauth"
-        litellm_params = kwargs["litellm_params"]
-        assert litellm_params["oauth_token_url"] == "https://idp.test/token"
-        assert litellm_params["oauth_client_id"] == "cid"
-        assert litellm_params["oauth_client_secret"] == "sec"
-        assert litellm_params["oauth_scope"] == "sc"
+        token_client.post.assert_called_once()
+        assert chat.call_args.kwargs["api_key"] == "tok-e2e"
 
-    def test_custom_oauth_propagates_handler_error(self):
-        """The custom_oauth branch logs and re-raises handler failures."""
+    def test_no_flag_keeps_configured_api_key(self):
+        # Without the flag, even with oauth_* present, no token is fetched and the
+        # configured api_key is sent unchanged.
         import litellm
         import litellm.main as main_mod
+        from litellm.types.utils import ModelResponse
 
-        with patch.object(
-            main_mod.base_llm_http_handler,
-            "completion",
-            side_effect=RuntimeError("upstream boom"),
+        token_client = _token_client(access_token="should-not-be-used")
+        fake = ModelResponse()
+        with (
+            patch(
+                "litellm.llms.openai_like.oauth_authenticator._get_httpx_client",
+                return_value=token_client,
+            ),
+            patch.object(
+                main_mod.openai_chat_completions, "completion", return_value=fake
+            ) as chat,
         ):
-            with pytest.raises(Exception):
-                litellm.completion(
-                    model="custom_oauth/m",
-                    messages=[{"role": "user", "content": "hi"}],
-                    api_base="https://gateway.test/v1",
-                    oauth_token_url="https://idp.test/token",
-                    oauth_client_id="cid",
-                    oauth_client_secret="sec",
-                )
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://gateway.test/v1",
+                api_key="sk-static",
+                oauth_token_url="https://idp.test/token",
+                oauth_client_id="cid",
+                oauth_client_secret="secret",
+            )
+
+        token_client.post.assert_not_called()
+        assert chat.call_args.kwargs["api_key"] == "sk-static"
