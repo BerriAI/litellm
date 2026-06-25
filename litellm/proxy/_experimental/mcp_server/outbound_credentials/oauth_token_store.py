@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Protocol, Tuple
+from typing import Protocol
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -31,8 +32,8 @@ class OAuthToken:
     """
 
     access_token: str
-    expires_at: Optional[float] = None
-    refresh_token: Optional[str] = None
+    expires_at: float | None = None
+    refresh_token: str | None = None
 
     def __repr__(self) -> str:
         has_refresh = self.refresh_token is not None
@@ -58,7 +59,7 @@ class OAuthTokenStore(Protocol):
     read as a definite absence.
     """
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]: ...
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None: ...
 
 
 class TokenRefresher(Protocol):
@@ -70,7 +71,7 @@ class TokenRefresher(Protocol):
     persist the new token so later requests (and the surrounding cache) read it without refreshing.
     """
 
-    async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]: ...
+    async def refresh(self, token: OAuthToken) -> OAuthToken | None: ...
 
 
 class CachedOAuthTokenStore:
@@ -97,14 +98,14 @@ class CachedOAuthTokenStore:
         self._expiry_skew_seconds = expiry_skew_seconds
         self._max_size = max_size
         self._clock = clock
-        self._cache: Dict[Tuple[str, str], Tuple[Optional[OAuthToken], float]] = {}
+        self._cache: dict[tuple[str, str], tuple[OAuthToken | None, float]] = {}
 
-    def _valid_until(self, token: Optional[OAuthToken]) -> float:
+    def _valid_until(self, token: OAuthToken | None) -> float:
         if token is not None and token.expires_at is not None:
             return token.expires_at - self._expiry_skew_seconds
         return self._clock() + self._default_ttl_seconds
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         key = (user_id, server_id)
         hit = self._cache.get(key)
         if hit is not None:
@@ -154,7 +155,7 @@ class RefreshingTokenStore:
         # In-flight refreshes, one future per (user, server). Entries exist only while a refresh
         # is running (removed in `finally`), so the map is bounded by concurrency, not by the
         # number of distinct users/servers ever seen.
-        self._inflight: Dict[Tuple[str, str], asyncio.Future[Optional[OAuthToken]]] = {}
+        self._inflight: dict[tuple[str, str], asyncio.Future[OAuthToken | None]] = {}
 
     def _is_expired(self, token: OAuthToken) -> bool:
         return (
@@ -162,7 +163,7 @@ class RefreshingTokenStore:
             and self._clock() >= token.expires_at - self._expiry_skew_seconds
         )
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         token = await self._inner.fetch(user_id, server_id)
         if token is None or not self._is_expired(token):
             return token
@@ -170,7 +171,7 @@ class RefreshingTokenStore:
 
     async def _refresh_single_flight(
         self, user_id: str, server_id: str, token: OAuthToken
-    ) -> Optional[OAuthToken]:
+    ) -> OAuthToken | None:
         key = (user_id, server_id)
         task = self._inflight.get(key)
         if task is None:

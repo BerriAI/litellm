@@ -25,9 +25,10 @@ union (see `result.py`), not `expression.Result`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal, Mapping, Optional
+from typing import Annotated, Literal
 
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -69,8 +70,8 @@ class Unauthorized:
     """
 
     detail: str
-    www_authenticate: Optional[str] = None
-    body: Optional[Mapping[str, str]] = None
+    www_authenticate: str | None = None
+    body: Mapping[str, str] | None = None
 
 
 @tagged_union(frozen=True)
@@ -113,8 +114,8 @@ class CredError:
     def of_unauthorized(
         detail: str,
         *,
-        www_authenticate: Optional[str] = None,
-        body: Optional[Mapping[str, str]] = None,
+        www_authenticate: str | None = None,
+        body: Mapping[str, str] | None = None,
     ) -> CredError:
         return CredError(
             unauthorized=Unauthorized(
