@@ -320,9 +320,11 @@ class Router:
             "latency-based-routing",
             "cost-based-routing",
             "usage-based-routing-v2",
+            "lar1",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
+        lar1_settings: Optional[dict] = None,
         routing_groups: Optional[List[Union[RoutingGroup, dict]]] = None,
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
@@ -647,10 +649,27 @@ class Router:
         """
 
         ### ROUTING SETUP ###
-        self.routing_strategy_init(
-            routing_strategy=routing_strategy,
-            routing_strategy_args=routing_strategy_args,
-        )
+        if self._normalize_strategy(routing_strategy) == "lar1":
+            self.routing_strategy = "lar1"
+            from litellm.router_strategy.lar1_routing import LAR1RoutingStrategy
+
+            lar1_config = lar1_settings or {}
+            thresholds = {
+                "low": lar1_config.get("confidence_threshold_low", 0.3),
+                "medium": lar1_config.get("confidence_threshold_medium", 0.5),
+                "high": lar1_config.get("confidence_threshold_high", 0.7),
+            }
+            self.set_custom_routing_strategy(
+                LAR1RoutingStrategy(
+                    router_instance=self,
+                    thresholds=thresholds,
+                )
+            )
+        else:
+            self.routing_strategy_init(
+                routing_strategy=routing_strategy,
+                routing_strategy_args=routing_strategy_args,
+            )
         self._init_routing_groups(self._routing_groups_input)
         self.access_groups = None
         ## USAGE TRACKING ##
@@ -871,7 +890,9 @@ class Router:
         self, routing_strategy: Union[RoutingStrategy, str, None]
     ) -> None:
         # See: https://github.com/BerriAI/litellm/issues/11330
-        valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
+        valid_strategy_strings = ["simple-shuffle", "lar1"] + [
+            s.value for s in RoutingStrategy
+        ]
         if routing_strategy is None:
             return
         is_valid_string = (
