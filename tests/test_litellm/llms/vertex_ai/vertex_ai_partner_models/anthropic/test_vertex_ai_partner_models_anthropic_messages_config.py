@@ -370,6 +370,39 @@ def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instanc
         ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
 
 
+def test_validate_environment_does_not_mutate_caller_headers():
+    """Regression: beta headers (e.g. web-search) must not leak into the caller's
+    headers dict — which may be the shared deployment extra_headers object."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    caller_headers: dict = {}
+
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
+    ):
+        config.validate_anthropic_messages_environment(
+            headers=caller_headers,
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={
+                "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+            },
+            litellm_params={
+                "vertex_ai_project": "p",
+                "vertex_ai_location": "us-central1",
+            },
+            api_base=None,
+        )
+
+    assert (
+        caller_headers == {}
+    ), "validate_anthropic_messages_environment must not mutate the caller's headers dict"
+
+
 def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
     """Regression: router shallow-copies litellm_params so extra_headers is a shared
     reference. Verify that the chat/completions path builds a new headers dict instead
