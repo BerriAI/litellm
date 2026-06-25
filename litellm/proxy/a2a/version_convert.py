@@ -345,7 +345,12 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
             _parse(ParseDict, p, pb2_v10.SubscribeToTaskRequest()), ""
         ).params,
         "tasks/pushNotificationConfig/set": lambda p: to_compat_create_task_push_notification_config_request(
-            _parse(ParseDict, p, pb2_v10.TaskPushNotificationConfig()), ""
+            _parse(
+                ParseDict,
+                _flatten_create_push_notification_params(p),
+                pb2_v10.TaskPushNotificationConfig(),
+            ),
+            "",
         ).params,
         "tasks/pushNotificationConfig/get": lambda p: to_compat_get_task_push_notification_config_request(
             _parse(ParseDict, p, pb2_v10.GetTaskPushNotificationConfigRequest()), ""
@@ -363,8 +368,23 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
     return _dump_03(lower(params))
 
 
+def _flatten_create_push_notification_params(params: JsonDict) -> JsonDict:
+    """Merge 1.x create envelope fields (parent/configId/config) into flat pb fields."""
+    flat = dict(params)
+    nested = flat.pop("config", None) or flat.pop("pushNotificationConfig", None)
+    if not isinstance(nested, dict):
+        return params
+    parent = flat.pop("parent", None)
+    if isinstance(parent, str) and parent.startswith("tasks/") and "taskId" not in flat:
+        flat["taskId"] = parent.removeprefix("tasks/").split("/")[0]
+    if (config_id := flat.pop("configId", None)) and "id" not in nested:
+        nested["id"] = config_id
+    flat.update(nested)
+    return flat
+
+
 def _parse(
     parse_dict: Callable[..., object], data: JsonDict, message: object
 ) -> object:
-    parse_dict(data, message)
+    parse_dict(data, message, ignore_unknown_fields=True)
     return message

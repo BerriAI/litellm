@@ -128,6 +128,21 @@ def test_request_params_lowering_get_task_to_0_3():
     assert out["historyLength"] == 5
 
 
+def test_request_params_lowering_create_push_notification_config_preserves_task_id():
+    out = normalize_request_params(
+        {
+            "parent": "tasks/task-1",
+            "configId": "cfg-1",
+            "config": {"url": "https://webhook.example.com"},
+        },
+        "1.0",
+        method="tasks/pushNotificationConfig/set",
+    )
+    assert out["taskId"] == "task-1"
+    assert out["pushNotificationConfig"]["url"] == "https://webhook.example.com"
+    assert out["pushNotificationConfig"]["id"] == "cfg-1"
+
+
 def _extended_card_1_0() -> dict:
     return {
         "name": "Card",
