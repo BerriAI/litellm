@@ -1309,6 +1309,24 @@ def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
 
 
 @pytest.mark.asyncio
+async def test_handle_stream_message_rejects_invalid_params_with_32602():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    response = await _handle_stream_message(
+        api_base="http://upstream.local",
+        request_id="req-1",
+        params={"message": 12345},
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks
+    )
+    payload = json.loads(body.strip())
+    assert payload["error"]["code"] == -32602
+    assert payload["id"] == "req-1"
+
+
+@pytest.mark.asyncio
 async def test_send_message_pascal_case_routes_to_asend_message():
     from litellm.proxy._types import UserAPIKeyAuth
 
