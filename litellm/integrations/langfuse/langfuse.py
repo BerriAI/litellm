@@ -33,7 +33,11 @@ from litellm.integrations.langfuse.langfuse_mock_client import (
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -55,37 +59,33 @@ else:
     Langfuse = Any
 
 
+def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _get_numeric_attr_or_key(obj: Any, keys: Tuple[str, ...], default: int = 0) -> int:
+    for key in keys:
+        value = _get_attr_or_key(obj, key)
+        if isinstance(value, (int, float)):
+            return int(value)
+    return default
+
+
 def _extract_cache_read_input_tokens(usage_obj) -> int:
-    """
-    Extract cache_read_input_tokens from usage object.
+    cache_read_input_tokens = _get_numeric_attr_or_key(
+        usage_obj, ("cache_read_input_tokens",)
+    )
 
-    Checks both:
-    1. Top-level cache_read_input_tokens (Anthropic format)
-    2. prompt_tokens_details.cached_tokens (Gemini, OpenAI format)
-
-    See: https://github.com/BerriAI/litellm/issues/18520
-
-    Args:
-        usage_obj: Usage object from LLM response
-
-    Returns:
-        int: Number of cached tokens read, defaults to 0
-    """
-    cache_read_input_tokens = usage_obj.get("cache_read_input_tokens") or 0
-
-    # Check prompt_tokens_details.cached_tokens (used by Gemini and other providers)
-    if hasattr(usage_obj, "prompt_tokens_details"):
-        prompt_tokens_details = getattr(usage_obj, "prompt_tokens_details", None)
-        if prompt_tokens_details is not None and hasattr(
-            prompt_tokens_details, "cached_tokens"
-        ):
-            cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
-            if (
-                cached_tokens is not None
-                and isinstance(cached_tokens, (int, float))
-                and cached_tokens > 0
-            ):
-                cache_read_input_tokens = cached_tokens
+    for details_attr in ("input_tokens_details", "prompt_tokens_details"):
+        token_details = _get_attr_or_key(usage_obj, details_attr)
+        if token_details is None:
+            continue
+        cached_tokens = _get_attr_or_key(token_details, "cached_tokens")
+        if isinstance(cached_tokens, (int, float)) and cached_tokens > 0:
+            cache_read_input_tokens = int(cached_tokens)
+            break
 
     return cache_read_input_tokens
 
@@ -287,6 +287,7 @@ class LangFuseLogger:
             RerankResponse,
             HttpxBinaryResponseContent,
             ResponsesAPIResponse,
+            ResponsesAPIStreamingResponse,
         ],
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -399,6 +400,7 @@ class LangFuseLogger:
             RerankResponse,
             HttpxBinaryResponseContent,
             ResponsesAPIResponse,
+            ResponsesAPIStreamingResponse,
         ],
         prompt: dict,
         level: str,
@@ -463,11 +465,17 @@ class LangFuseLogger:
         ):
             input = prompt
             output = response_obj.results
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.ResponsesAPIResponse
+        elif (
+            response_obj is not None
+            and (
+                responses_api_response := self._get_responses_api_response(response_obj)
+            )
+            is not None
         ):
             input = prompt
-            output = self._get_responses_api_content_for_langfuse(response_obj)
+            output = self._get_responses_api_content_for_langfuse(
+                responses_api_response
+            )
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"
@@ -729,11 +737,26 @@ class LangFuseLogger:
             verbose_logger.debug(f"trace: {cost}")
 
             clean_metadata["litellm_response_cost"] = cost
+            hidden_params: Optional[dict] = None
             if standard_logging_object is not None:
-                hidden_params = standard_logging_object.get("hidden_params", {})
+                standard_hidden_params = standard_logging_object.get(
+                    "hidden_params", {}
+                )
+                hidden_params = dict(standard_hidden_params)
                 clean_metadata["hidden_params"] = filter_exceptions_from_params(
                     hidden_params
                 )
+
+            # Fallback: when response_cost is None (e.g. responses API bridge
+            # path fails to compute cost), read the cost from the standard
+            # logging payload's hidden_params which correctly handles all
+            # fallback paths (including zero-cost subscription models).
+            # Without this, Langfuse applies its own pricing table and
+            # produces phantom costs for zero-cost routes like Codex.
+            if cost is None and hidden_params:
+                hidden_cost = hidden_params.get("response_cost")
+                if isinstance(hidden_cost, (int, float)):
+                    cost = hidden_cost
 
             if (
                 litellm.langfuse_default_tags is not None
@@ -790,27 +813,33 @@ class LangFuseLogger:
             generation_id = None
             usage = None
             usage_details = None
+            cost_details = None
             if response_obj is not None:
+                usage_response_obj = self._get_responses_api_response(response_obj)
+                if usage_response_obj is None:
+                    usage_response_obj = response_obj
                 if (
-                    hasattr(response_obj, "id")
-                    and response_obj.get("id", None) is not None
+                    hasattr(usage_response_obj, "id")
+                    and usage_response_obj.get("id", None) is not None
                 ):
                     generation_id = litellm.utils.get_logging_id(
-                        start_time, response_obj
+                        start_time, usage_response_obj
                     )
-                _usage_obj = getattr(response_obj, "usage", None)
+                _usage_obj = getattr(usage_response_obj, "usage", None)
 
                 if _usage_obj:
-                    # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
-                    # Some providers may return null for token counts.
-                    prompt_tokens = getattr(_usage_obj, "prompt_tokens", None) or 0
-                    completion_tokens = (
-                        getattr(_usage_obj, "completion_tokens", None) or 0
+                    prompt_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("prompt_tokens", "input_tokens")
                     )
-                    total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
+                    completion_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("completion_tokens", "output_tokens")
+                    )
+                    total_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("total_tokens",)
+                    )
 
-                    cache_creation_input_tokens = (
-                        _usage_obj.get("cache_creation_input_tokens") or 0
+                    cache_creation_input_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("cache_creation_input_tokens",)
                     )
                     cache_read_input_tokens = _extract_cache_read_input_tokens(
                         _usage_obj
@@ -830,6 +859,10 @@ class LangFuseLogger:
                         cache_creation_input_tokens=cache_creation_input_tokens,
                         cache_read_input_tokens=cache_read_input_tokens,
                     )
+                    if isinstance(cost, (int, float)):
+                        cost_details = {
+                            "total": float(cost),
+                        }
 
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
@@ -869,6 +902,7 @@ class LangFuseLogger:
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
                 "usage_details": usage_details,
+                "cost_details": cost_details,
                 "metadata": log_requester_metadata(clean_metadata),
                 "level": level,
                 "version": clean_metadata.pop("version", None),
@@ -936,6 +970,17 @@ class LangFuseLogger:
             return None
 
     @staticmethod
+    def _get_responses_api_response(
+        response_obj: Any,
+    ) -> Optional[ResponsesAPIResponse]:
+        if isinstance(response_obj, litellm.ResponsesAPIResponse):
+            return response_obj
+        nested_response = getattr(response_obj, "response", None)
+        if isinstance(nested_response, litellm.ResponsesAPIResponse):
+            return nested_response
+        return None
+
+    @staticmethod
     def _get_responses_api_content_for_langfuse(
         response_obj: ResponsesAPIResponse,
     ):
@@ -943,7 +988,9 @@ class LangFuseLogger:
         Get the responses API content for Langfuse logging
         """
         if hasattr(response_obj, "output") and response_obj.output:
-            # ResponsesAPIResponse.output is a list of strings
+            response_output_text = getattr(response_obj, "output_text", None)
+            if response_output_text:
+                return response_output_text
             return response_obj.output
         else:
             return None
