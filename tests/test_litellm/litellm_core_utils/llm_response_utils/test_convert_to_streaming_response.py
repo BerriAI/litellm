@@ -153,6 +153,17 @@ async def test_async_tool_calls_and_function_call_only_on_first_chunk():
 
 
 @pytest.mark.asyncio
+async def test_async_logprobs_only_on_first_chunk():
+    payload = _async_payload(content="cached token logprobs")
+    payload["choices"][0]["logprobs"] = {"content": []}
+    chunks = await _collect_async(payload)
+    assert len(chunks) > 1
+    assert chunks[0].choices[0].logprobs is not None
+    for c in chunks[1:]:
+        assert c.choices[0].logprobs is None
+
+
+@pytest.mark.asyncio
 async def test_async_metadata_propagated_to_every_chunk():
     chunks = await _collect_async(_async_payload())
     for c in chunks:
@@ -190,3 +201,82 @@ def test_sync_multi_chunk_and_lossless_join():
     assert chunks[-1].choices[0].finish_reason == "stop"
     assert getattr(chunks[-1], "usage", None) is not None
     assert chunks[-1].usage.total_tokens == 12
+
+
+def test_sync_delta_and_choice_metadata_only_on_first_chunk():
+    thinking_blocks = [
+        {"type": "thinking", "thinking": "cached thinking", "signature": "sig"}
+    ]
+    payload = {
+        "id": "chatcmpl-test-sync",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "cached content slices",
+                    "reasoning_content": "cached reasoning",
+                    "thinking_blocks": thinking_blocks,
+                },
+                "finish_reason": "stop",
+                "logprobs": {"content": []},
+                "enhancements": {"source": "cache"},
+            }
+        ],
+    }
+    chunks = list(convert_to_streaming_response(payload))
+    assert len(chunks) > 1
+    first_choice = chunks[0].choices[0]
+    assert getattr(first_choice.delta, "reasoning_content", None) == "cached reasoning"
+    assert getattr(first_choice.delta, "thinking_blocks", None) == thinking_blocks
+    assert first_choice.logprobs is not None
+    assert first_choice.enhancements == {"source": "cache"}
+    for c in chunks[1:]:
+        choice = c.choices[0]
+        assert getattr(choice.delta, "reasoning_content", None) is None
+        assert getattr(choice.delta, "thinking_blocks", None) is None
+        assert choice.logprobs is None
+        assert getattr(choice, "enhancements", None) is None
+
+
+def test_sync_non_enumerated_delta_fields_only_on_first_chunk():
+    # annotations (and any other Delta field beyond the role/tool_call/reasoning
+    # set) must also stay on the first slice. Rebuilding later slices as a bare
+    # content delta drops the whole class, so this holds without enumerating
+    # every field by hand.
+    annotations = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://example.com",
+                "title": "Example",
+                "start_index": 0,
+                "end_index": 1,
+            },
+        }
+    ]
+    payload = {
+        "id": "chatcmpl-test-sync",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "cached content slices here",
+                    "annotations": annotations,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    chunks = list(convert_to_streaming_response(payload))
+    assert len(chunks) > 1
+    assert getattr(chunks[0].choices[0].delta, "annotations", None) == annotations
+    for c in chunks[1:]:
+        assert getattr(c.choices[0].delta, "annotations", None) is None

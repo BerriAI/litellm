@@ -141,6 +141,19 @@ def _split_assembled_content_for_replay(content: Optional[str]) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
+def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
+    # Rebuild the delta as content-only so every accumulate-able field (role,
+    # tool_calls, reasoning_content, thinking_blocks, audio, images,
+    # annotations, ...) is dropped on later slices instead of an enumerated
+    # subset; repeating any of them makes downstream handlers that accumulate
+    # streamed deltas collect it once per slice, and a field added to Delta
+    # later can't silently re-introduce the duplication.
+    choice.delta = Delta(content=choice.delta.content)
+    choice.logprobs = None  # type: ignore[assignment]
+    if hasattr(choice, "enhancements"):
+        del choice.enhancements
+
+
 async def convert_to_streaming_response_async(
     response_object: Optional[dict] = None,
 ):
@@ -266,12 +279,7 @@ async def convert_to_streaming_response_async(
         slice_chunk = model_response_object.model_copy(deep=True)
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
-            # role, tool_calls and function_call belong on the first slice
-            # only — repeating them would make downstream handlers that
-            # accumulate tool-call deltas collect them N times.
-            slice_chunk.choices[0].delta.role = None
-            slice_chunk.choices[0].delta.tool_calls = None
-            slice_chunk.choices[0].delta.function_call = None
+            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
         slice_chunk.choices[0].finish_reason = (
             original_finish_reason if i == last_idx else None  # type: ignore[assignment]
         )
@@ -364,12 +372,7 @@ def convert_to_streaming_response(
         slice_chunk = model_response_object.model_copy(deep=True)
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
-            # role, tool_calls and function_call belong on the first slice
-            # only — repeating them would make downstream handlers that
-            # accumulate tool-call deltas collect them N times.
-            slice_chunk.choices[0].delta.role = None
-            slice_chunk.choices[0].delta.tool_calls = None
-            slice_chunk.choices[0].delta.function_call = None
+            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
         slice_chunk.choices[0].finish_reason = (
             original_finish_reason if i == last_idx else None  # type: ignore[assignment]
         )
