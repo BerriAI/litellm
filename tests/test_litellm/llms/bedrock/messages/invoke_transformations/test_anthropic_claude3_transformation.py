@@ -547,6 +547,54 @@ def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
     assert request["system"][0]["cache_control"]["ttl"] == "1h"
 
 
+def test_remove_ttl_from_cache_control_preserves_ttl_for_opus_4_8():
+    """
+    Claude Opus 4.8 supports 5m/1h prompt-cache TTL on Bedrock (per the model
+    card), but was missing from ``is_claude_4_5_on_bedrock`` — so its ttl was
+    stripped, silently downgrading 1h caches to the 5-minute default.
+    """
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    request = {
+        "tools": [
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
+        "system": [
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    cfg._remove_ttl_from_cache_control(
+        request, model="global.anthropic.claude-opus-4-8"
+    )
+
+    # tools, system, and messages should all preserve ttl for Opus 4.8
+    assert request["tools"][0]["cache_control"]["ttl"] == "1h"
+    assert request["system"][0]["cache_control"]["ttl"] == "1h"
+    assert request["messages"][0]["content"][0]["cache_control"]["ttl"] == "1h"
+
+
 def test_remove_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
 
