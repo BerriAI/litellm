@@ -3163,8 +3163,26 @@ class CustomPricingLiteLLMParams(BaseModel):
     regional_processing_uplift_multiplier_us: Optional[float] = None
 
 
+# Server-controlled fields that bound or drive an interceptor's agentic loop
+# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
+# in all_litellm_params so they are treated as LiteLLM-level and excluded from
+# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
+# any unrecognized top-level key into extra_body and leaks them to the provider.
+# This is what lets the loop carry state across rerun calls without a provider
+# scrubber.
+agentic_loop_internal_litellm_params = [
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_agentic_loop_api_surface",
+    "max_agentic_loops",
+    "_code_interpreter_interception_active",
+    "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_converted_stream",
+]
+
 all_litellm_params = (
-    [
+    agentic_loop_internal_litellm_params
+    + [
         "metadata",
         "litellm_metadata",
         "litellm_trace_id",
@@ -3463,6 +3481,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    DARKBLOOM = "darkbloom"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3520,6 +3539,7 @@ class SandboxProviders(str, Enum):
     """
 
     E2B = "e2b"
+    OPENSANDBOX = "opensandbox"
 
 
 class LiteLLMLoggingBaseClass:

@@ -8,6 +8,7 @@ stripping that are specific to the bedrock-mantle endpoint.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
@@ -19,10 +20,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-MANTLE_ENDPOINT_TEMPLATE = (
-    "https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages"
-)
 
 
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
@@ -43,7 +40,13 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         stream: Optional[bool] = None,
     ) -> str:
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
-        return MANTLE_ENDPOINT_TEMPLATE.format(region=region)
+        return build_mantle_messages_url(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=optional_params.get(
+                "aws_bedrock_runtime_endpoint"
+            ),
+            region=region,
+        )
 
     def validate_anthropic_messages_environment(
         self,

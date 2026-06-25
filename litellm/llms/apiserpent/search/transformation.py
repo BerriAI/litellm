@@ -53,7 +53,13 @@ class APISerpentSearchConfig(BaseSearchConfig):
         api_base: Optional[str] = None,
         **kwargs,
     ) -> Dict:
-        api_key = api_key or get_secret_str("APISERPENT_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("APISERPENT_API_KEY",),
+            base_env_var="APISERPENT_API_BASE",
+            default_api_base=APISERPENT_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "APISERPENT_API_KEY is not set. Set `APISERPENT_API_KEY` environment variable."

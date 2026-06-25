@@ -436,3 +436,27 @@ describe("provider_info_helpers", () => {
     });
   });
 });
+
+describe("getProviderLogoAndName under a custom server_root_path", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
+  });
+
+  // Regression: under SERVER_ROOT_PATH=/litellm the logo must be requested at
+  // /litellm/ui/assets/logos/... A bare /ui/... path is served off the root and
+  // 404s behind the reverse proxy.
+  it("prefixes the server root path onto the resolved logo", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/litellm" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/litellm/ui/assets/logos/openai_small.svg");
+  });
+
+  it("leaves the logo at /ui/... when mounted at the root", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/ui/assets/logos/openai_small.svg");
+  });
+});
