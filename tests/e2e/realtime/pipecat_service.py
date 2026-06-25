@@ -45,6 +45,9 @@ class LiteLLMRealtimeLLMService(OpenAIRealtimeLLMService):
         if self._websocket:
             return
         try:
+            # self.base_url already carries the ?model=<alias> the proxy routes on:
+            # the parent __init__ sets self.base_url = f"{base_url}?model={settings.model}"
+            # before _connect runs, so passing it through preserves the query param.
             self._websocket = await websocket_connect(
                 uri=self.base_url,
                 additional_headers={"Authorization": f"Bearer {self.api_key}"},
