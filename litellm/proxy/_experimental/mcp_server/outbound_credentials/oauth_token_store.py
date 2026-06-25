@@ -4,28 +4,39 @@ The resolver reads a user's token through the injected ``OAuthTokenStore`` seam;
 ``CachedOAuthTokenStore`` is an expiry-aware cache in front of it. ``TokenStoreUnavailable``
 signals an unreachable backing store, so an outage is never cached or read as "not authorized".
 
-Refresh (using ``refresh_token`` once the access token has expired) and distributed single-flight
-are the later hardening; this cache only avoids serving a token past its own expiry.
+``RefreshingTokenStore`` mints a fresh token through an injected ``TokenRefresher`` when the stored
+one is near expiry, under in-process per-(user, server) single-flight so concurrent callers share
+one refresh. Distributed (cross-replica) single-flight and reactive-401 refresh are the later
+hardening. The mode plugs in its own source and refresher; the cache, store seam, and refresh
+machinery are shared across the oauth2 modes (authorization_code / client_credentials /
+token_exchange).
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Protocol, Tuple
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class OAuthToken:
     """A user's OAuth credential: the bearer value, when it expires, and how to refresh it.
 
     ``expires_at`` is epoch seconds (``None`` means no known expiry). ``refresh_token`` is kept for
-    the later refresh step; it is never minted into a header directly.
+    the later refresh step; it is never minted into a header directly. ``repr`` masks both secrets
+    so a stray log line cannot leak them (the values are still plain ``str`` for the header path,
+    since ``SecretStr`` resolves as unknown under this repo's basedpyright).
     """
 
     access_token: str
     expires_at: Optional[float] = None
     refresh_token: Optional[str] = None
+
+    def __repr__(self) -> str:
+        has_refresh = self.refresh_token is not None
+        return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh})"
 
 
 class TokenStoreUnavailable(Exception):
@@ -48,6 +59,18 @@ class OAuthTokenStore(Protocol):
     """
 
     async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]: ...
+
+
+class TokenRefresher(Protocol):
+    """Mints a fresh token from an expired one and persists it, returning the new token.
+
+    The action is mode-specific: the ``authorization_code`` refresh_token grant, the
+    ``client_credentials`` grant, or an RFC 8693 re-exchange. Returns ``None`` when it cannot
+    refresh (e.g. no ``refresh_token``), which the caller turns into a 401 challenge. It must
+    persist the new token so later requests (and the surrounding cache) read it without refreshing.
+    """
+
+    async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]: ...
 
 
 class CachedOAuthTokenStore:
@@ -99,3 +122,63 @@ class CachedOAuthTokenStore:
         """Drop a cached entry after the user (re)authorizes or revokes, so a stale token or a
         stale "not authorized" None cannot mask the change."""
         self._cache.pop((user_id, server_id), None)
+
+
+class RefreshingTokenStore:
+    """An ``OAuthTokenStore`` that proactively refreshes a near-expiry token.
+
+    Reads from an inner store; if the token is within ``expiry_skew_seconds`` of expiry, it mints a
+    fresh one via the injected ``TokenRefresher`` under per-(user, server) single-flight: the first
+    caller refreshes while concurrent callers await the same in-flight future and share its result,
+    instead of stampeding the IdP. The refresher persists the new token so later requests (and the
+    surrounding cache) read it without refreshing again. An expired token the refresher cannot renew
+    (``None``) is surfaced as ``None`` so the arm challenges, never a stale bearer.
+
+    Single-flight here is in-process (one event loop). Cross-replica single-flight (Redis SET NX)
+    and reactive-401 refresh are the later distributed hardening. Composes under
+    ``CachedOAuthTokenStore`` so the refreshed token is cached until its own expiry.
+    """
+
+    def __init__(
+        self,
+        inner: OAuthTokenStore,
+        refresher: TokenRefresher,
+        *,
+        expiry_skew_seconds: float = 30.0,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._inner = inner
+        self._refresher = refresher
+        self._expiry_skew_seconds = expiry_skew_seconds
+        self._clock = clock
+        # In-flight refreshes, one future per (user, server). Entries exist only while a refresh
+        # is running (removed in `finally`), so the map is bounded by concurrency, not by the
+        # number of distinct users/servers ever seen.
+        self._inflight: Dict[Tuple[str, str], asyncio.Future[Optional[OAuthToken]]] = {}
+
+    def _is_expired(self, token: OAuthToken) -> bool:
+        return (
+            token.expires_at is not None
+            and self._clock() >= token.expires_at - self._expiry_skew_seconds
+        )
+
+    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        token = await self._inner.fetch(user_id, server_id)
+        if token is None or not self._is_expired(token):
+            return token
+        return await self._refresh_single_flight(user_id, server_id, token)
+
+    async def _refresh_single_flight(
+        self, user_id: str, server_id: str, token: OAuthToken
+    ) -> Optional[OAuthToken]:
+        key = (user_id, server_id)
+        task = self._inflight.get(key)
+        if task is None:
+            # First caller starts the refresh; concurrent callers await the same task and share its
+            # result (or exception). The done-callback removes the entry, so the map self-cleans and
+            # is bounded by in-flight refreshes, not by the number of distinct users/servers. The
+            # task is detached from the caller, so a cancelled caller does not abort the refresh.
+            task = asyncio.ensure_future(self._refresher.refresh(token))
+            self._inflight[key] = task
+            task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
+        return await task

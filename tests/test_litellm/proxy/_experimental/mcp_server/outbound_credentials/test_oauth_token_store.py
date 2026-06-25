@@ -1,5 +1,6 @@
-"""Tests for the v2 OAuth token cache (CachedOAuthTokenStore)."""
+"""Tests for the v2 OAuth token cache and refresh (CachedOAuthTokenStore, RefreshingTokenStore)."""
 
+import asyncio
 from typing import Dict, List, Optional, Tuple
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
     OAuthToken,
+    RefreshingTokenStore,
     TokenStoreUnavailable,
 )
 
@@ -121,3 +123,106 @@ async def test_isolates_by_subject():
     second = await store.fetch("u2", "s")
     assert first is not None and first.access_token == "a"
     assert second is not None and second.access_token == "b"
+
+
+class _RefreshablePair:
+    """A store + refresher pair that simulates persistence: refresh() updates what fetch returns,
+    and yields once so concurrent callers actually contend on the single-flight lock."""
+
+    def __init__(self, initial: Optional[OAuthToken]) -> None:
+        self._current = initial
+        self.fetch_calls = 0
+        self.refresh_calls = 0
+
+    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        self.fetch_calls += 1
+        return self._current
+
+    async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]:
+        self.refresh_calls += 1
+        await asyncio.sleep(
+            0
+        )  # yield so other concurrent callers reach the lock and wait
+        self._current = OAuthToken(access_token="refreshed", expires_at=9999.0)
+        return self._current
+
+
+async def test_refreshing_passes_through_a_fresh_token():
+    pair = _RefreshablePair(OAuthToken(access_token="ok", expires_at=9999.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
+
+    token = await store.fetch("u", "s")
+    assert token is not None and token.access_token == "ok"
+    assert pair.refresh_calls == 0  # not near expiry -> no refresh
+
+
+async def test_refreshing_mints_a_fresh_token_when_expired():
+    pair = _RefreshablePair(OAuthToken(access_token="old", expires_at=900.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
+
+    token = await store.fetch("u", "s")
+    assert token is not None and token.access_token == "refreshed"
+    assert pair.refresh_calls == 1
+
+
+async def test_refreshing_returns_none_when_it_cannot_refresh():
+    class _NoRefresh:
+        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+            return OAuthToken(access_token="old", expires_at=900.0)
+
+        async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]:
+            return None  # e.g. no refresh_token
+
+    src = _NoRefresh()
+    store = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    # expired and unrefreshable -> None (the arm challenges), never a stale bearer
+    assert await store.fetch("u", "s") is None
+
+
+async def test_refreshing_is_single_flight_under_concurrency():
+    pair = _RefreshablePair(OAuthToken(access_token="old", expires_at=900.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
+
+    results = await asyncio.gather(*[store.fetch("u", "s") for _ in range(5)])
+    assert pair.refresh_calls == 1  # one refresh shared across 5 concurrent callers
+    assert all(r is not None and r.access_token == "refreshed" for r in results)
+
+
+async def test_refresh_failure_is_shared_by_joiners_not_re_run():
+    class _FailingRefresher:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+            return OAuthToken(access_token="old", expires_at=900.0)
+
+        async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]:
+            self.calls += 1
+            await asyncio.sleep(0)  # let the concurrent callers join the same task
+            raise RuntimeError("refresh boom")
+
+    src = _FailingRefresher()
+    store = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    results = await asyncio.gather(
+        *[store.fetch("u", "s") for _ in range(3)], return_exceptions=True
+    )
+    assert src.calls == 1  # single-flight: one attempt, the failure is shared
+    assert all(isinstance(r, RuntimeError) for r in results)
+
+
+def test_oauth_token_repr_masks_the_secrets():
+    token = OAuthToken(
+        access_token="super-secret", expires_at=123.0, refresh_token="rt-secret"
+    )
+    rendered = repr(token)
+    assert "super-secret" not in rendered
+    assert "rt-secret" not in rendered
+    assert "access_token=***" in rendered
+    assert "has_refresh_token=True" in rendered
