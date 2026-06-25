@@ -106,7 +106,7 @@ def _set_usage_on_logging_obj(
 
 def _set_agent_id_on_logging_obj(
     kwargs: Dict[str, Any],
-    agent_id: Optional[str],
+    agent_id: str | None,
 ) -> None:
     """
     Set agent_id on litellm_logging_obj for SpendLogs tracking.
@@ -168,9 +168,9 @@ def _get_a2a_client_agent_card(a2a_client: Any) -> Optional["AgentCard"]:
 async def _send_message_via_completion_bridge(
     request: "SendMessageRequest",
     custom_llm_provider: str,
-    api_base: Optional[str],
+    api_base: str | None,
     litellm_params: Dict[str, Any],
-    agent_extra_headers: Optional[Dict[str, str]] = None,
+    agent_extra_headers: Dict[str, str] | None = None,
 ) -> LiteLLMSendMessageResponse:
     """
     Route a send_message through the LiteLLM completion bridge (e.g. LangGraph, Bedrock AgentCore).
@@ -217,7 +217,7 @@ async def _send_message(
         last_event,
         request_id=request.id,
     )
-    result: Union["Message", "Task"] = stream_compat.result
+    result = stream_compat.result
     if not isinstance(result, (Message, Task)):
         raise RuntimeError(
             "A2A send_message failed: non-streaming message/send expects the "
@@ -235,9 +235,9 @@ async def _execute_a2a_send_with_retry(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
     agent_card: Optional["AgentCard"],
-    card_url: Optional[str],
-    api_base: Optional[str],
-    agent_name: Optional[str],
+    card_url: str | None,
+    api_base: str | None,
+    agent_name: str | None,
 ) -> "SendMessageResponse":
     """Send an A2A message with retry logic for localhost URL errors."""
     a2a_response = None
@@ -295,9 +295,9 @@ async def _execute_a2a_stream_with_retry(
     a2a_client: "A2AClientType",
     request: "SendStreamingMessageRequest",
     agent_card: Optional["AgentCard"],
-    card_url: Optional[str],
-    api_base: Optional[str],
-    agent_name: Optional[str],
+    card_url: str | None,
+    api_base: str | None,
+    agent_name: str | None,
 ) -> AsyncIterator["SendStreamingMessageResponse"]:
     """Stream an A2A message with retry logic for localhost URL errors."""
     response_started = False
@@ -345,10 +345,10 @@ async def _execute_a2a_stream_with_retry(
 async def asend_message(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendMessageRequest"] = None,
-    api_base: Optional[str] = None,
-    litellm_params: Optional[Dict[str, Any]] = None,
-    agent_id: Optional[str] = None,
-    agent_extra_headers: Optional[Dict[str, str]] = None,
+    api_base: str | None = None,
+    litellm_params: Dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    agent_extra_headers: Dict[str, str] | None = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -519,10 +519,10 @@ def send_message(
 def _build_streaming_logging_obj(
     request: "SendStreamingMessageRequest",
     agent_name: str,
-    agent_id: Optional[str],
-    litellm_params: Optional[Dict[str, Any]],
-    metadata: Optional[Dict[str, Any]],
-    proxy_server_request: Optional[Dict[str, Any]],
+    agent_id: str | None,
+    litellm_params: Dict[str, Any] | None,
+    metadata: Dict[str, Any] | None,
+    proxy_server_request: Dict[str, Any] | None,
 ) -> Logging:
     """Build logging object for streaming A2A requests."""
     start_time = datetime.datetime.now()
@@ -561,12 +561,12 @@ def _build_streaming_logging_obj(
 async def asend_message_streaming(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
-    api_base: Optional[str] = None,
-    litellm_params: Optional[Dict[str, Any]] = None,
-    agent_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    proxy_server_request: Optional[Dict[str, Any]] = None,
-    agent_extra_headers: Optional[Dict[str, str]] = None,
+    api_base: str | None = None,
+    litellm_params: Dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    metadata: Dict[str, Any] | None = None,
+    proxy_server_request: Dict[str, Any] | None = None,
+    agent_extra_headers: Dict[str, str] | None = None,
     **kwargs: object,
 ) -> AsyncIterator[Any]:
     """
@@ -640,7 +640,7 @@ async def asend_message_streaming(
         raise ValueError("request is required")
 
     _raw_logging_obj = kwargs.get("litellm_logging_obj")
-    logging_obj: Optional[Logging] = (
+    logging_obj: Logging | None = (
         _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
     )
 
@@ -706,7 +706,7 @@ async def asend_message_streaming(
 async def create_a2a_client(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
-    extra_headers: Optional[Dict[str, str]] = None,
+    extra_headers: Dict[str, str] | None = None,
     streaming: bool = False,
 ) -> "A2AClientType":
     """
@@ -787,7 +787,7 @@ async def create_a2a_client(
 async def aget_agent_card(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
-    extra_headers: Optional[Dict[str, str]] = None,
+    extra_headers: Dict[str, str] | None = None,
 ) -> "AgentCard":
     """
     Fetch the agent card from an A2A agent.

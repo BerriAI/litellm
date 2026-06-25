@@ -8,7 +8,7 @@ and uses LiteLLM auth.
 """
 
 from copy import deepcopy
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping
 
 # Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
 # responses are normalized to it regardless of the upstream agent's own version.
@@ -18,7 +18,7 @@ SUPPORTED_A2A_PROTOCOL_VERSIONS = ("0.3", "1.0")
 LITELLM_A2A_PROTOCOL_VERSION = "1.0"
 
 
-def resolve_served_protocol_version(card: Optional[Mapping[str, Any]]) -> str:
+def resolve_served_protocol_version(card: Mapping[str, Any] | None) -> str:
     """Return the validated protocol version an agent card pins, else the default."""
     version = card.get("protocolVersion") if card else None
     if version in SUPPORTED_A2A_PROTOCOL_VERSIONS:
@@ -119,12 +119,12 @@ def _default_litellm_provider(proxy_base_url: str) -> Dict[str, str]:
 
 
 def merge_agent_card(
-    upstream_card: Optional[Mapping[str, Any]],
+    upstream_card: Mapping[str, Any] | None,
     *,
     proxy_url: str,
     proxy_base_url: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
+    name: str | None = None,
+    description: str | None = None,
 ) -> Dict[str, Any]:
     """
     Build the LiteLLM-fronted agent card.

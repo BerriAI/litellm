@@ -7,7 +7,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 
 import json
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -74,7 +74,7 @@ def _build_message_send_params(params: dict) -> "MessageSendParams":
 
 
 def _served_version(
-    agent: "AgentResponse", request: Request, original_method: Optional[str] = None
+    agent: "AgentResponse", request: Request, original_method: str | None = None
 ) -> A2AVersion:
     """Protocol version LiteLLM serves for this agent.
 
@@ -115,8 +115,8 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str
 def _forwarding_headers(
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
-    agent_extra_headers: Optional[Dict[str, str]],
-) -> Optional[Dict[str, str]]:
+    agent_extra_headers: Dict[str, str] | None,
+) -> Dict[str, str] | None:
     sanitized = (
         {k: v for k, v in agent_extra_headers.items() if not k.lower().startswith("x-litellm-")}
         if agent_extra_headers
@@ -132,7 +132,7 @@ def _forwarding_headers(
 
 
 def _jsonrpc_error(
-    request_id: Optional[Any],
+    request_id: Any | None,
     code: int,
     message: str,
     status_code: int = 400,
@@ -178,7 +178,7 @@ def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
 async def _forward_jsonrpc(
     agent_url: str,
     body: dict,
-    extra_headers: Optional[Dict[str, str]] = None,
+    extra_headers: Dict[str, str] | None = None,
 ) -> dict:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -202,8 +202,8 @@ async def _forward_jsonrpc(
 async def _a2a_sse_event_source(
     agent_url: str,
     body: dict,
-    request_id: Optional[Any] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
+    request_id: Any | None = None,
+    extra_headers: Dict[str, str] | None = None,
     served_version: A2AVersion = "0.3",
 ) -> AsyncGenerator[dict, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
@@ -230,7 +230,7 @@ async def _a2a_sse_event_source(
     try:
         if not resp.is_success:
             error_body = await resp.aread()
-            error_event: Optional[dict] = None
+            error_event: dict | None = None
             try:
                 parsed = json.loads(error_body)
                 if isinstance(parsed, dict) and "error" in parsed:
@@ -266,11 +266,11 @@ async def _a2a_sse_event_source(
 async def _forward_jsonrpc_sse(
     agent_url: str,
     body: dict,
-    request_id: Optional[Any] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    proxy_logging_obj: Optional[Any] = None,
-    user_api_key_dict: Optional[Any] = None,
-    request_data: Optional[dict] = None,
+    request_id: Any | None = None,
+    extra_headers: Dict[str, str] | None = None,
+    proxy_logging_obj: Any | None = None,
+    user_api_key_dict: Any | None = None,
+    request_data: dict | None = None,
     served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
     event_source = _a2a_sse_event_source(
@@ -328,18 +328,18 @@ async def _forward_jsonrpc_sse(
 
 
 async def _handle_stream_message(
-    api_base: Optional[str],
+    api_base: str | None,
     request_id: Any,
     params: dict,
-    litellm_params: Optional[dict] = None,
-    agent_id: Optional[str] = None,
-    metadata: Optional[dict] = None,
-    proxy_server_request: Optional[dict] = None,
+    litellm_params: dict | None = None,
+    agent_id: str | None = None,
+    metadata: dict | None = None,
+    proxy_server_request: dict | None = None,
     *,
-    agent_extra_headers: Optional[Dict[str, str]] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    request_data: Optional[dict] = None,
-    proxy_logging_obj: Optional[Any] = None,
+    agent_extra_headers: Dict[str, str] | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    request_data: dict | None = None,
+    proxy_logging_obj: Any | None = None,
     served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
@@ -624,9 +624,9 @@ async def invoke_agent_a2a(
         if body.get("jsonrpc") != "2.0":
             return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
 
-        request_id: Optional[Any] = body.get("id")
-        original_method: Optional[str] = body.get("method")
-        method: Optional[str] = original_method
+        request_id: Any | None = body.get("id")
+        original_method: str | None = body.get("method")
+        method: str | None = original_method
         params = body.get("params", {})
 
         if method:

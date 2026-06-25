@@ -20,14 +20,14 @@ The two wire shapes:
 """
 
 from types import ModuleType
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Literal, Union
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 
 A2AVersion = Literal["0.3", "1.0"]
-RequestId = Optional[Union[str, int]]
+RequestId = Union[str, int, None]
 JsonDict = dict[str, object]
 
 _V1_SEND_ENVELOPE_KEYS = frozenset({"message", "task"})
@@ -160,7 +160,7 @@ def _convert_result(
     return result
 
 
-def _detect_send_version(result: JsonDict) -> Optional[A2AVersion]:
+def _detect_send_version(result: JsonDict) -> A2AVersion | None:
     if "kind" in result:
         return "0.3"
     if result.keys() & _V1_SEND_ENVELOPE_KEYS:
@@ -218,7 +218,7 @@ def _convert_task(result: JsonDict, target: A2AVersion) -> JsonDict:
     return _best_effort(lambda: _task_to(result, target), result, label="task")
 
 
-def _detect_list_tasks_version(result: JsonDict) -> Optional[A2AVersion]:
+def _detect_list_tasks_version(result: JsonDict) -> A2AVersion | None:
     tasks = result.get("tasks")
     if not isinstance(tasks, list) or not tasks:
         return None
@@ -270,7 +270,7 @@ def _task_to(result: JsonDict, target: A2AVersion) -> JsonDict:
     return _dump_03(to_compat_task(pb))
 
 
-def _detect_stream_version(result: JsonDict) -> Optional[A2AVersion]:
+def _detect_stream_version(result: JsonDict) -> A2AVersion | None:
     if "kind" in result:
         return "0.3"
     if result.keys() & _V1_STREAM_ENVELOPE_KEYS:
@@ -429,7 +429,7 @@ def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
 
 def _proto_task_state_name_to_0_3(
     name: str, valid_0_3_values: frozenset[str]
-) -> Optional[str]:
+) -> str | None:
     """Map a 1.0 protobuf ``TaskState`` enum name to its 0.3 wire string.
 
     The ``TASK_STATE_<NAME>`` enum names line up with the 0.3 wire values once the

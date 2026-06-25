@@ -11,7 +11,7 @@ Follows the A2A Spec.
 import asyncio
 import os
 import uuid
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -48,7 +48,7 @@ def _proxy_base_url(http_request: Request) -> str:
     return get_custom_url(str(http_request.base_url), route=None)
 
 
-def _validate_protocol_version(upstream_card: Optional[Mapping[str, Any]]) -> None:
+def _validate_protocol_version(upstream_card: Mapping[str, Any] | None) -> None:
     """Reject an agent card pinning an unsupported A2A protocol version."""
     version = upstream_card.get("protocolVersion") if upstream_card else None
     if version is not None and version not in SUPPORTED_A2A_PROTOCOL_VERSIONS:
@@ -62,11 +62,11 @@ def _validate_protocol_version(upstream_card: Optional[Mapping[str, Any]]) -> No
 
 
 def _build_merged_agent_card(
-    upstream_card: Optional[Mapping[str, Any]],
+    upstream_card: Mapping[str, Any] | None,
     *,
     agent_id: str,
     http_request: Request,
-    agent_name: Optional[str] = None,
+    agent_name: str | None = None,
 ) -> Dict[str, Any]:
     """Apply the LiteLLM-fronting merge to ``upstream_card`` for ``agent_id``."""
     proxy_base = _proxy_base_url(http_request)
@@ -400,7 +400,7 @@ async def create_agent(
         # schemes, default skills) the agent doesn't actually expose.
         upstream_card = request.get("agent_card_params")
         agent_to_create: AgentConfig = request
-        new_agent_id: Optional[str] = None
+        new_agent_id: str | None = None
         if upstream_card is not None:
             # Pre-generate the agent_id so the merged card can reference it
             # in ``supportedInterfaces`` before the DB row exists.
@@ -1006,14 +1006,14 @@ async def make_agents_public(
     response_model=SpendAnalyticsPaginatedResponse,
 )
 async def get_agent_daily_activity(
-    agent_ids: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
+    agent_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
     page: int = 1,
     page_size: int = 10,
-    exclude_agent_ids: Optional[str] = None,
+    exclude_agent_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1030,7 +1030,7 @@ async def get_agent_daily_activity(
         )
 
     agent_ids_list = agent_ids.split(",") if agent_ids else None
-    exclude_agent_ids_list: Optional[List[str]] = None
+    exclude_agent_ids_list: List[str] | None = None
     if exclude_agent_ids:
         exclude_agent_ids_list = exclude_agent_ids.split(",") if exclude_agent_ids else None
 
