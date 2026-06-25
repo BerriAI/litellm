@@ -3867,7 +3867,7 @@ class ProxyConfig:
         litellm.cache = Cache(**cache_params)
 
         if litellm.cache is not None and isinstance(
-            litellm.cache.cache, (RedisCache, RedisClusterCache)
+            getattr(litellm.cache, "cache", None), (RedisCache, RedisClusterCache)
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache

@@ -38,6 +38,7 @@ class QdrantSemanticCache(BaseCache):
         embedding_model="text-embedding-ada-002",
         host_type=None,
         vector_size=None,
+        embed_api_base=None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
             _get_httpx_client,
@@ -58,6 +59,7 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embed_api_base = embed_api_base
         self.vector_size = (
             vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
         )
@@ -267,13 +269,16 @@ class QdrantSemanticCache(BaseCache):
         prompt = get_str_from_messages(messages)
 
         # create an embedding for prompt
+        embedding_kwargs: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if getattr(self, "embed_api_base", None) is not None:
+            embedding_kwargs["api_base"] = self.embed_api_base
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embedding_kwargs),
         )
 
         # get the embedding
@@ -310,13 +315,16 @@ class QdrantSemanticCache(BaseCache):
         prompt = get_str_from_messages(messages)
 
         # convert to embedding
+        embedding_kwargs: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if getattr(self, "embed_api_base", None) is not None:
+            embedding_kwargs["api_base"] = self.embed_api_base
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embedding_kwargs),
         )
 
         # get the embedding
@@ -387,8 +395,37 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages = kwargs["messages"]
-        prompt = get_str_from_messages(messages)
-        embedding_response = await self._get_async_embedding(prompt, **kwargs)
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+        # create an embedding for prompt
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding, pass api_base if available
+            embedding_kwargs: dict[str, Any] = {
+                "model": self.embedding_model,
+                "input": prompt,
+                "cache": {"no-store": True, "no-cache": True},
+            }
+            if getattr(self, "embed_api_base", None) is not None:
+                embedding_kwargs["api_base"] = self.embed_api_base
+            embedding_response = await litellm.aembedding(**embedding_kwargs)
 
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
@@ -424,7 +461,33 @@ class QdrantSemanticCache(BaseCache):
         messages = kwargs["messages"]
         prompt = get_str_from_messages(messages)
 
-        embedding_response = await self._get_async_embedding(prompt, **kwargs)
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding, pass api_base if available
+            embedding_kwargs: dict[str, Any] = {
+                "model": self.embedding_model,
+                "input": prompt,
+                "cache": {"no-store": True, "no-cache": True},
+            }
+            if getattr(self, "embed_api_base", None) is not None:
+                embedding_kwargs["api_base"] = self.embed_api_base
+            embedding_response = await litellm.aembedding(**embedding_kwargs)
 
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
