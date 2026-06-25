@@ -409,3 +409,78 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+@pytest.mark.asyncio
+async def test_build_chat_completion_request_patch_preserves_provider_for_nested_model():
+    """Test that _build_chat_completion_request_patch correctly prepends the provider
+    when the model name itself contains a slash (e.g. 'openai/gpt-oss-120b').
+
+    Regression test for bug where model='openai/gpt-oss-120b' with
+    custom_llm_provider='hosted_vllm' would skip prepending the provider because
+    '/' was already present in the model string, causing the follow-up call to
+    route to plain OpenAI instead of hosted_vllm.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["hosted_vllm"])
+    logger._execute_search = AsyncMock(
+        return_value="Title: Test\nURL: http://example.com\nSnippet: test result"
+    )
+
+    # Internal normalized format produced by WebSearchTransformation.transform_request
+    tool_calls = [
+        {
+            "id": "call_123",
+            "type": "function",
+            "name": "litellm_web_search",
+            "function": {
+                "name": "litellm_web_search",
+                "arguments": {"query": "latest litellm release"},
+            },
+            "input": {"query": "latest litellm release"},
+        }
+    ]
+
+    patch = await logger._build_chat_completion_request_patch(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": "Find the latest LiteLLM release"}],
+        tool_calls=tool_calls,
+        optional_params={},
+        kwargs={"custom_llm_provider": "hosted_vllm"},
+    )
+
+    # Provider must be prepended — follow-up call must go to hosted_vllm, not openai
+    assert patch.model == "hosted_vllm/openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
+async def test_build_chat_completion_request_patch_no_double_prefix():
+    """Test that provider is not prepended twice if model already starts with provider/."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["hosted_vllm"])
+    logger._execute_search = AsyncMock(
+        return_value="Title: Test\nURL: http://example.com\nSnippet: test result"
+    )
+
+    # Internal normalized format produced by WebSearchTransformation.transform_request
+    tool_calls = [
+        {
+            "id": "call_456",
+            "type": "function",
+            "name": "litellm_web_search",
+            "function": {
+                "name": "litellm_web_search",
+                "arguments": {"query": "test query"},
+            },
+            "input": {"query": "test query"},
+        }
+    ]
+
+    patch = await logger._build_chat_completion_request_patch(
+        model="hosted_vllm/gpt-oss-120b",
+        messages=[{"role": "user", "content": "test"}],
+        tool_calls=tool_calls,
+        optional_params={},
+        kwargs={"custom_llm_provider": "hosted_vllm"},
+    )
+
+    # Must NOT become hosted_vllm/hosted_vllm/gpt-oss-120b
+    assert patch.model == "hosted_vllm/gpt-oss-120b"
