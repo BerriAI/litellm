@@ -2221,7 +2221,7 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_looks_up_stored_token(self):
-        """Falls back to stored per-user OAuth headers when no token is supplied."""
+        """Falls back to stored per-user OAuth headers for a non-migrated (delegate) oauth2 server."""
         from litellm.proxy._types import UserAPIKeyAuth
 
         manager = MCPServerManager()
@@ -2230,6 +2230,7 @@ class TestMCPServerManager:
             name="oauth-srv",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,  # stays on v1, so v1 still builds the header
         )
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
         stored = {"Authorization": "Bearer stored-user-token"}
@@ -2244,6 +2245,33 @@ class TestMCPServerManager:
 
         assert result == stored
         mock_lookup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_steps_aside_for_migrated_server(self):
+        """A migrated authorization_code server is owned by the v2 resolver, so v1 must not also
+        build the token into extra_headers (which the v2 graft would defer to and shadow).
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,  # per-user, not delegate -> migrated to v2
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer should-not-be-used"}),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+
+        assert result is None  # stepped aside; the v2 resolver handles the token
+        mock_lookup.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_swallows_lookup_exception(self):
@@ -2970,14 +2998,17 @@ class TestMCPServerManager:
             object_permission_id="perm_no_mcp",
         )
 
-        with patch.object(
-            manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
-        ), patch.object(
-            MCPRequestHandler,
-            "get_allowed_mcp_servers",
-            new_callable=AsyncMock,
-            return_value=["leaked-server"],
-        ) as mock_inner:
+        with (
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
         assert result == []

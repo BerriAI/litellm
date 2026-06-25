@@ -3694,6 +3694,12 @@ class MCPServerManager:
         ):
             return oauth2_headers
 
+        if to_server_spec(mcp_server) is not None:
+            # Migrated to v2: the resolver owns this server's per-user token (inject or fail-closed
+            # 401). Building it into extra_headers here would let the v2 graft defer to it and
+            # shadow the resolver, double-resolving and hiding the per-server challenge.
+            return oauth2_headers
+
         user_id = getattr(user_api_key_auth, "user_id", None)
         if not user_id:
             return oauth2_headers
