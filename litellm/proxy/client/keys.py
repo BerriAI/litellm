@@ -318,7 +318,7 @@ class KeysManagementClient:
         except requests.exceptions.HTTPError as e:
             redacted_message = redact_string(str(e))
             if e.response.status_code == 401:
-                raise UnauthorizedError(redacted_message) from None
+                raise UnauthorizedError(e) from None
             raise requests.exceptions.HTTPError(
                 redacted_message, response=e.response
             ) from None

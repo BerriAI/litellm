@@ -481,6 +481,9 @@ def test_info_unauthorized_redacts_key_everywhere(client):
     assert LEAKY_KEY not in str(exc.orig_exception)
     assert LEAKY_KEY not in _render_full_traceback(exc)
     assert exc.__cause__ is None and exc.__suppress_context__
+    assert isinstance(exc.orig_exception, requests.exceptions.HTTPError)
+    assert exc.orig_exception.response is not None
+    assert exc.orig_exception.response.status_code == 401
 
 
 def _http_error_with_key(prefix: str, status: int) -> requests.exceptions.HTTPError:
