@@ -2339,6 +2339,7 @@ async def cli_poll_key(
             user_budget = user_db_obj.max_budget if user_db_obj is not None else None
 
             team_budget: Optional[float] = None
+            team_budget_resolved = False
             if team_id is not None:
                 try:
                     team_obj = await get_team_object(
@@ -2347,12 +2348,14 @@ async def cli_poll_key(
                         user_api_key_cache=user_api_key_cache,
                     )
                     team_budget = team_obj.max_budget
+                    team_budget_resolved = True
                 except Exception:
                     pass
 
             session_max_budget = (
                 litellm.max_ui_session_budget
-                if user_budget is None and team_budget is None
+                if user_budget is None
+                and (team_id is None or (team_budget_resolved and team_budget is None))
                 else None
             )
 

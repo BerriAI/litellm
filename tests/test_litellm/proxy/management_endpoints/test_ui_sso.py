@@ -2898,11 +2898,13 @@ class TestCLIKeyRegenerationFlow:
             assert result["team_id"] == selected_team
             assert result["teams"] == ["team-a", "team-b", "team-c"]
 
-            # Verify JWT was generated with correct team
+            # Verify JWT was generated with correct team and no budget cap
+            # (team lookup failed, but team_id is set, so fallback cap must not apply)
             mock_get_jwt.assert_called_once()
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
             assert jwt_call_args.kwargs["team_alias"] == "Team B"
+            assert jwt_call_args.kwargs["max_budget"] is None
 
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
