@@ -125,6 +125,30 @@ async def test_isolates_by_subject():
     assert second is not None and second.access_token == "b"
 
 
+async def test_bounded_cache_evicts_oldest_not_everything():
+    inner = _FakeStore(
+        {
+            ("u1", "s"): OAuthToken(access_token="k1"),
+            ("u2", "s"): OAuthToken(access_token="k2"),
+            ("u3", "s"): OAuthToken(access_token="k3"),
+        }
+    )
+    store = CachedOAuthTokenStore(
+        inner, default_ttl_seconds=60, max_size=2, clock=_Clock()
+    )
+
+    await store.fetch("u1", "s")
+    await store.fetch("u2", "s")
+    await store.fetch("u3", "s")  # at capacity -> evict the oldest (u1), keep u2
+    await store.fetch("u2", "s")  # still cached
+    await store.fetch("u1", "s")  # was evicted -> re-read
+
+    assert (
+        inner.calls.count(("u2", "s")) == 1
+    )  # only the oldest was evicted, not everything
+    assert inner.calls.count(("u1", "s")) == 2
+
+
 class _RefreshablePair:
     """A store + refresher pair that simulates persistence: refresh() updates what fetch returns,
     and yields once so concurrent callers actually contend on the single-flight lock."""

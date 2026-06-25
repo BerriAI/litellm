@@ -25,10 +25,12 @@ from typing import Protocol
 class OAuthToken:
     """A user's OAuth credential: the bearer value, when it expires, and how to refresh it.
 
-    ``expires_at`` is epoch seconds (``None`` means no known expiry). ``refresh_token`` is kept for
-    the later refresh step; it is never minted into a header directly. ``repr`` masks both secrets
-    so a stray log line cannot leak them (the values are still plain ``str`` for the header path,
-    since ``SecretStr`` resolves as unknown under this repo's basedpyright).
+    ``expires_at`` is epoch seconds (``None`` means no known expiry). ``refresh_token`` is what a
+    ``TokenRefresher`` uses to mint a new access token when this one nears expiry (the refresh
+    mechanism, ``RefreshingTokenStore``, is in this module; the concrete per-mode refresher lands
+    with each mode); it is never minted into a header directly. ``repr`` masks both secrets so a
+    stray log line cannot leak them (the values are still plain ``str`` for the header path, since
+    ``SecretStr`` resolves as unknown under this repo's basedpyright).
     """
 
     access_token: str
@@ -114,8 +116,10 @@ class CachedOAuthTokenStore:
                 return token
 
         token = await self._inner.fetch(user_id, server_id)
-        if len(self._cache) >= self._max_size:
-            self._cache.clear()
+        if key not in self._cache and len(self._cache) >= self._max_size:
+            # Evict the oldest entry (insertion order) to make room, rather than clearing the
+            # whole cache and forcing every key to re-read the store at once.
+            self._cache.pop(next(iter(self._cache)), None)
         self._cache[key] = (token, self._valid_until(token))
         return token
 
@@ -152,9 +156,9 @@ class RefreshingTokenStore:
         self._refresher = refresher
         self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock
-        # In-flight refreshes, one future per (user, server). Entries exist only while a refresh
-        # is running (removed in `finally`), so the map is bounded by concurrency, not by the
-        # number of distinct users/servers ever seen.
+        # In-flight refreshes, one task per (user, server). Each entry is removed by the task's
+        # done-callback, so the map is bounded by concurrent refreshes, not by the number of
+        # distinct users/servers ever seen.
         self._inflight: dict[tuple[str, str], asyncio.Future[OAuthToken | None]] = {}
 
     def _is_expired(self, token: OAuthToken) -> bool:
