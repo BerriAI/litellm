@@ -2,7 +2,6 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
-import os
 from functools import cached_property
 from typing import (
     Any,
@@ -179,9 +178,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     @cached_property
     def deployment_url(self) -> str:
-        return self._resolve_deployment_url(deployment_name=None)
+        return self._resolve_deployment_url()
 
-    def _resolve_deployment_url(self, deployment_name: Optional[str]) -> str:
+    def _resolve_deployment_url(self) -> str:
         client = litellm.module_level_client
         deployments = client.get(
             f"{self.base_url}/lm/deployments", headers=self.headers
@@ -204,20 +203,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 message="No orchestration deployment found in SAP AI Core.",
             )
 
-        name_filter = deployment_name or os.environ.get("SAP_ORCHESTRATION_DEPLOYMENT_NAME")
-        if name_filter:
-            filtered = [v for v in valid if v[2] == name_filter]
-            if not filtered:
-                available = [v[2] for v in valid]
-                raise GenAIHubOrchestrationError(
-                    status_code=404,
-                    message=(
-                        f"No orchestration deployment named {name_filter!r} found. "
-                        f"Available: {available}"
-                    ),
-                )
-            valid = filtered
-
         if len(valid) > 1:
             sorted_valid = sorted(valid, key=lambda x: x[1], reverse=True)
             chosen = sorted_valid[0]
@@ -226,8 +211,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 f"SAP: found {len(valid)} orchestration deployments; using the newest one "
                 f"(name={chosen[2]!r}, url={chosen[0]!r}). "
                 f"Others ignored: {others}. "
-                "Set SAP_ORCHESTRATION_DEPLOYMENT_NAME to select a specific one, "
-                "or use the deployment_name per-call parameter."
+                "Pass `deployment_url` in `litellm_params` to route to a specific deployment."
             )
             return chosen[0]
 
@@ -298,11 +282,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ):
-        deployment_name = litellm_params.get("deployment_name")
-        if deployment_name:
-            base = self._resolve_deployment_url(deployment_name=deployment_name)
-        else:
-            base = self.deployment_url
+        base = litellm_params.get("deployment_url") or self.deployment_url
         return f"{base}/v2/completion"
 
     def _build_prompt_module(
