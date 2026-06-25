@@ -3014,8 +3014,11 @@ class SSOAuthenticationHandler:
                 user_info = await insert_sso_user(
                     result_openid=result,
                     user_defined_values=user_defined_values,
+                    prisma_client=prisma_client,
                 )
             return user_info
+        except ProxyException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error upserting SSO user into LiteLLM DB: {e}"
