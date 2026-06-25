@@ -296,6 +296,8 @@ def test_load_rust_ocr_none_when_extension_absent():
     litellm.use_litellm_rust(True)  # no impl injected; extension isn't built in CI
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
+    assert rust_bridge.load_rust_image_edit() is None
+    assert rust_bridge.load_rust_aimage_edit() is None
 
 
 def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
@@ -305,11 +307,15 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module = types.ModuleType("litellm_python_bridge")
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
+    fake_module.image_edit = lambda **kwargs: {"data": []}  # type: ignore[attr-defined]
+    fake_module.aimage_edit = lambda **kwargs: {"data": []}  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "litellm_python_bridge", fake_module)
 
     litellm.use_litellm_rust(True)  # enabled, no impl injected -> import the extension
     assert rust_bridge.load_rust_ocr() is fake_module.ocr
     assert rust_bridge.load_rust_aocr() is fake_module.aocr
+    assert rust_bridge.load_rust_image_edit() is fake_module.image_edit
+    assert rust_bridge.load_rust_aimage_edit() is fake_module.aimage_edit
 
 
 def test_timeout_to_seconds_handles_float_timeout_and_none():

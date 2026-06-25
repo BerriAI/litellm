@@ -176,7 +176,7 @@ def _filename_for_file(file_value: Any, default: str) -> str:
 
 
 def _rust_image_file_part(file_value: Any, default_filename: str) -> dict[str, object]:
-    filename = default_filename
+    filename: str | None = None
     content_type: str | None = None
     raw_file = file_value
 
