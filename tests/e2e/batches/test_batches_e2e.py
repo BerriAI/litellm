@@ -202,7 +202,14 @@ def test_batch_lifecycle(
         cancelled = unwrap(client.cancel_batch(batch.id, key=key, provider=provider))
         assert cancelled.id == batch.id
         assert cancelled.object == "batch"
-        assert cancelled.status in {"cancelling", "cancelled"}
+        # Vertex cancel is async: the job may still show its pre-cancel status
+        # briefly before transitioning to cancelling/cancelled.
+        valid_post_cancel = {"cancelling", "cancelled"}
+        if cap.provider == "vertex_ai":
+            valid_post_cancel |= CREATED_BATCH_STATUSES
+        assert cancelled.status in valid_post_cancel, (
+            f"unexpected post-cancel status {cancelled.status!r}"
+        )
 
     if cap.can_list:
         listed = unwrap(client.list_batches(key=key, provider=provider))

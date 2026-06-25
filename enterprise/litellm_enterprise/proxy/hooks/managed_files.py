@@ -140,8 +140,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 f"storage_url={db_data.get('storage_url')}"
             )
 
-        result = await self.prisma_client.db.litellm_managedfiletable.create(
-            data=db_data
+        result = await self.prisma_client.db.litellm_managedfiletable.upsert(
+            where={"unified_file_id": file_id},
+            data={"create": db_data, "update": {}},
         )
         verbose_logger.debug(
             f"LiteLLM Managed File object with id={file_id} stored in db: {result}"

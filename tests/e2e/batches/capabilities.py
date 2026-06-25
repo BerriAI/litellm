@@ -88,7 +88,14 @@ def raw_id_matches_provider(provider: str, batch_id: str) -> bool:
     if provider in ("openai", "azure"):
         return batch_id.startswith("batch")
     if provider == "vertex_ai":
-        return batch_id.startswith("projects/") or "batchPredictionJobs" in batch_id
+        # LiteLLM strips the full resource path to just the numeric job id
+        # (last segment of projects/.../batchPredictionJobs/<id>), so accept
+        # the full path form or a bare numeric id.
+        return (
+            batch_id.startswith("projects/")
+            or "batchPredictionJobs" in batch_id
+            or batch_id.isdigit()
+        )
     if provider == "bedrock":
         return batch_id.startswith("arn:aws")
     return True
