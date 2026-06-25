@@ -239,6 +239,8 @@ tolerations: []
 
 affinity: {}
 
+priorityClassName: ""
+
 db:
   # Use an existing postgres server/cluster
   useExisting: false

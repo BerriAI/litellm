@@ -5,6 +5,8 @@ fullnameOverride: ""
 
 imagePullSecrets: []
 
+priorityClassName: ""
+
 # Optional Ingress wiring the three component Services behind a single L7
 # entrypoint. Required when serving the static UI bundle over the network.
 ingress:
@@ -159,6 +161,7 @@ gateway:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  priorityClassName: ""
 
 # ---------- backend (UI / management API) ----------
 backend:
@@ -198,6 +201,7 @@ backend:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  priorityClassName: ""
 
 # ---------- ui (Next.js static dashboard) ----------
 ui:
@@ -240,3 +244,4 @@ ui:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  priorityClassName: ""
