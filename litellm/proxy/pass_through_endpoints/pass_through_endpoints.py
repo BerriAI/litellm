@@ -2821,10 +2821,14 @@ async def initialize_pass_through_endpoints(
             config_file_path=config_file_path,
         )
 
-    # remove the ones that are not visited from the list
+    # Drop stale registry entries by their exact route key. registered_pass_through_endpoints
+    # holds route keys ("{id}:{type}:{path}:{methods}"), not endpoint ids, so remove_endpoint_routes
+    # (which matches on endpoint_id) never matched and left the registry growing every reload cycle.
+    # We pop the key directly and leave openai_routes alone: its append is path-deduped, and the path
+    # is still owned by the live endpoint that was just re-registered under a new id this same cycle.
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
+            _registered_pass_through_routes.pop(endpoint_key, None)
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:

@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from contextlib import ExitStack
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,8 +19,11 @@ sys.path.insert(
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     HttpPassThroughEndpointHelpers,
+    InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _registered_pass_through_routes,
     create_pass_through_route,
+    initialize_pass_through_endpoints,
     pass_through_request,
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
@@ -3313,3 +3317,117 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+class TestStaleRouteCleanupOnReload:
+    """Regression tests for the PERF-13 / issue #19921 reload leak.
+
+    ``initialize_pass_through_endpoints`` is re-run every 30s by the
+    ``add_deployment_job`` scheduler. Endpoints sourced from the DB/config
+    without a persisted ``id`` get a fresh UUID each cycle, so their route key
+    ("{id}:{type}:{path}:{methods}") changes every reload. The old cleanup
+    called ``remove_endpoint_routes(route_key)`` which matches on ``endpoint_id``
+    and therefore never matched a route key, so ``_registered_pass_through_routes``
+    grew without bound. That unbounded dict turned the O(n) per-cycle cleanup and
+    the per-request ``is_registered_pass_through_route`` scan into a CPU sink.
+    """
+
+    def setup_method(self):
+        _registered_pass_through_routes.clear()
+
+    def teardown_method(self):
+        _registered_pass_through_routes.clear()
+
+    @staticmethod
+    def _patches():
+        stack = ExitStack()
+        stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists"
+            )
+        )
+        stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
+        mock_set_env = stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
+            )
+        )
+        mock_set_env.return_value = {}
+        return stack
+
+    @staticmethod
+    def _paths_in_registry():
+        return sorted(v["path"] for v in _registered_pass_through_routes.values())
+
+    @pytest.mark.asyncio
+    async def test_registry_stays_bounded_across_reloads_for_idless_endpoint(self):
+        """A DB/config endpoint with no id must not grow the registry per reload.
+
+        Mutation check: with the old ``remove_endpoint_routes`` call this asserts
+        2 but the registry holds ``2 * num_cycles`` entries, so it fails.
+        """
+        num_cycles = 25
+        with self._patches():
+            for _ in range(num_cycles):
+                # Fresh dict each cycle mirrors the DB loader rebuilding objects;
+                # a reused dict would cache the minted id and hide the bug.
+                await initialize_pass_through_endpoints(
+                    [
+                        {
+                            "path": "/vertex-passthrough",
+                            "target": "http://example.com",
+                            "include_subpath": True,
+                        }
+                    ]
+                )
+
+        assert len(_registered_pass_through_routes) == 2
+        assert self._paths_in_registry() == [
+            "/vertex-passthrough",
+            "/vertex-passthrough",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_departed_endpoint_is_removed_on_next_reload(self):
+        """A route present in one cycle but absent the next is dropped.
+
+        Mutation check: the old cleanup leaves the departed ``/a`` key behind,
+        so the registry would hold both paths instead of only ``/b``.
+        """
+        with self._patches():
+            await initialize_pass_through_endpoints(
+                [{"path": "/a", "target": "http://example.com"}]
+            )
+            assert self._paths_in_registry() == ["/a"]
+
+            await initialize_pass_through_endpoints(
+                [{"path": "/b", "target": "http://example.com"}]
+            )
+
+        assert self._paths_in_registry() == ["/b"]
+
+    @pytest.mark.asyncio
+    async def test_live_route_survives_reload_and_stays_resolvable(self):
+        """The currently-registered route must remain after the stale-key sweep.
+
+        Guards against a cleanup that over-removes (e.g. stripping the shared
+        path of the freshly re-registered endpoint).
+        """
+        with self._patches():
+            for _ in range(3):
+                await initialize_pass_through_endpoints(
+                    [
+                        {
+                            "path": "/live-passthrough",
+                            "target": "http://example.com",
+                            "include_subpath": True,
+                        }
+                    ]
+                )
+
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/live-passthrough"
+        )
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/live-passthrough/some/subpath"
+        )
