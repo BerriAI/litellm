@@ -1092,6 +1092,23 @@ _DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
 )
 
 
+def _db_model_is_team_scoped(model: Any) -> bool:
+    model_info = getattr(model, "model_info", None)
+    if isinstance(model_info, BaseModel):
+        return getattr(model_info, "team_id", None) is not None
+    if isinstance(model_info, str):
+        try:
+            model_info = json.loads(model_info)
+        except (TypeError, ValueError):
+            model_info = None
+    if isinstance(model_info, dict) and model_info.get("team_id") is not None:
+        return True
+    if getattr(model_info, "team_id", None) is not None:
+        return True
+    model_name = getattr(model, "model_name", None)
+    return isinstance(model_name, str) and model_name.startswith("model_name_")
+
+
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
     base, separator, suffix = operation_id.rpartition("_")
     if separator and suffix in _OPENAPI_HTTP_METHODS:
@@ -5203,7 +5220,9 @@ class ProxyConfig:
                     deleted_deployments += 1
         return deleted_deployments
 
-    def _resolve_db_litellm_param(self, key: str, value: Any) -> Any:
+    def _resolve_db_litellm_param(
+        self, key: str, value: Any, resolve_env_refs: bool = True
+    ) -> Any:
         if not isinstance(value, str):
             return value
 
@@ -5211,7 +5230,8 @@ class ProxyConfig:
             value=value, key=key, return_original_value=True
         )
         if (
-            key in _DB_LITELLM_PARAM_ENV_REF_KEYS
+            resolve_env_refs
+            and key in _DB_LITELLM_PARAM_ENV_REF_KEYS
             and isinstance(decrypted_value, str)
             and decrypted_value.startswith("os.environ/")
         ):
@@ -5235,10 +5255,13 @@ class ProxyConfig:
         ## ADD MODEL LOGIC
         for m in db_models:
             _litellm_params = m.litellm_params
+            resolve_env_refs = not _db_model_is_team_scoped(m)
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                    _litellm_params[k] = self._resolve_db_litellm_param(
+                        key=k, value=v, resolve_env_refs=resolve_env_refs
+                    )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -5266,12 +5289,15 @@ class ProxyConfig:
         _model_list: list = []
         for m in new_models:
             _litellm_params = m.litellm_params
+            resolve_env_refs = not _db_model_is_team_scoped(m)
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                    _litellm_params[k] = self._resolve_db_litellm_param(
+                        key=k, value=v, resolve_env_refs=resolve_env_refs
+                    )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(

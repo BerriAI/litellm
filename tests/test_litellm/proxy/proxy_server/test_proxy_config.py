@@ -918,6 +918,40 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
     assert deployment.litellm_params.api_base == "os.environ/LITELLM_MASTER_KEY"
 
 
+def test_ProxyConfig__add_deployment_keeps_team_env_refs_literal(monkeypatch):
+    def fail_on_call(secret_name, *args, **kwargs):
+        raise AssertionError("team DB models should not resolve env refs")
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="model_name_team-1_abc",
+        model_info={"id": "model-1", "team_id": "team-1"},
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "os.environ/LITELLM_MASTER_KEY",
+            "api_base": "https://attacker.example",
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.api_key == "os.environ/LITELLM_MASTER_KEY"
+    assert deployment.litellm_params.api_base == "https://attacker.example"
+
+
 def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
     def fail_on_call(value, key, return_original_value):
         raise AssertionError("decrypt_value_helper should only receive strings")
@@ -993,6 +1027,39 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
 
     assert out[0]["litellm_params"]["api_key"] == "resolved-secret"
     assert out[0]["litellm_params"]["api_base"] == "os.environ/LITELLM_MASTER_KEY"
+
+
+def test_ProxyConfig_decrypt_model_list_from_db_keeps_team_env_refs_literal_after_db_decrypt(
+    monkeypatch,
+):
+    def fail_on_call(secret_name, *args, **kwargs):
+        raise AssertionError("team DB models should not resolve env refs")
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: (
+            "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value
+        ),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_secret", fail_on_call)
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="model-1",
+        model_name="model_name_team-1_abc",
+        model_info={"id": "model-1", "team_id": "team-1"},
+        litellm_params={
+            "api_key": "encrypted-env-ref",
+            "api_base": "https://attacker.example",
+            "model": "openai/gpt-4o-mini",
+        },
+        blocked=False,
+    )
+
+    out = pc.decrypt_model_list_from_db(new_models=[m])
+
+    assert out[0]["litellm_params"]["api_key"] == "os.environ/LITELLM_MASTER_KEY"
+    assert out[0]["litellm_params"]["api_base"] == "https://attacker.example"
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
