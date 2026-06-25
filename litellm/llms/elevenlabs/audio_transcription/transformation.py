@@ -2,7 +2,8 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
-from typing import List, Optional, Union
+from itertools import groupby
+from typing import List, Optional, Tuple, Union
 
 from httpx import Headers, Response
 
@@ -10,11 +11,22 @@ import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.elevenlabs import (
+    ElevenLabsSTTChunk,
+    ElevenLabsSTTMultichannelResponse,
+    ElevenLabsSTTWord,
+    OpenAIDiarizedSegment,
+    OpenAITranscriptionWord,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import FileTypes, TranscriptionResponse
+from litellm.types.utils import (
+    FileTypes,
+    TranscriptionResponse,
+    TranscriptionUsageDurationObject,
+)
 
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -31,7 +43,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIAudioTranscriptionOptionalParams]:
-        return ["language", "temperature"]
+        return ["language", "temperature", "response_format"]
 
     def map_openai_params(
         self,
@@ -42,12 +54,19 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
-            if k in supported_params:
-                if k == "language":
-                    # Map OpenAI language format to ElevenLabs language_code
-                    optional_params["language_code"] = v
-                else:
-                    optional_params[k] = v
+            if k not in supported_params:
+                continue
+            if k == "language":
+                # Map OpenAI language format to ElevenLabs language_code
+                optional_params["language_code"] = v
+            elif k == "response_format":
+                # ElevenLabs always returns JSON; the only response_format that
+                # changes the request is diarized_json, which maps to diarization.
+                # Other formats are shaped from the same JSON at response time.
+                if v == "diarized_json":
+                    optional_params["diarize"] = True
+            else:
+                optional_params[k] = v
         return optional_params
 
     def get_error_class(
@@ -117,44 +136,53 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: Response,
     ) -> TranscriptionResponse:
         """
-        Transforms the raw response from ElevenLabs to the TranscriptionResponse format
+        Transforms the raw ElevenLabs speech-to-text response.
+
+        When the response carries speaker information (diarize=true) or per-channel
+        transcripts (use_multi_channel=true), it is shaped into OpenAI's
+        diarized_json form (segments with speaker labels + usage). Otherwise it
+        falls back to a flat transcript with word-level timestamps.
         """
         try:
             response_json = raw_response.json()
-
-            # Extract the main transcript text
-            text = response_json.get("text", "")
-
-            # Create TranscriptionResponse object
-            response = TranscriptionResponse(text=text)
-
-            # Add additional metadata matching OpenAI format
-            response["task"] = "transcribe"
-            response["language"] = response_json.get("language_code", "unknown")
-
-            # Map ElevenLabs words to OpenAI format
-            if "words" in response_json:
-                response["words"] = []
-                for word_data in response_json["words"]:
-                    # Only include actual words, skip spacing and audio events
-                    if word_data.get("type") == "word":
-                        response["words"].append(
-                            {
-                                "word": word_data.get("text", ""),
-                                "start": word_data.get("start", 0),
-                                "end": word_data.get("end", 0),
-                            }
-                        )
-
-            # Store full response in hidden params
-            response._hidden_params = response_json
-
-            return response
-
         except Exception as e:
             raise ValueError(
                 f"Error transforming ElevenLabs response: {str(e)}\nResponse: {raw_response.text}"
             )
+
+        if "transcripts" in response_json:
+            parsed = ElevenLabsSTTMultichannelResponse.model_validate(response_json)
+            words = _words_from_channels(parsed.transcripts)
+            text = " ".join(t.text for t in parsed.transcripts if t.text)
+            language = next(
+                (t.language_code for t in parsed.transcripts if t.language_code), None
+            )
+            duration = parsed.audio_duration_secs
+            diarized = True
+        else:
+            chunk = ElevenLabsSTTChunk.model_validate(response_json)
+            words = tuple(chunk.words)
+            text = chunk.text
+            language = chunk.language_code
+            duration = chunk.audio_duration_secs
+            diarized = any(w.speaker_id is not None for w in words)
+
+        response = TranscriptionResponse(text=text)
+        response["task"] = "transcribe"
+        response["language"] = language or "unknown"
+
+        if diarized:
+            response["segments"] = _build_segments(words)
+            if duration is not None:
+                response["duration"] = duration
+                response["usage"] = TranscriptionUsageDurationObject(
+                    type="duration", seconds=duration
+                )
+        else:
+            response["words"] = _openai_words(words)
+
+        response._hidden_params = response_json
+        return response
 
     def get_complete_url(
         self,
@@ -198,3 +226,51 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         headers.update(auth_header)
         return headers
+
+
+def _words_from_channels(
+    transcripts: List[ElevenLabsSTTChunk],
+) -> Tuple[ElevenLabsSTTWord, ...]:
+    """
+    Flatten per-channel transcripts into a single time-ordered word stream, using
+    the channel as the speaker so the two sides of e.g. a stereo call don't collide
+    on the per-channel speaker ids ElevenLabs assigns independently.
+    """
+    words = tuple(
+        word.model_copy(update={"speaker_id": f"speaker_{transcript.channel_index}"})
+        for transcript in transcripts
+        for word in transcript.words
+    )
+    return tuple(sorted(words, key=lambda w: w.start if w.start is not None else 0.0))
+
+
+def _build_segments(
+    words: Tuple[ElevenLabsSTTWord, ...],
+) -> List[OpenAIDiarizedSegment]:
+    spoken = (w for w in words if w.type == "word" and w.start is not None)
+    groups = (tuple(group) for _, group in groupby(spoken, key=lambda w: w.speaker_id))
+    return [
+        OpenAIDiarizedSegment(
+            id=f"segment_{index}",
+            start=group[0].start if group[0].start is not None else 0.0,
+            end=group[-1].end if group[-1].end is not None else 0.0,
+            speaker=group[0].speaker_id or "speaker_0",
+            text=" ".join(w.text for w in group),
+            type="transcript.text.segment",
+        )
+        for index, group in enumerate(groups)
+    ]
+
+
+def _openai_words(
+    words: Tuple[ElevenLabsSTTWord, ...],
+) -> List[OpenAITranscriptionWord]:
+    return [
+        OpenAITranscriptionWord(
+            word=w.text,
+            start=w.start if w.start is not None else 0.0,
+            end=w.end if w.end is not None else 0.0,
+        )
+        for w in words
+        if w.type == "word"
+    ]
