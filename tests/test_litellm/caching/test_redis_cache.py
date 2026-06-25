@@ -3,7 +3,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -517,3 +516,130 @@ async def test_async_lpop_with_float_redis_version(
 
             # Verify the method completed without error
             assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# async_increment_idempotent
+# ---------------------------------------------------------------------------
+
+
+class _FakeRedisSpendStore:
+    """
+    Minimal stand-in for RedisCache.async_register_script that faithfully models
+    the Lua SET NX-gated INCRBYFLOAT without a real Redis server or Lua runtime.
+
+    The registered callable uses an in-process set as the dedup store, so a
+    re-issue with the same dedup_key is a no-op (exactly-once semantics).
+    """
+
+    def __init__(self):
+        self._counters: dict = {}
+        self._dedup: set = set()
+
+    def async_register_script(self, script: str):
+        async def _run(keys, args):
+            counter_key, dedup_key = keys[0], keys[1]
+            amount = float(args[0])
+            if dedup_key not in self._dedup:
+                self._dedup.add(dedup_key)
+                self._counters[counter_key] = (
+                    self._counters.get(counter_key, 0.0) + amount
+                )
+            return str(self._counters.get(counter_key, 0.0))
+
+        return _run
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_same_dedup_id_increments_once(
+    monkeypatch, redis_no_ping
+):
+    """
+    Re-issuing async_increment_idempotent with the same dedup_id must advance
+    the counter only once — this is the core fix for the cluster-mode double-apply bug.
+    """
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    fake_store = _FakeRedisSpendStore()
+    redis_cache.async_register_script = fake_store.async_register_script  # type: ignore[method-assign]
+
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+    )
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+    )
+
+    assert fake_store._counters.get("spend:key:abc") == pytest.approx(
+        0.01
+    ), "re-issued increment must not double-apply"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_different_dedup_ids_are_independent(
+    monkeypatch, redis_no_ping
+):
+    """Two distinct requests (different dedup_id) must each apply once — INV-2."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    fake_store = _FakeRedisSpendStore()
+    redis_cache.async_register_script = fake_store.async_register_script  # type: ignore[method-assign]
+
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+    )
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.02, dedup_id="req-2", refresh_ttl=True
+    )
+
+    assert fake_store._counters.get("spend:key:abc") == pytest.approx(
+        0.03
+    ), "distinct dedup_ids must each contribute independently"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_script_error_falls_back_to_plain_increment(
+    monkeypatch, redis_no_ping
+):
+    """On Lua script failure (NOSCRIPT / scripting disabled), fall back to
+    plain async_increment — INV-4."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    async def _bad_script(keys, args):
+        raise RuntimeError("NOSCRIPT")
+
+    redis_cache._dedup_increment_script = _bad_script
+
+    plain_increment = AsyncMock(return_value=0.01)
+    redis_cache.async_increment = plain_increment  # type: ignore[method-assign]
+
+    result = await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+    )
+
+    assert plain_increment.called, "must fall back to async_increment on script error"
+    assert result == pytest.approx(0.01)
+    assert (
+        redis_cache._dedup_increment_script_disabled
+    ), "script must be permanently disabled after failure to avoid re-registration loop"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_no_register_script_falls_back_to_plain(
+    monkeypatch, redis_no_ping
+):
+    """When async_register_script is unavailable, fall back to plain async_increment — INV-4."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    redis_cache.async_register_script = None  # type: ignore[assignment]
+
+    plain_increment = AsyncMock(return_value=0.05)
+    redis_cache.async_increment = plain_increment  # type: ignore[method-assign]
+
+    result = await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.05, dedup_id="req-1"
+    )
+
+    assert plain_increment.called
+    assert result == pytest.approx(0.05)

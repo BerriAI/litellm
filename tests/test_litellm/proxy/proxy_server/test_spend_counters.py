@@ -53,6 +53,9 @@ def _make_spend_counter_cache(
             return_value=redis_increment_value,
             side_effect=redis_increment_side_effect,
         )
+        cache.redis_cache.async_increment_idempotent = AsyncMock(
+            return_value=redis_increment_value,
+        )
         cache.redis_cache.async_delete_cache = AsyncMock()
         cache.redis_cache.async_set_cache = AsyncMock()
         cache.redis_cache.async_set_max = AsyncMock()
@@ -409,12 +412,12 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
     )
 
     observed = {
-        "redis_increment_called": fake_cache.redis_cache.async_increment.called,
-        "increment_calls": fake_cache.redis_cache.async_increment.call_count,
+        "redis_idempotent_increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
+        "increment_calls": fake_cache.redis_cache.async_increment_idempotent.call_count,
         "user_cache_used": fake_user_cache.async_get_cache.called,
     }
     assert normalize(observed) == {
-        "redis_increment_called": True,
+        "redis_idempotent_increment_called": True,
         "increment_calls": 4,
         "user_cache_used": True,
     }
@@ -441,6 +444,7 @@ async def test_increment_spend_counters_zero_cost_is_noop_finalizes_reservation(
 
     assert reservation == {"finalized": True}
     assert fake_cache.redis_cache.async_increment.called is False
+    assert fake_cache.redis_cache.async_increment_idempotent.called is False
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +518,9 @@ async def test_increment_end_user_and_tag_spend_counters_increments_each_unique_
     )
 
     observed = {
-        "increment_calls": fake_cache.redis_cache.async_increment.call_count,
+        "increment_calls": fake_cache.redis_cache.async_increment_idempotent.call_count,
         "in_memory_set_calls": fake_cache.in_memory_cache.set_cache.call_count,
-        "called": fake_cache.redis_cache.async_increment.called,
+        "called": fake_cache.redis_cache.async_increment_idempotent.called,
     }
     assert normalize(observed) == {
         "increment_calls": 3,
@@ -567,9 +571,9 @@ async def test_increment_org_spend_counter_increments_when_org_present(monkeypat
     )
 
     observed = {
-        "increment_called": fake_cache.redis_cache.async_increment.called,
-        "increment_calls": fake_cache.redis_cache.async_increment.call_count,
-        "counter_key_arg": fake_cache.redis_cache.async_increment.call_args.kwargs[
+        "increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
+        "increment_calls": fake_cache.redis_cache.async_increment_idempotent.call_count,
+        "counter_key_arg": fake_cache.redis_cache.async_increment_idempotent.call_args.kwargs[
             "key"
         ],
     }
@@ -639,7 +643,7 @@ async def test_init_and_increment_unreserved_spend_counter_proceeds_when_not_res
     )
 
     observed = {
-        "increment_called": fake_cache.redis_cache.async_increment.called,
+        "increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
         "redis_get_called": fake_cache.redis_cache.async_get_cache.called,
         "reseed_consulted": True,
     }
@@ -675,7 +679,7 @@ async def test_init_and_increment_spend_counter_warm_cache_skips_reseed(monkeypa
 
     observed = {
         "reseed_called": reseed.called,
-        "increment_called": fake_cache.redis_cache.async_increment.called,
+        "increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
         "in_memory_seeded_from_redis": fake_cache.in_memory_cache.set_cache.called,
     }
     assert normalize(observed) == {
@@ -714,8 +718,8 @@ async def test_init_and_increment_window_spend_counter_increments_when_initializ
     )
 
     observed = {
-        "redis_increment_called": fake_cache.redis_cache.async_increment.called,
-        "increment_calls": fake_cache.redis_cache.async_increment.call_count,
+        "redis_increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
+        "increment_calls": fake_cache.redis_cache.async_increment_idempotent.call_count,
         "in_memory_set_calls": fake_cache.in_memory_cache.set_cache.call_count,
     }
     assert normalize(observed) == {
@@ -799,7 +803,7 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
 
     observed = {
         "source_cache_called": fake_user_cache.async_get_cache.called,
-        "seed_increment_called": fake_cache.redis_cache.async_increment.called,
+        "seed_increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
         "warm_check_done": fake_cache.redis_cache.async_get_cache.called,
     }
     assert normalize(observed) == {
@@ -965,12 +969,12 @@ async def test_increment_spend_counter_cache_redis_path_returns_new_value(monkey
 
     observed = {
         "result": result,
-        "redis_increment_called": fake_cache.redis_cache.async_increment.called,
+        "redis_idempotent_increment_called": fake_cache.redis_cache.async_increment_idempotent.called,
         "in_memory_set_called": fake_cache.in_memory_cache.set_cache.called,
     }
     assert normalize(observed) == {
         "result": 44.0,
-        "redis_increment_called": True,
+        "redis_idempotent_increment_called": True,
         "in_memory_set_called": True,
     }
 
@@ -979,8 +983,9 @@ async def test_increment_spend_counter_cache_redis_path_returns_new_value(monkey
 async def test_increment_spend_counter_cache_redis_error_raises_and_invalidates(
     monkeypatch,
 ):
-    fake_cache = _make_spend_counter_cache(
-        redis_increment_side_effect=RuntimeError("incr fail")
+    fake_cache = _make_spend_counter_cache()
+    fake_cache.redis_cache.async_increment_idempotent = AsyncMock(
+        side_effect=RuntimeError("incr fail")
     )
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 
@@ -1084,3 +1089,224 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _increment_spend_counter_cache — idempotent routing (INV-3, INV-4, INV-5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counter_cache_always_uses_idempotent(
+    monkeypatch,
+):
+    """async_increment_idempotent is always taken when available — plain async_increment
+    is never used for regular counter increments."""
+    fake_cache = _make_spend_counter_cache(redis_increment_value=0.01)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._increment_spend_counter_cache(counter_key="spend:key:abc", increment=0.01)
+
+    assert (
+        fake_cache.redis_cache.async_increment_idempotent.called
+    ), "idempotent method must always be called when available"
+    assert (
+        not fake_cache.redis_cache.async_increment.called
+    ), "plain increment must not be called when idempotent path is available"
+    call_kwargs = fake_cache.redis_cache.async_increment_idempotent.call_args.kwargs
+    assert "dedup_id" in call_kwargs, "a server-generated dedup_id must be passed"
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counter_cache_uses_plain_when_idempotent_unavailable(
+    monkeypatch,
+):
+    """When async_increment_idempotent is absent from the redis_cache, fall back
+    to plain async_increment."""
+    fake_cache = _make_spend_counter_cache(redis_increment_value=0.01)
+    del fake_cache.redis_cache.async_increment_idempotent
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._increment_spend_counter_cache(counter_key="spend:key:abc", increment=0.01)
+
+    assert (
+        fake_cache.redis_cache.async_increment.called
+    ), "plain increment must be used when idempotent method is absent"
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_uses_idempotent_for_all_buckets(
+    monkeypatch,
+):
+    """increment_spend_counters uses async_increment_idempotent with a
+    server-generated UUID for each of the four main counter buckets (key, team,
+    team_member, user). Each call gets its own unique dedup_id."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_value=None, redis_increment_value=5.0
+    )
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        response_cost=5.0,
+    )
+
+    assert fake_cache.redis_cache.async_increment_idempotent.called
+    assert not fake_cache.redis_cache.async_increment.called
+    dedup_ids = [
+        call.kwargs["dedup_id"]
+        for call in fake_cache.redis_cache.async_increment_idempotent.call_args_list
+    ]
+    assert len(dedup_ids) == 4, "expected one idempotent increment per counter bucket"
+    assert len(set(dedup_ids)) == 4, "each counter increment must use a unique dedup_id"
+
+
+@pytest.mark.asyncio
+async def test_seed_fallback_uses_idempotent_increment(monkeypatch):
+    """The cold-seed fallback in _ensure_spend_counter_initialized calls
+    _increment_spend_counter_cache which always uses async_increment_idempotent
+    with a server-generated UUID."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_value=None, redis_increment_value=10.0
+    )
+    fake_user_cache = _make_user_api_key_cache(get_value={"spend": 10.0})
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed,
+        "coalesced",
+        AsyncMock(return_value=None),
+    )
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:key:tok", source_cache_key="tok"
+    )
+
+    assert (
+        fake_cache.redis_cache.async_increment_idempotent.called
+    ), "cold-seed fallback must use async_increment_idempotent"
+    assert not fake_cache.redis_cache.async_increment.called
+
+
+# ---------------------------------------------------------------------------
+# Proxy-level regression: reissued increment does not inflate the counter
+# ---------------------------------------------------------------------------
+
+
+class _FakeSpendRedisCache:
+    """
+    Minimal Redis stand-in that models exactly-once dedup for the proxy-level
+    regression test. Implements the same SET NX-gated INCRBYFLOAT as the Lua
+    script but in plain Python.
+    """
+
+    def __init__(self):
+        self._counters: dict = {}
+        self._dedup: set = set()
+
+    async def async_get_cache(self, key, **kwargs):
+        return self._counters.get(key)
+
+    async def async_increment(self, key, value, refresh_ttl=False, **kwargs):
+        self._counters[key] = self._counters.get(key, 0.0) + value
+        return self._counters[key]
+
+    async def async_increment_idempotent(
+        self, key, value, dedup_id, refresh_ttl=False, **kwargs
+    ):
+        dedup_key = f"{key}:dedup:{dedup_id}"
+        if dedup_key not in self._dedup:
+            self._dedup.add(dedup_key)
+            self._counters[key] = self._counters.get(key, 0.0) + value
+        return self._counters.get(key, 0.0)
+
+    async def async_delete_cache(self, key, **kwargs):
+        self._counters.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_two_independent_increments_each_apply_once(monkeypatch):
+    """
+    Two separate calls to _increment_spend_counter_cache each generate a distinct
+    server-side UUID, so both increments are applied independently. The dedup
+    mechanism protects against redis-py internal retries (same UUID within one
+    call), not against two distinct spend events.
+    """
+    fake_redis = _FakeSpendRedisCache()
+    fake_cache = MagicMock()
+    fake_cache.in_memory_cache = MagicMock()
+    fake_cache.in_memory_cache.set_cache = MagicMock()
+    fake_cache.redis_cache = fake_redis
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._increment_spend_counter_cache(counter_key="spend:key:abc", increment=0.01)
+    await ps._increment_spend_counter_cache(counter_key="spend:key:abc", increment=0.01)
+
+    spend = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=0.0)
+    assert spend == pytest.approx(
+        0.02
+    ), f"two independent increments must each apply; got {spend}"
+
+
+@pytest.mark.asyncio
+async def test_window_spend_counter_uses_idempotent_path(monkeypatch):
+    """_init_and_increment_window_spend_counter uses async_increment_idempotent
+    with a server-generated UUID."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_value=0.0, redis_increment_value=5.0
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed,
+        "coalesced_window",
+        AsyncMock(return_value=0.0),
+    )
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps._init_and_increment_window_spend_counter(
+        counter_key="spend:key:tok:window:1d",
+        entity_type="Key",
+        entity_id="tok",
+        window_start=datetime(2024, 1, 1),
+        increment=0.05,
+    )
+
+    assert fake_cache.redis_cache.async_increment_idempotent.called
+    assert not fake_cache.redis_cache.async_increment.called
+    call_kwargs = fake_cache.redis_cache.async_increment_idempotent.call_args.kwargs
+    assert "dedup_id" in call_kwargs, "a server-generated dedup_id must be passed"
+
+
+@pytest.mark.asyncio
+async def test_end_user_and_tag_counters_use_idempotent_path(monkeypatch):
+    """_increment_end_user_and_tag_spend_counters uses async_increment_idempotent
+    with server-generated UUIDs, same as all other spend counter paths."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_value=None, redis_increment_value=3.0
+    )
+    fake_user_cache = _make_user_api_key_cache()
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    await ps._increment_end_user_and_tag_spend_counters(
+        end_user_id="eu-1",
+        tags=["tag-a"],
+        response_cost=0.03,
+        reserved_counter_keys=set(),
+    )
+
+    assert fake_cache.redis_cache.async_increment_idempotent.called
+    assert not fake_cache.redis_cache.async_increment.called

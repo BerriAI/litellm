@@ -14,6 +14,7 @@ import functools
 import hashlib
 import inspect
 import json
+import re
 import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
@@ -258,6 +259,8 @@ class RedisCache(BaseCache):
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
+        self._dedup_increment_script: Optional[Any] = None
+        self._dedup_increment_script_disabled: bool = False
 
         self._setup_health_pings()
 
@@ -939,6 +942,82 @@ class RedisCache(BaseCache):
         if isinstance(result, bytes):
             result = result.decode()
         return float(result)
+
+    _SPEND_DEDUP_INCREMENT_SCRIPT = """
+if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[2])) then
+    local v = redis.call('INCRBYFLOAT', KEYS[1], tonumber(ARGV[1]))
+    if ARGV[3] ~= '' then
+        redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+    end
+    return v
+else
+    local v = redis.call('GET', KEYS[1])
+    if v == false then return '0' else return v end
+end
+"""
+
+    async def async_increment_idempotent(
+        self,
+        key: str,
+        value: float,
+        dedup_id: str,
+        ttl: Optional[int] = None,
+        refresh_ttl: bool = False,
+    ) -> float:
+        """
+        Atomically increment a spend counter at most once per (key, dedup_id) pair.
+
+        Uses a Lua script with SET NX as a dedup gate so a re-issued INCRBYFLOAT
+        (e.g. cluster-mode retry after a client-side timeout) is a no-op on the
+        second run rather than double-applying the increment. Falls back to the
+        plain async_increment when scripting is unavailable. The dedup_id should
+        be a server-generated UUID (uuid4) to avoid client-supplied values
+        suppressing spend tracking.
+        """
+        if self._dedup_increment_script_disabled:
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+
+        key = self.check_and_fix_namespace(key=key)
+        _used_ttl = self.get_ttl(ttl=ttl)
+        _m = re.search(r"\{([^}]+)\}", key)
+        _slot_key = _m.group(1) if _m else key
+        dedup_key = f"{{{_slot_key}}}:dedup:{dedup_id}"
+        counter_ttl_arg = (
+            str(_used_ttl) if refresh_ttl and _used_ttl is not None else ""
+        )
+
+        script_register = getattr(self, "async_register_script", None)
+        if not callable(script_register):
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+
+        try:
+            if self._dedup_increment_script is None:
+                self._dedup_increment_script = script_register(
+                    self._SPEND_DEDUP_INCREMENT_SCRIPT
+                )
+
+            raw = await self._dedup_increment_script(
+                keys=[key, dedup_key],
+                args=[str(value), "300", counter_ttl_arg],
+            )
+
+            if inspect.isawaitable(raw):
+                raw = await raw
+
+            result = float(raw)
+            return result
+        except Exception:
+            self._dedup_increment_script_disabled = True
+            verbose_logger.warning(
+                "LiteLLM Redis: idempotent increment Lua script failed, falling back to plain increment",
+            )
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
 
     async def flush_cache_buffer(self):
         print_verbose(
