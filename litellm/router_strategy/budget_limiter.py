@@ -441,13 +441,17 @@ class RouterBudgetLimiting(CustomLogger):
 
         response_cost: float = standard_logging_payload.get("response_cost", 0)
         model_id: str = str(standard_logging_payload.get("model_id", ""))
-        custom_llm_provider: str = kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider", None
+        custom_llm_provider: Optional[str] = (
+            kwargs.get("litellm_params", {}).get("custom_llm_provider")
+            or kwargs.get("custom_llm_provider")
+            or standard_logging_payload.get("custom_llm_provider")
         )
-        if custom_llm_provider is None:
-            raise ValueError("custom_llm_provider is required")
 
-        budget_config = self._get_budget_config_for_provider(custom_llm_provider)
+        budget_config = (
+            self._get_budget_config_for_provider(custom_llm_provider)
+            if custom_llm_provider
+            else None
+        )
         if budget_config:
             # increment spend for provider
             spend_key = (
