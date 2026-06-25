@@ -4,7 +4,12 @@ use crate::CoreResult;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
-pub trait OcrProviderConfig {
+/// Provider-specific OCR transforms.
+///
+/// Implementations should stay pure and non-blocking: map supported params,
+/// build the provider request body, and normalize the provider response. The
+/// route layer owns async HTTP I/O.
+pub trait OcrProviderConfig: Send + Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
     fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
