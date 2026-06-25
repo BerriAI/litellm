@@ -158,3 +158,25 @@ def raise_public(error: CredError) -> NoReturn:
         case "not_implemented":
             raise HTTPException(status_code=501, detail=error.summary)
     assert_never(error.tag)
+
+
+def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
+    """Raise the 401 an ``authorization_code`` server returns at egress when the user has no token.
+
+    Points at the server's RFC 9728 Protected Resource Metadata (``resource_metadata``), which names
+    the upstream authorization server the client must complete OAuth with. The URL is per-server and
+    relative, so it resolves against the caller's own host (correct even behind a reverse proxy)
+    without needing request context. The listing-phase 401 still emits the RFC 8414 ``authorization_uri``
+    form pending the format unification; both target the same server, so the difference is cosmetic.
+    """
+    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+
+    root = get_server_root_path()
+    prefix = "" if root == "/" else root
+    name = server.alias or server.server_name or server.name or server.server_id
+    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"www-authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
+    )

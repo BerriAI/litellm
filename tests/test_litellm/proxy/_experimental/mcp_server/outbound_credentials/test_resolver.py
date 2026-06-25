@@ -111,7 +111,7 @@ async def test_authorization_code_emits_bearer_for_a_stored_token():
 
 
 @pytest.mark.asyncio
-async def test_authorization_code_without_token_is_unauthorized_with_challenge():
+async def test_authorization_code_without_token_is_semantically_unauthorized():
     result = await UpstreamCredentialProvider(
         oauth_token_store=_FakeTokenStore({})
     ).resolve_credentials(
@@ -119,14 +119,14 @@ async def test_authorization_code_without_token_is_unauthorized_with_challenge()
     )
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
-    challenge = result.error.unauthorized
-    assert challenge.www_authenticate is not None
-    assert challenge.body is not None
-    assert challenge.body["error"] == "authorization_required"
+    # Semantic only: the per-server challenge is built at the edge, not in the request-free arm.
+    assert "Authorization required" in result.error.unauthorized.detail
+    assert result.error.unauthorized.www_authenticate is None
+    assert result.error.unauthorized.body is None
 
 
 @pytest.mark.asyncio
-async def test_authorization_code_store_unavailable_surfaces_the_challenge():
+async def test_authorization_code_store_unavailable_is_unauthorized():
     class _Unavailable:
         async def fetch(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")

@@ -7,12 +7,14 @@ maps each CredError onto its HTTP status. These pin the parity-critical mapping 
 
 import base64
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
 )
@@ -178,3 +180,43 @@ def test_raise_public_plain_unauthorized_has_no_challenge():
     assert exc.status_code == 401
     assert exc.detail == "unauthorized: nope"
     assert exc.headers is None
+
+
+_ROOT_PATH = "litellm.proxy.utils.get_server_root_path"
+
+
+def test_raise_user_oauth_challenge_points_at_per_server_prm():
+    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(alias="my-srv"))
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert (
+        exc.headers["www-authenticate"]
+        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
+    )
+
+
+def test_raise_user_oauth_challenge_includes_server_root_path():
+    with (
+        patch(_ROOT_PATH, return_value="/api/v1"),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        raise_user_oauth_challenge(_server(alias="my-srv"))
+    assert (
+        exc_info.value.headers["www-authenticate"]
+        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected_name",
+    [
+        ({"alias": "a", "server_name": "sn"}, "a"),  # alias wins
+        ({"server_name": "sn"}, "sn"),  # then server_name
+        ({}, "n"),  # then the name field (server_id is the last fallback)
+    ],
+)
+def test_raise_user_oauth_challenge_name_fallback(kwargs, expected_name):
+    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(**kwargs))
+    assert f'/mcp/{expected_name}"' in exc_info.value.headers["www-authenticate"]
