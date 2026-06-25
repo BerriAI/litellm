@@ -26,15 +26,15 @@ from litellm.types.utils import (
 
 
 class _AnthropicServerToolUseProbe(BaseModel):
-    web_search_requests: Optional[int] = None
+    web_search_requests: int | None = None
 
 
 class _AnthropicUsageProbe(BaseModel):
-    server_tool_use: Optional[_AnthropicServerToolUseProbe] = None
+    server_tool_use: _AnthropicServerToolUseProbe | None = None
 
 
 class _AnthropicResponseProbe(BaseModel):
-    usage: Optional[_AnthropicUsageProbe] = None
+    usage: _AnthropicUsageProbe | None = None
 
 
 class StandardBuiltInToolCostTracking:
@@ -325,7 +325,7 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _anthropic_web_search_count(response_object: object) -> Optional[int]:
+    def _anthropic_web_search_count(response_object: object) -> int | None:
         """Read usage.server_tool_use.web_search_requests from a raw Anthropic
         /v1/messages response dict, returning None when absent."""
         if not isinstance(response_object, dict):
@@ -340,8 +340,8 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _usage_with_anthropic_web_search(
-        usage: Optional[Usage], response_object: object
-    ) -> Optional[Usage]:
+        usage: Usage | None, response_object: object
+    ) -> Usage | None:
         """Return a Usage carrying server_tool_use.web_search_requests sourced from a
         raw Anthropic /v1/messages response dict when the reconstructed Usage dropped
         it. The original Usage is returned unchanged when it already exposes the field
