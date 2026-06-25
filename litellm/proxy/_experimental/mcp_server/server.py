@@ -3462,6 +3462,18 @@ if MCP_AVAILABLE:
         params.append(f'resource_metadata="{resource_metadata_url}"')
         return "Bearer " + ", ".join(params)
 
+    def _get_gateway_oauth2_challenge(scope: Scope, server_name: str) -> str:
+        base_url = get_request_base_url(StarletteRequest(scope))
+        path = scope.get("_original_path") or scope.get("path", "") or ""
+        # Pick the well-known AS-metadata form that matches the inbound route
+        # so strict RFC 9728 §3.2 clients can resolve it correctly.
+        well_known_path = (
+            f"mcp/{server_name}"
+            if path.startswith(f"/mcp/{server_name}")
+            else server_name
+        )
+        return f'Bearer authorization_uri="{base_url}/.well-known/oauth-authorization-server/{well_known_path}"'
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: Optional[List[str]],
@@ -3522,22 +3534,14 @@ if MCP_AVAILABLE:
                             headers={"www-authenticate": www_authenticate},
                         )
 
-                request = StarletteRequest(scope)
-                base_url = get_request_base_url(request)
-                _path = scope.get("_original_path") or scope.get("path", "") or ""
-
-                # Pick the well-known AS-metadata form that matches the inbound route
-                # so strict RFC 9728 §3.2 clients can resolve it correctly.
-                if _path.startswith(f"/mcp/{server_name}"):
-                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
-                else:
-                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                authorization_uri = f'Bearer authorization_uri="{_as_url}"'
-
                 raise HTTPException(
                     status_code=401,
                     detail="Unauthorized",
-                    headers={"www-authenticate": authorization_uri},
+                    headers={
+                        "www-authenticate": _get_gateway_oauth2_challenge(
+                            scope, server_name
+                        )
+                    },
                 )
 
             # Pass-through OAuth: when the admin has opted a server into
@@ -3718,6 +3722,64 @@ if MCP_AVAILABLE:
                     detail="Forbidden",
                 )
 
+    async def _check_oauth2_upstream_auth(
+        scope: Scope,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        oauth2_headers: Optional[Dict[str, str]],
+        client_ip: Optional[str],
+        allowed_server_ids: Optional[Set[str]] = None,
+    ) -> None:
+        """Probe gateway-managed per-user OAuth2 upstreams with the token the
+        request would actually use so a stale or revoked token surfaces as an
+        HTTP 401 challenge instead of degrading into an empty tool list.
+
+        Best-effort: only a genuine upstream 401 short-circuits the request;
+        non-401 responses and network errors fall through to the MCP session
+        manager. M2M (client_credentials) servers are skipped via
+        ``needs_user_oauth_token`` so the proxy key is never replayed upstream,
+        and only servers the caller's key is authorized to reach are probed.
+
+        The stored per-user token takes precedence over the caller's
+        ``Authorization`` header, mirroring the call path so a stale client
+        token (e.g. an editor's cached bearer) cannot trigger a spurious 401
+        for a request that would have used the fresh DB token.
+        """
+        allowed_servers = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        for server in allowed_servers:
+            if not server.needs_user_oauth_token or not server.url:
+                continue
+            if (
+                allowed_server_ids is not None
+                and server.server_id not in allowed_server_ids
+            ):
+                continue
+            stored_headers = await _get_user_oauth_extra_headers_from_db(
+                server=server,
+                user_api_key_auth=user_api_key_auth,
+            )
+            preflight_headers = stored_headers or oauth2_headers
+            auth_header = (preflight_headers or {}).get("Authorization")
+            if not auth_header:
+                continue
+            probe_status, upstream_www_authenticate = await _probe_upstream_auth(
+                server.url, auth_header
+            )
+            if probe_status != 401:
+                continue
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized",
+                headers={
+                    "www-authenticate": upstream_www_authenticate
+                    or _get_gateway_oauth2_challenge(scope, server.name)
+                },
+            )
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -3782,6 +3844,18 @@ if MCP_AVAILABLE:
             # server set, not the raw user-supplied names.
             await _check_passthrough_upstream_auth(
                 scope, user_api_key_auth, mcp_servers, _client_ip
+            )
+
+            # Pre-flight auth check for gateway-managed per-user OAuth2 servers so
+            # a present-but-stale token surfaces the upstream 401 challenge instead
+            # of degrading into an empty tool list.
+            await _check_oauth2_upstream_auth(
+                scope=scope,
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                client_ip=_client_ip,
+                allowed_server_ids=toolset_allowed_server_ids,
             )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
