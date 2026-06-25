@@ -105,6 +105,7 @@ from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
 )
+from litellm.proxy.common_utils.db_model_utils import strip_env_refs_for_team_model
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -5219,6 +5220,19 @@ class ProxyConfig:
                             value=v, key=k, return_original_value=True
                         )
                         _litellm_params[k] = _value
+                _model_info_raw = (
+                    m.model_info
+                    if isinstance(m.model_info, dict)
+                    else (
+                        m.model_info.model_dump()
+                        if hasattr(m.model_info, "model_dump")
+                        else None
+                    )
+                )
+                _litellm_params = strip_env_refs_for_team_model(
+                    litellm_params=_litellm_params,
+                    model_info=_model_info_raw,
+                )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -5255,6 +5269,19 @@ class ProxyConfig:
                         value=v, key=k, return_original_value=True
                     )
                     _litellm_params[k] = decrypted_value
+                _model_info_raw = (
+                    m.model_info
+                    if isinstance(m.model_info, dict)
+                    else (
+                        m.model_info.model_dump()
+                        if hasattr(m.model_info, "model_dump")
+                        else None
+                    )
+                )
+                _litellm_params = strip_env_refs_for_team_model(
+                    litellm_params=_litellm_params,
+                    model_info=_model_info_raw,
+                )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
