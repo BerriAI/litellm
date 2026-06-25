@@ -11,7 +11,7 @@ The operation location must be polled until the analysis completes.
 import asyncio
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from urllib.parse import quote
 
 import httpx
@@ -35,6 +35,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
+AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+
 
 class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     """
@@ -53,6 +55,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_api_key_env_var(self) -> str | None:
+        return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
@@ -144,9 +149,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -156,7 +161,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         # Get API key from environment if not provided
         if api_key is None:
-            api_key = get_secret_str("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
+            api_key = get_secret_str(AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR)
 
         if api_key is None:
             raise ValueError(
@@ -182,10 +187,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
