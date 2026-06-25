@@ -27,6 +27,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -448,7 +449,11 @@ class GenericGuardrailAPI(CustomGuardrail):
                 request_headers=inbound_headers,
                 litellm_version=litellm_version,
                 images=images,
-                tools=tools,
+                tools=(
+                    [GuardrailToolParam.model_validate(t) for t in tools]
+                    if tools
+                    else None
+                ),
                 structured_messages=structured_messages,
                 tool_calls=tool_calls,
                 additional_provider_specific_params=additional_params,
