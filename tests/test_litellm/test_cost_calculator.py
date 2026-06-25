@@ -3040,10 +3040,7 @@ def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
     # prompt_tokens=2000 is cache-inclusive: 1500 read + 300 creation + 200 uncached
     uncached = 2000 - 1500 - 300
     expected = (
-        uncached * 0.000003
-        + 1500 * 0.0000003
-        + 300 * 0.00000375
-        + 100 * 0.000015
+        uncached * 0.000003 + 1500 * 0.0000003 + 300 * 0.00000375 + 100 * 0.000015
     )
 
     assert cost == pytest.approx(expected)
@@ -3088,12 +3085,7 @@ def test_custom_pricing_matches_real_anthropic_transformer_usage():
         },
     )
 
-    expected = (
-        100 * 0.000003
-        + 200 * 0.0000003
-        + 700 * 0.00000375
-        + 50 * 0.000015
-    )
+    expected = 100 * 0.000003 + 200 * 0.0000003 + 700 * 0.00000375 + 50 * 0.000015
 
     assert cost == pytest.approx(expected)
 
