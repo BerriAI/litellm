@@ -43714,13 +43714,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *     Every rate-limit condition surfaced by litellm — whether it originated from
-             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *     max-iterations, etc.) — is raised as an instance of this class.
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
              *
-             *     The :attr:`category` attribute lets callers distinguish the source. See
-             *     :class:`RateLimitErrorCategory` for the available values.
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
