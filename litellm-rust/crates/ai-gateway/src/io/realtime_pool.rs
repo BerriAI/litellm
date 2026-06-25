@@ -566,10 +566,9 @@ mod tests {
         assert_eq!(
             handoff
                 .session_created
-                .data
-                .get("session")
-                .and_then(|s| s.get("id"))
-                .and_then(|v| v.as_str()),
+                .session
+                .as_ref()
+                .and_then(|session| session.id.as_deref()),
             Some("sess_fake")
         );
         // Taking one leaves one.

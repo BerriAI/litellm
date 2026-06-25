@@ -4,9 +4,13 @@ use std::path::{Path, PathBuf};
 const FORBIDDEN_RAW_JSON_MARKERS: &[&str] = &[
     "serde_json::Value",
     "serde_json::Map",
+    "serde_json::Number",
     "use serde_json::{Map",
     "use serde_json::{Value",
     "json!(",
+    "FieldValue",
+    "BTreeMap<String",
+    "HashMap<String",
 ];
 
 fn core_src_root() -> PathBuf {
@@ -53,7 +57,7 @@ fn core_translation_code_does_not_use_raw_json_values() {
 
     assert!(
         violations.is_empty(),
-        "litellm-core is the typed translation layer. Do not use raw serde_json::Value/Map or json! in crates/core/src; add route/provider structs instead.\n{}",
+        "litellm-core is the typed translation layer. Do not use JSON-shaped value bags/maps in crates/core/src; add route/provider structs instead.\n{}",
         violations.join("\n")
     );
 }

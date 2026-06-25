@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -45,33 +43,57 @@ pub struct OcrRequestData {
     pub optional_params: MistralOcrOptionalParams,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum OcrFieldValue {
-    Null,
-    Bool(bool),
-    Number(serde_json::Number),
-    String(String),
-    Array(Vec<OcrFieldValue>),
-    Object(BTreeMap<String, OcrFieldValue>),
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrDimensions {
+    pub dpi: Option<u32>,
+    pub height: Option<u32>,
+    pub width: Option<u32>,
 }
 
-pub type OcrObject = BTreeMap<String, OcrFieldValue>;
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrImage {
+    pub id: Option<String>,
+    pub top_left_x: Option<f64>,
+    pub top_left_y: Option<f64>,
+    pub bottom_right_x: Option<f64>,
+    pub bottom_right_y: Option<f64>,
+    pub image_base64: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrPage {
+    pub index: Option<u32>,
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub images: Vec<OcrImage>,
+    pub dimensions: Option<OcrDimensions>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrDocumentAnnotation {
+    pub markdown: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrUsageInfo {
+    pub pages_processed: Option<u32>,
+    pub doc_size_bytes: Option<u64>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MistralOcrResponseData {
     #[serde(default)]
-    pub pages: Vec<OcrObject>,
+    pub pages: Vec<OcrPage>,
     pub model: Option<String>,
-    pub document_annotation: Option<OcrFieldValue>,
-    pub usage_info: Option<OcrObject>,
+    pub document_annotation: Option<OcrDocumentAnnotation>,
+    pub usage_info: Option<OcrUsageInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OcrResponseData {
-    pub pages: Vec<OcrObject>,
+    pub pages: Vec<OcrPage>,
     pub model: String,
-    pub document_annotation: Option<OcrFieldValue>,
-    pub usage_info: Option<OcrObject>,
+    pub document_annotation: Option<OcrDocumentAnnotation>,
+    pub usage_info: Option<OcrUsageInfo>,
     pub object: String,
 }

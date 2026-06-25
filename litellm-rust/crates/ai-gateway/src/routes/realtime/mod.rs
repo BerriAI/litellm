@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::io::realtime::{parse_realtime_event, realtime_event_payload};
 use crate::io::realtime_pool::RealtimePool;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -129,15 +130,13 @@ async fn bridge(
 
     let client_in = ws_stream.filter_map(|message| async move {
         match message {
-            Ok(Message::Text(text)) => serde_json::from_str::<RealtimeEvent>(&text).ok(),
+            Ok(Message::Text(text)) => parse_realtime_event(&text).ok(),
             _ => None,
         }
     });
     // Plain forwarding sink — no observe here anymore.
     let client_out = ws_sink.with(|event: RealtimeEvent| async move {
-        Ok::<Message, axum::Error>(Message::Text(
-            serde_json::to_string(&event).unwrap_or_default(),
-        ))
+        Ok::<Message, axum::Error>(Message::Text(realtime_event_payload(&event).to_string()))
     });
 
     futures_util::pin_mut!(client_in, client_out);

@@ -1,54 +1,45 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum RealtimeFieldValue {
-    Null,
-    Bool(bool),
-    Number(serde_json::Number),
-    String(String),
-    Array(Vec<RealtimeFieldValue>),
-    Object(BTreeMap<String, RealtimeFieldValue>),
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeSession {
+    pub id: Option<String>,
+    pub model: Option<String>,
 }
 
-impl RealtimeFieldValue {
-    pub fn as_object(&self) -> Option<&BTreeMap<String, RealtimeFieldValue>> {
-        match self {
-            Self::Object(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    pub fn as_u64(&self) -> Option<u64> {
-        match self {
-            Self::Number(value) => value.as_u64(),
-            _ => None,
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<&RealtimeFieldValue> {
-        self.as_object()?.get(key)
-    }
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeResponse {
+    pub usage: Option<RealtimeUsage>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RealtimeEvent {
-    #[serde(rename = "type")]
     pub event_type: String,
-    #[serde(flatten)]
-    pub data: BTreeMap<String, RealtimeFieldValue>,
+    pub raw_json: String,
+    pub session: Option<RealtimeSession>,
+    pub response: Option<RealtimeResponse>,
+    pub delta: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+impl RealtimeEvent {
+    pub fn passthrough(event_type: impl Into<String>, raw_json: impl Into<String>) -> Self {
+        Self {
+            event_type: event_type.into(),
+            raw_json: raw_json.into(),
+            session: None,
+            response: None,
+            delta: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RealtimeTransformResult {
     pub events: Vec<RealtimeEvent>,
 }
@@ -65,27 +56,9 @@ impl RealtimeTransformResult {
 mod tests {
     use super::*;
 
-    fn event(raw: &str) -> RealtimeEvent {
-        serde_json::from_str(raw).expect("valid event json")
-    }
-
-    #[test]
-    fn realtime_event_round_trips_type_and_extra_fields() {
-        let raw = r#"{"type":"response.output_text.delta","delta":"hi","response_id":"r1"}"#;
-        let parsed = event(raw);
-        assert_eq!(parsed.event_type, "response.output_text.delta");
-        assert_eq!(
-            parsed.data.get("delta"),
-            Some(&RealtimeFieldValue::String("hi".into()))
-        );
-        let reparsed: RealtimeEvent =
-            serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
-        assert_eq!(parsed, reparsed);
-    }
-
     #[test]
     fn passthrough_produces_single_element_vec() {
-        let parsed = event(r#"{"type":"session.update"}"#);
+        let parsed = RealtimeEvent::passthrough("session.update", r#"{"type":"session.update"}"#);
         let result = RealtimeTransformResult::passthrough(parsed.clone());
         assert_eq!(result.events, vec![parsed]);
     }

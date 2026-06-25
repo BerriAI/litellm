@@ -128,7 +128,7 @@ pub fn transform_ocr_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ocr::types::{OcrFieldValue, OcrObject};
+    use crate::ocr::types::{OcrPage, OcrUsageInfo};
 
     #[test]
     fn supported_params_match_python_mistral_ocr_config() {
@@ -186,21 +186,19 @@ mod tests {
 
     #[test]
     fn transform_ocr_response_normalizes_mistral_json() {
-        let page = OcrObject::from([
-            ("index".to_string(), OcrFieldValue::Number(0.into())),
-            (
-                "markdown".to_string(),
-                OcrFieldValue::String("hello".to_string()),
-            ),
-        ]);
-        let usage_info = OcrObject::from([(
-            "pages_processed".to_string(),
-            OcrFieldValue::Number(1.into()),
-        )]);
+        let page = OcrPage {
+            index: Some(0),
+            markdown: Some("hello".to_string()),
+            ..Default::default()
+        };
+        let usage_info = OcrUsageInfo {
+            pages_processed: Some(1),
+            ..Default::default()
+        };
         let response = MistralOcrResponseData {
             pages: vec![page.clone()],
             model: Some("mistral-ocr-2505-completion".to_string()),
-            document_annotation: Some(OcrFieldValue::Null),
+            document_annotation: None,
             usage_info: Some(usage_info.clone()),
         };
 
@@ -209,7 +207,7 @@ mod tests {
 
         assert_eq!(result.pages, vec![page]);
         assert_eq!(result.model, "mistral-ocr-2505-completion");
-        assert_eq!(result.document_annotation, Some(OcrFieldValue::Null));
+        assert_eq!(result.document_annotation, None);
         assert_eq!(result.usage_info, Some(usage_info));
         assert_eq!(result.object, "ocr");
     }
