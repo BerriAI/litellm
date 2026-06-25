@@ -166,6 +166,31 @@ async def test_authorization_code_isolates_by_subject():
     assert isinstance(bob, Error) and bob.error.tag == "unauthorized"
 
 
+@pytest.mark.asyncio
+async def test_has_user_token_reflects_the_stored_token():
+    present = UpstreamCredentialProvider(
+        oauth_token_store=_FakeTokenStore(
+            {("alice", "s"): OAuthToken(access_token="at")}
+        )
+    )
+    absent = UpstreamCredentialProvider(oauth_token_store=_FakeTokenStore({}))
+    spec = _spec(AuthorizationCodeConfig())
+    subject = Subject(tenant_id="", subject_id="alice")
+    assert await present.has_user_token(subject, spec) is True
+    assert await absent.has_user_token(subject, spec) is False
+
+
+@pytest.mark.asyncio
+async def test_has_user_token_false_for_a_non_per_user_mode():
+    # A none-mode server has no per-user token to check.
+    provider = UpstreamCredentialProvider()
+    spec = _spec(NoneConfig())
+    assert (
+        await provider.has_user_token(Subject(tenant_id="", subject_id="a"), spec)
+        is False
+    )
+
+
 _STUBBED = [
     ("api_key_byok", ApiKeyConfig(key_source=Byok())),
     ("passthrough", PassthroughConfig()),
