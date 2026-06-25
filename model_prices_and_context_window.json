@@ -10443,8 +10443,7 @@
             "fast": 6.0
         },
         "supports_output_config": true,
-        "supports_max_reasoning_effort": true,
-        "supports_speed": true
+        "supports_max_reasoning_effort": true
     },
     "claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -10477,8 +10476,7 @@
             "fast": 6.0
         },
         "supports_max_reasoning_effort": true,
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -10513,8 +10511,7 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-opus-4-7-20260416": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -10549,8 +10546,7 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-fable-5": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -10619,8 +10615,7 @@
             "us": 1.1,
             "fast": 2.0
         },
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
@@ -16153,47 +16148,6 @@
         "supports_service_tier": true,
         "supports_image_size": false
     },
-    "gemini-3-pro-image": {
-        "input_cost_per_image": 0.0011,
-        "input_cost_per_token": 2e-06,
-        "input_cost_per_token_batches": 1e-06,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.134,
-        "output_cost_per_image_token": 0.00012,
-        "output_cost_per_token": 1.2e-05,
-        "output_cost_per_token_batches": 6e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3-pro-image",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": false,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "web_search_billing_unit": "per_query",
-        "supports_service_tier": true
-    },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
@@ -16234,44 +16188,6 @@
         },
         "web_search_billing_unit": "per_query",
         "supports_service_tier": true
-    },
-    "gemini-3.1-flash-image": {
-        "input_cost_per_image": 0.00056,
-        "input_cost_per_token": 5e-07,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.0672,
-        "output_cost_per_image_token": 6e-05,
-        "output_cost_per_token": 3e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": false,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -17844,49 +17760,6 @@
         "supports_service_tier": true,
         "supports_image_size": false
     },
-    "gemini/gemini-3-pro-image": {
-        "input_cost_per_image": 0.0011,
-        "input_cost_per_token": 2e-06,
-        "input_cost_per_token_batches": 1e-06,
-        "litellm_provider": "gemini",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.134,
-        "output_cost_per_image_token": 0.00012,
-        "output_cost_per_token": 1.2e-05,
-        "rpm": 1000,
-        "tpm": 4000000,
-        "output_cost_per_token_batches": 6e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3-pro-image",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": false,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "web_search_billing_unit": "per_query",
-        "supports_service_tier": true
-    },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
@@ -17929,48 +17802,6 @@
         },
         "web_search_billing_unit": "per_query",
         "supports_service_tier": true
-    },
-    "gemini/gemini-3.1-flash-image": {
-        "input_cost_per_token": 2.5e-07,
-        "input_cost_per_token_batches": 1.25e-07,
-        "litellm_provider": "gemini",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.045,
-        "output_cost_per_image_token": 6e-05,
-        "output_cost_per_image_token_batches": 3e-05,
-        "output_cost_per_token": 1.5e-06,
-        "output_cost_per_token_batches": 7.5e-07,
-        "rpm": 1000,
-        "tpm": 4000000,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-image",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "image"
-        ],
-        "supports_function_calling": false,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014,
-            "search_context_size_high": 0.014
-        },
-        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "input_cost_per_token": 2.5e-07,
@@ -20752,7 +20583,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-2024-05-13": {
         "input_cost_per_token": 5e-06,
@@ -20772,7 +20610,14 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -20793,7 +20638,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-2024-11-20": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -20814,7 +20666,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-audio-preview": {
         "input_cost_per_audio_token": 4e-05,
@@ -21102,7 +20961,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -21823,7 +21689,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21863,7 +21736,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21903,7 +21783,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21942,7 +21829,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -21983,7 +21877,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-2025-12-11": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -22024,7 +21925,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -22062,7 +21970,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.3-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -22100,7 +22015,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-pro": {
         "input_cost_per_token": 2.1e-05,
@@ -22134,7 +22056,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-pro-2025-12-11": {
         "input_cost_per_token": 2.1e-05,
@@ -22168,7 +22097,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5": {
         "cache_read_input_token_cost": 5e-07,
@@ -22218,7 +22154,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5e-07,
@@ -22268,7 +22211,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -22314,7 +22264,14 @@
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "supports_low_reasoning_effort": false
+        "supports_low_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5-pro-2026-04-23": {
         "cache_read_input_token_cost": 3e-06,
@@ -22360,7 +22317,14 @@
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "supports_low_reasoning_effort": false
+        "supports_low_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -22409,7 +22373,14 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -22455,7 +22426,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -22500,7 +22478,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-pro-2026-03-05": {
         "cache_read_input_token_cost": 3e-06,
@@ -22545,7 +22530,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-mini": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -22593,7 +22585,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-mini-2026-03-17": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -22641,7 +22640,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-nano": {
         "cache_read_input_token_cost": 2e-08,
@@ -22686,7 +22692,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-nano-2026-03-17": {
         "cache_read_input_token_cost": 2e-08,
@@ -22731,7 +22744,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-pro": {
         "input_cost_per_token": 1.5e-05,
@@ -22767,7 +22787,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-pro-2025-10-06": {
         "input_cost_per_token": 1.5e-05,
@@ -22803,7 +22830,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22846,7 +22880,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22881,7 +22922,14 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22916,7 +22964,14 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-codex": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22950,7 +23005,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-codex": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22987,7 +23049,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-codex-max": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -23021,7 +23090,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-codex-mini": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -23058,7 +23134,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -23095,7 +23178,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.3-codex": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -23132,7 +23222,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -23175,7 +23272,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-mini-2025-08-07": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -23218,7 +23322,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-nano": {
         "cache_read_input_token_cost": 5e-09,
@@ -23258,7 +23369,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-nano-2025-08-07": {
         "cache_read_input_token_cost": 5e-09,
@@ -23297,7 +23415,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
@@ -35737,21 +35862,6 @@
         "tpm": 8000000,
         "supports_image_size": false
     },
-    "vertex_ai/gemini-3-pro-image": {
-        "input_cost_per_image": 0.0011,
-        "input_cost_per_token": 2e-06,
-        "input_cost_per_token_batches": 1e-06,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.134,
-        "output_cost_per_image_token": 0.00012,
-        "output_cost_per_token": 1.2e-05,
-        "output_cost_per_token_batches": 6e-06,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
-    },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
@@ -35766,19 +35876,6 @@
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
-    },
-    "vertex_ai/gemini-3.1-flash-image": {
-        "input_cost_per_image": 0.00056,
-        "input_cost_per_token": 5e-07,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "image_generation",
-        "output_cost_per_image": 0.0672,
-        "output_cost_per_image_token": 6e-05,
-        "output_cost_per_token": 3e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -42252,7 +42349,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-search-api-2025-10-14": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -42273,7 +42377,14 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_xhigh_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-realtime-mini-2025-10-06": {
         "cache_creation_input_audio_token_cost": 3e-07,

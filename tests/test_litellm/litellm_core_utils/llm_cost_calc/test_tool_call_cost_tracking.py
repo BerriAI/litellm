@@ -324,3 +324,53 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def test_gpt5_mini_has_web_search_pricing():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost["gpt-5-mini"]
+    assert (
+        model_info["search_context_cost_per_query"]["search_context_size_medium"]
+        == 0.01
+    )
+
+
+def test_responses_api_web_search_cost_counts_each_call():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    response = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        output=[
+            {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+            {"type": "web_search_call", "id": "ws_2", "status": "completed"},
+            {"type": "web_search_call", "id": "ws_3", "status": "completed"},
+            {"type": "web_search_call", "id": "ws_4", "status": "completed"},
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}],
+            },
+        ],
+    )
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5-mini",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(0.04)

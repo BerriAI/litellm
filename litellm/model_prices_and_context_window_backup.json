@@ -10443,8 +10443,7 @@
             "fast": 6.0
         },
         "supports_output_config": true,
-        "supports_max_reasoning_effort": true,
-        "supports_speed": true
+        "supports_max_reasoning_effort": true
     },
     "claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -10477,8 +10476,7 @@
             "fast": 6.0
         },
         "supports_max_reasoning_effort": true,
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -10513,8 +10511,7 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-opus-4-7-20260416": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -10549,8 +10546,7 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-fable-5": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -10619,8 +10615,7 @@
             "us": 1.1,
             "fast": 2.0
         },
-        "supports_output_config": true,
-        "supports_speed": true
+        "supports_output_config": true
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
@@ -20580,7 +20575,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-2024-05-13": {
         "input_cost_per_token": 5e-06,
@@ -20600,7 +20602,14 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -20621,7 +20630,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-2024-11-20": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -20642,7 +20658,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-audio-preview": {
         "input_cost_per_audio_token": 4e-05,
@@ -20930,7 +20953,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -21651,7 +21681,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21691,7 +21728,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21731,7 +21775,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21770,7 +21821,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -21811,7 +21869,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-2025-12-11": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -21852,7 +21917,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -21890,7 +21962,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.3-chat-latest": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -21928,7 +22007,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-pro": {
         "input_cost_per_token": 2.1e-05,
@@ -21962,7 +22048,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-pro-2025-12-11": {
         "input_cost_per_token": 2.1e-05,
@@ -21996,7 +22089,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5": {
         "cache_read_input_token_cost": 5e-07,
@@ -22046,7 +22146,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5e-07,
@@ -22096,7 +22203,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -22142,7 +22256,14 @@
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "supports_low_reasoning_effort": false
+        "supports_low_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.5-pro-2026-04-23": {
         "cache_read_input_token_cost": 3e-06,
@@ -22188,7 +22309,14 @@
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
-        "supports_low_reasoning_effort": false
+        "supports_low_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -22237,7 +22365,14 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -22283,7 +22418,14 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -22328,7 +22470,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-pro-2026-03-05": {
         "cache_read_input_token_cost": 3e-06,
@@ -22373,7 +22522,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-mini": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -22421,7 +22577,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-mini-2026-03-17": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -22469,7 +22632,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-nano": {
         "cache_read_input_token_cost": 2e-08,
@@ -22514,7 +22684,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.4-nano-2026-03-17": {
         "cache_read_input_token_cost": 2e-08,
@@ -22559,7 +22736,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": false
+        "supports_minimal_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-pro": {
         "input_cost_per_token": 1.5e-05,
@@ -22595,7 +22779,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-pro-2025-10-06": {
         "input_cost_per_token": 1.5e-05,
@@ -22631,7 +22822,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22674,7 +22872,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22709,7 +22914,14 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22744,7 +22956,14 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-codex": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22778,7 +22997,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-codex": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22815,7 +23041,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-codex-max": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22849,7 +23082,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.1-codex-mini": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -22886,7 +23126,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -22923,7 +23170,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5.3-codex": {
         "cache_read_input_token_cost": 1.75e-07,
@@ -22960,7 +23214,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -23003,7 +23264,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-mini-2025-08-07": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -23046,7 +23314,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-nano": {
         "cache_read_input_token_cost": 5e-09,
@@ -23086,7 +23361,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-nano-2025-08-07": {
         "cache_read_input_token_cost": 5e-09,
@@ -23125,7 +23407,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
@@ -41850,7 +42139,14 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-5-search-api-2025-10-14": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -41871,7 +42167,14 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_xhigh_reasoning_effort": false,,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_web_search": true
     },
     "gpt-realtime-mini-2025-10-06": {
         "cache_creation_input_audio_token_cost": 3e-07,

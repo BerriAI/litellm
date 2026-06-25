@@ -58,6 +58,7 @@ class StandardBuiltInToolCostTracking:
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
                 standard_built_in_tools_params=standard_built_in_tools_params,
+                response_object=response_object,
             )
 
         # Handle file search
@@ -83,6 +84,7 @@ class StandardBuiltInToolCostTracking:
         custom_llm_provider: Optional[str],
         usage: Optional[Usage],
         standard_built_in_tools_params: StandardBuiltInToolsParams,
+        response_object: Any = None,
     ) -> float:
         """Handle web search cost calculation."""
         from litellm.llms import get_cost_for_web_search_request
@@ -107,12 +109,20 @@ class StandardBuiltInToolCostTracking:
             if result is not None:
                 return result
 
-        return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        unit_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
             web_search_options=standard_built_in_tools_params.get(
                 "web_search_options", None
             ),
             model_info=model_info,
         )
+
+        num_searches = StandardBuiltInToolCostTracking.count_output_type(
+            response_object=response_object, output_type="web_search_call"
+        )
+        if num_searches == 0:
+            num_searches = 1
+
+        return unit_cost * num_searches
 
     @staticmethod
     def _handle_file_search_cost(
@@ -407,6 +417,32 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
+    def _get_output_item_type(output_item: Any) -> Optional[str]:
+        if isinstance(output_item, dict):
+            _type = output_item.get("type")
+            return _type if isinstance(_type, str) else None
+        return getattr(output_item, "type", None)
+
+    @staticmethod
+    def count_output_type(
+        response_object: Any,
+        output_type: Literal["web_search_call", "file_search_call"],
+    ) -> int:
+        """
+        Count output items of a given type in a Responses API response.
+        """
+        if not isinstance(response_object, ResponsesAPIResponse):
+            return 0
+
+        output = response_object.output or []
+        return sum(
+            1
+            for output_item in output
+            if StandardBuiltInToolCostTracking._get_output_item_type(output_item)
+            == output_type
+        )
+
+    @staticmethod
     def response_includes_output_type(
         response_object: ResponsesAPIResponse,
         output_type: Literal["web_search_call", "file_search_call"],
@@ -425,8 +461,10 @@ class StandardBuiltInToolCostTracking:
         """
         output = response_object.output
         for output_item in output:
-            _output_type: Optional[str] = getattr(output_item, "type", None)
-            if _output_type == output_type:
+            if (
+                StandardBuiltInToolCostTracking._get_output_item_type(output_item)
+                == output_type
+            ):
                 return True
         return False
 
