@@ -149,10 +149,8 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
         max_results_str: str = "20"
         if raw_response.request:
-            raw_param: object = (
-                raw_response.request.url.params.get(  # any-ok: httpx QueryParams.get() -> Any
-                    "max_results", "20"
-                )
+            raw_param: object = raw_response.request.url.params.get(  # any-ok: httpx QueryParams.get() -> Any
+                "max_results", "20"
             )
             max_results_str = str(raw_param)
         max_results: int = min(int(max_results_str), 20)

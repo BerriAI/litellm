@@ -169,7 +169,9 @@ class RealTimeStreaming:
         try:
             event_type = message_obj.get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
-                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
+                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(
+                    **message_obj
+                )  # type: ignore
             else:
                 # Catch-all base object so unknown/new event names never raise.
                 typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore

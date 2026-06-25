@@ -67,9 +67,7 @@ class BudgetManager:
             )
             response = response.json()
             if response["status"] == "error":
-                self.user_dict = (
-                    {}
-                )  # assume this means the user dict hasn't been stored yet
+                self.user_dict = {}  # assume this means the user dict hasn't been stored yet
             else:
                 self.user_dict = response["data"]
 

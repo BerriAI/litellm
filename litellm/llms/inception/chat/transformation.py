@@ -45,7 +45,11 @@ class InceptionChatConfig(OpenAILikeChatConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         passed_api_base = api_base
-        api_base = api_base or get_secret_str("INCEPTION_API_BASE") or "https://api.inceptionlabs.ai/v1"  # type: ignore
+        api_base = (
+            api_base
+            or get_secret_str("INCEPTION_API_BASE")
+            or "https://api.inceptionlabs.ai/v1"
+        )  # type: ignore
         dynamic_api_key = api_key
         if passed_api_base is None or api_key:
             dynamic_api_key = (

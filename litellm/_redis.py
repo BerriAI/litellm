@@ -327,7 +327,9 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
-    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
+    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get(
+        "startup_nodes", None
+    ) or get_secret(  # type: ignore
         "REDIS_CLUSTER_NODES"
     )
 
@@ -338,7 +340,9 @@ def _get_redis_client_logic(**env_overrides):
     elif _startup_nodes is None:
         redis_kwargs.pop("startup_nodes", None)
 
-    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
+    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get(
+        "sentinel_nodes", None
+    ) or get_secret(  # type: ignore
         "REDIS_SENTINEL_NODES"
     )
 
@@ -609,7 +613,8 @@ def get_redis_async_client(
 
         # Create async RedisCluster with IAM token as password if available
         cluster_client = async_redis.RedisCluster(
-            startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+            startup_nodes=new_startup_nodes,
+            **cluster_kwargs,  # type: ignore
         )
 
         return cluster_client
