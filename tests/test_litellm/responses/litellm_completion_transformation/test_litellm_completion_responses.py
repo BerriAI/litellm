@@ -949,6 +949,28 @@ class TestToolChoiceTransformation:
         result = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
         assert result == tool_choice
 
+    def test_transform_tool_choice_responses_flat_function_name(self):
+        """Responses-API forced-function with a top-level name maps to the nested Chat
+        Completions shape instead of degrading to required and dropping the name"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": "get_weather"}
+        )
+        assert result == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
+        """A function-type dict with no name still falls back to required"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function"}
+        )
+        assert result == "required"
+
+    def test_transform_tool_choice_function_empty_name_falls_back_to_required(self):
+        """An empty top-level name is falsy and must not produce an empty function name"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": ""}
+        )
+        assert result == "required"
+
 
 class TestContentTypeTransformation:
     """Test content type transformation from Responses API to Chat Completion format"""
@@ -2253,3 +2275,28 @@ class TestCacheControlPreservation:
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
+    """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that
+    resets every response) alongside a unique ``id`` (``fc_...``). For that degenerate
+    form the converter must expose the unique ``id``; otherwise every tool call across
+    an agent's turns collapses to the same id, the agent cannot correlate its tool
+    results, and it loops re-issuing the same call. A normal (unique) ``call_id`` must
+    be preserved, since it is the canonical Responses API correlation key. Regression
+    for the bedrock-mantle gpt-5.5 non-streaming path."""
+    from types import SimpleNamespace
+
+    convert = (
+        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
+    )
+
+    mantle = SimpleNamespace(
+        id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}"
+    )
+    assert convert(mantle)["id"] == "fc_unique_abc123"
+
+    openai = SimpleNamespace(
+        id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
+    )
+    assert convert(openai)["id"] == "call_tokyo"

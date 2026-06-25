@@ -63,6 +63,7 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
     ContentType,
@@ -613,9 +614,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(  # noqa: PLR0915
-        self, value: List[dict], optional_params: dict
-    ) -> List[Tools]:
+    def _map_function(self, value: List[dict], optional_params: dict) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -1111,6 +1110,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         {
             "voice": "alloy",
             "format": "mp3",
+            "language_code": "en-US",
         }
 
         Expected output:
@@ -1119,7 +1119,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 prebuiltVoiceConfig: {
                     voiceName: "alloy",
                 }
-            }
+            },
+            languageCode: "en-US",
         }
         """
         from litellm.types.llms.vertex_ai import (
@@ -1145,6 +1146,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             voice_config: VoiceConfig = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
 
+        if "language_code" in value:
+            speech_config["languageCode"] = value["language_code"]
+
         return cast(dict, speech_config)
 
     @staticmethod
@@ -1167,7 +1171,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: Dict,
         optional_params: Dict,
@@ -1898,7 +1902,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
 
     @staticmethod
-    def _calculate_usage(  # noqa: PLR0915
+    def _calculate_usage(
         completion_response: Union[
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],
@@ -2254,6 +2258,71 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     @staticmethod
+    def _get_stream_chunk_attr(chunk: Any, field_name: str) -> Any:
+        if isinstance(chunk, dict):
+            value = chunk.get(field_name)
+            if value is not None:
+                return value
+            model_extra = chunk.get("model_extra")
+            if isinstance(model_extra, dict):
+                value = model_extra.get(field_name)
+                if value is not None:
+                    return value
+            hidden_params = chunk.get("_hidden_params")
+            if isinstance(hidden_params, dict):
+                return hidden_params.get(field_name)
+            return None
+        return getattr(chunk, field_name, None)
+
+    @staticmethod
+    def _set_stream_metadata_on_response(
+        model_response: Any,
+        grounding_metadata: List[dict],
+        url_context_metadata: List[dict],
+        safety_ratings: List[dict],
+        citation_metadata: List[dict],
+    ) -> None:
+        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
+        if grounding_metadata:
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
+        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
+        if url_context_metadata:
+            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+                url_context_metadata
+            )
+        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
+        setattr(model_response, "vertex_ai_safety_results", safety_ratings)  # type: ignore
+        if safety_ratings:
+            model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
+            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
+        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+        if citation_metadata:
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata
+            )
+
+    def apply_assembled_streaming_response_metadata(
+        self,
+        response: ModelResponse,
+        chunks: List[Any],
+    ) -> None:
+        for field_name in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            merged: List[Any] = []
+            for chunk in chunks:
+                value = VertexGeminiConfig._get_stream_chunk_attr(chunk, field_name)
+                if not value:
+                    continue
+                if isinstance(value, list):
+                    merged.extend(value)
+                else:
+                    merged.append(value)
+            if merged:
+                setattr(response, field_name, merged)
+                response._hidden_params[field_name] = merged
+
+    @staticmethod
     def _convert_grounding_metadata_to_annotations(
         grounding_metadata: List[dict],
         content_text: Optional[str],
@@ -2309,7 +2378,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return annotations
 
     @staticmethod
-    def _process_candidates(  # noqa: PLR0915
+    def _process_candidates(
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
@@ -2775,6 +2844,7 @@ async def make_call(
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,
     )
     # LOGGING
     logging_obj.post_call(
@@ -2818,6 +2888,7 @@ def make_sync_call(
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,
     )
 
     # LOGGING
@@ -3279,12 +3350,14 @@ class ModelResponseIterator:
         sync_stream: bool,
         logging_obj: LoggingClass,
         response_headers: Optional[Dict[str, str]] = None,
+        response: httpx.Response | None = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
         )
 
         self.streaming_response = streaming_response
+        self.response = response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
@@ -3351,14 +3424,18 @@ class ModelResponseIterator:
                     self.has_seen_tool_calls = True
                     break
 
-        # Handle final chunk with finishReason but no content.
-        # _process_candidates skips candidates without "content",
-        # so the finish_reason from the final chunk is lost.
+        # _process_candidates skips candidates without a "content" part, so a
+        # content-less chunk leaves choices empty and the downstream streaming
+        # handler hits IndexError on choices[0]. This covers the final chunk
+        # (finishReason, no content) and mid-stream metadata-only chunks
+        # (grounding/web-search/thought, no content and no finishReason — seen
+        # with web_search + reasoning) by emitting an empty-delta choice.
         if not model_response.choices and _candidates:
             from litellm.types.utils import Delta, StreamingChoices
 
             for candidate in _candidates:
                 finish_reason_str = candidate.get("finishReason")
+                mapped_finish_reason = None
                 if finish_reason_str is not None:
                     if self.has_seen_tool_calls:
                         mapped_finish_reason = "tool_calls"
@@ -3366,14 +3443,14 @@ class ModelResponseIterator:
                         mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
                             None, finish_reason_str
                         )
-                    choice = StreamingChoices(
-                        finish_reason=mapped_finish_reason,
-                        index=candidate.get("index", 0),
-                        delta=Delta(content=None, role=None),
-                        logprobs=None,
-                        enhancements=None,
-                    )
-                    model_response.choices.append(choice)
+                choice = StreamingChoices(
+                    finish_reason=mapped_finish_reason,
+                    index=candidate.get("index", 0),
+                    delta=Delta(content=None, role=None),
+                    logprobs=None,
+                    enhancements=None,
+                )
+                model_response.choices.append(choice)
 
         # Also handle the case where the final chunk has empty
         # content (e.g. text:"") WITH finishReason. In this case
@@ -3385,10 +3462,13 @@ class ModelResponseIterator:
                 if choice.finish_reason == "stop":
                     choice.finish_reason = "tool_calls"
 
-        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
-        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
-        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
-        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+        VertexGeminiConfig._set_stream_metadata_on_response(
+            model_response,
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+        )
 
         return (
             grounding_metadata,
@@ -3579,3 +3659,41 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    async def aclose(self) -> None:
+        iterator = getattr(
+            self,
+            "async_response_iterator",
+            self.streaming_response,
+        )
+        if iterator is not None and hasattr(iterator, "aclose"):
+            try:
+                await iterator.aclose()
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.aclose: error closing iterator: %s", e
+                )
+        if self.response is not None:
+            try:
+                await self.response.aclose()
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.aclose: error closing response: %s", e
+                )
+
+    def close(self) -> None:
+        iterator = getattr(self, "response_iterator", self.streaming_response)
+        if iterator is not None and hasattr(iterator, "close"):
+            try:
+                iterator.close()
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.close: error closing iterator: %s", e
+                )
+        if self.response is not None:
+            try:
+                self.response.close()
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.close: error closing response: %s", e
+                )

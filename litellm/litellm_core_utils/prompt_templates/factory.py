@@ -1475,7 +1475,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def convert_to_gemini_tool_call_result(  # noqa: PLR0915
+def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
     model: Optional[str] = None,
@@ -2227,7 +2227,7 @@ def _sanitize_empty_text_content(
     return message
 
 
-def _add_missing_tool_results(  # noqa: PLR0915
+def _add_missing_tool_results(
     current_message: AllMessageValues,
     messages: List[AllMessageValues],
     current_index: int,
@@ -2484,7 +2484,7 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def anthropic_messages_pt(  # noqa: PLR0915
+def anthropic_messages_pt(
     messages: List[AllMessageValues],
     model: str,
     llm_provider: str,
@@ -3278,7 +3278,7 @@ def convert_to_cohere_tool_invoke(tool_calls: list) -> List[ToolCallObject]:
     return cohere_tool_invoke
 
 
-def cohere_messages_pt_v2(  # noqa: PLR0915
+def cohere_messages_pt_v2(
     messages: List,
     model: str,
     llm_provider: str,
@@ -3653,17 +3653,13 @@ from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
+from litellm.types.llms.bedrock import BedrockToolSpec
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
-from litellm.types.llms.bedrock import (
-    ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
-)
-from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
 from litellm.types.llms.bedrock import SearchResultBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
 )
-from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 
@@ -4294,6 +4290,49 @@ def _deduplicate_bedrock_tool_content(
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
 
 
+def _rename_duplicate_bedrock_document_names(
+    contents: List[BedrockMessageBlock],
+) -> List[BedrockMessageBlock]:
+    """
+    Rename duplicate document names across all messages in a Bedrock request.
+
+    Document names are derived from a content hash, so the same file appearing
+    in multiple conversation turns produces identical names and Bedrock rejects
+    the request with "Messages can not contain duplicate document names".  The
+    first occurrence keeps its original name so prompt-cache prefixes stay
+    stable; later occurrences get a deterministic positional suffix
+    (``_2``, ``_3``, ...), bumped further if the suffixed name already
+    belongs to another document (e.g. an organic name ending in ``_2``).
+    """
+    used_names: Set[str] = set()
+    for message in contents:
+        for block in message.get("content") or []:
+            document = block.get("document")
+            if isinstance(document, dict) and document.get("name"):
+                used_names.add(document["name"])
+
+    name_counts: Dict[str, int] = {}
+    for message in contents:
+        for block in message.get("content") or []:
+            document = block.get("document")
+            if not isinstance(document, dict):
+                continue
+            name = document.get("name")
+            if not name:
+                continue
+            count = name_counts.get(name, 0) + 1
+            name_counts[name] = count
+            if count > 1:
+                suffix = count
+                new_name = f"{name}_{suffix}"
+                while new_name in used_names:
+                    suffix += 1
+                    new_name = f"{name}_{suffix}"
+                used_names.add(new_name)
+                document["name"] = new_name
+    return contents
+
+
 def _sort_bedrock_assistant_content_blocks(
     blocks: List[BedrockContentBlock],
 ) -> List[BedrockContentBlock]:
@@ -4664,7 +4703,7 @@ class BedrockConverseMessagesProcessor:
         return messages
 
     @staticmethod
-    async def _bedrock_converse_messages_pt_async(  # noqa: PLR0915
+    async def _bedrock_converse_messages_pt_async(
         messages: List,
         model: str,
         llm_provider: str,
@@ -4701,6 +4740,12 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(
                                     guardContent={"text": {"text": element["text"]}}
                                 )
+                                _parts.append(_part)
+                            elif element["type"] in ("grounding_source", "query"):
+                                # Contextual grounding tags are guardrail metadata; the
+                                # model only needs the underlying text, so render them
+                                # as plain text on the generate path.
+                                _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
@@ -4942,7 +4987,7 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return contents
+        return _rename_duplicate_bedrock_document_names(contents)
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5088,7 +5133,7 @@ class BedrockConverseMessagesProcessor:
         return assistant_parts
 
 
-def _bedrock_converse_messages_pt(  # noqa: PLR0915
+def _bedrock_converse_messages_pt(
     messages: List,
     model: str,
     llm_provider: str,
@@ -5133,6 +5178,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(
                                 guardContent={"text": {"text": element["text"]}}
                             )
+                            _parts.append(_part)
+                        elif element["type"] in ("grounding_source", "query"):
+                            # Contextual grounding tags are guardrail metadata; the
+                            # model only needs the underlying text, so render them as
+                            # plain text on the generate path.
+                            _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
                             format: Optional[str] = None
@@ -5364,7 +5415,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 llm_provider=llm_provider,
             )
 
-    return contents
+    return _rename_duplicate_bedrock_document_names(contents)
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
@@ -5496,12 +5547,18 @@ def _bedrock_tools_pt(
     ]
     """
     from litellm.llms.bedrock.common_utils import (
+        get_bedrock_base_model,
         normalize_json_schema_custom_types_to_object,
     )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
     _valid_json_schema_root_types = frozenset(
         ("array", "boolean", "integer", "null", "number", "object", "string")
+    )
+    # Only Claude on Bedrock honours strict tool schemas; other families
+    # (Nova, Llama, GPT-OSS) reject the strict field outright.
+    supports_strict_tools = bool(
+        model and get_bedrock_base_model(model).startswith("anthropic")
     )
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
@@ -5548,17 +5605,16 @@ def _bedrock_tools_pt(
         normalize_json_schema_custom_types_to_object(parameters)
         if parameters.get("type") not in _valid_json_schema_root_types:
             parameters["type"] = "object"
-        tool_input_schema = BedrockToolInputSchemaBlock(
-            json=BedrockToolJsonSchemaBlock(
-                type=parameters["type"],
-                properties=parameters.get("properties", {}),
-                required=parameters.get("required", []),
-            )
+        tool_block = cast(
+            BedrockToolBlock,
+            BedrockToolSpec(
+                name=name,
+                description=description,
+                parameters=parameters,
+                strict=tool.get("function", {}).get("strict", None),
+                supports_strict_tools=supports_strict_tools,
+            ),
         )
-        tool_spec = BedrockToolSpecBlock(
-            inputSchema=tool_input_schema, name=name, description=description
-        )
-        tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##

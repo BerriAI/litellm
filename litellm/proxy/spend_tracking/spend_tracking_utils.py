@@ -228,9 +228,7 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
-def get_logging_payload(  # noqa: PLR0915
-    kwargs, response_obj, start_time, end_time
-) -> SpendLogsPayload:
+def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 
@@ -264,6 +262,13 @@ def get_logging_payload(  # noqa: PLR0915
             usage = dict(_usage)
         elif isinstance(_usage, dict):
             usage = _usage
+
+    # A request that failed mid-stream has no usable response_obj usage, but the
+    # streaming handler may have recovered the usage from the chunks already
+    # delivered. Honor that override so the partial usage lands in spend tracking.
+    _combined_usage = kwargs.get("combined_usage_object")
+    if not usage and isinstance(_combined_usage, litellm.Usage):
+        usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(

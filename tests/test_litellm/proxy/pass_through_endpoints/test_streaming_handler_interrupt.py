@@ -118,3 +118,20 @@ async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
 
     assert received == []
     mock_route.assert_not_called()
+
+
+def test_convert_raw_bytes_survives_truncated_multibyte_sequence():
+    """A stream cut mid-multibyte-sequence (client disconnect) must still decode
+    via errors="replace" so the usage events already received are logged, instead
+    of raising UnicodeDecodeError and dropping the whole request from SpendLogs."""
+    # the 3-byte "☃" (E2 98 83) is cut after 2 bytes, leaving an invalid sequence
+    # that strict utf-8 decode would raise on, discarding the message_delta line too
+    truncated_codepoint = "☃".encode("utf-8")[:2]
+    raw_bytes = [
+        b'data: {"text": "' + truncated_codepoint,
+        b'\ndata: {"type": "message_delta"}\n',
+    ]
+
+    lines = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+
+    assert any('"type": "message_delta"' in line for line in lines)

@@ -1886,6 +1886,89 @@ def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(mod
     assert AnthropicConfig._model_supports_effort_param(model) is False
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
+        "claude-opus-4-7-20260416",
+    ],
+)
+def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-fable-5",
+        "claude-3-haiku-20240307",
+        "vertex_ai/claude-opus-4-8",
+        "azure_ai/claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+    ],
+)
+def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is False
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "azure_ai", "bedrock"])
+def test_anthropic_model_supports_speed_param_rejects_non_anthropic_providers(
+    custom_llm_provider,
+):
+    """Fast mode is direct-Anthropic-only. Vertex/Azure/Bedrock strip their prefix
+    before the shared transform runs, so the bare Opus id must still be rejected."""
+    assert (
+        AnthropicConfig._model_supports_speed_param(
+            "claude-opus-4-8", custom_llm_provider
+        )
+        is False
+    )
+    assert (
+        AnthropicConfig._model_supports_speed_param("claude-opus-4-8", "anthropic")
+        is True
+    )
+
+
+def test_vertex_anthropic_drops_speed_for_opus_with_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus must drop ``speed`` even though the prefix-stripped
+    ``claude-opus-4-8`` maps to a fast-mode-capable direct-Anthropic entry."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"speed": "fast", "max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "speed" not in result
+
+
+def test_vertex_anthropic_raises_on_speed_without_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus raises rather than forwarding an unsupported
+    ``speed`` when neither global nor per-request drop_params is set."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        VertexAIAnthropicConfig().map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
+
+
 def test_translate_system_message_skips_empty_string_content():
     """
     Test that translate_system_message skips system messages with empty string content.
@@ -3702,6 +3785,39 @@ def test_fast_mode_with_inference_geo():
         assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
 
 
+def test_calculate_usage_captures_service_tier():
+    """
+    Anthropic returns the assigned service tier on the response usage object
+    (e.g. ``"priority"``). It must be surfaced on the Usage object so it is
+    visible in logs and used to select tier-specific pricing.
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 410,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 585,
+        "service_tier": "priority",
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.service_tier == "priority"
+
+
+def test_calculate_usage_service_tier_defaults_to_none():
+    """A response without a service tier must not invent one."""
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 5},
+        reasoning_content=None,
+    )
+
+    assert usage.service_tier is None
+
+
 def test_fast_mode_parameter_in_supported_params():
     """
     Test that 'speed' is in the list of supported OpenAI params.
@@ -3731,6 +3847,61 @@ def test_fast_mode_parameter_mapping():
 
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_anthropic_drop_params_strips_speed_for_unsupported_models():
+    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "speed" not in result
+
+
+def test_anthropic_drop_params_keeps_speed_for_supporting_models():
+    """``drop_params=True`` must not strip ``speed`` on Opus fast-mode models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("speed") == "fast"
+
+
+def test_speed_raises_clean_error_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
 
 
 def test_map_openai_params_max_tokens_normalized_to_int():
@@ -5092,6 +5263,177 @@ def test_map_tool_helper_collision_prefers_definitions_over_components_schemas()
     assert transformed["input_schema"]["properties"]["from_components"] == expected
 
 
+BILLING_HEADER_BLOCK = {
+    "type": "text",
+    "text": "x-anthropic-billing-header: cc_version=1.0.abc; cc_entrypoint=cli; cch=00000;",
+}
+
+
+def _system_with_billing_header(real_text: str) -> list:
+    return [
+        {
+            "role": "system",
+            "content": [BILLING_HEADER_BLOCK, {"type": "text", "text": real_text}],
+        }
+    ]
+
+
+def test_translate_system_message_keeps_billing_header_for_first_party_anthropic():
+    config = AnthropicConfig()
+    assert config.should_strip_billing_metadata() is False
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header(
+            "You are Claude Code, Anthropic's official CLI for Claude."
+        )
+    )
+
+    texts = [block["text"] for block in result]
+    assert any(t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "You are Claude Code, Anthropic's official CLI for Claude." in texts
+
+
+def test_translate_system_message_strips_billing_header_for_bedrock():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header("real system prompt")
+    )
+
+    texts = [block["text"] for block in result]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "real system prompt" in texts
+
+
+def test_anthropic_messages_request_keeps_billing_header_for_first_party():
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AnthropicMessagesConfig()
+    assert config.should_strip_billing_metadata() is False
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            BILLING_HEADER_BLOCK,
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result["system"]]
+    assert any(t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+def test_anthropic_messages_request_strips_billing_header_for_minimax():
+    from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = MinimaxMessagesConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            BILLING_HEADER_BLOCK,
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result.get("system", [])]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeConfig,
+    )
+
+    config = AmazonAnthropicClaudeConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header("real system prompt")
+    )
+
+    texts = [block["text"] for block in result]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "real system prompt" in texts
+
+
+@pytest.mark.parametrize(
+    "module_path, class_name, expected_strip",
+    [
+        ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
+        (
+            "litellm.llms.anthropic.experimental_pass_through.messages.transformation",
+            "AnthropicMessagesConfig",
+            False,
+        ),
+        (
+            "litellm.llms.bedrock.claude_platform.transformation",
+            "BedrockClaudePlatformConfig",
+            True,
+        ),
+        (
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "AmazonAnthropicClaudeConfig",
+            True,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
+            "VertexAIAnthropicConfig",
+            True,
+        ),
+        (
+            "litellm.llms.azure_ai.anthropic.transformation",
+            "AzureAnthropicConfig",
+            True,
+        ),
+        ("litellm.llms.minimax.messages.transformation", "MinimaxMessagesConfig", True),
+        (
+            "litellm.llms.azure_ai.anthropic.messages_transformation",
+            "AzureAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.deepseek.messages.transformation",
+            "DeepSeekAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation",
+            "VertexAIPartnerModelsAnthropicMessagesConfig",
+            True,
+        ),
+    ],
+)
+def test_should_strip_billing_metadata_by_provider(
+    module_path, class_name, expected_strip
+):
+    import importlib
+
+    config_cls = getattr(importlib.import_module(module_path), class_name)
+    assert config_cls().should_strip_billing_metadata() is expected_strip
+
+
 def test_namespace_tool_flat_nested_tools_are_extracted():
     """Codex sends nested tools in flat format {type, name, description, parameters} with no 'function' wrapper.
     These must be normalized and mapped without raising KeyError: 'function'."""
@@ -5188,3 +5530,140 @@ def test_client_metadata_stripped_from_anthropic_request():
         headers={},
     )
     assert "client_metadata" not in result
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-fable-5", "claude-opus-4-7", "claude-opus-4-8-20260120"],
+)
+def test_sampling_params_dropped_for_models_that_removed_them(model):
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p with a
+    400; with drop_params set they must be dropped, not forwarded (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+
+
+@pytest.mark.parametrize("params", [{"temperature": 0.5}, {"top_p": 0.9}, {"top_p": 1}])
+def test_sampling_params_raise_clean_error_without_drop_params(params, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="claude-fable-5",
+            drop_params=False,
+        )
+
+
+def test_temperature_1_forwarded_on_models_that_removed_sampling_params():
+    """temperature=1 (the API default) is still accepted and must pass through."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 1},
+        optional_params={},
+        model="claude-fable-5",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 1
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-6", "claude-sonnet-4-6"])
+def test_sampling_params_forwarded_on_models_that_accept_them(model):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["top_p"] == 0.9
+
+
+def test_sampling_param_gating_driven_by_model_map_flag(monkeypatch):
+    """The drop/raise decision must come from ``supports_sampling_params`` in
+    the model map, not just name matching: a flagged entry gates a model whose
+    name says nothing, and an explicit ``true`` overrides the name fallback."""
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False}
+    )
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-fable-5-test", {"supports_sampling_params": True}
+    )
+    config = AnthropicConfig()
+
+    flagged_off = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+    assert "top_p" not in flagged_off
+
+    flagged_on = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-fable-5-test",
+        drop_params=True,
+    )
+    assert flagged_on["top_p"] == 0.9
+
+
+def test_top_k_dropped_at_transform_for_models_that_removed_it():
+    """``top_k`` is a provider-specific kwarg that bypasses
+    ``map_openai_params``, so it must be stripped at the transform_request
+    boundary shared by the direct, invoke, Vertex, and Azure paths (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result
+
+
+def test_top_k_raises_at_transform_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"max_tokens": 10, "top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_top_k_forwarded_at_transform_on_models_that_accept_it():
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["top_k"] == 40

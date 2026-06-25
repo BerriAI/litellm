@@ -85,4 +85,19 @@ describe("createApiClient", () => {
     const [, init] = fetchImpl.mock.calls[0];
     expect(init.headers).toEqual({ "Content-Type": "application/json" });
   });
+
+  it("resolves the global fetch per call, so a swap after construction takes effect", async () => {
+    const client = createApiClient({ getBaseUrl: () => "" });
+
+    const original = globalThis.fetch;
+    const swapped = vi.fn(async () => okResponse({ swapped: true }));
+    globalThis.fetch = swapped as unknown as typeof fetch;
+    try {
+      const result = await client.get("/ping", { accessToken: "sk" });
+      expect(result).toEqual({ swapped: true });
+      expect(swapped).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
 });

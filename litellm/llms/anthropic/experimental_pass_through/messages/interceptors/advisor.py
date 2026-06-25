@@ -84,8 +84,14 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         )
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
         # If not set in the tool definition, litellm resolves from env vars.
-        advisor_api_key: Optional[str] = advisor_tool.get("api_key")
-        advisor_api_base: Optional[str] = advisor_tool.get("api_base")
+        # The advisor tool is caller-controlled; only honor a client-supplied
+        # api_base/api_key when the proxy has enabled clientside credentials,
+        # otherwise let litellm resolve from server config.
+        advisor_api_key: Optional[str] = None
+        advisor_api_base: Optional[str] = None
+        if _allow_client_side_advisor_credentials():
+            advisor_api_key = advisor_tool.get("api_key")
+            advisor_api_base = advisor_tool.get("api_base")
 
         # Build the synthetic tool definition the provider will receive.
         synthetic_advisor_tool = _make_synthetic_advisor_tool()
@@ -179,6 +185,20 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _allow_client_side_advisor_credentials() -> bool:
+    """Whether a caller-supplied advisor api_base/api_key may be honored.
+
+    Gated on the proxy's ``allow_client_side_credentials`` opt-in. When the
+    interceptor runs outside the proxy (SDK use), there is no admin boundary
+    to protect, so client-supplied routing is allowed.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except (ImportError, ModuleNotFoundError):
+        return True
+    return general_settings.get("allow_client_side_credentials") is True
 
 
 def _make_synthetic_advisor_tool() -> Dict:

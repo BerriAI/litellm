@@ -906,7 +906,10 @@ class BaseLLMChatTest(ABC):
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                                # sha-pinned in-repo logo via jsdelivr; gstatic's
+                                # robots.txt blocks server-side fetchers (e.g.
+                                # Anthropic), which 400s the request.
+                                "url": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg",
                                 "detail": detail,
                             },
                         },

@@ -21,6 +21,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.repositories.table_repositories import SpendLogsRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1729,7 +1734,7 @@ async def calculate_spend(request: SpendCalculateRequest):
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def ui_view_spend_logs(  # noqa: PLR0915
+async def ui_view_spend_logs(
     request: Request,
     api_key: Optional[str] = fastapi.Query(
         default=None,
@@ -2010,7 +2015,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         order_direction = (sort_order or "desc").lower()
 
         # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
+        total_records = await SpendLogsRepository(prisma_client).table.count(
             where=where_conditions,
         )
 
@@ -2137,6 +2142,20 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
+        # query_raw returns the JSONB `metadata` column as a string (the Prisma
+        # serialiser bypasses the model-layer JSON hydration we get on the ORM
+        # path). The UI reads `metadata.status` / `metadata.error_information`
+        # as object fields, so failure rows looked like successes (#29674).
+        # Re-hydrate to dict here.
+        for row in data:
+            if isinstance(row, dict):
+                md = row.get("metadata")
+                if isinstance(md, str):
+                    try:
+                        row["metadata"] = json.loads(md)
+                    except (ValueError, TypeError):
+                        row["metadata"] = {}
+
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 
@@ -2254,7 +2273,7 @@ async def ui_view_request_response_for_request_id(
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def view_spend_logs(  # noqa: PLR0915
+async def view_spend_logs(
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -2374,7 +2393,7 @@ async def view_spend_logs(  # noqa: PLR0915
             # Check if user wants unsummarized data
             if not summarize:
                 # Return filtered individual log entries (similar to UI endpoint)
-                data = await prisma_client.db.litellm_spendlogs.find_many(
+                data = await SpendLogsRepository(prisma_client).table.find_many(
                     where=filter_query,  # type: ignore
                     order={
                         "startTime": "desc",
@@ -2384,7 +2403,7 @@ async def view_spend_logs(  # noqa: PLR0915
 
             # Legacy behavior: return summarized data (when summarize=true)
             # SQL query
-            response = await prisma_client.db.litellm_spendlogs.group_by(
+            response = await SpendLogsRepository(prisma_client).table.group_by(
                 by=["api_key", "user", "model", "startTime"],
                 where=filter_query,  # type: ignore
                 sum={
@@ -2462,7 +2481,7 @@ async def view_spend_logs(  # noqa: PLR0915
                 )
                 return spend_logs
 
-            data = await prisma_client.db.litellm_spendlogs.find_many(
+            data = await SpendLogsRepository(prisma_client).table.find_many(
                 where=scoped_filter,  # type: ignore
                 order={"startTime": "desc"},
             )
@@ -2514,10 +2533,10 @@ async def global_spend_reset():
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    await prisma_client.db.litellm_verificationtoken.update_many(
+    await VerificationTokenRepository(prisma_client).table.update_many(
         data={"spend": 0.0}, where={}
     )
-    await prisma_client.db.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+    await TeamRepository(prisma_client).table.update_many(data={"spend": 0.0}, where={})
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",
@@ -3384,7 +3403,7 @@ async def ui_view_session_spend_logs(
         skip = (page - 1) * page_size
 
         # Get total count for pagination metadata
-        total_records = await prisma_client.db.litellm_spendlogs.count(
+        total_records = await SpendLogsRepository(prisma_client).table.count(
             where=where_conditions
         )
 
@@ -3400,7 +3419,7 @@ async def ui_view_session_spend_logs(
                 session_id, status, mcp_namespaced_tool_name, agent_id
             FROM "LiteLLM_SpendLogs"
             WHERE session_id = $1
-            ORDER BY "startTime" ASC
+            ORDER BY "startTime" DESC
             LIMIT $2 OFFSET $3
         """
         result = await prisma_client.db.query_raw(
@@ -3485,7 +3504,7 @@ async def _build_ui_spend_logs_response(
             # is bounded by page_size (typically 25-50 distinct session IDs).
             # If performance degrades at scale, consider short-lived caching or
             # folding the count into the main query via a window function.
-            counts = await prisma_client.db.litellm_spendlogs.group_by(
+            counts = await SpendLogsRepository(prisma_client).table.group_by(
                 by=["session_id"],
                 where={"session_id": {"in": session_ids}},
                 count={"session_id": True},
@@ -3572,7 +3591,7 @@ async def _can_team_member_view_log(
 
     if team_id is None:
         return False
-    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+    team_row = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
     if team_row is None:
@@ -3614,7 +3633,7 @@ async def _assert_user_can_view_request_id(
     permitted teams (admin or ``/spend/logs`` permission).
     Raises HTTP 403 if not.
     """
-    row = await prisma_client.db.litellm_spendlogs.find_unique(
+    row = await SpendLogsRepository(prisma_client).table.find_unique(
         where={"request_id": request_id},
         include=None,
     )
@@ -3669,7 +3688,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     if user_obj is None or not user_obj.teams:
         return []
 
-    team_rows = await prisma_client.db.litellm_teamtable.find_many(
+    team_rows = await TeamRepository(prisma_client).table.find_many(
         where={"team_id": {"in": user_obj.teams}}
     )
 

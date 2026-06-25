@@ -1,17 +1,22 @@
-"""Record/replay reverse proxy for the dockerized image-gen spend E2E.
+"""Record/replay reverse proxy for the dockerized real-provider spend E2Es.
 
-The spend-accuracy test ``tests/test_keys.py::
-test_key_info_spend_values_image_generation`` runs the litellm proxy in its own
-container and curls it over real HTTP, then asserts the proxy tracked a nonzero
-spend for a ``gpt-image-1`` call. That call wildcard-routes to ``openai/*`` on
-the real key, so every commit run hit api.openai.com for a paid image and was
-exposed to OpenAI outages (the 401 that started this).
+Several E2E tests run the litellm proxy in its own container and curl it over
+real HTTP, then assert on spend, cost, or rerank output. Those calls reach real
+provider APIs (OpenAI image gen and chat, Cohere rerank, Anthropic messages),
+so every commit run paid for them and was exposed to provider outages (the 401
+that started this).
 
-This process sits between the proxy and api.openai.com. The proxy points only
-its image model's ``api_base`` here; nothing else about the topology changes.
-The first request (or the first after a recording lapses) is forwarded live to
-OpenAI and recorded; subsequent requests within the TTL replay the recorded
-response, so the per-commit run no longer depends on OpenAI being up.
+This process sits between the proxy and the provider. A model points its
+``api_base`` here; nothing else about the topology changes. The first request
+(or the first after a recording lapses) is forwarded live to the provider and
+recorded; subsequent identical requests within the TTL replay the recorded
+response, so the per-commit run no longer depends on the provider being up.
+
+One recorder fronts every provider. The default upstream is api.openai.com; a
+non-OpenAI model points its ``api_base`` at ``/__recorder_upstream/<host>`` so
+the recorder forwards to ``https://<host>`` (folded into the cache key so two
+providers sharing a path can't collide). Routing rides ``api_base`` because
+some provider handlers drop custom request headers.
 
 Recordings live in the same Redis cassette store as the VCR persister
 (``CASSETTE_REDIS_URL``) and expire ``CASSETTE_TTL_SECONDS`` after their last
@@ -19,6 +24,11 @@ write, never refreshed on read. A recording therefore goes stale a day after
 capture and the next run past that point re-records live and catches provider
 contract drift, exactly matching the lapse-after-write contract in
 ``tests/_vcr_redis_persister.py``.
+
+The process logs its mode at startup (REPLAY when the cassette redis is
+reachable, PASSTHROUGH or DEGRADED otherwise) and a HIT/MISS line per request,
+so a CI run shows whether it served from the cassette or went live instead of
+silently degrading.
 """
 
 from __future__ import annotations
@@ -26,14 +36,24 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 from typing import Awaitable, Callable, List, Optional, Tuple
+
+_LOGGER = logging.getLogger("openai_record_replay")
+_LOGGER.setLevel(logging.INFO)
 
 CASSETTE_TTL_SECONDS = 24 * 60 * 60
 RECORD_KEY_PREFIX = "litellm:openai:record:"
 RECORDER_REDIS_URL_ENV = "CASSETTE_REDIS_URL"
 UPSTREAM_BASE_URL_ENV = "RECORDER_UPSTREAM_BASE_URL"
 DEFAULT_UPSTREAM_BASE_URL = "https://api.openai.com"
+# One recorder fronts many providers. A non-default provider is addressed by
+# prefixing the request path with ``/__recorder_upstream/<host>/`` via the
+# model's ``api_base``. This rides ``api_base`` (which every litellm provider
+# honours) rather than a custom header (which some provider handlers, e.g.
+# cohere rerank, silently drop).
+UPSTREAM_PATH_PREFIX = "/__recorder_upstream/"
 
 Headers = List[Tuple[str, str]]
 UpstreamResult = Tuple[int, Headers, bytes]
@@ -63,11 +83,25 @@ _STRIPPED_RESPONSE_HEADERS = frozenset(
 )
 
 
+def _resolve_upstream(path: str, default_upstream: str) -> Tuple[str, str]:
+    """Map an incoming request path to ``(upstream_base_url, real_path)``.
+
+    A path under ``/__recorder_upstream/<host>/...`` targets that provider; any
+    other path goes to the default upstream unchanged.
+    """
+    if path.startswith(UPSTREAM_PATH_PREFIX):
+        host, _, rest = path[len(UPSTREAM_PATH_PREFIX) :].partition("/")
+        return f"https://{host}", f"/{rest}"
+    return default_upstream, path
+
+
 def _canonical_body(body: bytes) -> bytes:
     if not body:
         return b""
     try:
-        return json.dumps(json.loads(body), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return json.dumps(
+            json.loads(body), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     except (ValueError, TypeError):
         return body
 
@@ -77,11 +111,12 @@ def _sanitize_headers(headers: Headers) -> Headers:
 
 
 class OpenAIRecordReplay:
-    """Record-once / replay-from-Redis for upstream OpenAI HTTP calls.
+    """Record-once / replay-from-Redis for upstream provider HTTP calls.
 
     ``redis_client`` is injected so the process wiring and the tests share one
     code path; pass ``None`` to run as a pure live passthrough (local dev with
-    no cassette Redis).
+    no cassette Redis). ``upstream_base_url`` is the default provider; per
+    request it can be overridden by a ``/__recorder_upstream/<host>/`` path.
     """
 
     def __init__(
@@ -96,10 +131,16 @@ class OpenAIRecordReplay:
         self._ttl_seconds = ttl_seconds
 
     @staticmethod
-    def record_key(method: str, path: str, body: bytes) -> str:
+    def record_key(
+        method: str,
+        path: str,
+        body: bytes,
+        upstream_base_url: str = DEFAULT_UPSTREAM_BASE_URL,
+    ) -> str:
         digest = hashlib.sha256(
             b"\n".join(
                 [
+                    upstream_base_url.rstrip("/").encode("utf-8"),
                     method.upper().encode("utf-8"),
                     path.encode("utf-8"),
                     _canonical_body(body),
@@ -108,16 +149,40 @@ class OpenAIRecordReplay:
         ).hexdigest()
         return f"{RECORD_KEY_PREFIX}{digest}"
 
-    async def handle(self, method: str, path: str, body: bytes, fetch_upstream: FetchUpstream) -> UpstreamResult:
-        key = self.record_key(method, path, body)
+    async def handle(
+        self,
+        method: str,
+        path: str,
+        body: bytes,
+        fetch_upstream: FetchUpstream,
+        *,
+        upstream_base_url: Optional[str] = None,
+    ) -> UpstreamResult:
+        key = self.record_key(
+            method, path, body, upstream_base_url or self.upstream_base_url
+        )
         cached = self._cache_get(key)
         if cached is not None:
+            _LOGGER.info("HIT replayed from cassette: %s %s", method, path)
             return cached
 
         status, headers, resp_body = await fetch_upstream()
         sanitized = _sanitize_headers(headers)
-        if 200 <= status < 300:
-            self._cache_set(key, status, sanitized, resp_body)
+        if not (200 <= status < 300):
+            _LOGGER.info(
+                "MISS forwarded live, not cached (status=%s): %s %s",
+                status,
+                method,
+                path,
+            )
+        elif self._cache_set(key, status, sanitized, resp_body):
+            _LOGGER.info("MISS forwarded live and recorded: %s %s", method, path)
+        else:
+            _LOGGER.warning(
+                "MISS forwarded live but NOT recorded (redis unset or unreachable): %s %s",
+                method,
+                path,
+            )
         return status, sanitized, resp_body
 
     def _cache_get(self, key: str) -> Optional[UpstreamResult]:
@@ -138,9 +203,9 @@ class OpenAIRecordReplay:
             return None
         return status, headers, resp_body
 
-    def _cache_set(self, key: str, status: int, headers: Headers, body: bytes) -> None:
+    def _cache_set(self, key: str, status: int, headers: Headers, body: bytes) -> bool:
         if self._redis is None:
-            return
+            return False
         payload = json.dumps(
             {
                 "status": status,
@@ -150,8 +215,31 @@ class OpenAIRecordReplay:
         )
         try:
             self._redis.set(key, payload, ex=self._ttl_seconds)
+            return True
         except Exception:
-            pass
+            return False
+
+    def log_startup_mode(self) -> None:
+        if self._redis is None:
+            _LOGGER.warning(
+                "PASSTHROUGH: %s unset, every request goes live to %s and nothing is cached",
+                RECORDER_REDIS_URL_ENV,
+                self.upstream_base_url,
+            )
+            return
+        try:
+            self._redis.ping()
+        except Exception as exc:
+            _LOGGER.warning(
+                "DEGRADED to live: %s set but cassette redis unreachable (%s); nothing is cached",
+                RECORDER_REDIS_URL_ENV,
+                type(exc).__name__,
+            )
+            return
+        _LOGGER.info(
+            "REPLAY mode: cassette redis reachable, recordings expire %ss after write (no refresh on read)",
+            self._ttl_seconds,
+        )
 
 
 def _build_default_redis_client():
@@ -179,13 +267,16 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
     if recorder is None:
         recorder = OpenAIRecordReplay(
             redis_client=_build_default_redis_client(),
-            upstream_base_url=os.environ.get(UPSTREAM_BASE_URL_ENV, DEFAULT_UPSTREAM_BASE_URL),
+            upstream_base_url=os.environ.get(
+                UPSTREAM_BASE_URL_ENV, DEFAULT_UPSTREAM_BASE_URL
+            ),
         )
     owns_client = http_client is None
     client = http_client or httpx.AsyncClient(timeout=httpx.Timeout(120.0))
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
+        recorder.log_startup_mode()
         try:
             yield
         finally:
@@ -197,14 +288,21 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
 
     async def proxy(request):
         body = await request.body()
-        path = request.url.path
-        full_path = f"{path}?{request.url.query}" if request.url.query else path
+        upstream_base_url, real_path = _resolve_upstream(
+            request.url.path, recorder.upstream_base_url
+        )
+        upstream_base_url = upstream_base_url.rstrip("/")
+        full_path = (
+            f"{real_path}?{request.url.query}" if request.url.query else real_path
+        )
 
         async def fetch_upstream() -> UpstreamResult:
-            fwd_headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+            fwd_headers = {
+                k: v for k, v in request.headers.items() if k.lower() != "host"
+            }
             upstream = await client.request(
                 request.method,
-                f"{recorder.upstream_base_url}{full_path}",
+                f"{upstream_base_url}{full_path}",
                 content=body,
                 headers=fwd_headers,
             )
@@ -214,13 +312,21 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
                 upstream.content,
             )
 
-        status, headers, resp_body = await recorder.handle(request.method, full_path, body, fetch_upstream)
+        status, headers, resp_body = await recorder.handle(
+            request.method,
+            full_path,
+            body,
+            fetch_upstream,
+            upstream_base_url=upstream_base_url,
+        )
         return Response(content=resp_body, status_code=status, headers=dict(headers))
 
     return Starlette(
         routes=[
             Route("/__recorder_health", health, methods=["GET"]),
-            Route("/{path:path}", proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
+            Route(
+                "/{path:path}", proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
+            ),
         ],
         lifespan=lifespan,
     )
@@ -231,6 +337,9 @@ if __name__ == "__main__":
 
     import uvicorn
 
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8090)
