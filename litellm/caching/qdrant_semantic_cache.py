@@ -12,7 +12,7 @@ import ast
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -221,8 +221,8 @@ class QdrantSemanticCache(BaseCache):
         return cached_key is not None and str(cached_key) == str(key)
 
     def _get_embedding(
-        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
-    ) -> Any:
+        self, prompt: str, metadata: Dict[str, Any] | None = None
+    ) -> EmbeddingResponse:
         """Embed via the proxy Router when it serves the model, else direct."""
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
@@ -247,8 +247,8 @@ class QdrantSemanticCache(BaseCache):
         )
 
     async def _get_async_embedding(
-        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
-    ) -> Any:
+        self, prompt: str, metadata: Dict[str, Any] | None = None
+    ) -> EmbeddingResponse:
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
         except ImportError:

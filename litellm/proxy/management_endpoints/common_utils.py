@@ -8,7 +8,7 @@ from pydantic import BaseModel
 # Defined above the `litellm.proxy.*` imports so the name is bound even when
 # this module is imported first through the proxy import cycle (CodeQL:
 # module-level cyclic import). Depends only on `math` + `HTTPException`.
-def validate_finite_spend(spend: Optional[float]) -> None:
+def validate_finite_spend(spend: float | None) -> None:
     """Reject NaN/±inf spend before it reaches the DB / spend counter.
 
     A non-finite spend would otherwise slip past `spend >= max_budget`

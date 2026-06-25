@@ -547,6 +547,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return list(set(betas))
 
+    @staticmethod
+    def _make_api_key_auth_header(api_key: str, api_base: str | None) -> dict:
+        if (
+            api_base
+            and "api.anthropic.com" not in api_base
+            and not api_key.startswith("sk-ant-")
+        ):
+            value = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
+            return {"authorization": value}
+        return {"x-api-key": api_key}
+
     def get_anthropic_headers(
         self,
         api_key: Optional[str] = None,
@@ -566,7 +577,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers: Optional[List[str]] = None,
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
     ) -> dict:
         betas = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -615,17 +626,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
-            if (
-                api_base
-                and "api.anthropic.com" not in api_base
-                and not api_key.startswith("sk-ant-")
-            ):
-                if api_key.startswith("Bearer "):
-                    headers["authorization"] = api_key
-                else:
-                    headers["authorization"] = f"Bearer {api_key}"
-            else:
-                headers["x-api-key"] = api_key
+            headers.update(self._make_api_key_auth_header(api_key, api_base))
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -748,8 +749,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_auth_header(
-        api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> Optional[dict]:
+        api_key: str | None = None, api_base: str | None = None
+    ) -> dict | None:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
         Checks ANTHROPIC_API_KEY first (-> x-api-key), then

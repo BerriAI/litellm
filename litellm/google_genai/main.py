@@ -218,8 +218,8 @@ class GenerateContentHelper:
 
 def _merge_native_request_fields(
     native_request_fields: dict[str, object],
-    extra_body: Optional[dict[str, object]],
-) -> Optional[dict[str, object]]:
+    extra_body: dict[str, object] | None,
+) -> dict[str, object] | None:
     """
     Merge native top-level request fields into ``extra_body`` so the HTTP handler
     forwards them verbatim onto the outgoing request body. An explicit ``extra_body``

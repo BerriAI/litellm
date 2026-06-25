@@ -114,16 +114,16 @@ class RedisSemanticCache(BaseCache):
         self._llmcache = None
 
     @property
-    def llmcache(self) -> Any:
+    def llmcache(self) -> object:
         if getattr(self, "_llmcache", None) is None:
             self._llmcache = self._build_llmcache()
         return self._llmcache
 
     @llmcache.setter
-    def llmcache(self, value: Any) -> None:
+    def llmcache(self, value: object) -> None:
         self._llmcache = value
 
-    def _build_llmcache(self) -> Any:
+    def _build_llmcache(self) -> object:
         # CustomTextVectorizer probes its embedding dimension at construction by
         # embedding "dimension test", so the first cache request issues one extra
         # billable embedding on top of the request's own.
@@ -311,7 +311,7 @@ class RedisSemanticCache(BaseCache):
         return value
 
     def _get_embedding(
-        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
+        self, prompt: str, metadata: Dict[str, Any] | None = None
     ) -> List[float]:
         """
         Routes through the proxy Router when the embedding model is a Router
@@ -486,7 +486,7 @@ class RedisSemanticCache(BaseCache):
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
     async def _get_async_embedding(
-        self, prompt: str, metadata: Optional[Dict[str, Any]] = None
+        self, prompt: str, metadata: Dict[str, Any] | None = None
     ) -> List[float]:
         """
         Asynchronously generate an embedding for the given prompt.

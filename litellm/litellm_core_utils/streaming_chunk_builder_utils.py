@@ -695,7 +695,7 @@ class ChunkProcessor:
         # heuristic (which encodes Anthropic's specific message_start SSE shape)
         # does not silently affect other providers that may legitimately report
         # completion_tokens=1 from a single usage event.
-        custom_llm_provider: Optional[str] = None
+        custom_llm_provider: str | None = None
         if chunks:
             first_chunk = chunks[0]
             if isinstance(first_chunk, dict):

@@ -1092,7 +1092,7 @@ _DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
 )
 
 
-def _db_model_is_team_scoped(model: Any) -> bool:
+def _db_model_is_team_scoped(model: object) -> bool:
     model_info = getattr(model, "model_info", None)
     if isinstance(model_info, BaseModel):
         return getattr(model_info, "team_id", None) is not None
@@ -5221,8 +5221,8 @@ class ProxyConfig:
         return deleted_deployments
 
     def _resolve_db_litellm_param(
-        self, key: str, value: Any, resolve_env_refs: bool = True
-    ) -> Any:
+        self, key: str, value: object, resolve_env_refs: bool = True
+    ) -> object:
         if not isinstance(value, str):
             return value
 

@@ -466,7 +466,7 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
 
 def update_messages_with_model_file_ids(
     messages: List[AllMessageValues],
-    model_id: Optional[str],
+    model_id: str | None,
     model_file_id_mapping: Dict[str, Dict[str, str]],
 ) -> List[AllMessageValues]:
     """
