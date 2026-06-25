@@ -379,18 +379,19 @@ class RealTimeStreaming:
                     self._cache_session_configuration_request(msg)
                     sent = True
                 else:
-                    if isinstance(
+                    is_content_message = isinstance(
                         msg_obj, dict
-                    ) and self.provider_config.is_content_message(msg_obj):
-                        self._content_sent_after_setup = True
-                    # Send first; only cache the setup payload once the backend
-                    # has actually accepted it. Caching before send would leave
-                    # ``session_configuration_request`` populated after a failed
-                    # send, causing subsequent client session.update messages to
-                    # be treated as "subsequent" and dropped even though the
-                    # backend never received the original setup.
+                    ) and self.provider_config.is_content_message(msg_obj)
+                    # Send first, then mutate state, so a failed send leaves both
+                    # ``session_configuration_request`` and
+                    # ``_content_sent_after_setup`` untouched. Caching or marking
+                    # content before send would leave the session believing the
+                    # backend received a setup/content frame it never got, causing
+                    # subsequent client session.update messages to be dropped.
                     await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
                     self._cache_session_configuration_request(msg)
+                    if is_content_message:
+                        self._content_sent_after_setup = True
                     sent = True
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]

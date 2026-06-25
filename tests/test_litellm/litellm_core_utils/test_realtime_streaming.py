@@ -1122,6 +1122,47 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
     assert "setup" in sent_payload
 
 
+@pytest.mark.asyncio
+async def test_failed_content_send_does_not_block_later_setup():
+    """A content frame whose backend send fails must not flip
+    ``_content_sent_after_setup``; otherwise a later setup is silently dropped
+    even though the backend never received any content."""
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_request = MagicMock(
+        side_effect=lambda m, *a, **k: [m]
+    )
+    provider_config.is_setup_message = MagicMock(side_effect=lambda obj: "setup" in obj)
+    provider_config.is_content_message = MagicMock(
+        side_effect=lambda obj: obj.get("type") == "conversation.item.create"
+    )
+
+    backend_ws.send = AsyncMock(side_effect=[ConnectionClosed(None, None), None])
+
+    streaming = RealTimeStreaming(
+        websocket=websocket,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    content = json.dumps({"type": "conversation.item.create", "item": {}})
+    with pytest.raises(ConnectionClosed):
+        await streaming._send_to_backend(content)
+
+    assert streaming._content_sent_after_setup is False
+
+    setup = json.dumps({"setup": {"model": "models/gemini-2.5-flash"}})
+    sent = await streaming._send_to_backend(setup)
+
+    assert sent is True
+    assert backend_ws.send.await_args_list[-1].args[0] == setup
+
+
 def test_collect_session_tools_from_session_update():
     """
     Test that tools from session.update events are collected.
