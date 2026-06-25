@@ -3098,6 +3098,33 @@ def test_custom_pricing_matches_real_anthropic_transformer_usage():
     assert cost == pytest.approx(expected)
 
 
+def test_custom_pricing_cache_exclusive_prompt_tokens_direct_call_not_clamped():
+    """A direct cost_per_token call that passes raw cache-exclusive prompt_tokens
+    plus explicit cache params and no usage_object must still bill the uncached
+    input rather than clamping it to zero.
+    """
+    from litellm.cost_calculator import cost_per_token
+
+    custom = {
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "cache_read_input_token_cost": 0.0000003,
+        "cache_creation_input_token_cost": 0.00000375,
+    }
+    prompt_cost, _ = cost_per_token(
+        model="claude-x",
+        prompt_tokens=100,
+        completion_tokens=50,
+        cache_read_input_tokens=200,
+        cache_creation_input_tokens=700,
+        custom_cost_per_token=custom,
+        custom_llm_provider="anthropic",
+    )
+
+    expected = 100 * 0.000003 + 200 * 0.0000003 + 700 * 0.00000375
+    assert prompt_cost == pytest.approx(expected)
+
+
 def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     """
     Backward compatibility: when custom_cost_per_token omits both cache rates,

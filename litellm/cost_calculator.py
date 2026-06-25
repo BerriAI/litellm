@@ -393,8 +393,21 @@ def cost_per_token(
     if not _cache_creation_tokens and cache_creation_input_tokens:
         _cache_creation_tokens = float(cache_creation_input_tokens)
 
+    # prompt_tokens is normally cache-inclusive and the helper subtracts the cache
+    # counts to recover the uncached input. A direct caller that instead passes raw
+    # cache-exclusive prompt_tokens is unambiguous when the value is smaller than the
+    # cache tokens it would have to contain; fold the cache tokens in for that case so
+    # the uncached input is not clamped to zero.
+    _raw_prompt_tokens = float(prompt_tokens)
+    _cache_total = _cache_read_tokens + _cache_creation_tokens
+    _normalized_prompt_tokens = (
+        _raw_prompt_tokens + _cache_total
+        if _raw_prompt_tokens < _cache_total
+        else _raw_prompt_tokens
+    )
+
     response_cost = _cost_per_token_custom_pricing_helper(
-        prompt_tokens=float(prompt_tokens),
+        prompt_tokens=_normalized_prompt_tokens,
         completion_tokens=completion_tokens,
         response_time_ms=response_time_ms,
         cached_tokens=_cache_read_tokens,
