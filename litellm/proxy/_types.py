@@ -3207,6 +3207,7 @@ class SpendLogsMetadata(TypedDict):
 
 class SpendLogsPayload(TypedDict):
     request_id: str
+    litellm_call_id: Optional[str]
     call_type: str
     api_key: str
     spend: float

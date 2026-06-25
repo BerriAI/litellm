@@ -414,6 +414,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
+    litellm_call_id: Optional[str] = cast(
+        Optional[str],
+        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+    )
     custom_llm_provider = kwargs.get("custom_llm_provider")
     raw_model = cast(str, kwargs.get("model") or "")
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
@@ -421,6 +425,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
+            litellm_call_id=litellm_call_id,
             call_type=call_type or "",
             api_key=str(api_key),
             cache_hit=str(cache_hit),
