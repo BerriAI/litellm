@@ -58,7 +58,10 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import (
+    ProviderConfigManager,
+    client,
+)
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool

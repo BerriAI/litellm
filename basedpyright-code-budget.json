@@ -120,7 +120,7 @@
     "slack": 3
   },
   "reportReturnType": {
-    "baseline": 130,
+    "baseline": 126,
     "slack": 100
   },
   "reportTypedDictNotRequiredAccess": {
@@ -156,7 +156,7 @@
     "slack": 10
   },
   "reportUnnecessaryComparison": {
-    "baseline": 688,
+    "baseline": 683,
     "slack": 100
   },
   "reportUnnecessaryContains": {

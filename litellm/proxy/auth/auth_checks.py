@@ -2954,6 +2954,26 @@ async def _get_agent_ids_from_access_groups(
     )
 
 
+def _resolve_all_team_model_sentinel_for_auth_check(
+    models: List[str],
+    llm_router: Optional[Router],
+    team_id: Optional[str],
+) -> List[str]:
+    if (
+        SpecialModelNames.all_team_models.value not in models
+        or team_id is None
+        or llm_router is None
+    ):
+        return models
+    proxy_models = llm_router.get_model_names()
+    non_sentinel_models = [
+        model for model in models if model != SpecialModelNames.all_team_models.value
+    ]
+    if not proxy_models:
+        return non_sentinel_models or models
+    return list(dict.fromkeys(non_sentinel_models + proxy_models))
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Optional[Router],
@@ -2970,6 +2990,12 @@ def _check_model_access_helper(
         access_groups = llm_router.get_model_access_groups(
             model_name=model, team_id=team_id
         )
+
+    models = _resolve_all_team_model_sentinel_for_auth_check(
+        models=models,
+        llm_router=llm_router,
+        team_id=team_id,
+    )
 
     if (
         len(access_groups) > 0 and llm_router is not None
