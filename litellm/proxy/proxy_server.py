@@ -8719,6 +8719,7 @@ def _apply_budget_exceeded_models_policy(
     # If policy is "blocked" and budget is exceeded, raise BudgetExceededError (429)
     if policy == "blocked":
         import litellm
+
         raise litellm.BudgetExceededError(
             current_cost=current_cost,
             max_budget=max_budget,
@@ -8733,7 +8734,11 @@ def _apply_budget_exceeded_models_policy(
             if isinstance(m, str):
                 model_name = m
             elif isinstance(m, dict):
-                model_name = m.get("model_name") or m.get("model") or m.get("litellm_params", {}).get("model")
+                model_name = (
+                    m.get("model_name")
+                    or m.get("model")
+                    or m.get("litellm_params", {}).get("model")
+                )
             else:
                 model_name = getattr(m, "model_name", None) or getattr(m, "model", None)
 

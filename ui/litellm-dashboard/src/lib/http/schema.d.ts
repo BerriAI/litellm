@@ -22210,6 +22210,12 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Budget Exceeded Models Policy
+             * @description Controls model-list behavior when a team/user/key budget is exceeded. 'blocked' (default) returns 429 as before. 'all' returns the full model list regardless of budget. 'free_only' returns only zero-cost models. Inference calls always enforce the budget regardless of this setting.
+             * @default blocked
+             */
+            budget_exceeded_models_policy: ("blocked" | "all" | "free_only") | null;
+            /**
              * Cancel On Disconnect
              * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
              */
