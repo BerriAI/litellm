@@ -11,7 +11,8 @@ can import it statically without forming an import cycle.
 
 from __future__ import annotations
 
-from typing import Awaitable, Final, Protocol, cast
+from collections.abc import Awaitable, Callable
+from typing import Final, Protocol, cast
 
 
 class RustOcr(Protocol):
@@ -48,42 +49,36 @@ class RustAocr(Protocol):
         raise NotImplementedError
 
 
-class RustImageEdit(Protocol):
-    """Signature of the compiled ``litellm_python_bridge.image_edit`` entrypoint."""
-
-    def __call__(
-        self,
-        model: str,
-        images: list[dict[str, object]],
-        prompt: str | None,
-        mask: dict[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        raise NotImplementedError
-
-
-class RustAimageEdit(Protocol):
-    """Signature of the compiled ``litellm_python_bridge.aimage_edit`` entrypoint."""
-
-    def __call__(
-        self,
-        model: str,
-        images: list[dict[str, object]],
-        prompt: str | None,
-        mask: dict[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]:
-        raise NotImplementedError
+RustImageEdit = Callable[
+    [
+        str,
+        list[dict[str, object]],
+        str | None,
+        dict[str, object] | None,
+        str | None,
+        str | None,
+        str,
+        dict[str, object] | None,
+        dict[str, object],
+        float | None,
+    ],
+    dict[str, object],
+]
+RustAimageEdit = Callable[
+    [
+        str,
+        list[dict[str, object]],
+        str | None,
+        dict[str, object] | None,
+        str | None,
+        str | None,
+        str,
+        dict[str, object] | None,
+        dict[str, object],
+        float | None,
+    ],
+    Awaitable[dict[str, object]],
+]
 
 
 class _Unset:
