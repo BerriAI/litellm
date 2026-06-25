@@ -9154,6 +9154,48 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
+    def _resolve_unblocked_deployment(self, model_id: str) -> Optional[Deployment]:
+        """
+        Resolve a model id, model-group alias, or wildcard pattern to a single
+        deployment, returning None when nothing matches or the match is paused
+        via ``LiteLLM_ProxyModelTable.blocked``.
+        """
+        deployment = self.get_deployment(model_id=model_id)
+
+        if deployment is None:
+            deployment = self.get_deployment_by_model_group_name(
+                model_group_name=model_id
+            )
+
+        if deployment is None:
+            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            if potential_wildcard_models:
+                deployment_dict = potential_wildcard_models[0]
+                if isinstance(deployment_dict, dict):
+                    deployment = Deployment(**deployment_dict)
+                elif isinstance(deployment_dict, Deployment):
+                    deployment = deployment_dict
+
+        if deployment is None or self._is_deployment_blocked(deployment):
+            return None
+        return deployment
+
+    def get_deployment_model_for_alias(self, model_id: str) -> Optional[str]:
+        """
+        Resolve a model-group alias (or deployment id / wildcard) to the
+        deployment's underlying ``litellm_params.model``.
+
+        Callers that hand a model to provider SDKs (e.g. the proxy batch-create
+        path) need the real provider model id, not the proxy alias:
+        ``get_llm_provider`` cannot resolve an alias, so passing it straight
+        through reaches the provider as an invalid model identifier. Returns
+        None when the alias resolves to nothing or to a paused deployment.
+        """
+        deployment = self._resolve_unblocked_deployment(model_id=model_id)
+        if deployment is None:
+            return None
+        return deployment.litellm_params.model
+
     def get_deployment_credentials_with_provider(
         self, model_id: str
     ) -> Optional[Dict[str, Any]]:
@@ -9177,27 +9219,8 @@ class Router:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
         """
-        # Try to get deployment by model_id first
-        deployment = self.get_deployment(model_id=model_id)
-
-        # If not found, try by model_group_name
+        deployment = self._resolve_unblocked_deployment(model_id=model_id)
         if deployment is None:
-            deployment = self.get_deployment_by_model_group_name(
-                model_group_name=model_id
-            )
-
-        # If still not found, check for wildcard pattern matches
-        if deployment is None:
-            potential_wildcard_models = self.pattern_router.route(model_id) or []
-            if potential_wildcard_models:
-                # Use the first matching wildcard deployment
-                deployment_dict = potential_wildcard_models[0]
-                if isinstance(deployment_dict, dict):
-                    deployment = Deployment(**deployment_dict)
-                elif isinstance(deployment_dict, Deployment):
-                    deployment = deployment_dict
-
-        if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
         # Get basic credentials
