@@ -1360,115 +1360,21 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, str]]:
-        """Look up stored OAuth2 token for (user, server) and return as extra_headers dict.
+        """Stored OAuth2 token for (user, server) as an ``Authorization: Bearer`` header, or None.
 
-        Lookup order:
-        1. Redis cache (fast path, NaCl-decrypted) — skipped when prefetched_creds supplied
-        2. prefetched_creds dict (pre-fetched batch DB query) or fresh DB query
-        3. Auto-refresh when the stored token is expired and a refresh_token exists
-
-        Args:
-            prefetched_creds: Optional dict keyed by server_id with credential payloads.
-                              When provided, the Redis and individual DB lookups are
-                              skipped in favour of the pre-fetched batch result.
+        Thin wrapper over ``resolve_user_oauth_access_token`` (Redis cache, else DB + refresh);
+        ``prefetched_creds`` skips the per-server Redis/DB lookups for the batch path.
         """
-        if server.auth_type != MCPAuth.oauth2:
+        if server.auth_type != MCPAuth.oauth2 or user_api_key_auth is None:
             return None
-        if user_api_key_auth is None:
-            return None
-        user_id = getattr(user_api_key_auth, "user_id", None)
-        server_id = getattr(server, "server_id", None)
-        if not user_id or not server_id:
-            return None
-        try:
-            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
-                get_user_oauth_credential,
-                resolve_valid_user_oauth_token,
-            )
-            from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: PLC0415
-                _compute_per_user_token_ttl,
-                mcp_per_user_token_cache,
-            )
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            resolve_user_oauth_access_token,
+        )
 
-            # ── Fast path: Redis cache ────────────────────────────────────────
-            # Only used when prefetched_creds is not supplied (individual lookup).
-            if prefetched_creds is None:
-                cached_token = await mcp_per_user_token_cache.get(user_id, server_id)
-                if cached_token is not None:
-                    verbose_logger.debug(
-                        "_get_user_oauth_extra_headers_from_db: Redis hit for user=%s server=%s",
-                        user_id,
-                        server_id,
-                    )
-                    return {"Authorization": f"Bearer {cached_token}"}
-
-            # ── Slow path: DB lookup ──────────────────────────────────────────
-            prisma_client = None
-            if prefetched_creds is not None:
-                cred = prefetched_creds.get(server_id)
-            else:
-                from litellm.proxy.utils import (  # noqa: PLC0415
-                    get_prisma_client_or_throw,
-                )
-
-                prisma_client = get_prisma_client_or_throw(
-                    "Database not connected. Connect a database to use OAuth2 MCP tools."
-                )
-                cred = await get_user_oauth_credential(
-                    prisma_client, user_id, server_id
-                )
-
-            if not cred or not cred.get("access_token"):
-                return None
-
-            cred = await resolve_valid_user_oauth_token(
-                user_id=user_id,
-                server=server,
-                cred=cred,
-                prisma_client=prisma_client,
-            )
-            if cred is None:
-                # Refresh failed or token expired with no usable refresh_token —
-                # clear the stale Redis entry so the next request doesn't reuse it.
-                await mcp_per_user_token_cache.delete(user_id, server_id)
-                return None
-
-            access_token: str = cred["access_token"]
-
-            # Warm (or re-warm) the Redis cache from the DB result.
-            # Always write regardless of whether expires_at is present — tokens
-            # without an expiry are still valid and should be cached using the
-            # server/default TTL so subsequent requests are fast.
-            if prefetched_creds is None:
-                raw_expires = None
-                expires_at = cred.get("expires_at")
-                if expires_at:
-                    from datetime import datetime, timezone  # noqa: PLC0415
-
-                    try:
-                        exp_dt = datetime.fromisoformat(expires_at)
-                        if exp_dt.tzinfo is None:
-                            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-                        remaining = int(
-                            (exp_dt - datetime.now(timezone.utc)).total_seconds()
-                        )
-                        raw_expires = max(remaining, 0) if remaining > 0 else None
-                    except (ValueError, TypeError):
-                        pass
-                ttl = _compute_per_user_token_ttl(server, raw_expires)
-                await mcp_per_user_token_cache.set(
-                    user_id, server_id, access_token, ttl
-                )
-
-            return {"Authorization": f"Bearer {access_token}"}
-        except Exception as e:
-            verbose_logger.warning(
-                "_get_user_oauth_extra_headers_from_db: failed to retrieve credential for user=%s server=%s: %s",
-                user_id,
-                server_id,
-                e,
-            )
-        return None
+        token = await resolve_user_oauth_access_token(
+            getattr(user_api_key_auth, "user_id", None), server, prefetched_creds
+        )
+        return {"Authorization": f"Bearer {token}"} if token else None
 
     async def _prefetch_oauth_creds_for_user(
         user_api_key_auth: Optional[UserAPIKeyAuth],
