@@ -71,6 +71,15 @@ else:
     LiteLLMLoggingObj = Any
 
 
+# OpenRouter routing/control fields that must not be forwarded from an image-edit
+# request body into the upstream /chat/completions call. Forwarding them would let
+# a caller of an allowed image-edit model redirect the request to other models or
+# providers, escaping LiteLLM's model-authorization and budget enforcement.
+OPENROUTER_ROUTING_CONTROL_PARAMS = frozenset(
+    {"models", "route", "provider", "transforms"}
+)
+
+
 class OpenRouterImageEditConfig(BaseImageEditConfig):
     """
     Configuration for OpenRouter image editing via chat completions.
@@ -191,10 +200,17 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             "modalities": ["image", "text"],
         }
 
-        # Add mapped optional params (image_config, n, etc.)
+        # Add mapped optional params (image_config, n, etc.). Skip OpenRouter
+        # routing/control fields: these can arrive via forwarded non-default
+        # params, and copying them into the chat body would let a caller route
+        # an allowed image-edit request to other models/providers, bypassing
+        # LiteLLM's model-authorization and budget checks.
         for key, value in image_edit_optional_request_params.items():
-            if key not in ("model", "messages", "modalities"):
-                request_body[key] = value
+            if key in ("model", "messages", "modalities"):
+                continue
+            if key in OPENROUTER_ROUTING_CONTROL_PARAMS:
+                continue
+            request_body[key] = value
 
         empty_files = cast(RequestFiles, [])
         return request_body, empty_files
