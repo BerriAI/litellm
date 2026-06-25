@@ -7,10 +7,22 @@ supplied by the proxy layer via ``call_agent``.
 """
 
 import json
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Optional,
+    cast,
+)
 
 import litellm
 from litellm._logging import verbose_logger
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 AGENT_TOOL_PREFIX = "agent__"
 DEFAULT_MAX_ITERATIONS = 8
@@ -69,7 +81,7 @@ def _build_agent_tools(callable_agents: list[dict[str, Any]]) -> list[dict[str, 
 
 
 async def _load_mcp_tools(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     litellm_trace_id: Optional[str],
 ):
     """Returns (openai_tools, tool_server_map) for the agent's allowed MCP servers."""
@@ -101,7 +113,7 @@ async def run_agentic_loop(
     completion_kwargs: dict[str, Any],
     callable_agents: list[dict[str, Any]],
     call_agent: Callable[[str, str], Awaitable[str]],
-    user_api_key_auth: Any = None,
+    user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
     enable_mcp_tools: bool = False,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ):
@@ -140,7 +152,10 @@ async def run_agentic_loop(
             break
 
         messages.append(
-            message.model_dump() if hasattr(message, "model_dump") else message
+            cast(
+                "dict[str, Any]",
+                message.model_dump() if hasattr(message, "model_dump") else message,
+            )
         )
 
         agent_calls = [

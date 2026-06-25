@@ -7,7 +7,8 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, AsyncGenerator, Dict, List, Optional, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -525,7 +526,9 @@ def _resolve_model_and_provider(
     return litellm_params, custom_llm_provider
 
 
-def _scope_auth_to_agent(user_api_key_auth: Any, agent_id: str) -> Any:
+def _scope_auth_to_agent(
+    user_api_key_auth: Optional[UserAPIKeyAuth], agent_id: str
+) -> Optional[UserAPIKeyAuth]:
     """Bind the caller's auth to ``agent_id`` so the MCP permission handler applies
     the agent's own object_permission (caller perms intersected with the agent's
     allowlist). Without ``agent_id`` set only the caller's key/team perms gate MCP,
@@ -536,12 +539,17 @@ def _scope_auth_to_agent(user_api_key_auth: Any, agent_id: str) -> Any:
     return user_api_key_auth
 
 
-async def _source_agent_allowed_targets(source_auth: Any) -> set | None:
+async def _source_agent_allowed_targets(
+    source_auth: Optional[UserAPIKeyAuth],
+) -> set | None:
     """Agent ids the source agent itself may call, from its own
     object_permission.agents plus agents resolved from its access groups. None
     means the source agent has no agent restriction. Delegation targets are
     intersected with this (not only the caller's perms), so a prompt-injected
     delegation cannot exceed what the source agent was granted."""
+    if source_auth is None:
+        return None
+
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
@@ -564,14 +572,19 @@ async def _source_agent_allowed_targets(source_auth: Any) -> set | None:
     return allowed or None
 
 
+@dataclass(frozen=True, slots=True)
+class _DelegationContext:
+    allowed_agent_ids: set
+    get_agent: Callable[[str], Any]
+    user_api_key_auth: Optional[UserAPIKeyAuth]
+    send_message: Callable[..., Awaitable[Any]]
+
+
 async def _delegate_to_agent(
     *,
     target_id: str,
     message: str,
-    allowed_agent_ids: set,
-    get_agent: Callable[[str], Any],
-    user_api_key_auth: Any,
-    send_message: Callable[..., Awaitable[Any]],
+    context: _DelegationContext,
 ) -> str:
     """Dispatch a sub-agent call and return its text reply.
 
@@ -579,10 +592,10 @@ async def _delegate_to_agent(
     via prompt injection, and ``send_message`` bypasses the endpoint's auth gate.
     The auth-filtered ``allowed_agent_ids`` whitelist is therefore re-enforced
     here so a caller can never reach an agent it was not granted."""
-    if target_id not in allowed_agent_ids:
+    if target_id not in context.allowed_agent_ids:
         return f"Agent '{target_id}' is not available."
 
-    target = get_agent(target_id)
+    target = context.get_agent(target_id)
     if target is None:
         return f"Agent '{target_id}' not found."
 
@@ -595,7 +608,7 @@ async def _delegate_to_agent(
 
     from uuid import uuid4
 
-    from a2a.types import MessageSendParams, SendMessageRequest
+    from a2a.types import Message, MessageSendParams, SendMessageRequest
 
     target_card = target.agent_card_params or {}
     # Strip delegation flags so a sub-agent cannot recurse into further
@@ -606,19 +619,22 @@ async def _delegate_to_agent(
         if k not in ("enable_agent_calls", "callable_agents", "call_agent")
     }
     target_params["user_api_key_auth"] = _scope_auth_to_agent(
-        user_api_key_auth, target.agent_id
+        context.user_api_key_auth, target.agent_id
     )
     sub_request = SendMessageRequest(
-        id="",
+        id=uuid4().hex,
         params=MessageSendParams(
-            message={
-                "role": "user",
-                "parts": [{"kind": "text", "text": message}],
-                "messageId": uuid4().hex,
-            }
+            message=cast(
+                Message,
+                {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": message}],
+                    "messageId": uuid4().hex,
+                },
+            )
         ),
     )
-    sub_response = await send_message(
+    sub_response = await context.send_message(
         request=sub_request,
         api_base=target_card.get("url"),
         litellm_params=target_params,
@@ -807,10 +823,12 @@ async def invoke_agent_a2a(
                 return await _delegate_to_agent(
                     target_id=target_id,
                     message=message,
-                    allowed_agent_ids=allowed_agent_ids,
-                    get_agent=_get_agent,
-                    user_api_key_auth=user_api_key_dict,
-                    send_message=asend_message,
+                    context=_DelegationContext(
+                        allowed_agent_ids=allowed_agent_ids,
+                        get_agent=_get_agent,
+                        user_api_key_auth=user_api_key_dict,
+                        send_message=asend_message,
+                    ),
                 )
 
             litellm_params = {

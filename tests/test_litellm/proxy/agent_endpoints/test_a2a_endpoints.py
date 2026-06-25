@@ -1611,7 +1611,10 @@ async def test_delegate_to_agent_rejects_target_outside_whitelist():
     and send_message bypasses the endpoint auth gate, so an agent id outside the
     auth-filtered whitelist must be refused before any dispatch or registry
     lookup."""
-    from litellm.proxy.agent_endpoints.a2a_endpoints import _delegate_to_agent
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _DelegationContext,
+        _delegate_to_agent,
+    )
 
     send_message = AsyncMock()
     get_agent = MagicMock()
@@ -1619,10 +1622,12 @@ async def test_delegate_to_agent_rejects_target_outside_whitelist():
     reply = await _delegate_to_agent(
         target_id="evil-agent",
         message="hi",
-        allowed_agent_ids={"allowed-agent"},
-        get_agent=get_agent,
-        user_api_key_auth=None,
-        send_message=send_message,
+        context=_DelegationContext(
+            allowed_agent_ids={"allowed-agent"},
+            get_agent=get_agent,
+            user_api_key_auth=None,
+            send_message=send_message,
+        ),
     )
 
     assert "not available" in reply
@@ -1632,17 +1637,22 @@ async def test_delegate_to_agent_rejects_target_outside_whitelist():
 
 @pytest.mark.asyncio
 async def test_delegate_to_agent_does_not_dispatch_when_target_missing():
-    from litellm.proxy.agent_endpoints.a2a_endpoints import _delegate_to_agent
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _DelegationContext,
+        _delegate_to_agent,
+    )
 
     send_message = AsyncMock()
 
     reply = await _delegate_to_agent(
         target_id="known",
         message="hi",
-        allowed_agent_ids={"known"},
-        get_agent=lambda _id: None,
-        user_api_key_auth=None,
-        send_message=send_message,
+        context=_DelegationContext(
+            allowed_agent_ids={"known"},
+            get_agent=lambda _id: None,
+            user_api_key_auth=None,
+            send_message=send_message,
+        ),
     )
 
     assert "not found" in reply
@@ -1670,7 +1680,10 @@ async def test_delegate_to_agent_refuses_target_with_guardrails():
     it is refused rather than returning output a guardrail would have blocked."""
     from types import SimpleNamespace
 
-    from litellm.proxy.agent_endpoints.a2a_endpoints import _delegate_to_agent
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _DelegationContext,
+        _delegate_to_agent,
+    )
 
     send_message = AsyncMock()
     guarded = SimpleNamespace(
@@ -1682,10 +1695,12 @@ async def test_delegate_to_agent_refuses_target_with_guardrails():
     reply = await _delegate_to_agent(
         target_id="guarded",
         message="hi",
-        allowed_agent_ids={"guarded"},
-        get_agent=lambda _id: guarded,
-        user_api_key_auth=None,
-        send_message=send_message,
+        context=_DelegationContext(
+            allowed_agent_ids={"guarded"},
+            get_agent=lambda _id: guarded,
+            user_api_key_auth=None,
+            send_message=send_message,
+        ),
     )
 
     assert "cannot be called indirectly" in reply
