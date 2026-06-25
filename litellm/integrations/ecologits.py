@@ -29,9 +29,7 @@ is logged without ecologits enrichment.
 """
 
 import os
-from typing import Any, Dict, Optional, Tuple
-
-from prometheus_client import Counter
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -40,6 +38,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+if TYPE_CHECKING:
+    from prometheus_client import Counter
 
 ECOLOGITS_DEFAULT_API_BASE = "https://api.ecologits.ai"
 ECOLOGITS_ESTIMATIONS_PATH = "/v1beta/estimations"
@@ -74,8 +75,26 @@ ECOLOGITS_IMPACTS = (
 )
 
 
-def _build_ecologits_counters() -> Dict[str, Counter]:
-    counters: Dict[str, Counter] = {}
+def _build_ecologits_counters() -> Optional[Dict[str, "Counter"]]:
+    """Build one Prometheus Counter per impact, or ``None`` if prometheus_client
+    is not installed.
+
+    Guarding the import (rather than importing it at module level) means users
+    who only want the Langfuse/Datadog enrichment can enable the ``ecologits``
+    callback without installing ``prometheus-client``; they simply get no
+    Prometheus metrics.
+    """
+    try:
+        from prometheus_client import Counter
+    except ImportError:
+        verbose_logger.warning(
+            "Missing prometheus_client. Run `pip install prometheus-client` to "
+            "emit EcoLogits Prometheus metrics. EcoLogits enrichment "
+            "(Langfuse/Datadog/SpendLogs) still works without it."
+        )
+        return None
+
+    counters: Dict[str, "Counter"] = {}
     for json_key, suffix, unit, description in ECOLOGITS_IMPACTS:
         counters[json_key] = Counter(
             name=f"litellm_ecologits_{suffix}_total",
@@ -177,6 +196,8 @@ class EcoLogitsLogger(CustomLogger):
         custom_llm_provider: Optional[str],
         zone: str,
     ) -> None:
+        if _ECOLOGITS_COUNTERS is None:
+            return
         if not isinstance(ecologits_data, dict):
             return
         impacts = ecologits_data.get("impacts")
