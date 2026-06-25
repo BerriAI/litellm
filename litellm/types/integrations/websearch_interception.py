@@ -13,11 +13,15 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
         litellm_settings:
           websearch_interception_params:
             enabled_providers: ["bedrock"]
+            disable_short_circuit_providers: ["hosted_vllm"]
             search_tool_name: "my-perplexity-search"
     """
 
     enabled_providers: List[str]
     """List of LLM provider names to enable interception for (e.g., ['bedrock', 'vertex_ai'])"""
+
+    disable_short_circuit_providers: List[str]
+    """List of LLM provider names where web-search-only requests should use normal dispatch."""
 
     search_tool_name: Optional[str]
     """Name of search tool configured in router's search_tools. If None, uses first available."""

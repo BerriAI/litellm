@@ -49,6 +49,27 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY = "_websearch_interception_emit_native_blocks"
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY = "websearch_native_blocks"
 
 
+def _normalize_provider_names(
+    providers: List[Union[LlmProviders, str]],
+) -> List[str]:
+    return [p.value if isinstance(p, LlmProviders) else p for p in providers]
+
+
+def _provider_names_from_config(
+    providers: Optional[List[str]],
+) -> Optional[List[Union[LlmProviders, str]]]:
+    if providers is None:
+        return None
+
+    normalized: List[Union[LlmProviders, str]] = []
+    for provider in providers:
+        try:
+            normalized.append(LlmProviders(provider))
+        except ValueError:
+            normalized.append(provider)
+    return normalized
+
+
 class WebSearchInterceptionLogger(CustomLogger):
     """
     CustomLogger that intercepts WebSearch tool calls for models that don't
@@ -65,6 +86,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         enabled_providers: Optional[List[Union[LlmProviders, str]]] = None,
         search_tool_name: Optional[str] = None,
+        disable_short_circuit_providers: Optional[
+            List[Union[LlmProviders, str]]
+        ] = None,
     ):
         """
         Args:
@@ -74,15 +98,18 @@ class WebSearchInterceptionLogger(CustomLogger):
                               Default: None (all providers enabled)
             search_tool_name: Name of search tool configured in router's search_tools.
                              If None, will attempt to use first available search tool.
+            disable_short_circuit_providers: Providers where web-search-only
+                                            requests should use normal dispatch.
         """
         super().__init__()
         # Convert enum values to strings for comparison
         if enabled_providers is None:
             self.enabled_providers = [LlmProviders.BEDROCK.value]
         else:
-            self.enabled_providers = [
-                p.value if isinstance(p, LlmProviders) else p for p in enabled_providers
-            ]
+            self.enabled_providers = _normalize_provider_names(enabled_providers)
+        self.disable_short_circuit_providers = _normalize_provider_names(
+            disable_short_circuit_providers or []
+        )
         self.search_tool_name = search_tool_name
         self._request_has_websearch = False  # Track if current request has web search
 
@@ -122,6 +149,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             self.enabled_providers is not None
             and provider_str not in self.enabled_providers
         ):
+            return None
+        if provider_str in self.disable_short_circuit_providers:
             return None
 
         # Only short-circuit for providers without native Anthropic Messages
@@ -326,23 +355,20 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Extract parameters from config
         enabled_providers_str = config.get("enabled_providers", None)
         search_tool_name = config.get("search_tool_name", None)
+        disable_short_circuit_providers_str = config.get(
+            "disable_short_circuit_providers", None
+        )
 
         # Convert string provider names to LlmProviders enum values
-        enabled_providers: Optional[List[Union[LlmProviders, str]]] = None
-        if enabled_providers_str is not None:
-            enabled_providers = []
-            for provider in enabled_providers_str:
-                try:
-                    # Try to convert string to LlmProviders enum
-                    provider_enum = LlmProviders(provider)
-                    enabled_providers.append(provider_enum)
-                except ValueError:
-                    # If conversion fails, keep as string
-                    enabled_providers.append(provider)
+        enabled_providers = _provider_names_from_config(enabled_providers_str)
+        disable_short_circuit_providers = _provider_names_from_config(
+            disable_short_circuit_providers_str
+        )
 
         return cls(
             enabled_providers=enabled_providers,
             search_tool_name=search_tool_name,
+            disable_short_circuit_providers=disable_short_circuit_providers,
         )
 
     async def async_pre_request_hook(

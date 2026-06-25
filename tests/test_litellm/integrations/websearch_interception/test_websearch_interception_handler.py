@@ -19,6 +19,7 @@ def test_initialize_from_proxy_config():
     litellm_settings = {
         "websearch_interception_params": {
             "enabled_providers": ["bedrock", "vertex_ai"],
+            "disable_short_circuit_providers": ["hosted_vllm"],
             "search_tool_name": "my-search",
         }
     }
@@ -31,6 +32,7 @@ def test_initialize_from_proxy_config():
 
     assert LlmProviders.BEDROCK.value in logger.enabled_providers
     assert LlmProviders.VERTEX_AI.value in logger.enabled_providers
+    assert "hosted_vllm" in logger.disable_short_circuit_providers
     assert logger.search_tool_name == "my-search"
 
 
@@ -161,8 +163,6 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     to the follow-up LLM request, causing "Extra inputs are not permitted" errors
     from providers like Bedrock that use strict parameter validation.
     """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
     # Simulate kwargs that would be passed during agentic loop execution
     kwargs_with_internal_flags = {
         "_websearch_interception_converted_stream": True,

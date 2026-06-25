@@ -122,6 +122,33 @@ class TestTryShortCircuitSearch:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_does_not_short_circuit_disabled_provider(self):
+        """Provider in disable_short_circuit_providers -> NOT short-circuited"""
+        logger = WebSearchInterceptionLogger(
+            enabled_providers=["hosted_vllm"],
+            disable_short_circuit_providers=["hosted_vllm"],
+        )
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            result = await logger.try_short_circuit_search(
+                model="hosted_vllm/Qwen/Qwen2.5-Coder-32B-Instruct",
+                messages=[{"role": "user", "content": "Search for something"}],
+                tools=[
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 8,
+                    }
+                ],
+                custom_llm_provider="hosted_vllm",
+            )
+
+        assert result is None
+        mock_search.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_does_not_short_circuit_bedrock(self):
         """Bedrock has native agentic loop support → NOT short-circuited.
 
