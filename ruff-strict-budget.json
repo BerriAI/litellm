@@ -231,10 +231,6 @@
     "baseline": 6,
     "slack": 3
   },
-  "PLR0913": {
-    "baseline": 1813,
-    "slack": 181
-  },
   "PLR1704": {
     "baseline": 3,
     "slack": 3
