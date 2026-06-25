@@ -1,21 +1,25 @@
 //! LiteLLM AI Gateway — a minimal Axum server fronting the Rust router.
 //!
 //! Flow: client → `POST /v1/realtime` → `router.realtime()` selects a deployment
-//! (simple-shuffle) → `providers::realtime::realtime()` invokes OpenAI. The
+//! (simple-shuffle) → `io::realtime::realtime()` invokes OpenAI. The
 //! server owns transport + config; routing lives in the `router` crate.
-
-mod auth;
-mod gil;
-#[cfg(feature = "python-config")]
-mod python;
-mod routes;
-mod state;
+//!
+//! The binary requires the `server` feature (declared in `Cargo.toml` via
+//! `required-features`), so cargo skips it unless that feature is on. Everything
+//! the binary needs lives in the library (`litellm_ai_gateway`); `main` just
+//! wires startup.
 
 use std::sync::Arc;
 
+use litellm_ai_gateway::io::realtime_pool::{upstream_key, PoolConfig, RealtimePool};
+use litellm_ai_gateway::routes;
+use litellm_ai_gateway::state::AppState;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
-use crate::state::AppState;
+use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
+use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
+#[cfg(feature = "python-config")]
+use litellm_ai_gateway::python;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
@@ -37,9 +41,37 @@ async fn main() {
         );
     }
 
+    // Spawn the realtime-logging worker (drains a channel → POSTs batches to the
+    // Python proxy's /v1/callbacks/logs). Built here so the spawn lands on the
+    // tokio runtime. `from_env` reads LITELLM_PROXY_BASE_URL + LITELLM_MASTER_KEY.
+    let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
+    let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
+
+    let router = Arc::new(build_router());
+
+    // Build the pre-warmed realtime pool and register each deployment's upstream
+    // so the background replenisher starts warming it. `REALTIME_POOL_SIZE=0`
+    // yields a disabled pool → every connect fresh-dials (original behavior).
+    let pool_config = PoolConfig::from_env();
+    let realtime_pool = RealtimePool::spawn(pool_config);
+    if pool_config.enabled() {
+        register_deployments(&router, &realtime_pool);
+        eprintln!(
+            "realtime connection pool enabled: target {} warm sockets/key, max idle {}s",
+            pool_config.target_size,
+            pool_config.max_idle.as_secs()
+        );
+    } else {
+        eprintln!(
+            "realtime connection pool disabled (REALTIME_POOL_SIZE=0); fresh-dialing each connect"
+        );
+    }
+
     let state = AppState {
-        router: Arc::new(build_router()),
+        router,
         master_key,
+        loggers: Arc::new(loggers),
+        realtime_pool,
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
@@ -52,6 +84,27 @@ async fn main() {
     axum::serve(listener, routes::app(state))
         .await
         .expect("server error");
+}
+
+/// Register every deployment's upstream key with the pool so the replenisher
+/// pre-warms it. Mirrors `service::run`'s key derivation (strip `openai/`, resolve
+/// api_key); deployments whose key can't be resolved are skipped (they fresh-dial
+/// and surface the auth error on the request path, as before).
+fn register_deployments(router: &Router, pool: &RealtimePool) {
+    for deployment in router.deployments() {
+        let params = &deployment.litellm_params;
+        let provider_model = params
+            .model
+            .strip_prefix("openai/")
+            .unwrap_or(&params.model);
+        if let Some(key) = upstream_key(
+            provider_model,
+            params.api_key.as_deref(),
+            params.api_base.as_deref(),
+        ) {
+            pool.register(key);
+        }
+    }
 }
 
 /// Resolve `PORT`, warning (rather than silently defaulting) on an invalid value.

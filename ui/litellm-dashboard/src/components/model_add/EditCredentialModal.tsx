@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { CredentialItem } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 const { Link } = Typography;
 
@@ -102,7 +103,7 @@ export default function EditCredentialsModal({
               <AntdSelect.Option key={providerEnum} value={providerEnum}>
                 <div className="flex items-center space-x-2">
                   <img
-                    src={providerLogoMap[providerDisplayName]}
+                    src={resolveLogoSrc(providerLogoMap[providerDisplayName])}
                     alt={`${providerEnum} logo`}
                     className="w-5 h-5"
                     onError={(e) => {

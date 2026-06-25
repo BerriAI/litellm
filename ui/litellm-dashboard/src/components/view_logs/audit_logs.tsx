@@ -3,6 +3,7 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
 import { ReloadOutlined, LoadingOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import moment from "moment";
 import { useTranslation } from "react-i18next";
 import { uiAuditLogsCall } from "../networking";
@@ -29,7 +30,7 @@ interface AuditLogsProps {
   premiumUser: boolean;
 }
 
-const asset_logos_folder = "../ui/assets/";
+const asset_logos_folder = "/ui/assets/";
 export const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
 
 const ACTION_COLOR: Record<string, string> = {
@@ -154,7 +155,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
           {t("viewLogs.auditLogs.previewText")}
         </p>
         <img
-          src={auditLogsPreviewImg}
+          src={resolveLogoSrc(auditLogsPreviewImg)}
           alt={t("viewLogs.auditLogs.previewAlt")}
           style={{
             maxWidth: "100%",

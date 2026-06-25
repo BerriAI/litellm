@@ -7,6 +7,7 @@ import { Button, Card, TextInput } from "@tremor/react";
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
 import { useTranslation } from "react-i18next";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NumericalInput from "../shared/numerical_input";
 
 const { Option } = Select;
@@ -189,7 +190,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             optionLabelProp="label"
           >
             {allCallbacks.map((callbackName) => {
-              const logo = callbackInfo[callbackName]?.logo;
+              const logo = resolveLogoSrc(callbackInfo[callbackName]?.logo);
               const description = callbackInfo[callbackName]?.description;
               return (
                 <Option key={callbackName} value={callbackName} label={callbackName}>
@@ -255,7 +256,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           const callbackDisplayName = config.callback_name
             ? Object.entries(callback_map).find(([_, value]) => value === config.callback_name)?.[0]
             : undefined;
-          const logoUrl = callbackDisplayName ? callbackInfo[callbackDisplayName]?.logo : null;
+          const logoUrl = callbackDisplayName ? resolveLogoSrc(callbackInfo[callbackDisplayName]?.logo) : null;
 
           return (
             <Card
@@ -298,7 +299,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       optionLabelProp="label"
                     >
                       {supportedCallbacks.map((callbackName) => {
-                        const logo = callbackInfo[callbackName]?.logo;
+                        const logo = resolveLogoSrc(callbackInfo[callbackName]?.logo);
                         const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>

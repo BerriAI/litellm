@@ -22,6 +22,7 @@ import {
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
 } from "./guardrail_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
@@ -692,7 +693,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                   <div style={{ display: "flex", alignItems: "center" }}>
                     {guardrailLogoMap[value] && (
                       <img
-                        src={guardrailLogoMap[value]}
+                        src={resolveLogoSrc(guardrailLogoMap[value])}
                         alt=""
                         style={{
                           height: "20px",
@@ -713,7 +714,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 <div style={{ display: "flex", alignItems: "center" }}>
                   {guardrailLogoMap[value] && (
                     <img
-                      src={guardrailLogoMap[value]}
+                      src={resolveLogoSrc(guardrailLogoMap[value])}
                       alt=""
                       style={{
                         height: "20px",

@@ -346,6 +346,9 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+    rust_control_plane_router,
+)
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
@@ -11500,18 +11503,20 @@ def get_direct_access_models(
     llm_router: Router,
 ) -> List[str]:
     """
-    Get all models that user has direct access to
-    """
+    Get all models that user has direct access to.
 
-    direct_access_models: List[str] = []
-    for model in user_db_object.models:
-        deployments = llm_router.get_model_list(model_name=model)
-        if deployments is not None:
-            for deployment in deployments:
-                model_id = deployment.get("model_info", {}).get("id", None)
-                if model_id is not None:
-                    direct_access_models.append(model_id)
-    return direct_access_models
+    The 'all-proxy-models' sentinel grants direct access to every non-team
+    deployment, mirroring how get_key_models expands it for the key/team path.
+    """
+    if SpecialModelNames.all_proxy_models.value in user_db_object.models:
+        return llm_router.get_model_ids(exclude_team_models=True)
+
+    return [
+        model_id
+        for model in user_db_object.models
+        for deployment in (llm_router.get_model_list(model_name=model) or [])
+        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
+    ]
 
 
 def _filter_models_to_user_accessible(all_models: List[Dict]) -> List[Dict]:
@@ -15661,8 +15666,6 @@ async def get_config():
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
-        import base64
-
         all_available_callbacks = AllCallbacks()
 
         config_data = await proxy_config.get_config()
@@ -15728,18 +15731,14 @@ async def get_config():
             _slack_vars = [
                 "SLACK_WEBHOOK_URL",
             ]
-            _slack_env_vars = {}
-            for _var in _slack_vars:
-                env_variable = environment_variables.get(_var, None)
-                if env_variable is None:
-                    _value = os.getenv("SLACK_WEBHOOK_URL", None)
-                    _slack_env_vars[_var] = _value
-                else:
-                    # decode + decrypt the value
-                    _decrypted_value = decrypt_value_helper(
-                        value=env_variable, key=_var
-                    )
-                    _slack_env_vars[_var] = _decrypted_value
+            _slack_env_vars = {
+                _var: (
+                    value
+                    if (value := environment_variables.get(_var)) is not None
+                    else os.getenv(_var)
+                )
+                for _var in _slack_vars
+            }
             _slack_env_vars = mask_sensitive_keys(
                 _slack_env_vars, _ALERTING_SENSITIVE_VARS
             )
@@ -15770,15 +15769,9 @@ async def get_config():
             "EMAIL_LOGO_URL",
             "EMAIL_SUPPORT_CONTACT",
         ]
-        _email_env_vars = {}
-        for _var in _email_vars:
-            env_variable = environment_variables.get(_var, None)
-            if env_variable is None:
-                _email_env_vars[_var] = None
-            else:
-                # decode + decrypt the value
-                _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
-                _email_env_vars[_var] = _decrypted_value
+        _email_env_vars = {
+            _var: environment_variables.get(_var) for _var in _email_vars
+        }
         _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
@@ -16636,6 +16629,7 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
+app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)

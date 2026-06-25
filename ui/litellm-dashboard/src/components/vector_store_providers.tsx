@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
@@ -22,7 +23,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   S3Vectors: "s3_vectors",
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
@@ -213,7 +214,7 @@ export const getVectorStoreProviderLogoAndName = (providerValue: string): { logo
 
   // Get the display name from VectorStoreProviders enum and logo from map
   const displayName = VectorStoreProviders[enumKey as keyof typeof VectorStoreProviders];
-  const logo = vectorStoreProviderLogoMap[displayName as keyof typeof vectorStoreProviderLogoMap];
+  const logo = resolveLogoSrc(vectorStoreProviderLogoMap[displayName as keyof typeof vectorStoreProviderLogoMap]) ?? "";
 
   return { logo, displayName };
 };

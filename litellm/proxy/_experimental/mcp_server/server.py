@@ -300,6 +300,7 @@ if MCP_AVAILABLE:
         is_tool_name_prefixed,
         normalize_server_name,
         split_server_prefix_from_name,
+        strip_known_server_prefix,
     )
 
     ######################################################
@@ -2109,20 +2110,18 @@ if MCP_AVAILABLE:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        if allowed_tool_names is not None:
-            # Strip prefix from tool names before comparing
-            # Tools are stored in DB without prefix, but come from MCP server with prefix
-            filtered_tools = []
-            for t in tools:
-                # Get tool name without server prefix
-                unprefixed_tool_name, _ = split_server_prefix_from_name(t.name)
-                if unprefixed_tool_name in allowed_tool_names:
-                    filtered_tools.append(t)
-        else:
-            # No restrictions, return all tools
-            filtered_tools = tools
+        if allowed_tool_names is None:
+            return tools
 
-        return filtered_tools
+        # Tools arrive prefixed with the server's own prefix; strip exactly that
+        # prefix (resolved from the server) rather than the first separator, so a
+        # prefix containing the separator still reduces to the stored bare name.
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        return [
+            t
+            for t in tools
+            if strip_known_server_prefix(t.name, server) in allowed_tool_names
+        ]
 
     async def _merge_toolset_permissions(
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -3501,7 +3500,19 @@ if MCP_AVAILABLE:
                     if stored_oauth_headers:
                         continue
                     if getattr(server, "delegate_auth_to_upstream", False) is True:
-                        continue
+                        # Delegate-auth servers run upstream PKCE: challenge with
+                        # the proxied resource_metadata (RFC 9728), not the
+                        # gateway authorization_uri below which would authorize
+                        # against the gateway instead of the upstream IdP.
+                        www_authenticate = _get_passthrough_www_authenticate(
+                            scope=scope,
+                            server_name=server_name,
+                        )
+                        raise HTTPException(
+                            status_code=401,
+                            detail="Unauthorized",
+                            headers={"www-authenticate": www_authenticate},
+                        )
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)

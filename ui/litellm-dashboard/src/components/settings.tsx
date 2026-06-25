@@ -23,6 +23,7 @@ import { Trans, useTranslation } from "react-i18next";
 
 import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
 import EmailSettings from "./email_settings";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const { Title, Paragraph } = Typography;
@@ -54,7 +55,7 @@ interface genericCallbackParams {
   litellm_callback_params: string[] | null; // known required params for this callback
 }
 
-const assetsLogoFolder = "../ui/assets/logos/";
+const assetsLogoFolder = "/ui/assets/logos/";
 
 interface DynamicParamsFieldsProps {
   params: string[];
@@ -161,10 +162,11 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
       >
         {callbackConfigs.map((callbackConfig) => {
           const logo = callbackConfig.logo;
-          const logoSrc =
+          const logoSrc = resolveLogoSrc(
             logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
               ? logo
-              : `${assetsLogoFolder}${logo}`;
+              : `${assetsLogoFolder}${logo}`,
+          );
 
           return (
             <SelectItem key={callbackConfig.id} value={callbackConfig.id}>

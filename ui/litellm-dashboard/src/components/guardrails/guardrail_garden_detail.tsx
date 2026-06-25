@@ -3,6 +3,7 @@ import { Button } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import AddGuardrailForm from "./add_guardrail_form";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 
@@ -84,7 +85,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
       {/* ── Header block (Vertex-style) ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 8 }}>
         <img
-          src={card.logo}
+          src={resolveLogoSrc(card.logo)}
           alt=""
           style={{ width: 40, height: 40, borderRadius: 8, objectFit: "contain" }}
           onError={(e) => {

@@ -3,6 +3,7 @@ import { Tag } from "antd";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
 import { useTranslation } from "react-i18next";
 import { callbackInfo, callback_map, reverse_callback_map } from "./callback_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 interface LoggingConfig {
   callback_name: string;
@@ -70,7 +71,7 @@ export function LoggingSettingsView({
           <div className="space-y-3">
             {loggingConfigs.map((config, index) => {
               const displayName = getLoggingDisplayName(config.callback_name);
-              const logoUrl = callbackInfo[displayName]?.logo;
+              const logoUrl = resolveLogoSrc(callbackInfo[displayName]?.logo);
 
               return (
                 <div
@@ -118,7 +119,7 @@ export function LoggingSettingsView({
             {disabledCallbacks.map((callbackName, index) => {
               // Handle both display names and internal values
               const displayName = reverse_callback_map[callbackName] || callbackName;
-              const logoUrl = callbackInfo[displayName]?.logo;
+              const logoUrl = resolveLogoSrc(callbackInfo[displayName]?.logo);
 
               return (
                 <div

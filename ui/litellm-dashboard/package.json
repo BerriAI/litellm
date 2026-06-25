@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "lint:metrics": "node scripts/update-lint-metrics.mjs",
     "test": "vitest",
     "test:dot": "vitest --reporter=dot",
     "test:watch": "vitest -w",
