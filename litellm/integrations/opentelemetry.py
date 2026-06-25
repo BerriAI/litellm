@@ -191,8 +191,19 @@ def _normalize_team_metadata_keys(value: Any) -> List[str]:
 
 _FREEZE_MAX_DEPTH = 16
 
+HashableScope = Union[
+    str,
+    int,
+    float,
+    bool,
+    bytes,
+    None,
+    tuple["HashableScope", ...],
+    frozenset["HashableScope"],
+]
 
-def _freeze_for_dedupe(value: object, _depth: int = 0) -> object:
+
+def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
     if _depth >= _FREEZE_MAX_DEPTH:
         return repr(value)
     if isinstance(value, (list, tuple)):
@@ -201,13 +212,14 @@ def _freeze_for_dedupe(value: object, _depth: int = 0) -> object:
         return frozenset(_freeze_for_dedupe(item, _depth + 1) for item in value)
     if isinstance(value, dict):
         return frozenset(
-            (key, _freeze_for_dedupe(item, _depth + 1)) for key, item in value.items()
+            (_freeze_for_dedupe(key, _depth + 1), _freeze_for_dedupe(item, _depth + 1))
+            for key, item in value.items()
         )
     try:
         hash(value)
     except TypeError:
         return repr(value)
-    return value
+    return cast(HashableScope, value)
 
 
 @dataclass
