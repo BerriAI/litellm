@@ -1,10 +1,7 @@
 """Regression tests for team-scoped DB model os.environ/ isolation.
 
-Issue #31052: a team admin could create a model with
-api_key: os.environ/LITELLM_MASTER_KEY and api_base pointing at a server
-they control.  When the proxy loaded the model from DB, set_model_list()
-resolved the reference to the real master key, which was then forwarded in
-the Authorization header to the attacker-controlled upstream.
+Issue #31052: team admins must not be able to reference proxy environment
+variables via os.environ/ in DB-stored model params.
 
 Fix: strip_env_refs_for_team_model() blanks os.environ/ values in
 litellm_params before they enter the router, but only for team-scoped
@@ -83,3 +80,40 @@ class TestStripEnvRefsForTeamModel:
             litellm_params=params, model_info={"team_id": "team-abc"}
         )
         assert result == params
+
+    def test_nested_dict_env_refs_blanked(self) -> None:
+        """Nested dicts (e.g. extra_headers) must also have os.environ/ stripped."""
+        params = {
+            "api_key": "sk-real",
+            "extra_headers": {"Authorization": "os.environ/INTERNAL_TOKEN"},
+        }
+        result = strip_env_refs_for_team_model(
+            litellm_params=params, model_info={"team_id": "team-abc"}
+        )
+        assert result["extra_headers"]["Authorization"] == ""
+        assert result["api_key"] == "sk-real"
+
+    def test_nested_list_env_refs_blanked(self) -> None:
+        """Lists of dicts (e.g. dataSources) must also have os.environ/ stripped."""
+        params = {
+            "dataSources": [{"parameters": {"key": "os.environ/AZURE_SEARCH_KEY"}}],
+        }
+        result = strip_env_refs_for_team_model(
+            litellm_params=params, model_info={"team_id": "team-abc"}
+        )
+        assert result["dataSources"][0]["parameters"]["key"] == ""
+
+    def test_pydantic_model_info_team_id_respected(self) -> None:
+        """model_info as Pydantic obj with team_id must still trigger stripping."""
+        from unittest.mock import MagicMock
+
+        pydantic_info = MagicMock()
+        pydantic_info.model_dump.return_value = {"team_id": "team-pydantic"}
+
+        params = {"api_key": "os.environ/SECRET"}
+        # simulate the callsite: model_dump() called before passing to strip_env_refs_for_team_model
+        result = strip_env_refs_for_team_model(
+            litellm_params=params,
+            model_info=pydantic_info.model_dump(),
+        )
+        assert result["api_key"] == ""

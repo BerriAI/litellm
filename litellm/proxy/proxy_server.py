@@ -101,11 +101,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.db_model_utils import strip_env_refs_for_team_model
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
 )
+from litellm.proxy.common_utils.db_model_utils import strip_env_refs_for_team_model
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -5218,7 +5218,11 @@ class ProxyConfig:
                         )
                         _litellm_params[k] = _value
                 _model_info_raw = (
-                    m.model_info if isinstance(m.model_info, dict) else None
+                    m.model_info
+                    if isinstance(m.model_info, dict)
+                    else m.model_info.model_dump()
+                    if hasattr(m.model_info, "model_dump")
+                    else None
                 )
                 _litellm_params = strip_env_refs_for_team_model(
                     litellm_params=_litellm_params,
@@ -5261,7 +5265,11 @@ class ProxyConfig:
                     )
                     _litellm_params[k] = decrypted_value
                 _model_info_raw = (
-                    m.model_info if isinstance(m.model_info, dict) else None
+                    m.model_info
+                    if isinstance(m.model_info, dict)
+                    else m.model_info.model_dump()
+                    if hasattr(m.model_info, "model_dump")
+                    else None
                 )
                 _litellm_params = strip_env_refs_for_team_model(
                     litellm_params=_litellm_params,
