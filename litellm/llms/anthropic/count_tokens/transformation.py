@@ -22,9 +22,6 @@ class AnthropicCountTokensConfig:
     _COUNT_TOKENS_PATH: str = "/v1/messages/count_tokens"
     _DEFAULT_ENDPOINT: str = f"https://api.anthropic.com{_COUNT_TOKENS_PATH}"
 
-    def get_anthropic_count_tokens_endpoint(self) -> str:
-        return self._DEFAULT_ENDPOINT
-
     def _build_count_tokens_url(self, api_base: Optional[str]) -> str:
         """Return the full count_tokens URL, appending the path when a custom base is provided."""
         if not api_base:
@@ -32,9 +29,11 @@ class AnthropicCountTokensConfig:
         base = api_base.rstrip("/")
         if base.endswith(self._COUNT_TOKENS_PATH):
             return base
-        if base.endswith("/v1/messages"):
+        messages_prefix = self._COUNT_TOKENS_PATH.rsplit("/count_tokens", 1)[0]
+        if base.endswith(messages_prefix):
             return f"{base}/count_tokens"
-        if base.endswith("/v1"):
+        v1_prefix = messages_prefix.rsplit("/messages", 1)[0]
+        if base.endswith(v1_prefix):
             return f"{base}/messages/count_tokens"
         return f"{base}{self._COUNT_TOKENS_PATH}"
 
