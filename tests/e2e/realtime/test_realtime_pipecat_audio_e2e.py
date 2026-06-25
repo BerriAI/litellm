@@ -63,7 +63,8 @@ from pipecat.processors.frame_processor import (
 from pipecat.services.llm_service import FunctionCallParams  # noqa: E402
 from pipecat.services.openai.realtime import events as rt_events  # noqa: E402
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService  # noqa: E402
-from websockets.asyncio.client import connect as websocket_connect  # noqa: E402
+
+from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 
 PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
 
@@ -102,61 +103,6 @@ SERVER_VAD_SETTINGS = rt_events.SessionProperties(
         )
     ),
 )
-
-
-# ---------------------------------------------------------------------------
-# Simplified LiteLLMRealtimeLLMService (from bot.py)
-# ---------------------------------------------------------------------------
-
-
-class LiteLLMRealtimeLLMService(OpenAIRealtimeLLMService):
-    """Minimal LiteLLM-aware realtime service for tests.
-
-    Three overrides carried from bot.py:
-      1. _connect   – disables websockets keepalive pings (LiteLLM proxy
-                      does not respond to pings, causing 1011 errors).
-      2. _create_response – sends session.update with tools BEFORE history
-                      items so that Gemini's deferred-setup logic in the
-                      proxy can include tools in the very first setup
-                      message it forwards to the backend.
-      3. _handle_evt_session_created – immediately marks the session ready
-                      without waiting for a session.updated echo (the
-                      LiteLLM Gemini bridge does not send one).
-    """
-
-    async def _connect(self) -> None:
-        if self._websocket:
-            return
-        try:
-            self._websocket = await websocket_connect(
-                uri=self.base_url,
-                additional_headers={"Authorization": f"Bearer {self.api_key}"},
-                ping_interval=None,
-                close_timeout=10,
-                max_size=None,
-            )
-            self._receive_task = self.create_task(self._receive_task_handler())
-        except Exception as exc:
-            await self.push_error(error_msg=f"Error connecting: {exc}", exception=exc)
-            self._websocket = None
-
-    async def _create_response(self) -> None:
-        # Send session.update (tools + system instruction) BEFORE history
-        # items so the proxy's deferred-setup path includes tools in the
-        # first Gemini setup message.  The parent sends it again after
-        # history, but the proxy guard drops that duplicate safely.
-        if self._llm_needs_conversation_setup and self._context:
-            await self._send_session_update()
-        await super()._create_response()
-
-    async def _handle_evt_session_created(self, evt: object) -> None:
-        # LiteLLM's Gemini bridge does not echo session.updated, so Pipecat
-        # would wait forever for _api_session_ready.  Mark it ready here.
-        await self._send_session_update()
-        self._api_session_ready = True
-        if self._run_llm_when_api_session_ready:
-            self._run_llm_when_api_session_ready = False
-            await self._create_response()
 
 
 # ---------------------------------------------------------------------------

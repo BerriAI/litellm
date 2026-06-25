@@ -1,7 +1,8 @@
 """Live pipecat smoke for the proxy realtime websocket.
 
 A realism layer on top of test_realtime_e2e: instead of speaking the GA protocol
-by hand, drive the proxy through pipecat's GA OpenAIRealtimeLLMService with its
+by hand, drive the proxy through the shared LiteLLMRealtimeLLMService (pipecat's
+GA service with proxy-specific overrides, keepalive pings disabled) with its
 base_url pointed at the proxy and the model swapped per provider. It confirms the
 audio and function-call wiring survives the round-trip. Assertions are coarse;
 the raw-websocket suite is the source of truth.
@@ -56,9 +57,8 @@ from pipecat.processors.frame_processor import (  # noqa: E402
     FrameProcessor,
 )
 from pipecat.services.llm_service import FunctionCallParams  # noqa: E402
-from pipecat.services.openai.realtime.llm import (  # noqa: E402
-    OpenAIRealtimeLLMService,
-)
+
+from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 
 PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
 
@@ -93,7 +93,7 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
         tool_called.set()
         await params.result_callback({"city": "Paris", "temperature_f": 72})
 
-    llm = OpenAIRealtimeLLMService(
+    llm = LiteLLMRealtimeLLMService(
         api_key=key, base_url=f"{_ws_base_url()}/v1/realtime", model=model
     )
     llm.register_function("get_weather", get_weather)
