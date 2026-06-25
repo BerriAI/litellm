@@ -21,6 +21,7 @@ RUN apk add --no-cache \
     gcc \
     python3 \
     python3-dev \
+    rust \
     openssl \
     openssl-dev \
     nodejs \

@@ -138,9 +138,7 @@ try:
     import weakref
 
     # Robust auth lookup keyed by session_object.
-    _session_obj_auth_storage: (
-        "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]"
-    ) = weakref.WeakKeyDictionary()
+    _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
 
     active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
         contextvars.ContextVar("active_mcp_session", default=None)
@@ -518,7 +516,12 @@ if MCP_AVAILABLE:
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm, _stateful_auth_context_cleanup_task
+        global \
+            _SESSION_MANAGERS_INITIALIZED, \
+            _session_manager_cm, \
+            _session_manager_stateful_cm, \
+            _sse_session_manager_cm, \
+            _stateful_auth_context_cleanup_task
 
         # Use async lock to prevent concurrent initialization
         async with _INITIALIZATION_LOCK:
@@ -547,7 +550,12 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm, _stateful_auth_context_cleanup_task
+        global \
+            _SESSION_MANAGERS_INITIALIZED, \
+            _session_manager_cm, \
+            _session_manager_stateful_cm, \
+            _sse_session_manager_cm, \
+            _stateful_auth_context_cleanup_task
 
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")

@@ -350,9 +350,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
                 if isinstance(messages[msg_idx]["content"][content_idx_optional], dict):
-                    messages[msg_idx]["content"][content_idx_optional][
-                        "text"
-                    ] = guardrail_response
+                    messages[msg_idx]["content"][content_idx_optional]["text"] = (
+                        guardrail_response
+                    )
 
     async def process_output_response(
         self,
