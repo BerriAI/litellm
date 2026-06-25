@@ -55,7 +55,7 @@ _PASCAL_TO_WIRE: Dict[str, str] = {
 }
 
 
-def _build_message_send_params(params: dict) -> "MessageSendParams":
+def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
     """Build MessageSendParams from wire (0.3) or A2A 1.0 JSON-RPC params."""
     from a2a.compat.v0_3.types import MessageSendParams
 
@@ -114,7 +114,7 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str
 
 def _forwarding_headers(
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, Any],
     agent_extra_headers: Dict[str, str] | None,
 ) -> Dict[str, str] | None:
     sanitized = (
@@ -177,9 +177,9 @@ def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
 
 async def _forward_jsonrpc(
     agent_url: str,
-    body: dict,
+    body: dict[str, Any],
     extra_headers: Dict[str, str] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -201,7 +201,7 @@ async def _forward_jsonrpc(
 
 async def _a2a_sse_event_source(
     agent_url: str,
-    body: dict,
+    body: dict[str, Any],
     request_id: Any | None = None,
     extra_headers: Dict[str, str] | None = None,
     served_version: A2AVersion = "0.3",
@@ -230,7 +230,7 @@ async def _a2a_sse_event_source(
     try:
         if not resp.is_success:
             error_body = await resp.aread()
-            error_event: dict | None = None
+            error_event: dict[str, Any] | None = None
             try:
                 parsed = json.loads(error_body)
                 if isinstance(parsed, dict) and "error" in parsed:
@@ -265,12 +265,12 @@ async def _a2a_sse_event_source(
 
 async def _forward_jsonrpc_sse(
     agent_url: str,
-    body: dict,
+    body: dict[str, Any],
     request_id: Any | None = None,
     extra_headers: Dict[str, str] | None = None,
     proxy_logging_obj: Any | None = None,
     user_api_key_dict: Any | None = None,
-    request_data: dict | None = None,
+    request_data: dict[str, Any] | None = None,
     served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
     event_source = _a2a_sse_event_source(
@@ -330,15 +330,15 @@ async def _forward_jsonrpc_sse(
 async def _handle_stream_message(
     api_base: str | None,
     request_id: Any,
-    params: dict,
-    litellm_params: dict | None = None,
+    params: dict[str, Any],
+    litellm_params: dict[str, Any] | None = None,
     agent_id: str | None = None,
-    metadata: dict | None = None,
-    proxy_server_request: dict | None = None,
+    metadata: dict[str, Any] | None = None,
+    proxy_server_request: dict[str, Any] | None = None,
     *,
     agent_extra_headers: Dict[str, str] | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-    request_data: dict | None = None,
+    request_data: dict[str, Any] | None = None,
     proxy_logging_obj: Any | None = None,
     served_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
