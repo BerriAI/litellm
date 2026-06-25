@@ -38,22 +38,17 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
 
-        project_id: Optional[str] = None
-        if "Authorization" not in headers:
-            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-                litellm_params
-            )
-
-            access_token, project_id = self._ensure_access_token(
-                credentials=vertex_credentials,
-                project_id=vertex_ai_project,
-                custom_llm_provider="vertex_ai",
-            )
-
-            headers["Authorization"] = f"Bearer {access_token}"
-        else:
-            # Authorization already in headers, but we still need project_id
-            project_id = vertex_ai_project
+        # Always refresh: tokens expire (~1 h) and a stale bearer may have been
+        # written into the shared deployment extra_headers by a prior /chat/completions
+        # call (router shallow-copies litellm_params, so nested dicts are shared).
+        # _ensure_access_token is cheap — it returns the cached token unless expired.
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+        access_token, project_id = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_ai_project,
+            custom_llm_provider="vertex_ai",
+        )
+        headers["Authorization"] = f"Bearer {access_token}"
 
         # Always calculate api_base if not provided, regardless of Authorization header
         if api_base is None:
