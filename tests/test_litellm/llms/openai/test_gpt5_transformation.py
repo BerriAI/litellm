@@ -1309,3 +1309,86 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+@pytest.fixture()
+def bridge_required_model() -> str:
+    name = "test-bridge-required-model"
+    litellm.register_model(
+        {
+            name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "requires_responses_api_bridge_for_tools_and_reasoning": True,
+            }
+        }
+    )
+    return name
+
+
+@pytest.fixture()
+def no_bridge_model() -> str:
+    name = "test-no-bridge-model"
+    litellm.register_model({name: {"litellm_provider": "openai", "mode": "chat"}})
+    return name
+
+
+def _check_bridge(model: str, **kwargs):
+    defaults = dict(
+        custom_llm_provider="openai",
+        responses_api_model_info={},
+        tools=[{"type": "function", "function": {"name": "get_weather"}}],
+        reasoning_effort="high",
+        optional_params={},
+    )
+    defaults.update(kwargs)
+    OpenAIGPT5Config._check_responses_api_bridge_requirement(model=model, **defaults)
+
+
+def test_bridge_required_raises_for_tools_plus_reasoning_effort(
+    bridge_required_model: str,
+):
+    with pytest.raises(litellm.BadRequestError):
+        _check_bridge(bridge_required_model)
+
+
+def test_bridge_required_raises_when_reasoning_effort_in_optional_params(
+    bridge_required_model: str,
+):
+    with pytest.raises(litellm.BadRequestError):
+        _check_bridge(
+            bridge_required_model,
+            reasoning_effort=None,
+            optional_params={"reasoning_effort": "high"},
+        )
+
+
+def test_bridge_required_allows_tools_without_reasoning_effort(
+    bridge_required_model: str,
+):
+    _check_bridge(bridge_required_model, reasoning_effort=None, optional_params={})
+
+
+def test_bridge_required_allows_reasoning_effort_without_tools(
+    bridge_required_model: str,
+):
+    _check_bridge(bridge_required_model, tools=None)
+
+
+def test_bridge_required_skipped_when_responses_mode_active(
+    bridge_required_model: str,
+):
+    _check_bridge(bridge_required_model, responses_api_model_info={"mode": "responses"})
+
+
+def test_bridge_required_skipped_when_force_check_disabled(
+    bridge_required_model: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "force_responses_api_bridge_check", True)
+    _check_bridge(bridge_required_model)
+
+
+def test_bridge_not_required_allows_tools_plus_reasoning_effort(
+    no_bridge_model: str,
+):
+    _check_bridge(no_bridge_model)

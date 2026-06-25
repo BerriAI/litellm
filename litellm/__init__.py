@@ -332,6 +332,7 @@ ssl_ecdh_curve: Optional[str] = (
 )
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
+force_responses_api_bridge_check: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False

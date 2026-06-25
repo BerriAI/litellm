@@ -1,6 +1,6 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import Optional, Union
+from typing import Any, List, Optional, Union
 
 import litellm
 from litellm.utils import (
@@ -119,8 +119,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return
 
         # Get model info for explicit capability check
-        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider) or {}
-        if not model_info.get("requires_responses_api_bridge_for_tools_and_reasoning", False):
+        model_info = (
+            get_model_info(model=model, custom_llm_provider=custom_llm_provider) or {}
+        )
+        if not model_info.get(
+            "requires_responses_api_bridge_for_tools_and_reasoning", False
+        ):
             return
 
         # If responses API mode is already active, no need to raise an error
@@ -128,7 +132,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return
 
         # Check for tools and reasoning_effort
-        _effort = reasoning_effort if reasoning_effort is not None else optional_params.get("reasoning_effort")
+        _effort = (
+            reasoning_effort
+            if reasoning_effort is not None
+            else optional_params.get("reasoning_effort")
+        )
         if tools and _effort is not None:
             raise litellm.BadRequestError(
                 message=(
