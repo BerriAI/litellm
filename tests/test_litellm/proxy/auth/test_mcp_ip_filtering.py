@@ -128,6 +128,168 @@ class TestMCPClientIPExtraction:
         assert result == "203.0.113.5"
 
 
+def _make_request(client_host, xff):
+    request = MagicMock(spec=Request)
+    request.client = MagicMock()
+    request.client.host = client_host
+    request.headers = {"x-forwarded-for": xff}
+    return request
+
+
+class TestExtractClientIpFromXffHops:
+    def test_single_hop_picks_rightmost(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "10.0.0.99, 203.0.113.9", num_trusted_hops=1
+            )
+            == "203.0.113.9"
+        )
+
+    def test_two_hops_picks_second_from_right(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "10.0.0.99, 203.0.113.9, 172.16.0.1", num_trusted_hops=2
+            )
+            == "203.0.113.9"
+        )
+
+    def test_whitespace_and_empty_entries_are_ignored(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                " 1.1.1.1 ,  , 203.0.113.9 ", num_trusted_hops=1
+            )
+            == "203.0.113.9"
+        )
+
+    def test_chain_shorter_than_hops_returns_none(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "203.0.113.9", num_trusted_hops=2
+            )
+            is None
+        )
+
+    def test_zero_or_negative_hops_returns_none(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "203.0.113.9", num_trusted_hops=0
+            )
+            is None
+        )
+
+    def test_invalid_selected_entry_returns_none(self):
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "not-an-ip, 10.0.0.1", num_trusted_hops=2
+            )
+            is None
+        )
+
+
+class TestResolveNumTrustedHops:
+    def test_unset_returns_none(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(None) is None
+
+    def test_int_value(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(2) == 2
+
+    def test_numeric_string_is_coerced(self):
+        assert IPAddressUtils._resolve_num_trusted_hops("3") == 3
+
+    def test_zero_is_treated_as_disabled(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(0) is None
+
+    def test_invalid_value_is_ignored(self):
+        assert IPAddressUtils._resolve_num_trusted_hops("abc") is None
+
+
+class TestXffTrustedHopsAccessControl:
+    def test_spoofed_internal_leftmost_is_defeated(self):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 1,
+            },
+        )
+
+        assert result == "203.0.113.9"
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_genuine_internal_client_is_preserved(self):
+        request = _make_request("10.0.0.5", "10.0.0.50")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 1,
+            },
+        )
+
+        assert result == "10.0.0.50"
+        assert IPAddressUtils.is_internal_ip(result) is True
+
+    def test_two_hops_skips_proxy_appended_addresses(self):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9, 172.16.0.1")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 2,
+            },
+        )
+
+        assert result == "203.0.113.9"
+
+    def test_short_chain_fails_closed(self):
+        request = _make_request("10.0.0.5", "203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": 2,
+            },
+        )
+
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_hops_without_trusted_ranges_still_fails_closed(self):
+        request = _make_request("203.0.113.5", "10.0.0.99, 8.8.8.8")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_xff_num_trusted_hops": 1,
+            },
+        )
+
+        assert result == ""
+
+    def test_unset_hops_keeps_legacy_leftmost_behavior(self):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+        )
+
+        assert result == "10.0.0.99, 203.0.113.9"
+
+
 class TestMCPServerIPFiltering:
     """Tests that external callers only see public MCP servers."""
 

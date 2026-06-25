@@ -9,6 +9,7 @@ import ipaddress
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Request
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
@@ -16,6 +17,8 @@ from litellm.proxy.auth.auth_utils import _get_request_ip_address
 # One-shot warning so operators upgrading from the prior "always trust X-Forwarded-*"
 # behaviour see an actionable message in their logs the first time it triggers.
 _warned_xff_without_trusted_ranges = False
+
+_NUM_TRUSTED_HOPS_ADAPTER = TypeAdapter(int)
 
 
 class IPAddressUtils:
@@ -167,6 +170,49 @@ class IPAddressUtils:
         return IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks)
 
     @staticmethod
+    def extract_client_ip_from_xff_hops(
+        xff_header: str,
+        num_trusted_hops: int,
+    ) -> Optional[str]:
+        """
+        Resolve the originating client IP from an X-Forwarded-For chain by
+        counting ``num_trusted_hops`` entries from the right.
+
+        Each trusted proxy appends the address it received the connection from,
+        so the right end of the chain is written by infrastructure while the
+        left end is attacker-controllable. Selecting the Nth entry from the
+        right, where N is the number of trusted appending proxies in front of
+        the gateway, yields the real client IP and discards any values a client
+        prepended to spoof an allowed address.
+
+        Returns None when the chain has fewer than ``num_trusted_hops`` entries
+        or the selected entry is not a valid IP, so callers can fail closed.
+        """
+        entries = tuple(part.strip() for part in xff_header.split(",") if part.strip())
+        if num_trusted_hops < 1 or len(entries) < num_trusted_hops:
+            return None
+        candidate = entries[-num_trusted_hops]
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            return None
+        return candidate
+
+    @staticmethod
+    def _resolve_num_trusted_hops(raw_num_trusted_hops: object) -> Optional[int]:
+        if raw_num_trusted_hops is None:
+            return None
+        try:
+            num_hops = _NUM_TRUSTED_HOPS_ADAPTER.validate_python(raw_num_trusted_hops)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Invalid mcp_xff_num_trusted_hops value %r; ignoring",
+                raw_num_trusted_hops,
+            )
+            return None
+        return num_hops if num_hops >= 1 else None
+
+    @staticmethod
     def get_mcp_client_ip(
         request: Request,
         general_settings: Optional[Dict[str, Any]] = None,
@@ -177,6 +223,10 @@ class IPAddressUtils:
         Security: Only trusts X-Forwarded-For if:
         1. use_x_forwarded_for is enabled in settings
         2. The direct connection is from a trusted proxy (if mcp_trusted_proxy_ranges configured)
+
+        When ``mcp_xff_num_trusted_hops`` is set, the client IP is read that many
+        entries from the right of the chain instead of the spoofable leftmost
+        value, defeating append-style X-Forwarded-For forgery.
 
         Args:
             request: FastAPI request object
@@ -215,4 +265,23 @@ class IPAddressUtils:
                 # returning it would mis-classify external callers as internal.
                 # Fail closed for access control.
                 return ""
+            raw_num_trusted_hops: object = general_settings.get(
+                "mcp_xff_num_trusted_hops"
+            )
+            num_trusted_hops = IPAddressUtils._resolve_num_trusted_hops(
+                raw_num_trusted_hops
+            )
+            if num_trusted_hops is not None:
+                client_ip = IPAddressUtils.extract_client_ip_from_xff_hops(
+                    request.headers["x-forwarded-for"], num_trusted_hops
+                )
+                if client_ip is None:
+                    verbose_proxy_logger.warning(
+                        "X-Forwarded-For chain has fewer than "
+                        "mcp_xff_num_trusted_hops=%s entries or an invalid "
+                        "address; failing closed",
+                        num_trusted_hops,
+                    )
+                    return ""
+                return client_ip
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
