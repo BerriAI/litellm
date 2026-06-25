@@ -346,7 +346,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+from litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
 from litellm.proxy.management_endpoints.budget_management_endpoints import (

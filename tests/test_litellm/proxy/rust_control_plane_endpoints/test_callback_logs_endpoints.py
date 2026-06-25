@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
-from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+from litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints import (
     CallbackLogsReplayer,
     DATA_PLANE_KEY_ENV_VAR,
     DATA_PLANE_KEY_HEADER,
@@ -149,7 +149,7 @@ async def test_verify_key_returns_model_dump(monkeypatch):
         return expected_auth
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
@@ -178,7 +178,7 @@ async def test_verify_key_omits_model_when_absent(monkeypatch):
         return UserAPIKeyAuth(api_key="hashed-key")
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
@@ -198,7 +198,7 @@ async def test_verify_key_does_not_double_prefix_existing_bearer(monkeypatch):
         return UserAPIKeyAuth(api_key="hashed-key")
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
@@ -220,7 +220,7 @@ async def test_verify_key_401_on_proxy_exception(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
@@ -237,7 +237,7 @@ async def test_verify_key_401_on_http_exception(monkeypatch):
         raise HTTPException(status_code=403, detail="forbidden internals")
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
@@ -256,7 +256,7 @@ async def test_verify_key_propagates_http_5xx(monkeypatch):
         raise HTTPException(status_code=503, detail="db unavailable")
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
@@ -275,7 +275,7 @@ async def test_verify_key_propagates_proxy_5xx(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy.logging_endpoints.callback_logs_endpoints.user_api_key_auth",
+        "litellm.proxy.rust_control_plane_endpoints.callback_logs_endpoints.user_api_key_auth",
         fake_user_api_key_auth,
     )
 
