@@ -18,6 +18,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
+    AuthorizationCodeConfig,
     CredError,
     NoneConfig,
     SharedKey,
@@ -72,11 +73,26 @@ def test_basic_scheme_base64_encodes_the_token():
 
 
 @pytest.mark.parametrize(
+    "oauth2_flow",
+    [None, "authorization_code"],
+)
+def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
+    # oauth2 without client_credentials is the per-user authorization_code mode.
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2, oauth2_flow=oauth2_flow))
+    assert spec is not None and isinstance(spec.config, AuthorizationCodeConfig)
+
+
+@pytest.mark.parametrize(
     "server",
     [
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
-        _server(auth_type=MCPAuth.oauth2),
+        _server(
+            auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials"
+        ),  # M2M -> v1
+        _server(
+            auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
+        ),  # delegated upstream OAuth -> v1
         _server(auth_type=MCPAuth.oauth2_token_exchange),
         _server(auth_type=MCPAuth.aws_sigv4),
         _server(
