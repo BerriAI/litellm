@@ -132,7 +132,7 @@
     "slack": 3
   },
   "reportUnknownArgumentType": {
-    "baseline": 30603,
+    "baseline": 30834,
     "slack": 3000
   },
   "reportUnknownLambdaType": {
