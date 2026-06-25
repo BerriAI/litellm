@@ -51,6 +51,16 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description=(
+            "Behavior on any guardrail error, not just unreachability. "
+            "True (default) raises and blocks the request on error. "
+            "False logs a critical error and allows the request to proceed, so only a valid "
+            "guardrail response can block or modify it; broader than unreachable_fallback."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
