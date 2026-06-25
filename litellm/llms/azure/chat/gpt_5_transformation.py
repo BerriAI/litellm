@@ -187,4 +187,3 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             litellm_params=litellm_params,
             headers=headers,
         )
-
