@@ -1,8 +1,10 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::run_ocr;
+use litellm_ai_gateway::io::realtime::{dial_url, UpstreamHandle};
 use litellm_core::error::CoreError;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
@@ -92,9 +94,98 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(stats.into_any().unbind())
 }
 
+fn core_error_to_runtime(err: CoreError) -> PyErr {
+    PyRuntimeError::new_err(err.to_string())
+}
+
+/// Async upstream WebSocket handle returned by [`realtime_connect`].
+///
+/// Quacks just enough like `websockets.asyncio.client.ClientConnection` for
+/// LiteLLM's `RealTimeStreaming` to drive it: an async `send(text)`, an async
+/// iterator yielding text frames (via `recv()` / `__anext__`), and an async
+/// `close()`. Sends and receives can be awaited concurrently because the
+/// underlying split halves live behind independent tokio mutexes.
+#[pyclass]
+struct RustRealtimeUpstream {
+    inner: Arc<UpstreamHandle>,
+}
+
+#[pymethods]
+impl RustRealtimeUpstream {
+    /// Send a single text frame upstream. Raises `RuntimeError` on a closed
+    /// or broken socket so callers can map it to their preferred Python
+    /// exception type.
+    fn send<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.send_text(text).await.map_err(core_error_to_runtime)
+        })
+    }
+
+    /// Pull the next text frame. Raises `StopAsyncIteration` on a clean close
+    /// so it composes with `async for`, and `RuntimeError` on a transport
+    /// failure.
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            match inner.recv_text().await {
+                Ok(Some(text)) => Ok(text),
+                Ok(None) => Err(PyStopAsyncIteration::new_err("upstream closed")),
+                Err(err) => Err(core_error_to_runtime(err)),
+            }
+        })
+    }
+
+    /// Close the upstream socket. Idempotent: closing an already-closed handle
+    /// is a no-op so `__aexit__` and an explicit `close()` can both run.
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.close().await.map_err(core_error_to_runtime)
+        })
+    }
+
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.recv(py)
+    }
+}
+
+/// Dial an upstream realtime WebSocket with the caller-supplied URL and
+/// headers; returns a [`RustRealtimeUpstream`] handle.
+///
+/// Python keeps owning URL construction (query params, transcription `intent`,
+/// `OpenAI-Beta` passthrough, custom SSL) and just hands the resolved values
+/// to Rust. The connection itself, including TLS, runs on tokio inside Rust.
+#[pyfunction]
+fn realtime_connect<'py>(
+    py: Python<'py>,
+    url: String,
+    headers: Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let headers_vec: Vec<(String, String)> = headers
+        .iter()
+        .map(|(key, value)| Ok((key.extract::<String>()?, value.extract::<String>()?)))
+        .collect::<PyResult<_>>()?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let upstream = dial_url(&url, &headers_vec)
+            .await
+            .map_err(core_error_to_runtime)?;
+        Ok(RustRealtimeUpstream {
+            inner: Arc::new(UpstreamHandle::new(upstream)),
+        })
+    })
+}
+
 #[pymodule]
 fn litellm_python_bridge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    module.add_function(wrap_pyfunction!(realtime_connect, module)?)?;
+    module.add_class::<RustRealtimeUpstream>()?;
     Ok(())
 }

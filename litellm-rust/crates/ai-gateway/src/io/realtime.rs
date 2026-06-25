@@ -11,6 +11,7 @@
 //! buffer its `session.created`, and later hand the live socket to the same
 //! splice loop a fresh dial uses.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -20,9 +21,10 @@ use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::CoreResult;
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
@@ -59,6 +61,90 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
                 .filter(|key| !key.trim().is_empty())
         })
         .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+}
+
+/// Dial an arbitrary realtime WebSocket URL with caller-supplied headers.
+///
+/// Used by the Python bridge so the proxy keeps owning URL construction (query
+/// params, `OpenAI-Beta` passthrough, transcription `intent`, custom SSL) and
+/// Rust only owns the upstream socket. The Python path is the source of truth
+/// for everything else; this stays a thin connector.
+pub async fn dial_url(url: &str, headers: &[(String, String)]) -> CoreResult<UpstreamWs> {
+    let mut request = url
+        .into_client_request()
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    for (name, value) in headers {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| CoreError::Auth(format!("invalid header name '{name}': {err}")))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|err| CoreError::Auth(format!("invalid header value for '{name}': {err}")))?;
+        request.headers_mut().insert(header_name, header_value);
+    }
+    let (upstream, _response) = connect_async(request)
+        .await
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    Ok(upstream)
+}
+
+/// Long-lived handle to an upstream realtime WebSocket. Wraps the split halves
+/// in independent mutexes so the Python bridge can await `send` and `recv`
+/// concurrently on the same connection (the realtime path needs exactly this:
+/// one client->upstream task and one upstream->client task).
+pub struct UpstreamHandle {
+    tx: Arc<Mutex<UpstreamTx>>,
+    rx: Arc<Mutex<UpstreamRx>>,
+}
+
+impl UpstreamHandle {
+    pub fn new(upstream: UpstreamWs) -> Self {
+        let (tx, rx) = upstream.split();
+        Self {
+            tx: Arc::new(Mutex::new(tx)),
+            rx: Arc::new(Mutex::new(rx)),
+        }
+    }
+
+    /// Pull the next text frame, returning `None` on a clean close.
+    ///
+    /// Non-text frames (ping/pong/binary) are ignored so callers see the same
+    /// stream Python's `websockets.ClientConnection` exposes (text-only).
+    pub async fn recv_text(&self) -> CoreResult<Option<String>> {
+        let mut rx = self.rx.lock().await;
+        loop {
+            let next = match rx.next().await {
+                Some(result) => result,
+                None => return Ok(None),
+            };
+            let message = next.map_err(|err| CoreError::Network(err.to_string()))?;
+            match message {
+                Message::Text(text) => return Ok(Some(text)),
+                Message::Close(_) => return Ok(None),
+                Message::Ping(_) | Message::Pong(_) => continue,
+                Message::Binary(_) | Message::Frame(_) => continue,
+            }
+        }
+    }
+
+    /// Send a text frame upstream.
+    pub async fn send_text(&self, text: String) -> CoreResult<()> {
+        let mut tx = self.tx.lock().await;
+        tx.send(Message::Text(text))
+            .await
+            .map_err(|err| CoreError::Network(err.to_string()))
+    }
+
+    /// Initiate a graceful close. Idempotent: a second call on an already-closed
+    /// socket is a no-op so the Python bridge can defensively close from both
+    /// `__aexit__` and an explicit `close()`.
+    pub async fn close(&self) -> CoreResult<()> {
+        let mut tx = self.tx.lock().await;
+        match tx.close().await {
+            Ok(()) => Ok(()),
+            Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => Ok(()),
+            Err(tokio_tungstenite::tungstenite::Error::AlreadyClosed) => Ok(()),
+            Err(err) => Err(CoreError::Network(err.to_string())),
+        }
+    }
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -291,6 +377,123 @@ mod tests {
         // A blank param with no env set should error.
         if std::env::var(OPENAI_API_KEY_ENV).is_err() {
             assert!(resolve_api_key(Some("   ")).is_err());
+        }
+    }
+
+    /// Spin up an in-process WebSocket server that captures upgrade headers and
+    /// echoes text frames, then exercise [`dial_url`] + [`UpstreamHandle`]
+    /// against it. Covers the bridge's two parity-critical guarantees:
+    /// caller-supplied headers reach the upstream (so `OpenAI-Beta` /
+    /// `Authorization` actually go on the wire) and a text frame round-trips
+    /// through the handle's split halves.
+    #[tokio::test]
+    async fn dial_url_forwards_headers_and_round_trips_text() {
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+        use tokio::sync::Mutex as TokioMutex;
+        use tokio_tungstenite::accept_hdr_async;
+        use tokio_tungstenite::tungstenite::handshake::server::{
+            ErrorResponse, Request, Response,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+
+        let captured: Arc<TokioMutex<Vec<(String, String)>>> = Arc::new(TokioMutex::new(vec![]));
+        let captured_for_server = captured.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let captured_for_callback = captured_for_server.clone();
+            let callback = |request: &Request,
+                            response: Response|
+             -> Result<Response, ErrorResponse> {
+                let snapshot: Vec<(String, String)> = request
+                    .headers()
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.as_str().to_string(),
+                            value.to_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect();
+                let target = captured_for_callback.clone();
+                tokio::spawn(async move {
+                    *target.lock().await = snapshot;
+                });
+                Ok(response)
+            };
+            let mut ws = accept_hdr_async(stream, callback).await.expect("accept ws");
+            while let Some(msg) = ws.next().await {
+                let msg = msg.expect("server msg");
+                if msg.is_text() {
+                    ws.send(msg).await.expect("server echo");
+                } else if msg.is_close() {
+                    break;
+                }
+            }
+        });
+
+        let url = format!("ws://127.0.0.1:{port}");
+        let headers = vec![
+            ("authorization".to_string(), "Bearer sk-test".to_string()),
+            ("openai-beta".to_string(), "realtime=v1".to_string()),
+        ];
+        let upstream = dial_url(&url, &headers).await.expect("dial");
+        let handle = UpstreamHandle::new(upstream);
+
+        handle
+            .send_text("{\"type\":\"ping\"}".to_string())
+            .await
+            .expect("send");
+        let echoed = handle.recv_text().await.expect("recv").expect("text");
+        assert_eq!(echoed, "{\"type\":\"ping\"}");
+        handle.close().await.expect("close");
+        let _ = server.await;
+
+        let seen = captured.lock().await;
+        let has_auth = seen
+            .iter()
+            .any(|(name, value)| name == "authorization" && value == "Bearer sk-test");
+        let has_beta = seen
+            .iter()
+            .any(|(name, value)| name == "openai-beta" && value == "realtime=v1");
+        assert!(has_auth, "Authorization header not forwarded: {seen:?}");
+        assert!(has_beta, "OpenAI-Beta header not forwarded: {seen:?}");
+    }
+
+    #[tokio::test]
+    async fn upstream_handle_recv_returns_none_after_close() {
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::accept_async;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut ws = accept_async(stream).await.expect("ws");
+            ws.close(None).await.expect("server close");
+        });
+
+        let upstream = dial_url(&format!("ws://127.0.0.1:{port}"), &[])
+            .await
+            .expect("dial");
+        let handle = UpstreamHandle::new(upstream);
+        let result = handle.recv_text().await.expect("recv");
+        assert!(result.is_none(), "expected None after server close");
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn dial_url_rejects_invalid_header_name() {
+        let result = dial_url(
+            "ws://127.0.0.1:1",
+            &[("invalid header".to_string(), "x".to_string())],
+        )
+        .await;
+        match result {
+            Err(CoreError::Auth(_)) => {}
+            other => panic!("expected Auth error, got {other:?}"),
         }
     }
 

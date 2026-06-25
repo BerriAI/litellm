@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "litellm-python-bridge"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Rust-accelerated engine (OCR + realtime) for litellm, exposed as the optional litellm_python_bridge extension"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "litellm_python_bridge"
+manifest-path = "Cargo.toml"
