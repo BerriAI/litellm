@@ -3103,6 +3103,86 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
 
 
 @pytest.mark.asyncio
+async def test_admin_user_update_spend_invalidates_counter(mocker):
+    """A direct /user/update spend change must invalidate the cross-pod
+    spend counter so enforcement re-reads the new DB value."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user", "spend": 50.0}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock(
+        return_value={"user_id": "target-user", "spend": -25.0}
+    )
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mock_invalidate = mocker.patch(
+        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        new=mocker.AsyncMock(),
+    )
+
+    # Use a negative spend: this also implicitly validates that negative spend
+    # is allowed, which is desirable. Admins may grant an entity extra
+    # allowance for the current budget period only (a one-time spend grant)
+    # without raising the recurring budget ceiling. Future changes should
+    # continue allowing negative spend counters.
+    user_request = UpdateUserRequest(user_id="target-user", spend=-25)
+    admin_caller = UserAPIKeyAuth(
+        user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    await _update_single_user_helper(
+        user_request=user_request, user_api_key_dict=admin_caller
+    )
+    mock_invalidate.assert_awaited_once_with(counter_key="spend:user:target-user")
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_non_finite_spend(mocker):
+    """NaN/inf spend is rejected before any DB write or counter invalidation."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user", "spend": 50.0}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mock_invalidate = mocker.patch(
+        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        new=mocker.AsyncMock(),
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", spend=float("nan"))
+    admin_caller = UserAPIKeyAuth(
+        user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=user_request, user_api_key_dict=admin_caller
+        )
+    assert exc.value.status_code == 400
+    mock_prisma_client.update_data.assert_not_called()
+    mock_invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resolve_user_email_metadata_maps_page_user_ids_to_email(mocker):
     """Regression for LIT-3889.
 

@@ -36,6 +36,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
     require_caller_user_id_for_non_admin,
+    validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -1336,6 +1337,9 @@ async def _update_single_user_helper(
         existing_metadata=existing_metadata or {},
     )
 
+    # Reject NaN/±inf spend before it can reach the DB / spend counter.
+    validate_finite_spend(non_default_values.get("spend"))
+
     # Perform the update
     response: Optional[Dict[str, Any]] = None
 
@@ -1383,6 +1387,18 @@ async def _update_single_user_helper(
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
+
+        # A direct `spend` change must also invalidate the cross-pod spend
+        # counter enforcement reads; the DB write alone leaves a warm counter
+        # at the stale value. `non_default_values["user_id"]` is populated in
+        # every branch above (incl. the email-new-user insert path, whose
+        # response is a bare model and not safely subscriptable).
+        if non_default_values.get("spend") is not None:
+            from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+            await _invalidate_spend_counter(
+                counter_key=f"spend:user:{non_default_values['user_id']}"
+            )
 
     if response is None:
         raise HTTPException(

@@ -69,6 +69,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
     _team_member_has_permission,
+    validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -2208,6 +2209,9 @@ async def _validate_update_key_data(
     user_api_key_cache: Any,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    # Reject NaN/±inf spend before it can reach the DB / spend counter.
+    validate_finite_spend(data.spend)
+
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
     _check_allowed_routes_caller_permission(
@@ -2267,12 +2271,14 @@ async def _validate_update_key_data(
     #   existing admin-only budget semantics).  budget_limits uses
     #   model_fields_set because an explicit null/[] clears the field
     #   and must gate the same as setting or changing it.
+    # - spend gates on presence alone (not a value diff): the DB spend
+    #   lags the live cross-pod counter, so letting an "unchanged" spend
+    #   through the non-admin path would let a key owner / team member
+    #   overwrite the live counter below real usage and silently weaken
+    #   enforcement.
     _is_budget_change = (
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
-        or (
-            data.spend is not None
-            and data.spend != getattr(existing_key_row, "spend", None)
-        )
+        or data.spend is not None
         or "budget_limits" in data.model_fields_set
     )
 
