@@ -1172,7 +1172,7 @@ class ProxyBaseLLMRequestProcessing:
             elif isinstance(self.data["stream_options"], dict) and "include_usage" not in self.data["stream_options"]:
                 self.data["stream_options"]["include_usage"] = True
 
-        if route_type == "acompletion":
+        if route_type in ("acompletion", "anthropic_messages", "atext_completion"):
             if self.data.get("logprobs") is None:
                 self.data["logprobs"] = True
             if self.data.get("top_logprobs") is None:

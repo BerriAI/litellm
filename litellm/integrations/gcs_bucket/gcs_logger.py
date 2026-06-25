@@ -206,7 +206,10 @@ class ProductionGCSLogger(CustomLogger):
 
             # no sensitive info is present in the full log verified manually
             if not success_log["user"]["email"]:
-                success_log["litellm_kwargs"] = kwargs
+                try:
+                    success_log["litellm_kwargs"] = kwargs
+                except Exception as e:
+                    verbose_logger.info(f"Failed to serialize litellm_kwargs: {e}")
 
             if hasattr(response_obj, "choices") and response_obj.choices:
                 choice = response_obj.choices[0]

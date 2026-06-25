@@ -13017,6 +13017,13 @@ async def async_queue_request(
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
 
+        if data.get("logprobs") is None:
+            data["logprobs"] = True
+        if data.get("top_logprobs") is None:
+            data["top_logprobs"] = 0
+        if data.get("return_token_ids") is None:
+            data["return_token_ids"] = True
+
         response = await llm_router.schedule_acompletion(**data)
 
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
