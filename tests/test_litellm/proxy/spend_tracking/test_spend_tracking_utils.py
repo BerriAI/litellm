@@ -2176,3 +2176,54 @@ def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
     )
 
     assert payload["litellm_call_id"] == trace_call_id
+
+
+def test_get_logging_payload_litellm_call_id_when_response_has_no_id():
+    """When the provider returns no id, request_id falls back to the call id, so
+    both columns hold the same value and correlation still resolves.
+    """
+    trace_call_id = "noid-5b2e-4c7a-9d10-3f8a1c2b4e6d"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert payload["litellm_call_id"] == trace_call_id
+    assert payload["request_id"] == trace_call_id
+
+
+def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
+    """On a cache hit request_id is suffixed to stay unique, but litellm_call_id
+    stays the raw trace id so the row still points at its trace.
+    """
+    trace_call_id = "cache-9a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "cache_hit": True,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": "chatcmpl-cache-src",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert payload["litellm_call_id"] == trace_call_id
+    assert "_cache_hit" in payload["request_id"]
+    assert payload["litellm_call_id"] != payload["request_id"]
