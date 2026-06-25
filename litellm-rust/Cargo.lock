@@ -595,12 +595,14 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-core",
  "litellm-providers",
  "pyo3",
  "pyo3-async-runtimes",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

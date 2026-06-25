@@ -1,17 +1,18 @@
 """
 Optional Rust-backed OCR path.
 
-Enable with ``litellm.use_litellm_rust()``; the sync ``litellm.ocr()`` entrypoint
-then routes supported Mistral calls through the compiled ``litellm_python_bridge``
-extension, which performs the whole OCR call (URL, headers, HTTP, parse) in Rust.
-
-No module-level ``litellm`` imports keep this a leaf so ``litellm/ocr/main.py``
-can import it statically without forming an import cycle.
+Enable with ``litellm.use_litellm_rust()``; the sync ``litellm.ocr()``
+entrypoint then routes supported Mistral calls through the compiled
+``litellm_python_bridge`` extension, which performs the whole OCR call
+(URL, headers, HTTP, parse) in Rust. The same public helper also toggles the
+optional Rust realtime bridge without importing top-level ``litellm`` here.
 """
 
 from __future__ import annotations
 
 from typing import Awaitable, Final, Protocol, cast
+
+from litellm.realtime_api.rust_bridge import RustRealtimeConnect, set_rust_realtime
 
 
 class RustOcr(Protocol):
@@ -64,11 +65,12 @@ def use_litellm_rust(
     *,
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
+    realtime: RustRealtimeConnect | None | _Unset = _UNSET,
 ) -> None:
-    """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
+    """Route supported calls through the Rust ``litellm_python_bridge`` extension.
 
-    ``ocr`` and ``aocr`` inject bridge callables; when omitted the compiled
-    extension is loaded on demand and any previously injected bridge is
+    ``ocr``, ``aocr``, and ``realtime`` inject bridge callables; when omitted the
+    compiled extension is loaded on demand and any previous injection is
     preserved. Pass ``None`` explicitly to clear a prior injection.
     """
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
@@ -77,6 +79,10 @@ def use_litellm_rust(
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
+    if isinstance(realtime, _Unset):
+        set_rust_realtime(enabled)
+    else:
+        set_rust_realtime(enabled, connect=realtime)
 
 
 def rust_ocr_enabled() -> bool:
