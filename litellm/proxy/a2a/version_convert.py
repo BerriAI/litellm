@@ -415,10 +415,11 @@ def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
         pb2_v10,
     )
 
-    pb = _parse(ParseDict, params, pb2_v10.ListTasksRequest())
-    lowered = MessageToDict(pb, preserving_proto_field_name=False)
-    if pb.status != pb2_v10.TaskState.TASK_STATE_UNSPECIFIED:
-        compat_state = _CORE_TO_COMPAT_TASK_STATE.get(pb.status)
+    proto = pb2_v10.ListTasksRequest()
+    _parse(ParseDict, params, proto)
+    lowered = MessageToDict(proto, preserving_proto_field_name=False)
+    if proto.status != pb2_v10.TaskState.TASK_STATE_UNSPECIFIED:
+        compat_state = _CORE_TO_COMPAT_TASK_STATE.get(proto.status)
         if compat_state is not None:
             lowered["status"] = compat_state.value
         else:
