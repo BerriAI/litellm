@@ -303,7 +303,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             f" http_status_code={http_status_code}" if http_status_code else ""
         )
         verbose_proxy_logger.critical(
-            "Generic Guardrail API unreachable (fail-open). Proceeding without guardrail.%s "
+            "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
             "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
             status_suffix,
             getattr(self, "guardrail_name", None),
