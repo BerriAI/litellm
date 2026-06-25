@@ -178,6 +178,64 @@ class TestSummariseEntityData:
 
 class TestStreamUsageAiChat:
     @pytest.mark.asyncio
+    async def test_stream_resolves_global_model_alias_before_acompletion(self):
+        mock_first_response = MagicMock()
+        mock_first_response.choices = [MagicMock()]
+        mock_first_response.choices[0].message.tool_calls = []
+        mock_first_response.choices[0].message.content = "ok"
+
+        with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+        ) as mock_litellm:
+            mock_litellm.model_alias_map = {"usage-alias": "gpt-4o-mini"}
+            mock_litellm.acompletion = AsyncMock(return_value=mock_first_response)
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="usage-alias",
+                is_admin=True,
+            ):
+                events.append(event)
+
+            first_call_kwargs = mock_litellm.acompletion.call_args_list[0].kwargs
+            assert first_call_kwargs["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_stream_resolves_router_model_group_alias_before_acompletion(self):
+        mock_first_response = MagicMock()
+        mock_first_response.choices = [MagicMock()]
+        mock_first_response.choices[0].message.tool_calls = []
+        mock_first_response.choices[0].message.content = "ok"
+
+        mock_router = MagicMock()
+        mock_router.model_group_alias = {"friendly-alias": "hidden-route"}
+        mock_router._get_model_from_alias.return_value = "anthropic/claude-3-5-sonnet"
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch.dict(
+                "sys.modules",
+                {"litellm.proxy.proxy_server": MagicMock(llm_router=mock_router)},
+            ),
+        ):
+            mock_litellm.model_alias_map = {}
+            mock_litellm.acompletion = AsyncMock(return_value=mock_first_response)
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="friendly-alias",
+                is_admin=True,
+            ):
+                events.append(event)
+
+            first_call_kwargs = mock_litellm.acompletion.call_args_list[0].kwargs
+            assert first_call_kwargs["model"] == "anthropic/claude-3-5-sonnet"
+
+    @pytest.mark.asyncio
     async def test_stream_emits_status_events(self):
         mock_tool_call = MagicMock()
         mock_tool_call.id = "call_123"

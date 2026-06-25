@@ -426,6 +426,28 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _resolve_usage_chat_model_alias(model: str) -> str:
+    """Resolve model aliases configured on the proxy before calling acompletion."""
+    resolved_model = model.strip()
+    if not resolved_model:
+        return resolved_model
+
+    if litellm.model_alias_map and resolved_model in litellm.model_alias_map:
+        return litellm.model_alias_map[resolved_model]
+
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None and resolved_model in getattr(
+            llm_router, "model_group_alias", {}
+        ):
+            return llm_router._get_model_from_alias(resolved_model)
+    except Exception:
+        pass
+
+    return resolved_model
+
+
 def _resolve_fetch_kwargs(
     fn_name: str,
     fn_args: Dict[str, str],
@@ -543,7 +565,8 @@ async def stream_usage_ai_chat(
     is_admin: bool = False,
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
-    resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    selected_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    resolved_model = _resolve_usage_chat_model_alias(selected_model)
     truncated = (
         messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     )
