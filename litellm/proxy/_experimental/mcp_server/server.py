@@ -1684,8 +1684,17 @@ if MCP_AVAILABLE:
                 # Prefer server-stored per-user OAuth when configured, so a stale
                 # Authorization header from the MCP client cannot override Redis/DB
                 # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                    to_server_spec,
+                )
+
+                # A server migrated to the v2 resolver gets its token from the resolver at connect
+                # time; building it here would double-resolve and be shadowed by the v2 graft. The
+                # preemptive 401 already challenged a missing token, so one exists for the connect.
+                migrated_to_v2 = to_server_spec(server) is not None
                 if (
-                    server.auth_type == MCPAuth.oauth2
+                    not migrated_to_v2
+                    and server.auth_type == MCPAuth.oauth2
                     and getattr(server, "needs_user_oauth_token", False)
                     and user_api_key_auth is not None
                 ):
@@ -1698,7 +1707,11 @@ if MCP_AVAILABLE:
                         extra_headers = db_headers
 
                 # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
-                elif extra_headers is None and server.auth_type == MCPAuth.oauth2:
+                elif (
+                    not migrated_to_v2
+                    and extra_headers is None
+                    and server.auth_type == MCPAuth.oauth2
+                ):
                     extra_headers = await _get_user_oauth_extra_headers_from_db(
                         server,
                         user_api_key_auth,
