@@ -3982,7 +3982,7 @@ class ProxyConfig:
                 "model_detail": "model_list",
                 "model_details": "model_list",
                 "litellm_setting": "litellm_settings",
-                "router_setting": "router_settings"
+                "router_setting": "router_settings",
             }
             for key in list(config.keys()):
                 if key in common_typos:
