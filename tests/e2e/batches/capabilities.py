@@ -66,13 +66,13 @@ PROVIDERS: tuple[Provider, ...] = (
     Provider(
         "vertex_ai", "vertex-batch", "gemini-2.5-flash", can_cancel=True, can_list=True
     ),
-    Provider(
-        "bedrock",
-        "bedrock-batch",
-        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        can_cancel=False,
-        can_list=False,
-    ),
+    # Provider(
+    #     "bedrock",
+    #     "bedrock-batch",
+    #     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    #     can_cancel=False,
+    #     can_list=False,
+    # ),
 )
 
 CAPABILITIES: tuple[Capability, ...] = tuple(
