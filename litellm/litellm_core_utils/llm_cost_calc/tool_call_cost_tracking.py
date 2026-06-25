@@ -91,6 +91,14 @@ class StandardBuiltInToolCostTracking:
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        # response_cost_calculator can pass a provider-prefixed model name
+        # (e.g. gemini/gemini-3.1-flash-lite) that get_model_info cannot map under the request
+        # provider (vertex_ai). Retry letting get_model_info infer the provider from the prefix.
+        if model_info is None and "/" in model:
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                model=model
+            )
+
         if custom_llm_provider is None and model_info is not None:
             custom_llm_provider = model_info["litellm_provider"]
 

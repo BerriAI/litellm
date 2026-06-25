@@ -6235,6 +6235,9 @@ def _get_model_info_helper(
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
                 ),
+                web_search_billing_unit=_model_info.get(
+                    "web_search_billing_unit", None
+                ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
