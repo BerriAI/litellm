@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from litellm.llms.elevenlabs.audio_transcription.transformation import (
     ElevenLabsAudioTranscriptionConfig,
@@ -184,6 +185,33 @@ class TestElevenLabsDiarizedResponse:
         # time-ordered across channels
         assert [s["start"] for s in segments] == sorted(s["start"] for s in segments)
         assert result["duration"] == 40.0
+
+    def test_multichannel_without_channel_index_keeps_speakers_distinct(self):
+        payload = {
+            "audio_duration_secs": 20.0,
+            "transcripts": [
+                {
+                    "text": "a",
+                    "words": [{"text": "a", "start": 1.0, "end": 1.2, "type": "word"}],
+                },
+                {
+                    "text": "b",
+                    "words": [{"text": "b", "start": 2.0, "end": 2.2, "type": "word"}],
+                },
+            ],
+        }
+
+        result = self.config.transform_audio_transcription_response(_response(payload))
+
+        speakers = {s["speaker"] for s in result["segments"]}
+        assert speakers == {"speaker_0", "speaker_1"}
+        assert "speaker_None" not in speakers
+
+    def test_malformed_response_raises_value_error(self):
+        bad = httpx.Response(status_code=200, content=b"not json")
+
+        with pytest.raises(ValueError):
+            self.config.transform_audio_transcription_response(bad)
 
     def test_plain_response_stays_flat(self):
         payload = {

@@ -145,44 +145,45 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         try:
             response_json = raw_response.json()
+
+            if "transcripts" in response_json:
+                parsed = ElevenLabsSTTMultichannelResponse.model_validate(response_json)
+                words = _words_from_channels(parsed.transcripts)
+                text = " ".join(t.text for t in parsed.transcripts if t.text)
+                language = next(
+                    (t.language_code for t in parsed.transcripts if t.language_code),
+                    None,
+                )
+                duration = parsed.audio_duration_secs
+                diarized = True
+            else:
+                chunk = ElevenLabsSTTChunk.model_validate(response_json)
+                words = tuple(chunk.words)
+                text = chunk.text
+                language = chunk.language_code
+                duration = chunk.audio_duration_secs
+                diarized = any(w.speaker_id is not None for w in words)
+
+            response = TranscriptionResponse(text=text)
+            response["task"] = "transcribe"
+            response["language"] = language or "unknown"
+
+            if diarized:
+                response["segments"] = _build_segments(words)
+                if duration is not None:
+                    response["duration"] = duration
+                    response["usage"] = TranscriptionUsageDurationObject(
+                        type="duration", seconds=duration
+                    )
+            else:
+                response["words"] = _openai_words(words)
+
+            response._hidden_params = response_json
+            return response
         except Exception as e:
             raise ValueError(
                 f"Error transforming ElevenLabs response: {str(e)}\nResponse: {raw_response.text}"
             )
-
-        if "transcripts" in response_json:
-            parsed = ElevenLabsSTTMultichannelResponse.model_validate(response_json)
-            words = _words_from_channels(parsed.transcripts)
-            text = " ".join(t.text for t in parsed.transcripts if t.text)
-            language = next(
-                (t.language_code for t in parsed.transcripts if t.language_code), None
-            )
-            duration = parsed.audio_duration_secs
-            diarized = True
-        else:
-            chunk = ElevenLabsSTTChunk.model_validate(response_json)
-            words = tuple(chunk.words)
-            text = chunk.text
-            language = chunk.language_code
-            duration = chunk.audio_duration_secs
-            diarized = any(w.speaker_id is not None for w in words)
-
-        response = TranscriptionResponse(text=text)
-        response["task"] = "transcribe"
-        response["language"] = language or "unknown"
-
-        if diarized:
-            response["segments"] = _build_segments(words)
-            if duration is not None:
-                response["duration"] = duration
-                response["usage"] = TranscriptionUsageDurationObject(
-                    type="duration", seconds=duration
-                )
-        else:
-            response["words"] = _openai_words(words)
-
-        response._hidden_params = response_json
-        return response
 
     def get_complete_url(
         self,
@@ -234,11 +235,17 @@ def _words_from_channels(
     """
     Flatten per-channel transcripts into a single time-ordered word stream, using
     the channel as the speaker so the two sides of e.g. a stereo call don't collide
-    on the per-channel speaker ids ElevenLabs assigns independently.
+    on the per-channel speaker ids ElevenLabs assigns independently. The list
+    position is the fallback channel when channel_index is absent, so distinct
+    channels never collapse onto the same speaker.
     """
     words = tuple(
-        word.model_copy(update={"speaker_id": f"speaker_{transcript.channel_index}"})
-        for transcript in transcripts
+        word.model_copy(
+            update={
+                "speaker_id": f"speaker_{transcript.channel_index if transcript.channel_index is not None else position}"
+            }
+        )
+        for position, transcript in enumerate(transcripts)
         for word in transcript.words
     )
     return tuple(sorted(words, key=lambda w: w.start if w.start is not None else 0.0))
