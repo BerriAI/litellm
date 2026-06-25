@@ -67,7 +67,7 @@ def _build_message_send_params(params: dict) -> "MessageSendParams":
 
         pb = pb2_v10.SendMessageRequest()
         try:
-            ParseDict(params, pb)
+            ParseDict(params, pb, ignore_unknown_fields=True)
         except ParseError as e:
             raise ValueError(f"Invalid message/send params: {e}") from e
         return to_compat_send_message_request(pb, "").params

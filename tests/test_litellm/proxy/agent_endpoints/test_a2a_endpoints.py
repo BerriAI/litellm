@@ -1291,6 +1291,23 @@ def test_build_message_send_params_accepts_wire_and_a2a_10(params):
     assert result.message.parts[0].root.text == "hello"
 
 
+def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    result = _build_message_send_params(
+        {
+            "message": {
+                "messageId": "msg-1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "hello"}],
+            },
+            "configuration": {},
+            "futureField": "ignored",
+        }
+    )
+    assert result.message.role.value == "user"
+
+
 @pytest.mark.asyncio
 async def test_send_message_pascal_case_routes_to_asend_message():
     from litellm.proxy._types import UserAPIKeyAuth
