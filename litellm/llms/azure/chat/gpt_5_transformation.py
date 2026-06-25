@@ -29,9 +29,15 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if super()._supports_reasoning_effort_level(model, level):
             return True
 
-        # Custom Azure deployment names (e.g. "azure/gpt-5.1_2025-11-13_global") are
-        # not registry keys; extract the canonical version prefix so capability lookups
-        # behave consistently with how base_model is honored elsewhere in litellm.
+        # If the model IS in the registry but capability is explicitly False, respect it.
+        # Only apply the canonical-prefix fallback for custom deployment names that are
+        # not registry entries (e.g. "azure/gpt-5.1_2025-11-13_global").
+        if super()._is_reasoning_effort_level_explicitly_disabled(model, level):
+            return False
+
+        # Custom Azure deployment names are not registry keys; extract the canonical
+        # version prefix so capability lookups behave consistently with how base_model
+        # is honored elsewhere in litellm.
         deployment_name = model.split("/", 1)[-1]
         if deployment_name.startswith("gpt-5"):
             rest = deployment_name[5:]
@@ -181,3 +187,4 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             litellm_params=litellm_params,
             headers=headers,
         )
+
