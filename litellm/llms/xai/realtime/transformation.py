@@ -64,7 +64,7 @@ class XAIRealtimeNormalizer:
     # Public interface consumed by RealTimeStreaming
     # ---------------------------------------------------------------------------
 
-    def should_drop(self, event: Any) -> bool:
+    def should_drop(self, event: object) -> bool:
         """Return True for provider-specific keepalives unknown to GA clients."""
         return isinstance(event, dict) and event.get("type") == "ping"
 
@@ -129,7 +129,7 @@ class XAIRealtimeNormalizer:
             self._content_part_by_key[self._content_part_key(event)] = part
 
     def _update_content_part_field(
-        self, event: dict, *, part_type: str, field: str, value: Any
+        self, event: dict, *, part_type: str, field: str, value: object
     ) -> None:
         if value is None:
             return
@@ -251,7 +251,7 @@ class XAIRealtimeNormalizer:
 
     @staticmethod
     def _normalize_usage(
-        usage: Any, *, empty_as_null: bool
+        usage: object, *, empty_as_null: bool
     ) -> Optional[dict[str, Any]]:
         """Coerce a usage object into the full OpenAI GA shape.
 

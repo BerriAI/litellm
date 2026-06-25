@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +27,11 @@ else:
 # Create a thread pool with a maximum of 10 threads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
+class RealtimeEventNormalizer(Protocol):
+    def should_drop(self, event: object) -> bool: ...
+    def normalize(self, event: dict) -> dict: ...
+
+
 DefaultLoggedRealTimeEventTypes = [
     "session.created",
     "response.create",
@@ -48,7 +53,7 @@ class RealTimeStreaming:
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
         force_transcription_model: Optional[str] = None,
-        event_normalizer: Optional[Any] = None,
+        event_normalizer: Optional[RealtimeEventNormalizer] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -581,7 +586,7 @@ class RealTimeStreaming:
                 return False
         return True
 
-    def _should_drop_event_from_client(self, event: Any) -> bool:
+    def _should_drop_event_from_client(self, event: object) -> bool:
         """Return True for provider-specific events that must not reach GA clients."""
         if self._event_normalizer is not None:
             return self._event_normalizer.should_drop(event)

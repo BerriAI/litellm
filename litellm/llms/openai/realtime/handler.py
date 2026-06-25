@@ -13,6 +13,7 @@ from litellm.types.realtime import RealtimeQueryParams
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
+    RealtimeEventNormalizer,
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
@@ -95,7 +96,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url = url.copy_with(params=query_params)
         return str(url)
 
-    def _make_event_normalizer(self) -> Any:
+    def _make_event_normalizer(self) -> Optional[RealtimeEventNormalizer]:
         """Return a per-session GA event normalizer, or None for passthrough.
 
         Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
