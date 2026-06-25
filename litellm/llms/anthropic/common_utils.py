@@ -549,13 +549,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _make_api_key_auth_header(api_key: str, api_base: str | None) -> dict:
-        if (
-            api_base
-            and "api.anthropic.com" not in api_base
-            and not api_key.startswith("sk-ant-")
-        ):
-            value = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
-            return {"authorization": value}
+        # Callers opt in to Bearer auth by passing "Bearer <token>" explicitly.
+        # All other keys continue to use x-api-key to preserve backwards compatibility
+        # with custom api_base endpoints that expect x-api-key rather than Authorization.
+        if api_key.startswith("Bearer "):
+            return {"authorization": api_key}
         return {"x-api-key": api_key}
 
     def get_anthropic_headers(
@@ -761,15 +759,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
-            if (
-                api_base
-                and "api.anthropic.com" not in api_base
-                and not resolved_key.startswith("sk-ant-")
-            ):
-                if resolved_key.startswith("Bearer "):
-                    return {"authorization": resolved_key}
-                return {"authorization": f"Bearer {resolved_key}"}
-            return {"x-api-key": resolved_key}
+            return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base)
         auth_token = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}
