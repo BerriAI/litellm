@@ -457,7 +457,7 @@ async def test_add_new_member_with_user_email_clones_default_budget():
 
     mock_prisma_client = AsyncMock()
 
-    mock_prisma_client.get_data = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     mock_user_response = MagicMock()
     mock_user_response.model_dump.return_value = {
@@ -466,7 +466,9 @@ async def test_add_new_member_with_user_email_clones_default_budget():
         "teams": [test_team_id],
         "user_role": "internal_user",
     }
-    mock_prisma_client.insert_data = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+        return_value=mock_user_response
+    )
 
     # Default budget that will be cloned
     mock_default_budget_row = MagicMock()
@@ -520,14 +522,12 @@ async def test_add_new_member_with_user_email_clones_default_budget():
     assert result_team_membership is not None
     assert result_team_membership.budget_id == test_cloned_budget_id
 
-    mock_prisma_client.get_data.assert_called_once_with(
-        key_val={"user_email": test_user_email},
-        table_name="user",
-        query_type="find_all",
+    mock_prisma_client.db.litellm_usertable.find_many.assert_called_once_with(
+        where={"user_email": test_user_email}
     )
 
-    mock_prisma_client.insert_data.assert_called_once()
-    insert_call_args = mock_prisma_client.insert_data.call_args
+    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    insert_call_args = mock_prisma_client.db.litellm_usertable.create.call_args
     insert_data = insert_call_args.kwargs["data"]
     assert insert_data["user_email"] == test_user_email
     assert insert_data["teams"] == [test_team_id]

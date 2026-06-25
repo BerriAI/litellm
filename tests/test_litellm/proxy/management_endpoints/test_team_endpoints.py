@@ -37,6 +37,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
+    _add_team_members_to_team,
     _persist_deleted_team_records,
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
@@ -1385,6 +1386,7 @@ async def test_process_team_members_single_member():
             team_id="test-team-123",
             default_team_budget_id="budget-123",
             allowed_models=None,
+            db_client=None,
         )
 
 
@@ -3815,6 +3817,11 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
     ):
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
@@ -3884,6 +3891,11 @@ async def test_new_team_max_budget_within_user_limit():
     ):
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -4017,6 +4029,11 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
     ):
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -4161,6 +4178,11 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     ):
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -4299,6 +4321,11 @@ async def test_new_team_standalone_validates_against_user_models(monkeypatch):
     ):
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
@@ -4368,6 +4395,11 @@ async def test_new_team_standalone_validates_against_user_budget():
     ):
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
@@ -4445,6 +4477,11 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
     ):
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
@@ -4525,6 +4562,11 @@ async def test_new_team_org_scoped_models_not_in_org_models():
     ):
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
@@ -4826,9 +4868,7 @@ async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
             "team_id": "standalone-uncapped-123",
             "organization_id": None,
             "max_budget": None,
-            "members_with_roles": [
-                {"user_id": "uncapped-team-admin", "role": "admin"}
-            ],
+            "members_with_roles": [{"user_id": "uncapped-team-admin", "role": "admin"}],
         }
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
@@ -5874,6 +5914,11 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
     ):
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
         # Should raise ProxyException because TPM exceeds org limit
@@ -5950,6 +5995,11 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
     ):
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
         # Should raise ProxyException because RPM exceeds org limit
@@ -6036,6 +6086,11 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
     ):
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
 
         # Mock team creation
@@ -7021,6 +7076,11 @@ async def test_new_team_soft_budget_validation(
     ):
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        # Member-add now runs inside prisma_client.db.tx(); make the transaction
+        # client passthrough to the same mocked db so the configured per-table
+        # mocks below are exercised by the code under test.
+        mock_prisma.db.tx.return_value.__aenter__.return_value = mock_prisma.db
+        mock_prisma.db.tx.return_value.__aexit__.return_value = False
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -9344,3 +9404,145 @@ async def test_team_info_forwards_key_limit_to_get_data():
         )
 
     assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
+
+
+class _FakeAtomicTx:
+    """Async context manager standing in for ``prisma_client.db.tx()``."""
+
+    def __init__(self, tx, record):
+        self._tx = tx
+        self._record = record
+
+    async def __aenter__(self):
+        return self._tx
+
+    async def __aexit__(self, exc_type, exc, tb):
+        # Record how we exited: a non-None exc_type is exactly what makes the
+        # real prisma transaction roll back.
+        self._record["exc_type"] = exc_type
+        return False  # never suppress -> mirror real tx behaviour
+
+
+def _make_atomic_tx_mocks(*, raise_on_team_update=False):
+    """Build (prisma_client, tx, record) wired so db.tx() yields tx."""
+    user_row = MagicMock()
+    user_row.model_dump.return_value = {
+        "user_id": "atomic-user",
+        "user_email": None,
+        "teams": ["atomic-team"],
+        "user_role": "internal_user",
+    }
+    budget_row = MagicMock()
+    budget_row.budget_id = "atomic-budget"
+    membership_row = MagicMock()
+    membership_row.model_dump.return_value = {
+        "team_id": "atomic-team",
+        "user_id": "atomic-user",
+        "budget_id": "atomic-budget",
+        "litellm_budget_table": None,
+    }
+
+    tx = MagicMock()
+    tx.litellm_usertable.upsert = AsyncMock(return_value=user_row)
+    tx.litellm_budgettable.create = AsyncMock(return_value=budget_row)
+    tx.litellm_teammembership.create = AsyncMock(return_value=membership_row)
+    if raise_on_team_update:
+        tx.litellm_teamtable.update = AsyncMock(
+            side_effect=RuntimeError("members_with_roles write failed")
+        )
+    else:
+        tx.litellm_teamtable.update = AsyncMock(return_value=MagicMock())
+
+    record: dict = {}
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.tx = MagicMock(return_value=_FakeAtomicTx(tx, record))
+    # Direct (non-transactional) accessors must never be used.
+    prisma_client.db.litellm_usertable.upsert = AsyncMock()
+    prisma_client.db.litellm_budgettable.create = AsyncMock()
+    prisma_client.db.litellm_teammembership.create = AsyncMock()
+    prisma_client.db.litellm_teamtable.update = AsyncMock()
+    return prisma_client, tx, record
+
+
+def _make_atomic_team_and_request():
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "atomic-team"
+    team.members_with_roles = []
+    team.metadata = None
+    team.default_team_member_models = None
+
+    data = TeamMemberAddRequest(
+        team_id="atomic-team",
+        member=Member(role="user", user_id="atomic-user"),
+        max_budget_in_team=10.0,
+    )
+    return team, data
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_to_team_runs_in_single_transaction():
+    """
+    Regression test for orphaned team memberships.
+
+    All writes performed when adding a member (the user.teams push, the budget
+    row, the LiteLLM_TeamMembership row and the team's members_with_roles) must
+    go through ONE prisma transaction, never the direct non-transactional
+    client. Otherwise a failure partway through leaves user.teams pointing at a
+    team while members_with_roles / TeamMembership were never written.
+    """
+    prisma_client, tx, record = _make_atomic_tx_mocks()
+    team, data = _make_atomic_team_and_request()
+
+    await _add_team_members_to_team(
+        data=data,
+        complete_team_data=team,
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="admin",
+    )
+
+    # Exactly one transaction was opened.
+    prisma_client.db.tx.assert_called_once()
+
+    # Every write happened on the transaction client.
+    tx.litellm_usertable.upsert.assert_called_once()
+    tx.litellm_teammembership.create.assert_called_once()
+    tx.litellm_teamtable.update.assert_called_once()
+
+    # And none happened on the direct, non-transactional client.
+    prisma_client.db.litellm_usertable.upsert.assert_not_called()
+    prisma_client.db.litellm_teammembership.create.assert_not_called()
+    prisma_client.db.litellm_teamtable.update.assert_not_called()
+
+    # The transaction committed cleanly (exited without an exception).
+    assert record.get("exc_type") is None
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_to_team_rolls_back_on_failure():
+    """
+    If the members_with_roles write fails, the error must propagate out of the
+    transaction (so the already-applied user.teams push + membership get rolled
+    back), and nothing must be written through the direct client.
+    """
+    prisma_client, tx, record = _make_atomic_tx_mocks(raise_on_team_update=True)
+    team, data = _make_atomic_team_and_request()
+
+    with pytest.raises(RuntimeError, match="members_with_roles write failed"):
+        await _add_team_members_to_team(
+            data=data,
+            complete_team_data=team,
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_proxy_admin_name="admin",
+        )
+
+    # The transaction context manager saw the exception -> real prisma rolls back.
+    assert record.get("exc_type") is RuntimeError
+
+    # The earlier writes were attempted on the tx (and rolled back), and the
+    # direct non-transactional client was never touched.
+    tx.litellm_usertable.upsert.assert_called_once()
+    prisma_client.db.litellm_usertable.upsert.assert_not_called()
+    prisma_client.db.litellm_teamtable.update.assert_not_called()

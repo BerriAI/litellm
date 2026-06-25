@@ -2260,8 +2260,13 @@ async def _process_team_members(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    db_client: Optional[Any] = None,
 ) -> Tuple[List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
-    """Process and add new team members."""
+    """Process and add new team members.
+
+    ``db_client`` is forwarded to ``add_new_member`` so every per-member write
+    runs inside the caller's transaction (see ``_add_team_members_to_team``).
+    """
     updated_users: List[LiteLLM_UserTable] = []
     updated_team_memberships: List[LiteLLM_TeamMembership] = []
 
@@ -2290,6 +2295,7 @@ async def _process_team_members(
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
+                db_client=db_client,
             )
         except Exception as e:
             raise HTTPException(
@@ -2315,6 +2321,7 @@ async def _process_team_members(
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
+                    db_client=db_client,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2396,29 +2403,41 @@ async def _add_team_members_to_team(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
-    """Add team members to the team."""
-    # Process and add new members
-    updated_users, updated_team_memberships = await _process_team_members(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_proxy_admin_name=litellm_proxy_admin_name,
-    )
+    """Add team members to the team.
 
-    # Update team members list
-    await _update_team_members_list(
-        data=data,
-        complete_team_data=complete_team_data,
-        updated_users=updated_users,
-    )
+    All writes (per-member ``user.teams`` push, budget rows, team memberships
+    and the team's ``members_with_roles``) run inside a single transaction so
+    they commit or roll back together. Without this, a failure partway through
+    could leave a user with the team in ``user.teams`` while the team's
+    ``members_with_roles`` and the ``LiteLLM_TeamMembership`` row were never
+    written — an orphaned, untrackable membership.
+    """
+    async with prisma_client.db.tx() as tx:
+        # Process and add new members
+        updated_users, updated_team_memberships = await _process_team_members(
+            data=data,
+            complete_team_data=complete_team_data,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            db_client=tx,
+        )
 
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-    )
+        # Update team members list
+        await _update_team_members_list(
+            data=data,
+            complete_team_data=complete_team_data,
+            updated_users=updated_users,
+        )
+
+        # ADD MEMBER TO TEAM
+        _db_team_members = [
+            m.model_dump() for m in complete_team_data.members_with_roles
+        ]
+        updated_team = await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+        )
 
     return updated_team, updated_users, updated_team_memberships
 
