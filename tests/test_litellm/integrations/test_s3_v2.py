@@ -381,6 +381,200 @@ class TestS3V2UnitTests:
         assert " " not in actual_url
 
 
+# ==============================================================
+# S3 returned 403 SignatureDoesNotMatch when the team alias (used as an S3 key
+# prefix via s3_use_team_prefix) contained special characters (space, #, +, &,
+# unicode, ...).
+#
+# Root cause: the signing flow signed a path that the generic botocore
+# SigV4Auth re-quoted ("My%20Team" -> canonical "My%2520Team"), while httpx put
+# "My%20Team" on the wire. The SigV4 canonical URI therefore did not match what
+# S3 verifies, producing 403 SignatureDoesNotMatch. The fix percent-encodes the
+# object key once and signs with S3SigV4Auth (which does not re-encode the
+# path), so the signed URI matches the wire URL.
+#
+# These tests model S3's server-side verification: they re-derive the SigV4
+# signature over the URL that was actually sent on the wire and assert it equals
+# the signature in the Authorization header the client sent. With the pre-fix
+# code these differ.
+# ==============================================================
+
+# Object keys whose team-alias prefix contains characters that are
+# percent-encoded by URL quoting and therefore exposed the double-
+# encoding bug.
+SPECIAL_CHAR_OBJECT_KEYS = [
+    "My Team/2025-09-14/test-key.json",
+    "R&D + Ops/2025-09-14/test-key.json",
+    "tëam#1/2025-09-14/test-key.json",
+    "a@b/2025-09-14/test-key.json",
+]
+
+
+def _assert_signature_valid_for_wire_url(
+    request_url,
+    data,
+    signed_headers,
+    access_key,
+    secret_key,
+    region="us-east-1",
+    method="PUT",
+):
+    """
+    Re-derive the SigV4 signature over the exact URL + headers that were sent
+    on the wire (the way S3 verifies an incoming request) and assert it matches
+    the Authorization header the client produced.
+
+    A mismatch is exactly the 403 SignatureDoesNotMatch condition: the client
+    signed a different (double-encoded) canonical URI than the path it actually
+    requested.
+    """
+    from botocore.auth import S3SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    assert "Authorization" in signed_headers, "request was not signed"
+    assert " " not in request_url, "raw space leaked onto the wire URL"
+
+    # Rebuild the request S3 would verify: same method, same wire URL, same
+    # signed header values, without the client's Authorization header.
+    verify_headers = {
+        k: v for k, v in signed_headers.items() if k.lower() != "authorization"
+    }
+    verify_req = AWSRequest(
+        method=method, url=request_url, data=data, headers=verify_headers
+    )
+    # Reuse the client's signing timestamp so the two signatures are comparable.
+    verify_req.context["timestamp"] = signed_headers["X-Amz-Date"]
+    S3SigV4Auth(Credentials(access_key, secret_key), "s3", region).add_auth(verify_req)
+
+    assert verify_req.headers["Authorization"] == signed_headers["Authorization"], (
+        "SigV4 signature does not match the URL actually sent on the wire; "
+        "S3 would reject this with 403 SignatureDoesNotMatch.\n"
+        f"  wire url   : {request_url}\n"
+        f"  sent sig   : {signed_headers['Authorization']}\n"
+        f"  valid sig  : {verify_req.headers['Authorization']}"
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", SPECIAL_CHAR_OBJECT_KEYS)
+@patch("asyncio.create_task")
+@patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
+def test_async_upload_signature_matches_wire_url_special_chars(
+    mock_periodic_flush, mock_create_task, s3_object_key
+):
+    """Async upload must sign the same (single-encoded) URL it sends."""
+    from unittest.mock import AsyncMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    mock_periodic_flush.return_value = None
+    mock_create_task.return_value = None
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+
+    access_key, secret_key = "test-access-key", "test-secret-key"
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id=access_key,
+        s3_aws_secret_access_key=secret_key,
+        s3_region_name="us-east-1",
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = mock_response
+
+    element = s3BatchLoggingElement(
+        s3_object_key=s3_object_key,
+        payload={"test": "data"},
+        s3_object_download_filename="test-file.json",
+    )
+    asyncio.run(logger.async_upload_data_to_s3(element))
+
+    call = logger.async_httpx_client.put.call_args
+    assert call is not None
+    request_url = call[0][0]
+    data = call.kwargs["data"]
+    signed_headers = call.kwargs["headers"]
+
+    _assert_signature_valid_for_wire_url(
+        request_url, data, signed_headers, access_key, secret_key
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", SPECIAL_CHAR_OBJECT_KEYS)
+def test_sync_upload_signature_matches_wire_url_special_chars(s3_object_key):
+    """Sync upload must sign the same (single-encoded) URL it sends."""
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.put.return_value = mock_response
+
+    access_key, secret_key = "test-access-key", "test-secret-key"
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id=access_key,
+        s3_aws_secret_access_key=secret_key,
+        s3_region_name="us-east-1",
+    )
+
+    element = s3BatchLoggingElement(
+        s3_object_key=s3_object_key,
+        payload={"test": "data"},
+        s3_object_download_filename="test-file.json",
+    )
+
+    with patch(
+        "litellm.integrations.s3_v2._get_httpx_client", return_value=mock_client
+    ):
+        logger.upload_data_to_s3(element)
+
+    call = mock_client.put.call_args
+    assert call is not None
+    request_url = call[0][0]
+    data = call.kwargs["data"]
+    signed_headers = call.kwargs["headers"]
+
+    _assert_signature_valid_for_wire_url(
+        request_url, data, signed_headers, access_key, secret_key
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", SPECIAL_CHAR_OBJECT_KEYS)
+def test_download_signature_matches_wire_url_special_chars(s3_object_key):
+    """Download (GET) must sign the same (single-encoded) URL it sends."""
+    from unittest.mock import AsyncMock
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"test": "data"}
+
+    access_key, secret_key = "test-access-key", "test-secret-key"
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id=access_key,
+        s3_aws_secret_access_key=secret_key,
+        s3_region_name="us-east-1",
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = mock_response
+
+    asyncio.run(logger._download_object_from_s3(s3_object_key))
+
+    call = logger.async_httpx_client.get.call_args
+    assert call is not None
+    request_url = call[0][0]
+    signed_headers = call.kwargs["headers"]
+
+    _assert_signature_valid_for_wire_url(
+        request_url, None, signed_headers, access_key, secret_key, method="GET"
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_upload_retries_on_s3_503():
     """
