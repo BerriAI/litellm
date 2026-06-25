@@ -1150,3 +1150,42 @@ class TestFailOnError:
                     request_data={},
                     input_type="request",
                 )
+
+    @pytest.mark.asyncio
+    async def test_response_path_continues_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """fail_on_error governs the response path identically to the request path."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", side_effect=error
+        ):
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["model output"]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert result == {"texts": ["model output"]}
+
+    @pytest.mark.asyncio
+    async def test_response_path_valid_block_still_blocks(self, fail_open_guardrail):
+        """On the response path too, a valid BLOCKED decision raises despite fail_on_error=False."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "BLOCKED",
+            "blocked_reason": "policy violation",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(GuardrailRaisedException):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["model output"]},
+                    request_data={},
+                    input_type="response",
+                )
