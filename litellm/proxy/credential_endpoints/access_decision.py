@@ -13,7 +13,7 @@ endpoint so it can be unit-tested exhaustively without spinning up FastAPI.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Literal, Mapping, cast
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,25 +35,33 @@ _IMMUTABLE_INFO_FIELDS = frozenset(
 )
 
 
-def _access(info: Mapping[str, Any] | None) -> Mapping[str, Any]:
+_EMPTY: Mapping[str, object] = {}
+
+
+def _access(info: Mapping[str, object] | None) -> Mapping[str, object]:
     if not isinstance(info, Mapping):
-        return {}
+        return _EMPTY
     raw = info.get("access")
-    return raw if isinstance(raw, Mapping) else {}
+    if isinstance(raw, Mapping):
+        return cast(Mapping[str, object], raw)
+    return _EMPTY
 
 
-def _teams_set(access: Mapping[str, Any]) -> frozenset[str]:
-    raw = access.get("teams") or ()
-    return frozenset(item for item in raw if isinstance(item, str))
+def _teams_set(access: Mapping[str, object]) -> frozenset[str]:
+    raw = access.get("teams")
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    teams: tuple[object, ...] = tuple(cast(tuple[object, ...], raw))
+    return frozenset(item for item in teams if isinstance(item, str))
 
 
 def decide_credential_patch(
     *,
     is_proxy_admin: bool,
     caller_team_admin_ids: frozenset[str],
-    existing_info: Mapping[str, Any] | None,
-    patch_info: Mapping[str, Any] | None,
-    patch_values: Mapping[str, Any] | None,
+    existing_info: Mapping[str, object] | None,
+    patch_info: Mapping[str, object] | None,
+    patch_values: Mapping[str, object] | None,
     patch_name_changed: bool,
 ) -> Decision:
     """Return Allow or Deny(reason) for a PATCH /credentials/{name} request.

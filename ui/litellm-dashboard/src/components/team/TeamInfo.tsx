@@ -1455,7 +1455,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Form.Item
                       label="Logging Exporters"
                       name="logging_exporters"
-                      tooltip="Admin-owned trace destinations this team exports to. Resolved server-side and fanned out (added to the key's and org's). Manage destinations under Settings -> Logging Callbacks."
+                      tooltip="Trace destinations this team exports to. Resolved server-side and unioned with the key's and org's destinations. Destinations are created by the proxy admin; team admins may attach any of them to teams they admin."
                     >
                       <LoggingExportersSelect />
                     </Form.Item>

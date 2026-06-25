@@ -61,18 +61,19 @@ async def _caller_team_admin_ids(
         user_row = await prisma_client.db.litellm_usertable.find_unique(  # type: ignore[attr-defined]
             where={"user_id": user_api_key_dict.user_id}
         )
-    except Exception:
-        verbose_proxy_logger.exception("team-admin lookup (user fetch) failed")
-        return frozenset()
-    user_team_ids = list(getattr(user_row, "teams", None) or []) if user_row else []
-    if not user_team_ids:
-        return frozenset()
-    try:
+        user_team_ids = list(
+            getattr(user_row, "teams", None) or []
+        ) if user_row else []
+        if not user_team_ids:
+            return frozenset()
         teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[attr-defined]
             where={"team_id": {"in": user_team_ids}}
         )
     except Exception:
-        verbose_proxy_logger.exception("team-admin lookup (teams fetch) failed")
+        # Best-effort; surface a clear log and treat the caller as having no
+        # team-admin teams. The PATCH decider will return Deny on any patch
+        # other than a no-op, which is the safe fallback.
+        verbose_proxy_logger.exception("team-admin lookup failed")
         return frozenset()
     return frozenset(
         team.team_id

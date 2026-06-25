@@ -729,7 +729,7 @@ export function KeyEditView({
       <Form.Item
         label="Logging Exporters"
         name="logging_exporters"
-        tooltip="Admin-owned trace destinations this key exports to. Resolved server-side and fanned out (added to the team's and org's). Manage destinations under Settings -> Logging Credentials."
+        tooltip="Trace destinations this key exports to. Resolved server-side and unioned with the team's and org's destinations. Destinations are created by the proxy admin; team admins may attach any of them to keys in their team."
       >
         <LoggingExportersSelect />
       </Form.Item>

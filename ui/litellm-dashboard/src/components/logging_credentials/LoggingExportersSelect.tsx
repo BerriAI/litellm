@@ -35,7 +35,7 @@ const LoggingExportersSelect: React.FC<LoggingExportersSelectProps> = ({ value, 
       options={options}
       style={{ width: "100%" }}
       optionFilterProp="label"
-      notFoundContent="No logging destinations. Add one under Settings -> Logging Callbacks."
+      notFoundContent="No logging destinations available. Ask your proxy admin to create one under Settings -> Logging Callbacks."
     />
   );
 };
