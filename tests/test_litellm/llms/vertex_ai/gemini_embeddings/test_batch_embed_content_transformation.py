@@ -10,9 +10,11 @@ Covers:
 
 import pytest
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
     _is_multimodal_input,
+    process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
@@ -208,9 +210,7 @@ class TestProcessResponse:
     """Test that process_response sets correct indices."""
 
     def test_single_embedding_index(self):
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         model_response = EmbeddingResponse()
         result = process_response(
             input="hello",
@@ -261,9 +261,7 @@ class TestProcessResponse:
 
     def test_nested_input_token_counting(self):
         """Nested list: only plain-text sub-elements should be counted."""
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         result = process_response(
             input=[["a red shoe", IMAGE_DATA_URI]],
             model_response=EmbeddingResponse(),
@@ -288,3 +286,103 @@ class TestProcessResponse:
                 model="gemini-embedding-2-preview",
                 optional_params={},
             )
+
+
+class TestProcessEmbedContentResponseUsage:
+    """Gemini Embedding 2 embedContent usageMetadata must drive spend.
+
+    Regression for multimodal calls recording prompt_tokens=0 / spend=$0.
+    """
+
+    MODEL = "gemini-embedding-2"
+
+    def test_multimodal_image_preserves_usage_metadata(self):
+        response_json = {
+            "embedding": {"values": [0.1, 0.2, 0.3]},
+            "usageMetadata": {
+                "promptTokenCount": 258,
+                "totalTokenCount": 258,
+                "promptTokensDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+            },
+        }
+        result = process_embed_content_response(
+            input=[IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens == 258
+        assert result.usage.total_tokens == 258
+        assert result.usage.prompt_tokens_details.image_count == 1
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        assert prompt_cost > 0
+
+    def test_text_modality_detail_populated(self):
+        response_json = {
+            "embedding": {"values": [0.1, 0.2]},
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "totalTokenCount": 12,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}],
+            },
+        }
+        result = process_embed_content_response(
+            input="a short caption",
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens == 12
+        assert result.usage.prompt_tokens_details.text_tokens == 12
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        assert prompt_cost > 0
+
+    def test_video_modality_derives_seconds_and_text_floor(self):
+        response_json = {
+            "embedding": {"values": [0.1]},
+            "usageMetadata": {
+                "promptTokenCount": 516,
+                "totalTokenCount": 516,
+                "promptTokensDetails": [{"modality": "VIDEO", "tokenCount": 516}],
+            },
+        }
+        result = process_embed_content_response(
+            input=["gs://bucket/clip.mp4"],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens == 516
+        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(2.0)
+        assert result.usage.prompt_tokens_details.text_tokens == 1
+
+    def test_missing_usage_metadata_does_not_estimate_from_base64(self):
+        response_json = {"embedding": {"values": [0.1, 0.2]}}
+        result = process_embed_content_response(
+            input=[IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens == 0
+        assert result.usage.total_tokens == 0
+
+    def test_missing_usage_metadata_text_falls_back_to_token_counter(self):
+        response_json = {"embedding": {"values": [0.1, 0.2]}}
+        result = process_embed_content_response(
+            input="hello world this is plain text",
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens > 0
