@@ -8680,7 +8680,7 @@ def _apply_budget_exceeded_models_policy(
         return all_models
 
     settings = cast(dict[str, object], general_settings)
-    policy = settings.get("budget_exceeded_models_policy", "blocked")
+    policy = settings.get("budget_exceeded_models_policy", "all")
 
     # If policy is not free_only or blocked, we just return all_models (the "all" behavior)
     if policy not in ("free_only", "blocked"):

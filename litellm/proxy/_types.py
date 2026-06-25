@@ -2398,13 +2398,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
 
     budget_exceeded_models_policy: Optional[Literal["blocked", "all", "free_only"]] = (
         Field(
-            "blocked",
+            "all",
             description=(
-                "Controls model-list behavior when a team/user/key budget is exceeded. "
-                "'blocked' (default) returns 429 as before. "
-                "'all' returns the full model list regardless of budget. "
-                "'free_only' returns only zero-cost models. "
-                "Inference calls always enforce the budget regardless of this setting."
+                "Controls model-discovery behavior (/v1/models, /model/info) when a "
+                "key/team/user budget is exceeded. 'all' (default) returns the full "
+                "model list, preserving the existing behavior where discovery routes "
+                "are exempt from budget enforcement. 'blocked' returns a 429. "
+                "'free_only' returns only zero-cost models. Inference calls always "
+                "enforce the budget regardless of this setting."
             ),
         )
     )
