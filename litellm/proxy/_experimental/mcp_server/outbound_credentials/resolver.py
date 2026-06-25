@@ -14,7 +14,6 @@ that each land in a follow-up PR with their seam. Pure v2: no imports from v1.
 
 from __future__ import annotations
 
-
 import httpx
 from typing_extensions import assert_never
 
@@ -86,7 +85,11 @@ class UpstreamCredentialProvider:
             case AuthorizationCodeConfig():
                 token = await self._authz_token(subject, server)
                 if token is None:
-                    return Error(_oauth_challenge(server.server_id))
+                    return Error(
+                        CredError.of_unauthorized(
+                            "Authorization required: complete the OAuth flow for this server."
+                        )
+                    )
                 return Ok(
                     StaticHeaderAuth(
                         f"Bearer {token.access_token}", header_name="Authorization"
@@ -131,28 +134,4 @@ class UpstreamCredentialProvider:
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
     return Error(
         CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet")
-    )
-
-
-_OAUTH_WWW_AUTHENTICATE = (
-    'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-)
-
-
-def _oauth_challenge(server_id: str) -> CredError:
-    """The 401 an authorization_code server returns when the user has no usable token.
-
-    Carries the RFC 9728 ``WWW-Authenticate`` challenge that drives the OAuth flow, plus an
-    ``authorization_required`` body. The exact body is reconciled with v1 when the v1-backed token
-    source lands.
-    """
-    message = "Authorization required: complete the OAuth flow for this server."
-    return CredError.of_unauthorized(
-        message,
-        www_authenticate=_OAUTH_WWW_AUTHENTICATE,
-        body={
-            "error": "authorization_required",
-            "server_id": server_id,
-            "message": message,
-        },
     )

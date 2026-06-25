@@ -63,6 +63,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
 )
@@ -2064,6 +2065,10 @@ class MCPServerManager:
                         ):
                             resolved_auth = None
                     case Error(err):
+                        if err.tag == "unauthorized":
+                            # The arm signals a missing per-user token semantically; raise the
+                            # per-server OAuth challenge here, where the full MCPServer is in hand.
+                            raise_user_oauth_challenge(server)
                         raise_public(err)
                 return MCPClient(
                     server_url=server_url,
