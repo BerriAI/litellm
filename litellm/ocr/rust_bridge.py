@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Awaitable, Final, Protocol, cast
 
+from litellm.realtime_api.rust_bridge import RustRealtimeConnect, set_rust_realtime
+
 
 class RustOcr(Protocol):
     """Signature of the compiled ``litellm_python_bridge.ocr`` entrypoint."""
@@ -64,11 +66,12 @@ def use_litellm_rust(
     *,
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
+    realtime: RustRealtimeConnect | None | _Unset = _UNSET,
 ) -> None:
-    """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
+    """Route supported calls through the Rust ``litellm_python_bridge`` extension.
 
-    ``ocr`` and ``aocr`` inject bridge callables; when omitted the compiled
-    extension is loaded on demand and any previously injected bridge is
+    ``ocr``, ``aocr``, and ``realtime`` inject bridge callables; when omitted the
+    compiled extension is loaded on demand and any previous injection is
     preserved. Pass ``None`` explicitly to clear a prior injection.
     """
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
@@ -77,6 +80,10 @@ def use_litellm_rust(
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
+    if isinstance(realtime, _Unset):
+        set_rust_realtime(enabled)
+    else:
+        set_rust_realtime(enabled, connect=realtime)
 
 
 def rust_ocr_enabled() -> bool:

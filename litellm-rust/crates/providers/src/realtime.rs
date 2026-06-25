@@ -8,6 +8,9 @@
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::error::CoreError;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
@@ -16,8 +19,9 @@ use litellm_core::CoreResult;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 
@@ -28,6 +32,10 @@ const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
+
+pub type UpstreamWs = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+type UpstreamTx = SplitSink<UpstreamWs, Message>;
+type UpstreamRx = SplitStream<UpstreamWs>;
 
 /// Resolve the OpenAI API key from the explicit param or the environment.
 ///
@@ -48,6 +56,79 @@ fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
 /// True for events that end a realtime turn: a completed response or an error.
 fn is_terminal_event(event: &RealtimeEvent) -> bool {
     event.event_type == "response.done" || event.event_type == "error"
+}
+
+/// Dial an arbitrary realtime WebSocket URL with caller-supplied headers.
+///
+/// Python owns URL/header construction for the proxy path so query params,
+/// OpenAI-Beta passthrough, and logging stay identical to the existing route.
+pub async fn dial_url(url: &str, headers: &[(String, String)]) -> CoreResult<UpstreamWs> {
+    let mut request = url
+        .into_client_request()
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    for (name, value) in headers {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| CoreError::Auth(format!("invalid header name '{name}': {err}")))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|err| CoreError::Auth(format!("invalid header value for '{name}': {err}")))?;
+        request.headers_mut().insert(header_name, header_value);
+    }
+    let (upstream, _response) = connect_async(request)
+        .await
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    Ok(upstream)
+}
+
+/// Long-lived handle to an upstream realtime WebSocket.
+///
+/// The split halves are protected independently so Python can await sends and
+/// receives concurrently from the existing bidirectional forwarding tasks.
+pub struct UpstreamHandle {
+    tx: Arc<tokio::sync::Mutex<UpstreamTx>>,
+    rx: Arc<tokio::sync::Mutex<UpstreamRx>>,
+}
+
+impl UpstreamHandle {
+    pub fn new(upstream: UpstreamWs) -> Self {
+        let (tx, rx) = upstream.split();
+        Self {
+            tx: Arc::new(tokio::sync::Mutex::new(tx)),
+            rx: Arc::new(tokio::sync::Mutex::new(rx)),
+        }
+    }
+
+    pub async fn send_text(&self, text: String) -> CoreResult<()> {
+        let mut tx = self.tx.lock().await;
+        tx.send(Message::Text(text))
+            .await
+            .map_err(|err| CoreError::Network(err.to_string()))
+    }
+
+    pub async fn recv_text(&self) -> CoreResult<Option<String>> {
+        let mut rx = self.rx.lock().await;
+        loop {
+            let Some(message) = rx.next().await else {
+                return Ok(None);
+            };
+            match message.map_err(|err| CoreError::Network(err.to_string()))? {
+                Message::Text(text) => return Ok(Some(text)),
+                Message::Close(_) => return Ok(None),
+                Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {
+                    continue
+                }
+            }
+        }
+    }
+
+    pub async fn close(&self) -> CoreResult<()> {
+        let mut tx = self.tx.lock().await;
+        match tx.close().await {
+            Ok(()) => Ok(()),
+            Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed)
+            | Err(tokio_tungstenite::tungstenite::Error::AlreadyClosed) => Ok(()),
+            Err(err) => Err(CoreError::Network(err.to_string())),
+        }
+    }
 }
 
 /// Invoke the OpenAI realtime API end to end over a WebSocket.

@@ -4,7 +4,7 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+from typing import Any, AsyncContextManager, Callable, Optional, cast
 
 from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -17,6 +17,8 @@ from ....litellm_core_utils.realtime_streaming import (
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..openai import OpenAIChatCompletion
+
+BackendConnect = Callable[..., AsyncContextManager[Any]]
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -107,6 +109,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: Optional[RealtimeQueryParams] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[dict] = None,
+        backend_connect: Optional[BackendConnect] = None,
         **kwargs: Any,
     ):
         import websockets
@@ -144,10 +147,14 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 additional_args={
                     "api_base": url,
                     "headers": headers,
-                    "complete_input_dict": {"query_params": query_params},
+                    "complete_input_dict": {
+                        "query_params": query_params,
+                        "rust_bridge": backend_connect is not None,
+                    },
                 },
             )
-            async with websockets.connect(  # type: ignore
+            connector: BackendConnect = backend_connect or websockets.connect  # type: ignore[assignment]
+            async with connector(
                 url,
                 additional_headers=headers,  # type: ignore
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
