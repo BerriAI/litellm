@@ -56,6 +56,26 @@ else:
     Span = Any
 
 
+_ASYNC_INCREMENT_WITH_TTL_SCRIPT = """
+local new_value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
+local ttl = tonumber(ARGV[2])
+local refresh_ttl = ARGV[3] == '1'
+
+if ttl ~= nil and ttl > 0 then
+    if refresh_ttl then
+        redis.call('EXPIRE', KEYS[1], ttl)
+    else
+        local current_ttl = redis.call('TTL', KEYS[1])
+        if current_ttl == -1 then
+            redis.call('EXPIRE', KEYS[1], ttl)
+        end
+    end
+end
+
+return new_value
+"""
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names from the previous 1-2 functions in the call stack.
@@ -850,21 +870,23 @@ class RedisCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
         refresh_ttl: bool = False,
     ) -> float:
-        from redis.asyncio import Redis
-
-        _redis_client: Redis = self.init_async_client()  # type: ignore
+        _redis_client: Any = self.init_async_client()
         start_time = time.time()
         _used_ttl = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            result = await _redis_client.incrbyfloat(name=key, amount=value)
-            if _used_ttl is not None:
-                if refresh_ttl:
-                    await _redis_client.expire(key, _used_ttl)
-                else:
-                    current_ttl = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+            if _used_ttl is None:
+                result = await _redis_client.incrbyfloat(name=key, amount=value)
+            else:
+                result = await _redis_client.eval(
+                    _ASYNC_INCREMENT_WITH_TTL_SCRIPT,
+                    1,
+                    key,
+                    value,
+                    _used_ttl,
+                    "1" if refresh_ttl else "0",
+                )
+                result = float(result)
 
             ## LOGGING ##
             end_time = time.time()
