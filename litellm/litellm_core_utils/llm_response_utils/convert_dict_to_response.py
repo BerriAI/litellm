@@ -126,7 +126,7 @@ def convert_tool_call_to_json_mode(
 _REPLAY_CONTENT_SLICE_RE = re.compile(r"\s*\S+\s*", re.UNICODE)
 
 
-def _split_assembled_content_for_replay(content: Optional[str]) -> List[str]:
+def _split_assembled_content_for_replay(content: Optional[str]) -> list[str]:
     """
     Slice an assembled cached completion's ``content`` into word-shaped pieces
     for cadence-preserving streaming replay. The split is lossless:
@@ -141,7 +141,7 @@ def _split_assembled_content_for_replay(content: Optional[str]) -> List[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
-async def convert_to_streaming_response_async(  # noqa: PLR0915
+async def convert_to_streaming_response_async(
     response_object: Optional[dict] = None,
 ):
     """
@@ -244,7 +244,7 @@ async def convert_to_streaming_response_async(  # noqa: PLR0915
     # don't arrive as a single SSE frame. Multi-choice (n>1) responses and
     # unsplittable content (None/empty/whitespace-free) keep the original
     # single-yield behavior.
-    slices: List[str] = []
+    slices: list[str] = []
     if len(model_response_object.choices) == 1:
         slices = _split_assembled_content_for_replay(
             model_response_object.choices[0].delta.content
@@ -255,13 +255,11 @@ async def convert_to_streaming_response_async(  # noqa: PLR0915
         return
 
     # Detach usage from the base object so we can re-attach it only to the
-    # final slice chunk.
+    # final slice chunk. A non-None usage always lives in __pydantic_extra__
+    # here (set via setattr above), so delattr cannot fail.
     original_usage = getattr(model_response_object, "usage", None)
     if original_usage is not None:
-        try:
-            delattr(model_response_object, "usage")
-        except AttributeError:
-            pass
+        delattr(model_response_object, "usage")
     original_finish_reason = model_response_object.choices[0].finish_reason
     last_idx = len(slices) - 1
     for i, piece in enumerate(slices):
@@ -283,7 +281,7 @@ async def convert_to_streaming_response_async(  # noqa: PLR0915
         await asyncio.sleep(0)
 
 
-def convert_to_streaming_response(  # noqa: PLR0915
+def convert_to_streaming_response(
     response_object: Optional[dict] = None,
 ):
     # used for yielding Cache hits when stream == True
@@ -348,7 +346,7 @@ def convert_to_streaming_response(  # noqa: PLR0915
     # Replay cached content with per-word cadence on sync cache-hit paths
     # (S3Cache, sync completion()). See convert_to_streaming_response_async
     # for the full rationale — this mirrors its tail.
-    slices: List[str] = []
+    slices: list[str] = []
     if len(model_response_object.choices) == 1:
         slices = _split_assembled_content_for_replay(
             model_response_object.choices[0].delta.content
@@ -359,10 +357,7 @@ def convert_to_streaming_response(  # noqa: PLR0915
 
     original_usage = getattr(model_response_object, "usage", None)
     if original_usage is not None:
-        try:
-            delattr(model_response_object, "usage")
-        except AttributeError:
-            pass
+        delattr(model_response_object, "usage")
     original_finish_reason = model_response_object.choices[0].finish_reason
     last_idx = len(slices) - 1
     for i, piece in enumerate(slices):
