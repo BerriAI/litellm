@@ -10,3 +10,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[lints.clippy]
+disallowed_macros = "deny"
+disallowed_types = "deny"

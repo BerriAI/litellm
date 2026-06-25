@@ -2,10 +2,12 @@ use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::run_ocr;
 use litellm_core::error::CoreError;
+use litellm_core::ocr::types::{MistralOcrOptionalParams, OcrDocument};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
-use serde_json::{Map, Value};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 mod gil;
 
@@ -20,6 +22,11 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     let encoded =
         serde_json::to_string(&value).map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(json.call_method1("loads", (encoded,))?.unbind())
+}
+
+fn parse_bridge_value<T: DeserializeOwned>(value: Value, label: &str) -> PyResult<T> {
+    serde_json::from_value(value)
+        .map_err(|err| PyValueError::new_err(format!("{label} is invalid: {err}")))
 }
 
 /// Map a core error to the closest Python exception. Caller-input problems
@@ -47,14 +54,16 @@ fn ocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let document = py_to_json(py, document.bind(py))?;
-
+    let document: OcrDocument = parse_bridge_value(py_to_json(py, document.bind(py))?, "document")?;
     let optional_params = match optional_params {
-        Some(params) => match py_to_json(py, params.bind(py))? {
-            Value::Object(map) => map,
-            _ => return Err(PyValueError::new_err("optional_params must be a dict")),
-        },
-        None => Map::new(),
+        Some(params) => {
+            let params = py_to_json(py, params.bind(py))?;
+            match params {
+                Value::Object(_) => parse_bridge_value(params, "optional_params")?,
+                _ => return Err(PyValueError::new_err("optional_params must be a dict")),
+            }
+        }
+        None => MistralOcrOptionalParams::default(),
     };
 
     let timeout = timeout_seconds.and_then(|secs| {

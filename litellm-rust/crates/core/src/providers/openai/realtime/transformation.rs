@@ -169,9 +169,7 @@ mod tests {
 
     #[test]
     fn transform_realtime_request_passthrough_preserves_event() {
-        let event: RealtimeEvent =
-            serde_json::from_str(r#"{"type":"session.update","session":{"voice":"alloy"}}"#)
-                .expect("valid event");
+        let event = RealtimeEvent::passthrough("session.update", r#"{"type":"session.update"}"#);
         let result =
             transform_realtime_request(&event, "gpt-realtime").expect("passthrough is infallible");
         assert_eq!(result.events, vec![event]);
@@ -179,9 +177,10 @@ mod tests {
 
     #[test]
     fn transform_realtime_response_passthrough_preserves_event() {
-        let event: RealtimeEvent =
-            serde_json::from_str(r#"{"type":"response.output_audio.delta","delta":"abc=="}"#)
-                .expect("valid event");
+        let event = RealtimeEvent::passthrough(
+            "response.output_audio.delta",
+            r#"{"type":"response.output_audio.delta","delta":"abc=="}"#,
+        );
         let result =
             transform_realtime_response(&event, "gpt-realtime").expect("passthrough is infallible");
         assert_eq!(result.events, vec![event]);

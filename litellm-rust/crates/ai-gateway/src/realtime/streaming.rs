@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use litellm_core::realtime::types::RealtimeEvent;
-use serde_json::Value;
 
 use crate::constants::DEFAULT_PROVIDER;
 use crate::integrations::custom_logger::CustomLogger;
@@ -103,14 +102,14 @@ impl RealTimeStreaming {
     /// Per the request-id rule, the OpenAI session id becomes BOTH `id` and
     /// `litellm_call_id`, replacing the gateway-generated fallback.
     fn on_session(&mut self, event: &RealtimeEvent) {
-        let session = event.data.get("session").and_then(Value::as_object);
-        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str) {
+        let session = event.session.as_ref();
+        if let Some(id) = session.and_then(|session| session.id.as_deref()) {
             if !id.is_empty() {
                 self.id = id.to_string();
                 self.litellm_call_id = id.to_string();
             }
         }
-        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str) {
+        if let Some(model) = session.and_then(|session| session.model.as_deref()) {
             if !model.is_empty() {
                 self.model = model.to_string();
             }
@@ -120,16 +119,14 @@ impl RealTimeStreaming {
     /// `response.done` → add this response's usage to the cumulative totals.
     fn on_response_done(&mut self, event: &RealtimeEvent) {
         let usage = event
-            .data
-            .get("response")
-            .and_then(Value::as_object)
-            .and_then(|r| r.get("usage"))
-            .and_then(Value::as_object);
+            .response
+            .as_ref()
+            .and_then(|response| response.usage.as_ref());
         let Some(usage) = usage else { return };
 
-        let input = usage.get("input_tokens").and_then(Value::as_u64);
-        let output = usage.get("output_tokens").and_then(Value::as_u64);
-        let total = usage.get("total_tokens").and_then(Value::as_u64);
+        let input = usage.input_tokens;
+        let output = usage.output_tokens;
+        let total = usage.total_tokens;
 
         if let Some(input) = input {
             self.usage.prompt_tokens += input;

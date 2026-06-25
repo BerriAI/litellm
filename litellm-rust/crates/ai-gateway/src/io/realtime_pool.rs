@@ -562,14 +562,16 @@ mod tests {
         assert_eq!(pool.warm_len(&key), 2);
 
         let handoff = pool.take(&key).expect("a warm socket should be available");
-        assert_eq!(handoff.session_created.event_type, "session.created");
+        assert_eq!(
+            handoff.session_created.event_type.as_str(),
+            "session.created"
+        );
         assert_eq!(
             handoff
                 .session_created
-                .data
-                .get("session")
-                .and_then(|s| s.get("id"))
-                .and_then(|v| v.as_str()),
+                .session
+                .as_ref()
+                .and_then(|session| session.id.as_deref()),
             Some("sess_fake")
         );
         // Taking one leaves one.
@@ -645,7 +647,10 @@ mod tests {
             "background replenisher should warm up to target_size"
         );
         let handoff = pool.take(&key).expect("a warm socket should be available");
-        assert_eq!(handoff.session_created.event_type, "session.created");
+        assert_eq!(
+            handoff.session_created.event_type.as_str(),
+            "session.created"
+        );
     }
 
     #[tokio::test]

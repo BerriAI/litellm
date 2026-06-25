@@ -17,7 +17,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use litellm_core::error::CoreError;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
-use litellm_core::realtime::types::RealtimeEvent;
+use litellm_core::realtime::types::{RealtimeEvent, RealtimeResponse, RealtimeSession};
 use litellm_core::CoreResult;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -59,6 +59,31 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
                 .filter(|key| !key.trim().is_empty())
         })
         .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+struct RealtimeWireEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    session: Option<RealtimeSession>,
+    response: Option<RealtimeResponse>,
+    delta: Option<String>,
+}
+
+pub(crate) fn parse_realtime_event(raw_json: &str) -> CoreResult<RealtimeEvent> {
+    let wire: RealtimeWireEvent = serde_json::from_str(raw_json)
+        .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+    Ok(RealtimeEvent {
+        event_type: wire.event_type.into(),
+        raw_json: raw_json.to_string().into(),
+        session: wire.session,
+        response: wire.response,
+        delta: wire.delta,
+    })
+}
+
+pub(crate) fn realtime_event_payload(event: &RealtimeEvent) -> &str {
+    event.raw_json.as_str()
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -104,10 +129,7 @@ pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> CoreResult<Realt
             .ok_or_else(|| CoreError::Network("upstream closed before first event".to_string()))?
             .map_err(|err| CoreError::Network(err.to_string()))?;
         match message {
-            Message::Text(text) => {
-                return serde_json::from_str(&text)
-                    .map_err(|err| CoreError::InvalidResponse(err.to_string()));
-            }
+            Message::Text(text) => return parse_realtime_event(&text),
             // Ignore protocol frames (ping/pong) while waiting for the first event.
             Message::Ping(_) | Message::Pong(_) => continue,
             Message::Close(_) => {
@@ -174,10 +196,8 @@ where
                 // would let an authenticated client POST a fabricated response.done and
                 // inflate its own spend log. Logging observes upstream events only.
                 for outbound in config.transform_realtime_request(&event, model)?.events {
-                    let payload = serde_json::to_string(&outbound)
-                        .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
                     upstream_tx
-                        .send(Message::Text(payload))
+                        .send(Message::Text(realtime_event_payload(&outbound).to_string()))
                         .await
                         .map_err(|err| CoreError::Network(err.to_string()))?;
                 }
@@ -187,8 +207,7 @@ where
                 let Some(message) = upstream_message else { break }; // upstream closed
                 match message.map_err(|err| CoreError::Network(err.to_string()))? {
                     Message::Text(text) => {
-                        let event: RealtimeEvent = serde_json::from_str(&text)
-                            .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                        let event = parse_realtime_event(&text)?;
                         observe(&event);
                         for outbound in config.transform_realtime_response(&event, model)?.events {
                             client_out
@@ -282,7 +301,7 @@ mod tests {
     use super::*;
 
     fn event(raw: &str) -> RealtimeEvent {
-        serde_json::from_str(raw).expect("valid event json")
+        parse_realtime_event(raw).expect("valid event json")
     }
 
     #[test]
@@ -331,9 +350,10 @@ mod tests {
             .expect("timed out waiting for session.created")
             .expect("backend stream closed before session.created");
         assert_eq!(
-            first.event_type, "session.created",
+            first.event_type.as_str(),
+            "session.created",
             "expected session.created, got: {}",
-            first.event_type
+            first.event_type.as_str()
         );
 
         // 2. Ask for a short audio response.
@@ -360,11 +380,7 @@ mod tests {
             };
             match event.event_type.as_str() {
                 "response.output_audio.delta" => {
-                    let delta = event
-                        .data
-                        .get("delta")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("");
+                    let delta = event.delta.as_deref().unwrap_or("");
                     if !delta.is_empty() {
                         saw_audio_delta = true;
                     }

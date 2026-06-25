@@ -1,0 +1,9 @@
+disallowed-macros = [
+    { path = "serde_json::json", reason = "litellm-core is the strongly typed translation layer; build typed structs/enums and serialize at gateway or Python edges." },
+]
+
+disallowed-types = [
+    { path = "serde_json::Value", reason = "litellm-core is the strongly typed translation layer; use route/provider structs instead of dynamic JSON values." },
+    { path = "serde_json::Map", reason = "litellm-core is the strongly typed translation layer; use typed structs instead of JSON object bags." },
+    { path = "serde_json::Number", reason = "litellm-core is the strongly typed translation layer; use typed numeric fields instead of JSON numbers." },
+]

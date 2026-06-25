@@ -594,6 +594,7 @@ dependencies = [
  "litellm-ai-gateway",
  "litellm-core",
  "pyo3",
+ "serde",
  "serde_json",
 ]
 
