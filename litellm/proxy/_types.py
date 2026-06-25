@@ -1538,6 +1538,12 @@ class NewUserRequest(GenerateRequestBase):
     sso_user_id: Optional[str] = None
     organizations: Optional[List[str]] = None
     owner_ids: Optional[List[str]] = None
+    is_service_account: Optional[bool] = None
+    name: Optional[str] = None
+    requested_models: Optional[List[str]] = None
+    use_case: Optional[str] = None
+    requested_rpm_limit: Optional[int] = None
+    requested_parallel_requests_limit: Optional[int] = None
 
 
 class NewUserResponse(GenerateKeyResponse):

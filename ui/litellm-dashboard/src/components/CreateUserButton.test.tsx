@@ -11,6 +11,7 @@ vi.mock("./networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   invitationCreateCall: vi.fn(),
   organizationMemberAddCall: vi.fn(),
+  userFilterUICall: vi.fn().mockResolvedValue([]),
   getProxyUISettings: vi.fn().mockResolvedValue({
     PROXY_BASE_URL: null,
     PROXY_LOGOUT_URL: null,
@@ -519,6 +520,127 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       expect(within(dialog).getByRole("checkbox", { name: /send invitation email/i })).toBeChecked();
+    });
+  });
+
+  it("reveals service account fields when the is_service_account toggle is switched on", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+    );
+
+    // The service-account-only fields (including Owners) are absent before the toggle is on
+    expect(screen.queryByLabelText(/name/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/use case/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/requested rpm limit/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /owners/i })).not.toBeInTheDocument();
+
+    // Switch the service account toggle on
+    await user.click(screen.getByRole("switch", { name: /service account/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/use case/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/requested rpm limit/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/requested parallel requests limit/i)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /owners/i })).toBeInTheDocument();
+  });
+
+  it("hides service account fields and does not send is_service_account when the toggle is off", async () => {
+    const user = userEvent.setup();
+    mockUserCreateCall.mockResolvedValue({ data: { user_id: "plain-user" } });
+    mockInvitationCreateCall.mockResolvedValue({
+      id: "inv-plain",
+      user_id: "plain-user",
+      has_user_setup_sso: false,
+    } as any);
+
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+    );
+
+    // Owners field must not be shown when the toggle is off
+    expect(screen.queryByRole("combobox", { name: /owners/i })).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/user email/i), "plain@example.com");
+    await user.click(screen.getByRole("combobox", { name: /user role/i }));
+    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /create user/i }));
+
+    await waitFor(() => {
+      expect(mockUserCreateCall).toHaveBeenCalledWith(
+        "token",
+        null,
+        expect.not.objectContaining({ is_service_account: true }),
+      );
+    });
+  });
+
+  it("requires at least 2 owners when the service account toggle is on", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+    );
+
+    await user.type(screen.getByLabelText(/user email/i), "sa@example.com");
+    await user.click(screen.getByRole("combobox", { name: /user role/i }));
+    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("switch", { name: /service account/i }));
+
+    // Submit without selecting any owners — should fail validation
+    await user.click(screen.getByRole("button", { name: /create user/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/service account requires at least 2 owners/i)).toBeInTheDocument();
+    });
+    expect(mockUserCreateCall).not.toHaveBeenCalled();
+  });
+
+  it("sends is_service_account and the service account fields in the POST body when toggle is on with 2 owners", async () => {
+    const user = userEvent.setup();
+    const { userFilterUICall } = await import("./networking");
+    vi.mocked(userFilterUICall).mockResolvedValue([
+      { user_email: "owner1@example.com", user_id: "owner-1" },
+      { user_email: "owner2@example.com", user_id: "owner-2" },
+    ] as any);
+    mockUserCreateCall.mockResolvedValue({ data: { user_id: "sa-user" } });
+
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} onUserCreated={vi.fn()} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+    );
+
+    await user.type(screen.getByLabelText(/user email/i), "sa@example.com");
+    await user.click(screen.getByRole("combobox", { name: /user role/i }));
+    await user.click(screen.getByText("User"));
+
+    // Turn the toggle on and fill in the service-account fields
+    await user.click(screen.getByRole("switch", { name: /service account/i }));
+    await user.type(screen.getByLabelText(/^name$/i), "my-service-account");
+    await user.type(screen.getByLabelText(/use case/i), "batch inference");
+
+    // Select two owners
+    const ownersSelect = screen.getByRole("combobox", { name: /owners/i });
+    await user.click(ownersSelect);
+    await user.click(screen.getByText("owner1@example.com (owner-1)"));
+    await user.click(ownersSelect);
+    await user.click(screen.getByText("owner2@example.com (owner-2)"));
+
+    await user.click(screen.getByRole("button", { name: /create user/i }));
+
+    await waitFor(() => {
+      expect(mockUserCreateCall).toHaveBeenCalledWith(
+        "token",
+        null,
+        expect.objectContaining({
+          user_email: "sa@example.com",
+          user_role: "proxy_user",
+          is_service_account: true,
+          name: "my-service-account",
+          use_case: "batch inference",
+          owner_ids: ["owner-1", "owner-2"],
+        }),
+      );
     });
   });
 });

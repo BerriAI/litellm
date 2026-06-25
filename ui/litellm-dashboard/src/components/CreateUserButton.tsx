@@ -8,10 +8,12 @@ import {
   Checkbox,
   Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Select as Select2,
   Space,
+  Switch,
   Tooltip,
   Typography,
 } from "antd";
@@ -82,6 +84,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const { data: organizations = [] } = useOrganizations();
   const [ownerOptions, setOwnerOptions] = useState<{ label: string; value: string }[]>([]);
   const [ownerSearchLoading, setOwnerSearchLoading] = useState(false);
+  const [isServiceAccount, setIsServiceAccount] = useState(false);
 
   const fetchOwners = async (searchText: string) => {
     if (!searchText) {
@@ -139,12 +142,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const handleOk = () => {
     setIsModalVisible(false);
+    setIsServiceAccount(false);
     form.resetFields();
   };
 
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiuser(false);
+    setIsServiceAccount(false);
     form.resetFields();
   };
 
@@ -156,6 +161,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     organizations?: string[];
     send_invite_email?: boolean;
     owner_ids?: string[];
+    is_service_account?: boolean;
+    name?: string;
+    requested_models?: string[];
+    use_case?: string;
+    requested_rpm_limit?: number;
+    requested_parallel_requests_limit?: number;
   }) => {
     try {
       NotificationsManager.info("Making API Call");
@@ -177,6 +188,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);
         form.resetFields();
+        setIsServiceAccount(false);
         return;
       }
 
@@ -207,6 +219,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
       NotificationsManager.success("API user Created");
       form.resetFields();
+      setIsServiceAccount(false);
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
@@ -214,6 +227,110 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       console.error("Error creating the user:", error);
     }
   };
+
+  // Service account toggle. When on, the owners field (required, min 2) and
+  // the extra service-account fields (name, requested_models, use_case, limits)
+  // are revealed. When off, none of these render. These Form.Items are shared
+  // by both the embedded and standalone (modal) forms to avoid duplication.
+  const serviceAccountFields = (
+    <>
+      <Form.Item
+        label={
+          <span>
+            Service Account{" "}
+            <Tooltip title="Create a service account entry owned by the selected owners.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="is_service_account"
+        valuePropName="checked"
+        help="When on, this user is registered as a service account."
+      >
+        <Switch onChange={(v) => setIsServiceAccount(v)} />
+      </Form.Item>
+
+      {isServiceAccount && (
+        <>
+          <Form.Item
+            label={
+              <span>
+                Owners{" "}
+                <Tooltip title="At least 2 users who own this service account">
+                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                </Tooltip>
+              </span>
+            }
+            name="owner_ids"
+            required
+            rules={[
+              {
+                validator: async (_, value) => {
+                  if (!value || value.length < 2) {
+                    throw new Error("A service account requires at least 2 owners");
+                  }
+                },
+              },
+            ]}
+            help="required — at least 2 owners for this service account"
+          >
+            <Select2
+              mode="multiple"
+              showSearch
+              placeholder="Search by email to add owners"
+              filterOption={false}
+              onSearch={(v) => debouncedOwnerSearch(v)}
+              loading={ownerSearchLoading}
+              options={ownerOptions}
+              notFoundContent={ownerSearchLoading ? "Searching..." : "No users found"}
+              style={{ width: "100%" }}
+            />
+          </Form.Item>
+
+          <Form.Item label="Name" name="name">
+            <Input placeholder="Service account name" />
+          </Form.Item>
+          <Form.Item
+            label={
+              <span>
+                Requested Models{" "}
+                <Tooltip title="Model public names this service account should be granted. Suggestions come from the proxy's available models.">
+                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                </Tooltip>
+              </span>
+            }
+            name="requested_models"
+            help="Start typing to see available model public names."
+          >
+            <Select2
+              mode="tags"
+              showSearch
+              placeholder="Search for model public names"
+              style={{ width: "100%" }}
+            >
+              {userModels.map((model) => (
+                <Select2.Option key={model} value={model}>
+                  {getModelDisplayName(model)}
+                </Select2.Option>
+              ))}
+            </Select2>
+          </Form.Item>
+          <Form.Item label="Use Case" name="use_case">
+            <Input.TextArea rows={2} placeholder="Describe the intended use case for this service account" />
+          </Form.Item>
+          <Form.Item label="Requested RPM Limit" name="requested_rpm_limit">
+            <InputNumber min={0} placeholder="Requests per minute" style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item
+            label="Requested Parallel Requests Limit"
+            name="requested_parallel_requests_limit"
+          >
+            <InputNumber min={0} placeholder="Max parallel requests" style={{ width: "100%" }} />
+          </Form.Item>
+        </>
+      )}
+    </>
+  );
 
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
@@ -263,40 +380,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           <TeamDropdown />
         </Form.Item>
 
-        <Form.Item
-          label={
-            <span>
-              Owners{" "}
-              <Tooltip title="At least 2 users who own this service account">
-                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-              </Tooltip>
-            </span>
-          }
-          name="owner_ids"
-          required={false}
-          rules={[
-            {
-              validator: async (_, value) => {
-                if (value && value.length > 0 && value.length < 2) {
-                  throw new Error("If specifying owners, please select at least 2");
-                }
-              },
-            },
-          ]}
-          help="optional — if provided, minimum 2 owners"
-        >
-          <Select2
-            mode="multiple"
-            showSearch
-            placeholder="Search by email to add owners"
-            filterOption={false}
-            onSearch={(v) => debouncedOwnerSearch(v)}
-            loading={ownerSearchLoading}
-            options={ownerOptions}
-            notFoundContent={ownerSearchLoading ? "Searching..." : "No users found"}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
+        {serviceAccountFields}
 
         <Form.Item label="Metadata" name="metadata">
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
@@ -405,40 +489,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             </Select>
           </Form.Item>
 
-          <Form.Item
-            label={
-              <span>
-                Owners{" "}
-                <Tooltip title="At least 2 users who own this service account">
-                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                </Tooltip>
-              </span>
-            }
-            name="owner_ids"
-            required={false}
-            rules={[
-              {
-                validator: async (_, value) => {
-                  if (value && value.length > 0 && value.length < 2) {
-                    throw new Error("If specifying owners, please select at least 2");
-                  }
-                },
-              },
-            ]}
-            help="optional — if provided, minimum 2 owners"
-          >
-            <Select2
-              mode="multiple"
-              showSearch
-              placeholder="Search by email to add owners"
-              filterOption={false}
-              onSearch={(v) => debouncedOwnerSearch(v)}
-              loading={ownerSearchLoading}
-              options={ownerOptions}
-              notFoundContent={ownerSearchLoading ? "Searching..." : "No users found"}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
+          {serviceAccountFields}
 
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />

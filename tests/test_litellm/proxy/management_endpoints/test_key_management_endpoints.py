@@ -14270,3 +14270,143 @@ async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_g
     assert int(exc.value.code) == 403
     assert "permissions" in str(exc.value.message)
     assert "Enterprise" not in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_activate_service_account_noop_when_user_id_none(monkeypatch):
+    """No user_id -> helper should not touch the service account table."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _activate_service_account_and_block_previous_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_serviceaccounttable.find_unique = AsyncMock()
+
+    await _activate_service_account_and_block_previous_keys(
+        user_id=None,
+        new_key_token="hashed-new",
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_prisma_client.db.litellm_serviceaccounttable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_activate_service_account_noop_when_user_not_in_table(monkeypatch):
+    """user_id present but no row in service account table -> no update / no blocking."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _activate_service_account_and_block_previous_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_serviceaccounttable.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.update = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.update_many = AsyncMock()
+
+    await _activate_service_account_and_block_previous_keys(
+        user_id="sa-user",
+        new_key_token="hashed-new",
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_prisma_client.db.litellm_serviceaccounttable.find_unique.assert_called_once_with(
+        where={"user_id": "sa-user"}
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.update.assert_not_called()
+    mock_prisma_client.db.litellm_verificationtoken.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_activate_service_account_activates_and_blocks_previous_keys(monkeypatch):
+    """Service account row exists -> set is_active=True, is_key_rotation_requested=False,
+    and block all other keys for that user (excluding the new key)."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _activate_service_account_and_block_previous_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_serviceaccounttable.find_unique = AsyncMock(
+        return_value=MagicMock(user_id="sa-user")
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.update = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.update_many = AsyncMock()
+
+    await _activate_service_account_and_block_previous_keys(
+        user_id="sa-user",
+        new_key_token="hashed-new",
+        prisma_client=mock_prisma_client,
+    )
+
+    # Activate the service account and clear the rotation-requested flag.
+    mock_prisma_client.db.litellm_serviceaccounttable.update.assert_called_once_with(
+        where={"user_id": "sa-user"},
+        data={"is_active": True, "is_key_rotation_requested": False},
+    )
+
+    # Block every other key for this user except the just-created one.
+    mock_prisma_client.db.litellm_verificationtoken.update_many.assert_called_once()
+    update_many_call = (
+        mock_prisma_client.db.litellm_verificationtoken.update_many.call_args
+    )
+    assert update_many_call.kwargs["data"] == {"blocked": True}
+    assert update_many_call.kwargs["where"] == {
+        "user_id": "sa-user",
+        "token": {"not": "hashed-new"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_key_activates_service_account_and_blocks_previous_keys(
+    monkeypatch,
+):
+    """End-to-end: /key/generate for a service-account user activates the row and
+    blocks previous keys. _common_key_generation_helper is stubbed so we isolate
+    the new behavior from the rest of the key-generation machinery."""
+    from litellm.proxy._types import GenerateKeyResponse
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_serviceaccounttable.find_unique = AsyncMock(
+        return_value=MagicMock(user_id="sa-user")
+    )
+    mock_prisma_client.db.litellm_serviceaccounttable.update = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.update_many = AsyncMock()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+
+    # Stub the shared helper so generate_key_fn doesn't need team/budget mocking.
+    new_key_response = GenerateKeyResponse(
+        key="sk-new",
+        token="hashed-new",
+        token_id="hashed-new",
+        user_id="sa-user",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+        AsyncMock(return_value=new_key_response),
+    )
+    response = await generate_key_fn(
+        data=GenerateKeyRequest(user_id="sa-user"),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    assert response.user_id == "sa-user"
+
+    mock_prisma_client.db.litellm_serviceaccounttable.update.assert_called_once_with(
+        where={"user_id": "sa-user"},
+        data={"is_active": True, "is_key_rotation_requested": False},
+    )
+    update_many_call = (
+        mock_prisma_client.db.litellm_verificationtoken.update_many.call_args
+    )
+    assert update_many_call.kwargs["where"] == {
+        "user_id": "sa-user",
+        "token": {"not": "hashed-new"},
+    }
+    assert update_many_call.kwargs["data"] == {"blocked": True}

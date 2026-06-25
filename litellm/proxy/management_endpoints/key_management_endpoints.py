@@ -1072,6 +1072,47 @@ async def _common_key_generation_helper(
     return response
 
 
+async def _activate_service_account_and_block_previous_keys(
+    user_id: Optional[str],
+    new_key_token: Optional[str],
+    prisma_client: Any,
+) -> None:
+    """
+    After a key is created on /key/generate for a user that is a service account:
+    - Mark the LiteLLM_ServiceAccountTable row as active (is_active=True) and
+      is_key_rotation_requested=False (the rotation is fulfilled by this new key).
+    - Block all previous keys for that user (every other LiteLLM_VerificationToken
+      row with the same user_id), so only the freshly created key remains usable.
+
+    No-op if the user_id is not present in the service account table.
+    """
+    if user_id is None or prisma_client is None:
+        return
+
+    service_account = await prisma_client.db.litellm_serviceaccounttable.find_unique(
+        where={"user_id": user_id}
+    )
+    if service_account is None:
+        return
+
+    # Activate the service account and clear the rotation-requested flag, since
+    # this new key fulfills any pending rotation.
+    await prisma_client.db.litellm_serviceaccounttable.update(
+        where={"user_id": user_id},
+        data={"is_active": True, "is_key_rotation_requested": False},
+    )
+
+    # Block all other keys owned by this user. The just-created key is identified
+    # by its hashed token (response.token after the token_id remap), which is the
+    # LiteLLM_VerificationToken.token primary key. Use update_many so this is a
+    # single query; the new key is excluded via the NOT clause.
+    where: dict = {"user_id": user_id, "token": {"not": new_key_token}}
+    await prisma_client.db.litellm_verificationtoken.update_many(
+        data={"blocked": True},
+        where=where,
+    )
+
+
 def _check_key_model_specific_limits(
     keys: List[LiteLLM_VerificationToken],
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -1636,12 +1677,23 @@ async def generate_key_fn(
                 user_api_key_cache=user_api_key_cache,
             )
 
-        return await _common_key_generation_helper(
+        result = await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
+
+        # If this key belongs to a service account user, activate the service
+        # account (is_active=True, is_key_rotation_requested=False) and block all
+        # of that user's previous keys so only the new key remains usable.
+        await _activate_service_account_and_block_previous_keys(
+            user_id=getattr(result, "user_id", None),
+            new_key_token=getattr(result, "token", None),
+            prisma_client=prisma_client,
+        )
+
+        return result
 
     except Exception as e:
         verbose_proxy_logger.exception(

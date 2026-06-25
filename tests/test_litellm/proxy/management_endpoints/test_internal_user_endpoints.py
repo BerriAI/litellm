@@ -1514,6 +1514,184 @@ async def test_new_user_default_teams_flow(mocker):
         litellm.default_internal_user_params = original_default_params
 
 
+async def _setup_new_user_service_account_mocks(mocker):
+    """Shared mock setup for /user/new service-account creation tests.
+
+    Returns the mock prisma client so the caller can assert on
+    litellm_serviceaccounttable.upsert calls.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user  # noqa: F401
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5  # under license limit
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None
+
+    async def mock_check_duplicate_user_id(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check_duplicate_user_email,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check_duplicate_user_id,
+    )
+
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    mock_generate_key_helper_fn = mocker.AsyncMock()
+    mock_generate_key_helper_fn.return_value = {
+        "user_id": "sa-user-123",
+        "token": "sk-sa-token-123",
+        "expires": None,
+        "max_budget": 100,
+    }
+
+    mock_user_created_hook = mocker.AsyncMock()
+    mock_write_audit_log = mocker.AsyncMock()
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mock_user_created_hook,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.write_audit_log",
+        mock_write_audit_log,
+    )
+
+    # upsert is awaited; default MagicMock isn't awaitable.
+    mock_prisma_client.db.litellm_serviceaccounttable.upsert = mocker.AsyncMock()
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_new_user_creates_service_account_when_toggle_on(mocker):
+    """
+    When is_service_account=True with >=2 owners and the extra service-account
+    fields, /user/new should upsert a LiteLLM_ServiceAccountTable row carrying
+    owner_ids plus all the provided service-account fields.
+    """
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = await _setup_new_user_service_account_mocks(mocker)
+
+    user_request = NewUserRequest(
+        user_email="sa@example.com",
+        user_role="internal_user",
+        is_service_account=True,
+        owner_ids=["owner-1", "owner-2"],
+        name="my-service-account",
+        requested_models=["gpt-4", "claude-3-opus"],
+        use_case="batch inference",
+        requested_rpm_limit=500,
+        requested_parallel_requests_limit=10,
+    )
+    mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
+
+    await new_user(data=user_request, user_api_key_dict=mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_serviceaccounttable.upsert.assert_called_once()
+    upsert_call = mock_prisma_client.db.litellm_serviceaccounttable.upsert.call_args
+    assert upsert_call.kwargs["where"] == {"user_id": "sa-user-123"}
+
+    create_data = upsert_call.kwargs["data"]["create"]
+    assert create_data["user_id"] == "sa-user-123"
+    assert create_data["owner_ids"] == ["owner-1", "owner-2"]
+    assert create_data["name"] == "my-service-account"
+    assert create_data["requested_models"] == ["gpt-4", "claude-3-opus"]
+    assert create_data["use_case"] == "batch inference"
+    assert create_data["requested_rpm_limit"] == 500
+    assert create_data["requested_parallel_requests_limit"] == 10
+
+    # The same payload is used for both create and update of the upsert.
+    assert upsert_call.kwargs["data"]["update"] == create_data
+
+    # Service-account-only fields must NOT leak into generate_key_helper_fn
+    # (they are popped off data_json before it is splatted into kwargs).
+    from litellm.proxy.management_endpoints import internal_user_endpoints
+
+    generate_key_helper_fn_mock = (
+        internal_user_endpoints.generate_key_helper_fn  # patched by the helper
+    )
+    generate_key_helper_fn_mock.assert_called_once()
+    passed_kwargs = generate_key_helper_fn_mock.call_args.kwargs
+    for leaked in (
+        "is_service_account",
+        "owner_ids",
+        "name",
+        "requested_models",
+        "use_case",
+        "requested_rpm_limit",
+        "requested_parallel_requests_limit",
+    ):
+        assert leaked not in passed_kwargs, f"{leaked} leaked to generate_key_helper_fn"
+
+
+@pytest.mark.asyncio
+async def test_new_user_service_account_requires_two_owners(mocker):
+    """
+    is_service_account=True with fewer than 2 owners should raise a 400.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = await _setup_new_user_service_account_mocks(mocker)
+
+    user_request = NewUserRequest(
+        user_email="sa@example.com",
+        user_role="internal_user",
+        is_service_account=True,
+        owner_ids=["owner-1"],  # only one owner
+    )
+    mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
+
+    with pytest.raises((HTTPException, ProxyException)) as exc_info:
+        await new_user(data=user_request, user_api_key_dict=mock_user_api_key_dict)
+
+    assert "at least 2" in str(exc_info.value)
+    mock_prisma_client.db.litellm_serviceaccounttable.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_user_does_not_create_service_account_when_toggle_off(mocker):
+    """
+    owner_ids alone (without is_service_account) must NOT create a service
+    account row — the toggle is the sole gate.
+    """
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = await _setup_new_user_service_account_mocks(mocker)
+
+    user_request = NewUserRequest(
+        user_email="plain@example.com",
+        user_role="internal_user",
+        owner_ids=["owner-1", "owner-2"],  # owners provided, but toggle off
+    )
+    mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
+
+    await new_user(data=user_request, user_api_key_dict=mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_serviceaccounttable.upsert.assert_not_called()
+
+
 def test_update_internal_new_user_params_proxy_admin_role():
     """
     Test that default_internal_user_params are NOT applied when user_role is PROXY_ADMIN

@@ -462,6 +462,21 @@ async def new_user(
             Optional[List[str]], data_json.pop("organizations", None)
         )
         owner_ids = cast(Optional[List[str]], data_json.pop("owner_ids", None))
+        # Service account fields are stored on LiteLLM_ServiceAccountTable, not
+        # the user/key tables, so they must be popped before generate_key_helper_fn
+        # (which takes explicit kwargs and rejects unknown fields).
+        service_account_fields: dict = {
+            "name": data_json.pop("name", None),
+            "requested_models": data_json.pop("requested_models", None),
+            "use_case": data_json.pop("use_case", None),
+            "requested_rpm_limit": data_json.pop("requested_rpm_limit", None),
+            "requested_parallel_requests_limit": data_json.pop(
+                "requested_parallel_requests_limit", None
+            ),
+        }
+        # Pop is_service_account so it isn't passed to generate_key_helper_fn;
+        # the value is read from the validated `data` object below.
+        data_json.pop("is_service_account", False)
 
         response = await generate_key_helper_fn(request_type="user", **data_json)
         # Admin UI Logic
@@ -496,19 +511,23 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
             )
 
-        # If owner_ids provided, create a service account entry linked to this user
-        if owner_ids is not None and len(owner_ids) > 0 and user_id is not None:
-            if len(owner_ids) < 2:
+        # If is_service_account is enabled, create a service account entry
+        # linked to this user. A service account requires at least 2 owners.
+        if data.is_service_account and user_id is not None:
+            if not owner_ids or len(owner_ids) < 2:
                 raise HTTPException(
                     status_code=400,
-                    detail="owner_ids must contain at least 2 user IDs",
+                    detail="is_service_account requires owner_ids with at least 2 user IDs",
                 )
+            create_data: dict = {"user_id": user_id, "owner_ids": owner_ids}
+            # Only set fields that were explicitly provided so Prisma defaults
+            # (e.g. requested_models=[], is_active=false) apply otherwise.
+            for field, value in service_account_fields.items():
+                if value is not None:
+                    create_data[field] = value
             await prisma_client.db.litellm_serviceaccounttable.upsert(
                 where={"user_id": user_id},
-                data={
-                    "create": {"user_id": user_id, "owner_ids": owner_ids},
-                    "update": {"owner_ids": owner_ids},
-                },
+                data={"create": create_data, "update": create_data},
             )
 
         special_keys = ["token", "token_id"]
