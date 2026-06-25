@@ -485,26 +485,31 @@ def test_claude_platform_unsupported_override_allows_context_management():
 def test_claude_platform_unsupported_override_ignores_invalid_type():
     """
     If claude_platform_unsupported_params is set to a non-collection type
-    (e.g. a string), the override is ignored and defaults apply.
+    (e.g. a string), the override is ignored, defaults apply, and a warning
+    naming the param is logged so the operator sees it had no effect.
     """
+    from litellm.llms.bedrock.claude_platform import common_utils
     from litellm.llms.bedrock.claude_platform.transformation import (
         BedrockClaudePlatformConfig,
     )
 
     config = BedrockClaudePlatformConfig()
-    request_body = config.transform_request(
-        model="claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "hello"}],
-        optional_params={
-            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
-            "max_tokens": 10,
-        },
-        litellm_params={"claude_platform_unsupported_params": "not_a_list"},
-        headers={},
-    )
+    with patch.object(common_utils.verbose_logger, "warning") as mock_warning:
+        request_body = config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+                "max_tokens": 10,
+            },
+            litellm_params={"claude_platform_unsupported_params": "not_a_list"},
+            headers={},
+        )
 
     assert "context_management" not in request_body
     assert request_body["max_tokens"] == 10
+    warned = [call.args[0] for call in mock_warning.call_args_list]
+    assert any("claude_platform_unsupported_params" in message for message in warned)
 
 
 def test_claude_platform_messages_does_not_advertise_beta_for_stripped_context_management():

@@ -78,18 +78,30 @@ def filter_claude_platform_request_body(
 
 def resolve_unsupported_override(
     litellm_params: Union[dict[str, object], GenericLiteLLMParams],
+    log_invalid: bool = True,
 ) -> Optional[frozenset[str]]:
     """Read ``claude_platform_unsupported_params`` from litellm_params.
 
-    Returns None (use default set) when the key is absent. Returns a
-    frozenset when present, allowing operators to override or clear the
-    unsupported-param list via proxy config without a code change.
+    Returns None (use the default set) when the key is absent or set to a
+    non-collection type; returns a frozenset when a list/set/tuple is given,
+    letting operators override or clear the unsupported-param list via proxy
+    config without a code change. A present but non-collection value is a
+    misconfiguration: it is ignored (defaults apply) and logged at WARNING when
+    ``log_invalid`` is set, so operators see the override had no effect. The
+    header-derivation pass disables it so the warning fires once per request.
     """
     raw = litellm_params.get("claude_platform_unsupported_params")
     if raw is None:
         return None
     if isinstance(raw, (list, set, frozenset, tuple)):
         return frozenset(str(item) for item in raw)
+    if log_invalid:
+        verbose_logger.warning(
+            "bedrock/claude_platform: ignoring claude_platform_unsupported_params "
+            "of unsupported type %s; expected a list/set/tuple of param names. "
+            "Using the default unsupported-param set.",
+            type(raw).__name__,
+        )
     return None
 
 

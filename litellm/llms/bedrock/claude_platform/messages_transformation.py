@@ -52,7 +52,9 @@ class BedrockClaudePlatformMessagesConfig(
         if resolved_api_key and "x-api-key" not in headers:
             headers["x-api-key"] = resolved_api_key
 
-        unsupported_override = resolve_unsupported_override(litellm_params)
+        unsupported_override = resolve_unsupported_override(
+            litellm_params, log_invalid=False
+        )
         filtered_optional_params = filter_claude_platform_request_body(
             optional_params,
             unsupported_override=unsupported_override,
