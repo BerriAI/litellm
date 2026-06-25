@@ -12,7 +12,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 
-MODEL_LIST_ORDER: Final[List[Dict[str, str]]] = [
+MODEL_LIST_ORDER: Final[list[dict[str, str]]] = [
     {"created_at": "asc"},
     {"model_id": "asc"},
 ]
