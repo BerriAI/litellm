@@ -140,7 +140,7 @@ pub async fn image_edit(request: ImageEditRequest<'_>) -> CoreResult<Value> {
     let mut request_builder = http_client().post(&url);
     if let Some(api_key) = api_key {
         if !has_header(&headers, "x-api-key") && !has_header(&headers, "authorization") {
-            request_builder = request_builder.header("x-api-key", api_key);
+            request_builder = request_builder.bearer_auth(api_key);
         }
     }
     for (key, value) in headers {
@@ -284,7 +284,12 @@ mod tests {
 
         let request = server.await.expect("server task completes");
         assert!(request.starts_with("POST /v1/images/edits "), "{request}");
-        assert!(request.contains("x-api-key: sk-test"), "{request}");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sk-test"),
+            "{request}"
+        );
         assert!(request.contains("name=\"model\""), "{request}");
         assert!(request.contains("qwen-image-edit"), "{request}");
         assert!(request.contains("name=\"prompt\""), "{request}");
