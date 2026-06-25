@@ -765,6 +765,12 @@ class LiteLLMRoutes(enum.Enum):
         # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
         "/guardrails/submissions",
         "/guardrails/submissions/{guardrail_id}",
+        # Logging-credential routes. GET filters to logging-typed for non-admins;
+        # PATCH delegates to decide_credential_patch in credential_endpoints, which
+        # only allows a team-admin to append their own team_id to access.teams.
+        # POST and DELETE stay proxy-admin only via is_admin_gated_credential_info.
+        "/credentials",
+        "/credentials/{credential_name}",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

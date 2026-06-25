@@ -1717,10 +1717,8 @@ async def update_team(
     """
     try:
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_logging_exporter_assignment,
+            validate_team_logging_exporter_assignment,
         )
-
-        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1781,9 +1779,21 @@ async def update_team(
             )
 
         # Verify caller has access to manage this team
+        team_obj_for_auth = LiteLLM_TeamTable(**existing_team_row.model_dump())
         await _verify_team_access(
-            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            team_obj=team_obj_for_auth,
             user_api_key_dict=user_api_key_dict,
+        )
+
+        # `logging_exporters` is the only metadata field a non-admin team-admin
+        # may write on /team/update. Run the gate now that we know the team id
+        # and have its membership loaded.
+        validate_team_logging_exporter_assignment(
+            metadata=data.metadata,
+            user_api_key_dict=user_api_key_dict,
+            is_team_admin=_is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj_for_auth
+            ),
         )
 
         _check_passthrough_routes_caller_permission(
