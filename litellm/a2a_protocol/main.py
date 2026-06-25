@@ -35,10 +35,12 @@ if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
     from a2a.compat.v0_3.types import (
         AgentCard,
+        Message,
         SendMessageRequest,
         SendMessageResponse,
         SendStreamingMessageRequest,
         SendStreamingMessageResponse,
+        Task,
     )
 
 # Runtime imports — requires a2a-sdk>=1.1.0
@@ -49,11 +51,13 @@ try:
     from a2a.client import Client, ClientConfig, create_client
     from a2a.compat.v0_3 import conversions as _a2a_conversions
     from a2a.compat.v0_3.types import (
+        Message,
         SendMessageRequest,
         SendMessageResponse,
         SendMessageSuccessResponse,
         SendStreamingMessageRequest,
         SendStreamingMessageResponse,
+        Task,
     )
 
     A2A_SDK_AVAILABLE = True
@@ -213,10 +217,16 @@ async def _send_message(
         last_event,
         request_id=request.id,
     )
+    result: Union["Message", "Task"] = stream_compat.result
+    if not isinstance(result, (Message, Task)):
+        raise RuntimeError(
+            "A2A send_message failed: non-streaming message/send expects the "
+            "agent's final event to be a Message or Task result."
+        )
     return SendMessageResponse(
         root=SendMessageSuccessResponse(
             id=request.id,
-            result=stream_compat.result,
+            result=result,
         )
     )
 
