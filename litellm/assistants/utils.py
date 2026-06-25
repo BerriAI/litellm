@@ -71,9 +71,7 @@ def get_optional_params_add_message(
     if custom_llm_provider == "openai":
         optional_params = non_default_params
     elif custom_llm_provider == "azure":
-        supported_params = (
-            litellm.AzureOpenAIAssistantsAPIConfig().get_supported_openai_create_message_params()
-        )
+        supported_params = litellm.AzureOpenAIAssistantsAPIConfig().get_supported_openai_create_message_params()
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.AzureOpenAIAssistantsAPIConfig().map_openai_params_create_message_params(
             non_default_params=non_default_params, optional_params=optional_params

@@ -29,13 +29,15 @@ _PROMOTABLE: Final[
 ] = {
     LiteLLM.TEAM_ID: lambda identity, model, team_metadata_keys: identity.team_id,
     LiteLLM.TEAM_ALIAS: lambda identity, model, team_metadata_keys: identity.team_alias,
-    LiteLLM.TEAM_METADATA: lambda identity, model, team_metadata_keys: _filtered_team_metadata_json(
-        identity.team_metadata, team_metadata_keys
+    LiteLLM.TEAM_METADATA: lambda identity, model, team_metadata_keys: (
+        _filtered_team_metadata_json(identity.team_metadata, team_metadata_keys)
     ),
     LiteLLM.KEY_HASH: lambda identity, model, team_metadata_keys: identity.key_hash,
     LiteLLM.END_USER: lambda identity, model, team_metadata_keys: identity.end_user,
     GenAI.REQUEST_MODEL: lambda identity, model, team_metadata_keys: model,
-    LiteLLM.PROVIDER_MODEL: lambda identity, model, team_metadata_keys: identity.provider_model,
+    LiteLLM.PROVIDER_MODEL: lambda identity, model, team_metadata_keys: (
+        identity.provider_model
+    ),
 }
 
 # Keys promoted by default (a subset of ``_PROMOTABLE``). ``END_USER`` is

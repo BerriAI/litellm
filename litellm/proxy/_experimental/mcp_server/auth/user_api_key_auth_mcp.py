@@ -521,9 +521,9 @@ class MCPRequestHandler:
                         if server_alias not in server_auth_headers:
                             server_auth_headers[server_alias] = {}
 
-                        server_auth_headers[server_alias][
-                            auth_header_name
-                        ] = header_value
+                        server_auth_headers[server_alias][auth_header_name] = (
+                            header_value
+                        )
                         verbose_logger.debug(
                             f"Found server auth header: {server_alias} -> {auth_header_name}: {header_value[:10]}..."
                         )
@@ -1383,9 +1383,9 @@ class MCPRequestHandler:
         cache_key = f"agent_object_permission_id:{agent_id}"
 
         try:
-            object_permission_id: Optional[str] = (
-                await user_api_key_cache.async_get_cache(key=cache_key)
-            )
+            object_permission_id: Optional[
+                str
+            ] = await user_api_key_cache.async_get_cache(key=cache_key)
 
             if object_permission_id == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None

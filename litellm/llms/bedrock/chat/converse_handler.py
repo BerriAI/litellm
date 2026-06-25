@@ -51,19 +51,19 @@ def make_sync_call(
         )
 
     if fake_stream:
-        model_response: (
-            ModelResponse
-        ) = litellm.AmazonConverseConfig()._transform_response(
-            model=model,
-            response=response,
-            model_response=litellm.ModelResponse(),
-            stream=True,
-            logging_obj=logging_obj,
-            optional_params={},
-            api_key="",
-            data=data,
-            messages=messages,
-            encoding=litellm.encoding,
+        model_response: ModelResponse = (
+            litellm.AmazonConverseConfig()._transform_response(
+                model=model,
+                response=response,
+                model_response=litellm.ModelResponse(),
+                stream=True,
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                data=data,
+                messages=messages,
+                encoding=litellm.encoding,
+            )
         )  # type: ignore
         completion_stream: Any = MockResponseIterator(
             model_response=model_response, json_mode=json_mode
