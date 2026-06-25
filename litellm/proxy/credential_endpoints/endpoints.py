@@ -70,16 +70,11 @@ async def _caller_team_admin_ids(
             parent_otel_span=user_api_key_dict.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except Exception:
-        verbose_proxy_logger.exception("team-admin lookup (user fetch) failed")
-        return frozenset()
-    if user_obj is None or not getattr(user_obj, "teams", None):
-        return frozenset()
-
-    team_ids: list[str] = [tid for tid in user_obj.teams if isinstance(tid, str)]
-    admin_of: list[str] = []
-    for team_id in team_ids:
-        try:
+        if user_obj is None or not getattr(user_obj, "teams", None):
+            return frozenset()
+        team_ids: list[str] = [tid for tid in user_obj.teams if isinstance(tid, str)]
+        admin_of: list[str] = []
+        for team_id in team_ids:
             team_obj = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,  # type: ignore[arg-type]
@@ -87,14 +82,17 @@ async def _caller_team_admin_ids(
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        except Exception:
-            continue
-        if any(
-            member.user_id == user_api_key_dict.user_id and member.role == "admin"
-            for member in (team_obj.members_with_roles or [])
-        ):
-            admin_of.append(team_id)
-    return frozenset(admin_of)
+            if any(
+                member.user_id == user_api_key_dict.user_id and member.role == "admin"
+                for member in (team_obj.members_with_roles or [])
+            ):
+                admin_of.append(team_id)
+        return frozenset(admin_of)
+    except Exception:
+        # Best-effort lookup. A miss here means the PATCH decider will deny any
+        # team-admin patch other than a no-op, which is the safe fallback.
+        verbose_proxy_logger.exception("team-admin lookup failed")
+        return frozenset()
 
 
 def _credential_in_memory(credential_name: str) -> Optional[CredentialItem]:

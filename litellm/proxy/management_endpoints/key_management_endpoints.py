@@ -2560,7 +2560,10 @@ async def update_key_fn(
         )
 
         # logging-exporters validation runs once the key's team is known so a
-        # team-admin of that team can attach destinations to the key
+        # team-admin of that team can attach destinations to the key. A missing
+        # or unauthorized team raises out of get_team_object as HTTPException;
+        # we suppress only that and fall through with is_team_admin_of_key_team
+        # = False so the validator denies the assignment for a non-admin caller.
         _key_team_id = getattr(existing_key_row, "team_id", None)
         _is_team_admin_of_key_team = False
         if _key_team_id is not None:
@@ -2572,13 +2575,14 @@ async def update_key_fn(
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                     check_db_only=True,
                 )
+            except HTTPException:
+                _key_team = None
+            if _key_team is not None:
                 _is_team_admin_of_key_team = any(
                     member.user_id == user_api_key_dict.user_id
                     and member.role == "admin"
                     for member in _key_team.members_with_roles
                 )
-            except Exception:
-                _is_team_admin_of_key_team = False
         validate_key_logging_exporter_assignment(
             metadata=data.metadata,
             user_api_key_dict=user_api_key_dict,
