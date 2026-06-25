@@ -14,6 +14,8 @@ from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
+VERTEX_AI_OCR_API_KEY_ENV_VAR = "VERTEX_AI_API_KEY"
+
 
 class VertexAIOCRConfig(MistralOCRConfig):
     """
@@ -32,6 +34,9 @@ class VertexAIOCRConfig(MistralOCRConfig):
         super().__init__()
         self.vertex_base = VertexBase()
 
+    def get_api_key_env_var(self) -> Optional[str]:
+        return VERTEX_AI_OCR_API_KEY_ENV_VAR
+
     def validate_environment(
         self,
         headers: Dict,
@@ -46,6 +51,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
 
         Vertex AI uses Bearer token authentication with access token from credentials.
         """
+        if api_key is not None:
+            return {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                **headers,
+            }
+
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}

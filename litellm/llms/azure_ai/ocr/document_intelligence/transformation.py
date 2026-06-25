@@ -35,6 +35,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
+AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+
 
 class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     """
@@ -53,6 +55,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_api_key_env_var(self) -> Optional[str]:
+        return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
@@ -156,7 +161,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         # Get API key from environment if not provided
         if api_key is None:
-            api_key = get_secret_str("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
+            api_key = get_secret_str(AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR)
 
         if api_key is None:
             raise ValueError(

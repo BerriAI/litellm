@@ -15,6 +15,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
+MISTRAL_OCR_API_KEY_ENV_VAR = "MISTRAL_API_KEY"
+
 
 class MistralOCRConfig(BaseOCRConfig):
     """
@@ -59,6 +61,9 @@ class MistralOCRConfig(BaseOCRConfig):
             "id",
         ]
 
+    def get_api_key_env_var(self) -> Optional[str]:
+        return MISTRAL_OCR_API_KEY_ENV_VAR
+
     def map_ocr_params(
         self,
         non_default_params: dict,
@@ -95,7 +100,7 @@ class MistralOCRConfig(BaseOCRConfig):
         """
         # Get API key from environment if not provided
         if api_key is None:
-            api_key = get_secret_str("MISTRAL_API_KEY")
+            api_key = get_secret_str(MISTRAL_OCR_API_KEY_ENV_VAR)
 
         if api_key is None:
             raise ValueError(
