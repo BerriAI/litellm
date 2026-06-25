@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrProviderConfig;
+use litellm_core::ocr::types::{MistralOcrOptionalParams, MistralOcrResponseData, OcrDocument};
 use litellm_core::CoreResult;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use litellm_core::providers::mistral::ocr::transformation as mistral;
 use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -50,10 +51,10 @@ fn truncate_error_body(body: &str) -> String {
 /// Blocking: intended to be called with the GIL released from the Python bridge.
 pub fn run_ocr(
     model: &str,
-    document: Value,
+    document: OcrDocument,
     api_key: Option<&str>,
     api_base: Option<&str>,
-    optional_params: Map<String, Value>,
+    optional_params: MistralOcrOptionalParams,
     timeout: Option<Duration>,
 ) -> CoreResult<Value> {
     let config = &MISTRAL_OCR_CONFIG;
@@ -61,9 +62,7 @@ pub fn run_ocr(
     let api_key = mistral::resolve_api_key(api_key, &|key| std::env::var(key).ok())?;
     let url = mistral::complete_url(api_base);
     let filtered_params = config.map_ocr_params(&optional_params);
-    let body = config
-        .transform_ocr_request(model, document, filtered_params)?
-        .data;
+    let body = config.transform_ocr_request(model, document, filtered_params)?;
 
     let mut request = http_client().post(&url).bearer_auth(&api_key).json(&body);
     if let Some(duration) = timeout {
@@ -86,12 +85,11 @@ pub fn run_ocr(
         });
     }
 
-    let response_json: Value = serde_json::from_str(&text)
+    let response_json: MistralOcrResponseData = serde_json::from_str(&text)
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
 
-    Ok(config
-        .transform_ocr_response(model, response_json)?
-        .into_json())
+    serde_json::to_value(config.transform_ocr_response(model, response_json)?)
+        .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))
 }
 
 #[cfg(test)]
