@@ -3976,6 +3976,22 @@ class ProxyConfig:
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
+        if config is not None and isinstance(config, dict):
+            common_typos = {
+                "general_setting": "general_settings",
+                "model_detail": "model_list",
+                "model_details": "model_list",
+                "litellm_setting": "litellm_settings",
+                "router_setting": "router_settings"
+            }
+            for key in list(config.keys()):
+                if key in common_typos:
+                    raise ValueError(
+                        f"Configuration Error: Invalid root-level key '{key}'. "
+                        f"Did you mean '{common_typos[key]}'? "
+                        f"Please correct your config.yaml."
+                    )
+
         self._load_environment_variables(config=config)
 
         ## Callback settings

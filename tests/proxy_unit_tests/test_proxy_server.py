@@ -3031,3 +3031,52 @@ def test_get_litellm_model_info(data):
     ):
         get_litellm_model_info(model=model)
         get_info_mock.assert_called_once_with(data["expected"])
+
+
+@pytest.mark.parametrize(
+    "typo_key",
+    [
+        "general_setting",
+        "model_detail",
+        "model_details",
+        "litellm_setting",
+        "router_setting",
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_config_invalid_keys(typo_key):
+    """
+    Test that calling ProxyConfig.load_config with a configuration containing
+    misspelled root-level keys raises a ValueError.
+    """
+    import os
+    import yaml
+    import tempfile
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    
+    # Create a temporary config YAML file with the typoed root-level key
+    config_data = {
+        typo_key: {
+            "some_setting": "some_value"
+        },
+        "model_list": []
+    }
+    
+    with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as temp_file:
+        yaml.dump(config_data, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        # We expect load_config to raise a ValueError because of the misspelled key.
+        # On the current code, this will fail (won't raise ValueError and won't throw any error)
+        # because misspelled keys are silently ignored.
+        with pytest.raises(ValueError):
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path
+            )
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
