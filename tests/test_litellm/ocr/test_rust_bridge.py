@@ -242,6 +242,11 @@ def test_use_litellm_rust_toggles_flag():
     assert rust_bridge.rust_ocr_enabled() is False
 
 
+def test_env_var_enables_rust_ocr(monkeypatch):
+    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
+    assert rust_bridge._env_enables_rust_ocr() is True
+
+
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
     litellm.use_litellm_rust(True, ocr=bridge)
@@ -384,6 +389,74 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
     assert bridge.calls[0]["api_key"] == "sk-provider-env"
 
 
+def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
+    bridge = RecordingBridge()
+
+    ocr_main._run_rust_ocr(
+        rust_ocr=bridge,
+        prepared_request=build_prepared_request(
+            custom_llm_provider="vertex_ai",
+            model="mistral-ocr-maas",
+            litellm_params={
+                "vertex_project": "project-1",
+                "vertex_location": "us-central1",
+                "vertex_credentials": "redacted",
+            },
+            optional_params={"include_image_base64": True},
+            timeout=None,
+        ),
+        resolve_api_key=lambda _name: None,
+    )
+
+    assert bridge.calls[0]["optional_params"] == {
+        "include_image_base64": True,
+        "vertex_project": "project-1",
+        "vertex_location": "us-central1",
+    }
+
+
+def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
+    bridge = RecordingBridge()
+
+    def _resolver(name: str) -> str | None:
+        return {
+            "VERTEXAI_PROJECT": "project-from-secret",
+            "VERTEXAI_LOCATION": "us-east5",
+        }.get(name)
+
+    ocr_main._run_rust_ocr(
+        rust_ocr=bridge,
+        prepared_request=build_prepared_request(
+            custom_llm_provider="vertex_ai",
+            model="mistral-ocr-maas",
+            timeout=None,
+        ),
+        resolve_api_key=_resolver,
+    )
+
+    assert bridge.calls[0]["optional_params"]["vertex_project"] == "project-from-secret"
+    assert bridge.calls[0]["optional_params"]["vertex_location"] == "us-east5"
+
+
+def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
+    bridge = RecordingBridge()
+
+    ocr_main._run_rust_ocr(
+        rust_ocr=bridge,
+        prepared_request=build_prepared_request(
+            custom_llm_provider="azure_ai",
+            model="pixtral-12b-2409",
+            api_base=None,
+            timeout=None,
+        ),
+        resolve_api_key=lambda name: (
+            "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None
+        ),
+    )
+
+    assert bridge.calls[0]["api_base"] == "https://azure.example.com"
+
+
 def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     bridge = RecordingBridge()
     resolver_calls = []
@@ -456,6 +529,20 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     }
     # Raw OCR params ride along in optional_params; Rust filters to supported keys.
     assert call["optional_params"].get("include_image_base64") is True
+
+
+def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
+    response = litellm.ocr(
+        model="azure_ai/pixtral-12b-2409",
+        document=DOCUMENT,
+        api_key="sk-test",
+        api_base="https://example.services.ai.azure.com",
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert len(fake_bridge.calls) == 1
+    assert fake_bridge.calls[0]["model"] == "pixtral-12b-2409"
+    assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
 
 
 def test_ocr_exception_type_uses_resolved_provider_context(

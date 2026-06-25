@@ -11,6 +11,7 @@ can import it statically without forming an import cycle.
 
 from __future__ import annotations
 
+import os
 from typing import Awaitable, Final, Protocol, cast
 
 
@@ -54,7 +55,17 @@ class _Unset:
 
 _UNSET: Final[_Unset] = _Unset()
 
-_rust_ocr_enabled = False
+
+def _env_enables_rust_ocr() -> bool:
+    return os.getenv("LITELLM_USE_RUST_OCR", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+_rust_ocr_enabled = _env_enables_rust_ocr()
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
 

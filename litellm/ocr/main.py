@@ -52,7 +52,17 @@ class _PreparedOCRRequest:
 @dataclass
 class _PreparedRustOCRCall:
     api_key: Optional[str]
+    api_base: Optional[str]
     headers: dict[str, object]
+    optional_params: dict[str, object]
+
+
+_RUST_OCR_PROVIDERS = {
+    "mistral",
+    "azure_ai",
+    "azure_ai/doc-intelligence",
+    "vertex_ai",
+}
 
 
 def _timeout_to_seconds(
@@ -172,6 +182,52 @@ def _prepare_ocr_request(
     )
 
 
+def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
+    return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
+
+
+def _rust_bridge_optional_params(
+    prepared_request: _PreparedOCRRequest,
+    resolve_secret: Callable[[str], Optional[str]],
+) -> dict[str, object]:
+    optional_params = dict(prepared_request.optional_params)
+    if prepared_request.custom_llm_provider == "vertex_ai":
+        vertex_project = (
+            prepared_request.litellm_params.get("vertex_project")
+            or prepared_request.litellm_params.get("vertex_ai_project")
+            or litellm.vertex_project
+            or resolve_secret("VERTEXAI_PROJECT")
+        )
+        vertex_location = (
+            prepared_request.litellm_params.get("vertex_location")
+            or prepared_request.litellm_params.get("vertex_ai_location")
+            or litellm.vertex_location
+            or resolve_secret("VERTEXAI_LOCATION")
+            or resolve_secret("VERTEX_LOCATION")
+        )
+        if vertex_project is not None:
+            optional_params["vertex_project"] = vertex_project
+        if vertex_location is not None:
+            optional_params["vertex_location"] = vertex_location
+    return optional_params
+
+
+def _rust_bridge_api_base(
+    prepared_request: _PreparedOCRRequest,
+    resolve_secret: Callable[[str], Optional[str]],
+) -> Optional[str]:
+    if prepared_request.api_base is not None:
+        return prepared_request.api_base
+    if prepared_request.custom_llm_provider == "azure_ai":
+        if (
+            "doc-intelligence" in prepared_request.model
+            or "documentintelligence" in prepared_request.model
+        ):
+            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+        return resolve_secret("AZURE_AI_API_BASE")
+    return None
+
+
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], Optional[str]],
@@ -194,6 +250,10 @@ def _prepare_rust_ocr_call(
         optional_params=prepared_request.optional_params,
         litellm_params=prepared_request.litellm_params,
     )
+    rust_api_base = _rust_bridge_api_base(prepared_request, resolve_api_key)
+    rust_optional_params = _rust_bridge_optional_params(
+        prepared_request, resolve_api_key
+    )
     prepared_request.litellm_logging_obj.pre_call(
         input="OCR document processing",
         api_key=resolved_api_key,
@@ -201,7 +261,7 @@ def _prepare_rust_ocr_call(
             "complete_input_dict": {
                 "model": prepared_request.model,
                 "document": prepared_request.document,
-                **prepared_request.optional_params,
+                **rust_optional_params,
             },
             "api_base": resolved_complete_url,
             "headers": resolved_headers,
@@ -209,7 +269,9 @@ def _prepare_rust_ocr_call(
     )
     return _PreparedRustOCRCall(
         api_key=resolved_api_key,
+        api_base=rust_api_base,
         headers=cast(dict[str, object], resolved_headers),
+        optional_params=rust_optional_params,
     )
 
 
@@ -235,10 +297,10 @@ def _run_rust_ocr(
             model=prepared_request.model,
             document=cast(dict[str, object], prepared_request.document),
             api_key=prepared.api_key,
-            api_base=prepared_request.api_base,
+            api_base=prepared.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
             extra_headers=prepared.headers,
-            optional_params=prepared_request.optional_params,
+            optional_params=prepared.optional_params,
             timeout_seconds=_timeout_to_seconds(prepared_request.effective_timeout),
         )
     )
@@ -258,10 +320,10 @@ async def _run_rust_aocr(
             model=prepared_request.model,
             document=cast(dict[str, object], prepared_request.document),
             api_key=prepared.api_key,
-            api_base=prepared_request.api_base,
+            api_base=prepared.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
             extra_headers=prepared.headers,
-            optional_params=prepared_request.optional_params,
+            optional_params=prepared.optional_params,
             timeout_seconds=_timeout_to_seconds(prepared_request.effective_timeout),
         )
     )
@@ -363,7 +425,7 @@ async def aocr(
             {"model": model, "custom_llm_provider": custom_llm_provider}
         )
 
-        if prepared.custom_llm_provider == "mistral" and rust_ocr_enabled():
+        if _rust_ocr_supported(prepared) and rust_ocr_enabled():
             rust_aocr = load_rust_aocr()
             if rust_aocr is None:
                 verbose_logger.debug(
@@ -640,8 +702,8 @@ def ocr(
             {"model": model, "custom_llm_provider": custom_llm_provider}
         )
 
-        # Optional Rust path: hand the whole Mistral OCR call to the Rust bridge.
-        if prepared.custom_llm_provider == "mistral" and rust_ocr_enabled():
+        # Optional Rust path: hand supported OCR calls to the Rust bridge.
+        if _rust_ocr_supported(prepared) and rust_ocr_enabled():
             rust_ocr = load_rust_ocr()
             if rust_ocr is None:
                 verbose_logger.debug(
