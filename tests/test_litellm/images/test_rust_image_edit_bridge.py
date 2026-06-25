@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
+import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import APIConnectionError
+from litellm.images import main as image_main
 
 rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
 
@@ -142,3 +146,44 @@ async def test_vllm_aimage_edit_routes_to_async_rust_bridge() -> None:
     assert len(bridge.calls) == 1
     assert bridge.calls[0]["model"] == "qwen-image-edit"
     assert bridge.calls[0]["prompt"] == "make it darker"
+
+
+def test_vllm_image_edit_respects_disabled_rust_bridge() -> None:
+    bridge = RecordingImageEditBridge()
+    litellm.use_litellm_rust(False, image_edit=bridge)
+
+    with pytest.raises(
+        APIConnectionError, match="image edit is not supported for vllm"
+    ):
+        litellm.image_edit(
+            model="vllm/qwen-image-edit",
+            image=PNG_BYTES,
+            prompt="make it brighter",
+            api_base="http://localhost:8000",
+        )
+
+    assert bridge.calls == []
+
+
+def test_vllm_image_edit_missing_path_raises_before_bridge_call(
+    tmp_path: Path,
+) -> None:
+    bridge = RecordingImageEditBridge()
+    missing_image = tmp_path / "missing-image.png"
+    litellm.use_litellm_rust(True, image_edit=bridge)
+
+    with pytest.raises(APIConnectionError, match="Image file path does not exist"):
+        litellm.image_edit(
+            model="vllm/qwen-image-edit",
+            image=str(missing_image),
+            prompt="make it brighter",
+            api_base="http://localhost:8000",
+        )
+
+    assert bridge.calls == []
+
+
+def test_timeout_to_seconds_falls_back_to_non_read_timeout() -> None:
+    timeout = httpx.Timeout(connect=7.0, read=None, write=8.0, pool=9.0)
+
+    assert image_main._timeout_to_seconds(timeout) == 7.0

@@ -88,6 +88,7 @@ class _Unset:
 _UNSET: Final[_Unset] = _Unset()
 
 _rust_ocr_enabled = False
+_rust_image_edit_enabled = False
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
 _rust_image_edit_impl: RustImageEdit | None = None
@@ -108,9 +109,10 @@ def use_litellm_rust(
     extension is loaded on demand and any previously injected bridge is
     preserved. Pass ``None`` explicitly to clear a prior injection.
     """
-    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
+    global _rust_ocr_enabled, _rust_image_edit_enabled, _rust_ocr_impl, _rust_aocr_impl
     global _rust_image_edit_impl, _rust_aimage_edit_impl
     _rust_ocr_enabled = enabled
+    _rust_image_edit_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
@@ -128,7 +130,7 @@ def rust_ocr_enabled() -> bool:
 
 def rust_image_edit_enabled() -> bool:
     """Whether the Rust image-edit path has been turned on."""
-    return _rust_ocr_enabled
+    return _rust_image_edit_enabled
 
 
 def load_rust_ocr() -> RustOcr | None:

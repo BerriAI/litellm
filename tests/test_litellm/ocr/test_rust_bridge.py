@@ -240,10 +240,13 @@ def fake_async_bridge():
 
 def test_use_litellm_rust_toggles_flag():
     assert rust_bridge.rust_ocr_enabled() is False
+    assert rust_bridge.rust_image_edit_enabled() is False
     litellm.use_litellm_rust()
     assert rust_bridge.rust_ocr_enabled() is True
+    assert rust_bridge.rust_image_edit_enabled() is True
     litellm.use_litellm_rust(False)
     assert rust_bridge.rust_ocr_enabled() is False
+    assert rust_bridge.rust_image_edit_enabled() is False
 
 
 def test_load_rust_ocr_returns_injected_impl():

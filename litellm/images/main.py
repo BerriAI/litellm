@@ -81,6 +81,7 @@ from litellm.ocr.rust_bridge import (
     RustImageEdit,
     load_rust_aimage_edit,
     load_rust_image_edit,
+    rust_image_edit_enabled,
 )
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
@@ -119,10 +120,15 @@ def _timeout_to_seconds(
     if timeout is None:
         return None
     if isinstance(timeout, httpx.Timeout):
-        read_timeout = timeout.read
-        if read_timeout is None:
-            return None
-        return float(read_timeout)
+        for timeout_value in (
+            timeout.read,
+            timeout.connect,
+            timeout.write,
+            timeout.pool,
+        ):
+            if timeout_value is not None:
+                return float(timeout_value)
+        return None
     return float(timeout)
 
 
@@ -147,11 +153,14 @@ def _read_file_content(file_value: Any) -> bytes:
         if isinstance(data, str):
             return data.encode()
         return bytes(data)
-    if isinstance(file_value, (str, os.PathLike)) and os.path.exists(file_value):
-        with open(file_value, "rb") as file:
+    if isinstance(file_value, (str, os.PathLike)):
+        path = os.fspath(file_value)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Image file path does not exist for Rust image_edit: {path}"
+            )
+        with open(path, "rb") as file:
             return file.read()
-    if isinstance(file_value, str):
-        return file_value.encode()
     raise TypeError(
         f"Unsupported image file type for Rust image_edit: {type(file_value)}"
     )
@@ -1065,7 +1074,7 @@ def image_edit(
                 )
 
         local_vars.update(kwargs)
-        if custom_llm_provider == "vllm":
+        if custom_llm_provider == "vllm" and rust_image_edit_enabled():
             image_edit_optional_params = (
                 _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
                     local_vars
