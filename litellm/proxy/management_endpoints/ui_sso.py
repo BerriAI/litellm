@@ -1734,6 +1734,8 @@ async def get_user_info_from_db(
         )
 
         return user_info
+    except ProxyException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             f"[Non-Blocking] Error trying to add sso user to db: {e}"
@@ -2368,9 +2370,38 @@ async def cli_poll_key(
         )
 
 
+async def _enforce_free_sso_user_limit(
+    prisma_client: PrismaClient,
+    premium_user: bool,
+    block_at_limit: bool,
+) -> None:
+    """Raise ProxyException if the free-tier SSO user limit (5) is exceeded.
+
+    block_at_limit=True  → block when count >= 5 (for inserts: inserting would exceed)
+    block_at_limit=False → block when count >  5 (for logins: existing user over limit)
+    """
+    if premium_user:
+        return
+    FREE_SSO_USER_LIMIT = 5
+    total_users = await prisma_client.db.litellm_usertable.count()
+    threshold = FREE_SSO_USER_LIMIT if block_at_limit else FREE_SSO_USER_LIMIT + 1
+    if total_users is not None and total_users >= threshold:
+        raise ProxyException(
+            message=(
+                "You must be a LiteLLM Enterprise user to use SSO for more than 5 users. "
+                "If you have a license please set `LITELLM_LICENSE` in your env. "
+                "If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo"
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param="premium_user",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+
 async def insert_sso_user(
     result_openid: Optional[Union[OpenID, dict]],
     user_defined_values: Optional[SSOUserDefinedValues] = None,
+    prisma_client: Optional[PrismaClient] = None,
 ) -> NewUserResponse:
     """
     Helper function to create a New User in LiteLLM DB after a successful SSO login
@@ -2385,6 +2416,14 @@ async def insert_sso_user(
     verbose_proxy_logger.debug(
         f"Inserting SSO user into DB. User values: {user_defined_values}"
     )
+    if prisma_client is not None:
+        from litellm.proxy.proxy_server import premium_user as _premium_user
+
+        await _enforce_free_sso_user_limit(
+            prisma_client=prisma_client,
+            premium_user=_premium_user,
+            block_at_limit=True,
+        )
     if result_openid is None:
         raise ValueError("result_openid is None")
     if isinstance(result_openid, dict):
