@@ -1,4 +1,3 @@
-import os
 import httpx
 from typing import List, Dict, Any, Optional, Union
 import litellm
