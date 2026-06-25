@@ -4558,3 +4558,17 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
 
+
+def test_get_model_info_unmapped_raises_model_not_mapped_error():
+    """get_model_info on an unmapped model raises the typed ModelNotMappedError,
+    which stays catchable as both BadRequestError and ValueError for backward
+    compatibility (regression for #29146)."""
+    with pytest.raises(litellm.ModelNotMappedError):
+        litellm.get_model_info("this-model-does-not-exist-xyz")
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        litellm.get_model_info("this-model-does-not-exist-xyz")
+
+    with pytest.raises(ValueError):
+        litellm.get_model_info("this-model-does-not-exist-xyz")
+
