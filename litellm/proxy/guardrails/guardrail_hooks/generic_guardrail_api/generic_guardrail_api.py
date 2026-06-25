@@ -354,7 +354,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         is_unreachable: bool = True,
     ) -> GenericGuardrailAPIInputs:
-        unreachable_fail_open = is_unreachable and self.unreachable_fallback == "fail_open"
+        unreachable_fail_open = (
+            is_unreachable and self.unreachable_fallback == "fail_open"
+        )
         if unreachable_fail_open or not self.fail_on_error:
             http_status_code = getattr(
                 getattr(error, "response", None), "status_code", None
