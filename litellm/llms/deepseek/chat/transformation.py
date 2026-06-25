@@ -62,6 +62,26 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         elif reasoning_effort is not None and reasoning_effort != "none":
             optional_params["thinking"] = {"type": "enabled"}
 
+        # DeepSeek V4 (deepseek-v4-pro / deepseek-v4-flash, released 2026-04) is
+        # a reasoner-only family that rejects `tool_choice="required"` |
+        # `"any"` | `{"type":"function",...}` with HTTP 400
+        # "deepseek-reasoner does not support this tool_choice", even when the
+        # caller did NOT explicitly send `thinking={"type":"enabled"}` (the
+        # server enables thinking mode by default). Only "auto" and "none" are
+        # accepted in thinking mode. Convert unsupported values to "auto" so
+        # SDKs that hardcode `tool_choice="required"` (e.g. OpenAI Agents SDK
+        # delegation paths) keep working on V4. Match on model name so the fix
+        # also fires on the first turn (before any reasoning_content reflects
+        # `thinking` back into optional_params).
+        # Ref: https://api-docs.deepseek.com/guides/thinking_mode
+        is_v4_reasoner = "deepseek-v4" in (model or "").lower() or optional_params.get(
+            "thinking"
+        ) == {"type": "enabled"}
+        if is_v4_reasoner:
+            tc = optional_params.get("tool_choice")
+            if tc in ("required", "any") or isinstance(tc, dict):
+                optional_params["tool_choice"] = "auto"
+
         return optional_params
 
     def _fill_reasoning_content(
