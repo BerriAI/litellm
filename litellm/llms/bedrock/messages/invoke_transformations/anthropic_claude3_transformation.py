@@ -81,7 +81,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         AmazonInvokeConfig.__init__(self, **kwargs)
 
     @staticmethod
-    def _as_system_content_blocks(value: Any) -> List[Any]:
+    def _as_system_content_blocks(value: Any) -> list[Any]:
         if value is None:
             return []
         if isinstance(value, list):
@@ -91,7 +91,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return [value]
 
     def _normalize_system_role_messages_for_bedrock(
-        self, anthropic_messages_request: Dict
+        self, anthropic_messages_request: dict
     ) -> None:
         """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
         some Claude aliases; Anthropic Messages carries that content in the
@@ -377,7 +377,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return "low"
 
     def _inject_adaptive_thinking_for_clear_thinking(
-        self, anthropic_messages_request: Dict, budget_tokens: int, model: str
+        self, anthropic_messages_request: dict, budget_tokens: int, model: str
     ) -> None:
         """Adaptive-thinking models (Opus 4.7/4.8, Fable 5) reject
         ``thinking.type=enabled`` on Bedrock. Use ``thinking.type=adaptive`` plus
