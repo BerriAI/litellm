@@ -79,6 +79,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
+    litellm_call_id: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -109,6 +110,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -133,6 +135,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
 
@@ -383,6 +386,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             if standard_logging_payload is not None
             else None
         ),
+        litellm_call_id=cast(
+            Optional[str],
+            kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -414,10 +421,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
-    clean_metadata["litellm_call_id"] = cast(
-        Optional[str],
-        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
-    )
     custom_llm_provider = kwargs.get("custom_llm_provider")
     raw_model = cast(str, kwargs.get("model") or "")
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
