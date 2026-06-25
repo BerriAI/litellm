@@ -10,7 +10,8 @@ To add a provider:
 - Add a `provider_endpoints_support.json` provider entry using the LiteLLM
   provider slug, display name, docs URL, and endpoint support flags.
 - Add optional defaults under the top-level `default_creds` map only when there
-  is a stable provider-level base URL or canonical API key environment variable.
+  is a stable provider-level base URL. Keep route-specific key env var names in
+  the provider transform/config so auth resolution has one owner.
 - Put request/response logic under
   `crates/providers/src/<provider>/<route>/transformation.rs`; do not put
   transforms, signing logic, or secrets in provider metadata.

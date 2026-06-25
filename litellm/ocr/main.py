@@ -365,10 +365,6 @@ async def aocr(
                     prepared_request=prepared,
                     resolve_api_key=get_secret_str,
                 )
-                if response is None:
-                    raise ValueError(
-                        f"Got an unexpected None response from the OCR API: {response}"
-                    )
                 return response
 
         response = base_llm_http_handler.ocr(
