@@ -817,7 +817,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
             ## COMPLETION CALL
-            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            raw_response = azure_client.embeddings.with_raw_response.create(
+                **data, timeout=timeout
+            )  # type: ignore
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             if isinstance(response, str):
@@ -833,7 +835,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding", _response_headers=process_azure_headers(headers))  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response.model_dump(),
+                model_response_object=model_response,
+                response_type="embedding",
+                _response_headers=process_azure_headers(headers),
+            )  # type: ignore
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
@@ -1296,7 +1303,18 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 is_async=False,
             )
             if aimg_generation is True:
-                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers, model=model)  # type: ignore
+                return self.aimage_generation(
+                    data=data,
+                    input=input,
+                    logging_obj=logging_obj,
+                    model_response=model_response,
+                    api_key=api_key,
+                    client=client,
+                    azure_client_params=azure_client_params,
+                    timeout=timeout,
+                    headers=headers,
+                    model=model,
+                )  # type: ignore
 
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params,
@@ -1348,7 +1366,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response,
+                model_response_object=model_response,
+                response_type="image_generation",
+            )  # type: ignore
         except AzureOpenAIError as e:
             raise e
         except Exception as e:

@@ -431,9 +431,7 @@ class Router:
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
         self.guardrail_list = guardrail_list or []
-        self.deployment_names: List = (
-            []
-        )  # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_names: List = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
@@ -486,9 +484,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
-        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
-            {}
-        )  # {"TEAM_ID": PatternMatchRouter}
+        self.team_pattern_routers: Dict[
+            str, PatternMatchRouter
+        ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
@@ -526,9 +524,7 @@ class Router:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         else:
-            self.model_list: List = (
-                []
-            )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
+            self.model_list: List = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
@@ -548,9 +544,7 @@ class Router:
         self.health_state_cache = DeploymentHealthCache(
             cache=self.cache, staleness_threshold=float(_staleness)
         )
-        self.failed_calls = (
-            InMemoryCache()
-        )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
+        self.failed_calls = InMemoryCache()  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
 
         if num_retries is not None:
             self.num_retries = num_retries
@@ -615,9 +609,7 @@ class Router:
         self.success_calls: defaultdict = defaultdict(
             int
         )  # dict to store success_calls  made to each model
-        self.previous_models: List = (
-            []
-        )  # list to store failed calls (passed in as metadata to next call)
+        self.previous_models: List = []  # list to store failed calls (passed in as metadata to next call)
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -2967,9 +2959,7 @@ class Router:
         """
         model_name = None
         deployment = None
-        _timeout_debug_deployment_dict = (
-            {}
-        )  # this is a temporary dict to debug timeout issues
+        _timeout_debug_deployment_dict = {}  # this is a temporary dict to debug timeout issues
         try:
             input_kwargs_for_streaming_fallback = kwargs.copy()
             input_kwargs_for_streaming_fallback["model"] = model
@@ -3504,7 +3494,11 @@ class Router:
             _tasks = []
             for model in models:
                 # add each task but if the task fails
-                _tasks.append(_async_completion_no_exceptions(model=model, messages=messages, **kwargs))  # type: ignore
+                _tasks.append(
+                    _async_completion_no_exceptions(
+                        model=model, messages=messages, **kwargs
+                    )
+                )  # type: ignore
             response = await asyncio.gather(*_tasks)
             return response
         elif isinstance(messages, list) and all(isinstance(m, list) for m in messages):
@@ -3613,7 +3607,9 @@ class Router:
             Wrapper around self.acompletion that catches exceptions and returns them as a result
             """
             try:
-                result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
+                result = await self.acompletion(
+                    model=model, messages=messages, stream=stream, **kwargs
+                )  # type: ignore
                 return result
             except asyncio.CancelledError:
                 verbose_router_logger.debug(
@@ -4414,7 +4410,9 @@ class Router:
                     kwargs[k].update(v)
 
             # call via litellm.completion()
-            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})  # type: ignore
+            return litellm.text_completion(
+                **{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}
+            )  # type: ignore
         except Exception as e:
             raise e
 
@@ -6723,9 +6721,7 @@ class Router:
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
-                        to fallbacks, if available.{}".format(
-                            error_message
-                        )
+                        to fallbacks, if available.{}".format(error_message)
                     )
 
                     if litellm.expose_router_debug_in_errors:
@@ -6759,9 +6755,7 @@ class Router:
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
-                        to fallbacks, if available.{}".format(
-                            error_message
-                        )
+                        to fallbacks, if available.{}".format(error_message)
                     )
 
                     if litellm.expose_router_debug_in_errors:
@@ -6822,9 +6816,11 @@ class Router:
             and litellm.expose_router_debug_in_errors
         ):
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
-                model_group,
-                fallback_model_group,
+            original_exception.message += (
+                ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
+                    model_group,
+                    fallback_model_group,
+                )
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
@@ -7609,7 +7605,11 @@ class Router:
         """
         Update RPM usage for a deployment
         """
-        deployment_name = kwargs["litellm_params"]["metadata"].get(
+        deployment_name = kwargs[
+            "litellm_params"
+        ][
+            "metadata"
+        ].get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
         model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
@@ -7669,9 +7669,7 @@ class Router:
             for (
                 k,
                 v,
-            ) in (
-                kwargs.items()
-            ):  # log everything in kwargs except the old previous_models value - prevent nesting
+            ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
                 if k not in [_metadata_var, "messages", "original_function"]:
                     previous_model[k] = v
                 elif k == _metadata_var and isinstance(v, dict):
@@ -9594,7 +9592,8 @@ class Router:
                 ):
                     model_group_info.supports_parallel_function_calling = True
                 if (
-                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
+                    model_info.get("supports_vision", None) is not None
+                    and model_info["supports_vision"] is True  # type: ignore
                 ):
                     model_group_info.supports_vision = True
                 if (
@@ -9614,7 +9613,8 @@ class Router:
                     model_group_info.supports_url_context = True
 
                 if (
-                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True  # type: ignore
+                    model_info.get("supports_reasoning", None) is not None
+                    and model_info["supports_reasoning"] is True  # type: ignore
                 ):
                     model_group_info.supports_reasoning = True
                 if (

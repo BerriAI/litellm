@@ -111,8 +111,10 @@ class AmazonNovaCanvasConfig:
                 **color_guided_generation_params,
             }
             try:
-                color_guided_generation_params_typed = AmazonNovaCanvasColorGuidedGenerationParams(
-                    **color_guided_generation_params  # type: ignore
+                color_guided_generation_params_typed = (
+                    AmazonNovaCanvasColorGuidedGenerationParams(
+                        **color_guided_generation_params  # type: ignore
+                    )
                 )
             except Exception as e:
                 raise ValueError(
@@ -171,8 +173,9 @@ class AmazonNovaCanvasConfig:
         _size = non_default_params.get("size")
         if _size is not None:
             width, height = _size.split("x")
-            optional_params["width"], optional_params["height"] = int(width), int(
-                height
+            optional_params["width"], optional_params["height"] = (
+                int(width),
+                int(height),
             )
         if non_default_params.get("n") is not None:
             optional_params["numberOfImages"] = non_default_params.get("n")

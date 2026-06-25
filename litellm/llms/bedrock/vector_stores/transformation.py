@@ -253,9 +253,9 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})[
-                "filter"
-            ] = filters
+            retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = (
+                filters
+            )
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(
                 BedrockKBRetrievalConfiguration, retrieval_config

@@ -2777,7 +2777,9 @@ class SSOAuthenticationHandler:
                     state_only_params[key] = value
 
             # Get the redirect response from fastapi-sso with only state param
-            redirect_response = await generic_sso.get_login_redirect(**state_only_params)  # type: ignore
+            redirect_response = await generic_sso.get_login_redirect(
+                **state_only_params
+            )  # type: ignore
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
@@ -3204,7 +3206,9 @@ class SSOAuthenticationHandler:
             user_id = getattr(result, "id", None)
             user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
-                _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                _role_from_attr = getattr(
+                    result, generic_user_role_attribute_name, None
+                )  # type: ignore
                 if _role_from_attr is not None:
                     # Convert enum to string if needed
                     user_role = (
@@ -4539,14 +4543,16 @@ async def debug_sso_callback(request: Request):
         )
 
     elif generic_client_id is not None:
-        result, received_response, access_token_payload = (
-            await get_generic_sso_response(
-                request=request,
-                jwt_handler=jwt_handler,
-                generic_client_id=generic_client_id,
-                redirect_url=redirect_url,
-                sso_jwt_handler=sso_jwt_handler,
-            )
+        (
+            result,
+            received_response,
+            access_token_payload,
+        ) = await get_generic_sso_response(
+            request=request,
+            jwt_handler=jwt_handler,
+            generic_client_id=generic_client_id,
+            redirect_url=redirect_url,
+            sso_jwt_handler=sso_jwt_handler,
         )
 
     # If result is None, return a basic error message

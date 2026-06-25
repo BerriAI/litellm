@@ -843,9 +843,7 @@ class DBSpendUpdateWriter:
                     daily_org_spend_update_transactions,
                     daily_end_user_spend_update_transactions,
                     daily_agent_spend_update_transactions,
-                ) = (
-                    await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
-                )
+                ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
@@ -960,9 +958,7 @@ class DBSpendUpdateWriter:
 
         # Aggregate all in memory spend updates (key, user, end_user, team, team_member, org) and commit to db
         ################## Spend Update Transactions ##################
-        db_spend_update_transactions = (
-            await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
-        )
+        db_spend_update_transactions = await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         await self._commit_spend_updates_to_db(
             prisma_client=prisma_client,
             n_retry_times=n_retry_times,
@@ -1089,9 +1085,7 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
             try:
-                daily_tag_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
-                )
+                daily_tag_spend_update_transactions = await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
 
                 if daily_tag_spend_update_transactions:
                     await DBSpendUpdateWriter.update_daily_tag_spend(

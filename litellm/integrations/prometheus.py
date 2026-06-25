@@ -3237,7 +3237,9 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-        async def fetch_keys(page_size: int, page: int) -> Tuple[
+        async def fetch_keys(
+            page_size: int, page: int
+        ) -> Tuple[
             List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]],
             Optional[int],
         ]:

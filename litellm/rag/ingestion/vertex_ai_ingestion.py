@@ -317,7 +317,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Construct upload URL using vertex base URL helper
         base_url = get_vertex_base_url(self.location)
-        url = f"{base_url}/upload/v1beta1/" f"{rag_corpus_id}/ragFiles:upload"
+        url = f"{base_url}/upload/v1beta1/{rag_corpus_id}/ragFiles:upload"
 
         # Build metadata for the file with snake_case keys (as per upload API docs)
         metadata: Dict[str, Any] = {
@@ -423,7 +423,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Construct import URL using vertex base URL helper
         base_url = get_vertex_base_url(self.location)
-        url = f"{base_url}/v1beta1/" f"{rag_corpus_id}/ragFiles:import"
+        url = f"{base_url}/v1beta1/{rag_corpus_id}/ragFiles:import"
 
         # Build request body with camelCase keys (Vertex AI API format)
         request_body: Dict[str, Any] = {
@@ -447,9 +447,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             "max_embedding_requests_per_min"
         )
         if max_embedding_qpm:
-            request_body["importRagFilesConfig"][
-                "maxEmbeddingRequestsPerMin"
-            ] = max_embedding_qpm
+            request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = (
+                max_embedding_qpm
+            )
 
         verbose_logger.debug(f"Importing files from GCS: {url}")
         verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")

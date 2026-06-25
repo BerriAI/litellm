@@ -3701,7 +3701,7 @@ class MCPServerManager:
                 return stored_headers
         except Exception as _lookup_exc:
             verbose_logger.debug(
-                "call_tool: per-user token lookup failed for " "user=%s server=%s: %s",
+                "call_tool: per-user token lookup failed for user=%s server=%s: %s",
                 user_id,
                 mcp_server.server_id,
                 _lookup_exc,

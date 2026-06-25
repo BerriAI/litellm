@@ -616,7 +616,11 @@ def _get_openai_compatible_provider_info(
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
         # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-        api_base = api_base or get_secret_str("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
+        api_base = (
+            api_base
+            or get_secret_str("ANYSCALE_API_BASE")
+            or "https://api.endpoints.anyscale.com/v1"
+        )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("ANYSCALE_API_KEY")
     elif custom_llm_provider == "deepinfra":
         (
@@ -709,9 +713,7 @@ def _get_openai_compatible_provider_info(
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif custom_llm_provider == "ollama":
-        api_base = (
-            api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
-        )  # type: ignore
+        api_base = api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
         custom_llm_provider == "ai21" and model in litellm.ai21_chat_models

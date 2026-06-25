@@ -27,7 +27,6 @@ from litellm.integrations.otel.model.payloads import (
 
 
 class LangfuseMapper:
-
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         "langfuse.observation.type": lambda d: "generation",
         "langfuse.observation.model.name": lambda d: d.request_model or None,

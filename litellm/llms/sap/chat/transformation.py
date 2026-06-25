@@ -149,7 +149,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def run_env_setup(self, service_key: Optional[str] = None) -> None:
         try:
-            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key)  # type: ignore
+            self.token_creator, self._base_url, self._resource_group = (
+                get_token_creator(service_key)
+            )  # type: ignore
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
 
@@ -189,7 +191,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
                 cfg = client.get(
-                    f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
+                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
                     headers=self.headers,
                 ).json()
                 if cfg.get("executableId") == "orchestration":

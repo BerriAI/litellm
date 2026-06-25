@@ -518,7 +518,9 @@ async def _add_model_to_db(
     _data: dict = {
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
-        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
+        "litellm_params": model_params.litellm_params.model_dump_json(
+            exclude_none=True
+        ),  # type: ignore
         "model_info": model_params.model_info.model_dump_json(  # type: ignore
             exclude_none=True
         ),

@@ -23,7 +23,9 @@ if TYPE_CHECKING:
         generationConfig: Optional[Any]
         tools: Optional[ToolConfigDict]  # type: ignore[assignment, valid-type]
 
-    class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc, valid-type]
+    class GenerateContentResponse(
+        GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject
+    ):  # type: ignore[misc, valid-type]
         _hidden_params: dict = {}
         pass
 

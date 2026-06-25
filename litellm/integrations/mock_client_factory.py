@@ -232,7 +232,11 @@ def create_mock_client_factory(config: MockClientConfig):
     # Create mock client initialization function
     def create_mock_client():
         """Initialize the mock client by patching HTTP handlers."""
-        nonlocal _original_async_handler_post, _original_sync_client_post, _original_http_handler_post, _mocks_initialized
+        nonlocal \
+            _original_async_handler_post, \
+            _original_sync_client_post, \
+            _original_http_handler_post, \
+            _mocks_initialized
 
         if _mocks_initialized:
             return
@@ -261,7 +265,7 @@ def create_mock_client_factory(config: MockClientConfig):
             verbose_logger.debug(f"[{config.name} MOCK] Patched HTTPHandler.post")
 
         verbose_logger.debug(
-            f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms"
+            f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms"
         )
         verbose_logger.debug(
             f"[{config.name} MOCK] {config.name} mock client initialization complete"

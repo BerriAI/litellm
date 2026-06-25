@@ -2089,7 +2089,9 @@ class BaseOpenAIPassThroughHandler:
             custom_llm_provider=(
                 custom_llm_provider.value
                 if hasattr(custom_llm_provider, "value")
-                else str(custom_llm_provider) if custom_llm_provider else None
+                else str(custom_llm_provider)
+                if custom_llm_provider
+                else None
             ),
         )  # dynamically construct pass-through endpoint based on incoming path
         received_value = await endpoint_func(

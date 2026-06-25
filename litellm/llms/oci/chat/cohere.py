@@ -274,7 +274,9 @@ def handle_cohere_response(
             total_tokens=usage_info.totalTokens,
         )
     else:
-        model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)  # type: ignore[attr-defined]
+        model_response.usage = Usage(
+            prompt_tokens=0, completion_tokens=0, total_tokens=0
+        )  # type: ignore[attr-defined]
 
     return model_response
 

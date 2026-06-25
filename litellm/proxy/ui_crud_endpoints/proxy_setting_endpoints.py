@@ -621,7 +621,8 @@ async def update_internal_user_settings(
         isinstance(team, NewUserRequestTeam) for team in settings.teams
     ):
         await update_default_team_member_budget(
-            settings.teams, user_api_key_dict=user_api_key_dict  # type: ignore
+            settings.teams,
+            user_api_key_dict=user_api_key_dict,  # type: ignore
         )
 
     return await _update_litellm_setting(

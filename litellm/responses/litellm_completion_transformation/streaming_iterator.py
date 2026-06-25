@@ -615,8 +615,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
         text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
-        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
-        annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)  # type: ignore
+        reasoning_content = (
+            getattr(litellm_complete_object.choices[0].message, "reasoning_content", "")
+            or ""
+        )  # type: ignore
+        annotations = getattr(
+            litellm_complete_object.choices[0].message, "annotations", None
+        )  # type: ignore
 
         part: Optional[PART_UNION_TYPES] = None
         if reasoning_content:
@@ -651,7 +656,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
         text = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
-        annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)  # type: ignore
+        annotations = getattr(
+            self.litellm_model_response.choices[0].message, "annotations", None
+        )  # type: ignore
 
         response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
             annotations=annotations

@@ -252,9 +252,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # _get_metadata_variable_name_from_kwargs would pick "litellm_metadata"
         # over "metadata" where tags are actually stored.
         if "litellm_metadata" in request_kwargs:
-            request_kwargs["litellm_metadata"][
-                "encrypted_content_affinity_enabled"
-            ] = True
+            request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = (
+                True
+            )
 
         request_input = request_kwargs.get("input")
         model_id = self._extract_model_id_from_input(request_input)

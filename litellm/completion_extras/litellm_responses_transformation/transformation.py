@@ -205,9 +205,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if provider_specific_fields:
                 tool_call_dict["provider_specific_fields"] = provider_specific_fields
                 # Also add to function's provider_specific_fields for consistency
-                tool_call_dict["function"][
-                    "provider_specific_fields"
-                ] = provider_specific_fields
+                tool_call_dict["function"]["provider_specific_fields"] = (
+                    provider_specific_fields
+                )
 
             msg = Message(
                 content=None,
@@ -301,7 +301,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
+                        "content": self._convert_content_to_responses_format(
+                            content, cast(str, role)
+                        ),  # type: ignore[arg-type]
                     }
                 )
 
@@ -1021,7 +1023,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # If string is passed, map with optional summary based on flag/env var
         if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
+            return (
+                Reasoning(effort="none", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="none")
+            )  # type: ignore
         elif reasoning_effort == "high":
             return (
                 Reasoning(effort="high", summary="detailed")
@@ -1029,7 +1035,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else Reasoning(effort="high")
             )
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
+            return (
+                Reasoning(effort="xhigh", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="xhigh")
+            )  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
             return (
                 Reasoning(effort="medium", summary="detailed")

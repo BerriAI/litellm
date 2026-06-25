@@ -65,8 +65,7 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_tenant_id=langsmith_tenant_id,
         )
         self.sampling_rate: float = (
-            langsmith_sampling_rate
-            or float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            langsmith_sampling_rate or float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
             if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
             and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
             else 1.0

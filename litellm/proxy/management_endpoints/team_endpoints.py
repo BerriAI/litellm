@@ -281,9 +281,9 @@ class TeamMemberBudgetHandler:
         # Add team_member_budget_id as metadata field to team table
         if new_team_data_json.get("metadata") is None:
             new_team_data_json["metadata"] = {}
-        new_team_data_json["metadata"][
-            "team_member_budget_id"
-        ] = team_member_budget_table.budget_id
+        new_team_data_json["metadata"]["team_member_budget_id"] = (
+            team_member_budget_table.budget_id
+        )
 
         # Remove team member fields from new_team_data_json
         TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
@@ -3889,7 +3889,8 @@ async def block_team(
     )
 
     record = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+        where={"team_id": data.team_id},
+        data={"blocked": True},  # type: ignore
     )
 
     return record
@@ -3941,7 +3942,8 @@ async def unblock_team(
     )
 
     record = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+        where={"team_id": data.team_id},
+        data={"blocked": False},  # type: ignore
     )
 
     return record
@@ -4651,7 +4653,7 @@ async def list_team(
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias
-    returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    returned_responses.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     if organization_id is not None:
         if organization_id == SpecialManagementEndpointEnums.DEFAULT_ORGANIZATION.value:
@@ -4692,7 +4694,9 @@ async def get_paginated_teams(
 
         # Get paginated teams
         teams = await TeamRepository(prisma_client).table.find_many(
-            skip=skip, take=page_size, order={"team_alias": "asc"}  # Sort by team_alias
+            skip=skip,
+            take=page_size,
+            order={"team_alias": "asc"},  # Sort by team_alias
         )
         return teams, total_count
     except Exception as e:

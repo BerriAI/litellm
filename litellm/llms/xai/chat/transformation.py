@@ -28,7 +28,6 @@ from ...openai.chat.gpt_transformation import (
 
 
 class XAIChatConfig(OpenAIGPTConfig):
-
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "xai"

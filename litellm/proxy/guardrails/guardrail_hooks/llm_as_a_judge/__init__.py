@@ -68,11 +68,11 @@ def _build_judge_prompt(
     response_text: str,
 ) -> str:
     criteria_block = "\n".join(
-        f'- {c.get("name", "")} (weight {c.get("weight", 0)}%): {c.get("description", "")}'
+        f"- {c.get('name', '')} (weight {c.get('weight', 0)}%): {c.get('description', '')}"
         for c in criteria
     )
     conversation = "\n".join(
-        f'{m.get("role", "user").upper()}: {_extract_text_from_content(m.get("content", ""))}'
+        f"{m.get('role', 'user').upper()}: {_extract_text_from_content(m.get('content', ''))}"
         for m in messages
         if m.get("content") is not None
     )

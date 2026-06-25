@@ -68,7 +68,8 @@ class LoggingCallbackManager:
         Ensures no duplicates are added.
         """
         self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.callbacks  # type: ignore
+            callback=callback,
+            parent_list=litellm.callbacks,  # type: ignore
         )
 
     def add_litellm_success_callback(

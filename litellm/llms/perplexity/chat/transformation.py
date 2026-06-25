@@ -25,7 +25,11 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
+        api_base = (
+            api_base
+            or get_secret_str("PERPLEXITY_API_BASE")
+            or "https://api.perplexity.ai"
+        )  # type: ignore
         dynamic_api_key = (
             api_key
             or get_secret_str("PERPLEXITYAI_API_KEY")

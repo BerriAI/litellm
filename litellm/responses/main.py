@@ -307,9 +307,7 @@ async def aresponses_api_with_mcp(
     # Auto-Execute Tools Handling
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
-    if should_auto_execute and isinstance(
-        response, ResponsesAPIResponse
-    ):  # type: ignore
+    if should_auto_execute and isinstance(response, ResponsesAPIResponse):  # type: ignore
         tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
             response=response
         )

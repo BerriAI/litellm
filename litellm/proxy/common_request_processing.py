@@ -1063,9 +1063,9 @@ class ProxyBaseLLMRequestProcessing:
                 self.data[_metadata_variable_name] = {}
             if not isinstance(self.data[_metadata_variable_name], dict):
                 self.data[_metadata_variable_name] = {}
-            self.data[_metadata_variable_name][
-                "queue_time_seconds"
-            ] = queue_time_seconds
+            self.data[_metadata_variable_name]["queue_time_seconds"] = (
+                queue_time_seconds
+            )
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -1508,7 +1508,9 @@ class ProxyBaseLLMRequestProcessing:
                             cache_hit=cache_hit,
                         )
 
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
+                    logging_obj._on_deferred_stream_complete = (
+                        _on_deferred_stream_complete  # type: ignore[union-attr]
+                    )
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator

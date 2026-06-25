@@ -25,7 +25,10 @@ class DynamoDBWrapper(CustomDB):
                 and database_arguments.write_capacity_units is not None
                 and isinstance(database_arguments.write_capacity_units, int)
             ):
-                self.throughput_type = Throughput(read=database_arguments.read_capacity_units, write=database_arguments.write_capacity_units)  # type: ignore
+                self.throughput_type = Throughput(
+                    read=database_arguments.read_capacity_units,
+                    write=database_arguments.write_capacity_units,
+                )  # type: ignore
             else:
                 raise Exception(
                     f"Invalid args passed in. Need to set both read_capacity_units and write_capacity_units. Args passed in - {database_arguments}"
