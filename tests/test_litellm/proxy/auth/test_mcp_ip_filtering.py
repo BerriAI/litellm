@@ -159,7 +159,7 @@ class TestXffPresentButDisabledWarning:
         # Does not hard-fail: falls back to the direct peer (the load balancer).
         assert result == "10.0.0.7"
         mock_error.assert_called_once()
-        assert "use_x_forwarded_for" in mock_error.call_args.args[0]
+        assert "use_x_forwarded_for" in str(mock_error.call_args)
 
     def test_warning_is_one_shot(self):
         self._reset_warning_flag()
@@ -178,6 +178,32 @@ class TestXffPresentButDisabledWarning:
 
         # One-shot so a flood of crafted XFF headers cannot spam the logs.
         mock_error.assert_called_once()
+
+    def test_re_arms_after_xff_is_enabled_then_disabled_again(self):
+        self._reset_warning_flag()
+
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
+        ) as mock_error:
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
+            )
+            # Operator fixes the config; observing it enabled re-arms the warning.
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={
+                    "use_x_forwarded_for": True,
+                    "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                },
+            )
+            # Config rolls back to disabled: the misconfiguration must warn again.
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
+            )
+
+        assert mock_error.call_count == 2
 
     def test_no_warning_without_xff_header(self):
         self._reset_warning_flag()

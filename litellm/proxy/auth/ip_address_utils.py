@@ -17,10 +17,12 @@ from litellm.proxy.auth.auth_utils import _get_request_ip_address
 # behaviour see an actionable message in their logs the first time it triggers.
 _warned_xff_without_trusted_ranges = False
 
-# One-shot error for the inverse footgun: requests arrive with an X-Forwarded-For
-# header but use_x_forwarded_for is off, so the real client IP is silently dropped
-# and "internal network only" access control trusts the load balancer's IP instead.
-# One-shot (not per-request) so a flood of crafted XFF headers can't spam the logs.
+# Error for the inverse footgun: requests arrive with an X-Forwarded-For header
+# but use_x_forwarded_for is off, so the real client IP is silently dropped and
+# "internal network only" access control trusts the load balancer's IP instead.
+# Logged once per misconfiguration window (not per-request) so a flood of crafted
+# XFF headers can't spam the logs; re-arms whenever use_x_forwarded_for is observed
+# enabled, so a later rollback to disabled warns again.
 _warned_xff_present_but_disabled = False
 
 
@@ -204,8 +206,10 @@ class IPAddressUtils:
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
 
-        if not use_xff and "x-forwarded-for" in request.headers:
-            global _warned_xff_present_but_disabled
+        global _warned_xff_present_but_disabled
+        if use_xff:
+            _warned_xff_present_but_disabled = False
+        elif "x-forwarded-for" in request.headers:
             if not _warned_xff_present_but_disabled:
                 verbose_proxy_logger.error(
                     "Received a request with an X-Forwarded-For header but "
