@@ -13,6 +13,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 def _client(config: dict, auth: UserAPIKeyAuth | None = None) -> TestClient:
     from litellm.proxy.opencode_endpoints.skills_endpoints import (
         initialize_agent_skills_endpoint,
+        initialize_opencode_remote_config_endpoint,
         initialize_opencode_skills_endpoint,
     )
 
@@ -20,6 +21,7 @@ def _client(config: dict, auth: UserAPIKeyAuth | None = None) -> TestClient:
     if auth is not None:
         app.dependency_overrides[user_api_key_auth] = lambda: auth
     initialize_opencode_skills_endpoint(app=app, skills_gateway_config=config)
+    initialize_opencode_remote_config_endpoint(app=app, skills_gateway_config=config)
     initialize_agent_skills_endpoint(app=app, skills_gateway_config=config)
     return TestClient(app)
 
@@ -28,6 +30,14 @@ def test_should_not_register_opencode_skills_endpoint_when_disabled():
     client = _client({})
 
     response = client.get("/opencode/skills")
+
+    assert response.status_code == 404
+
+
+def test_should_not_register_opencode_remote_config_when_disabled():
+    client = _client({"enabled": True, "opencode": {"enabled": True}})
+
+    response = client.get("/.well-known/opencode")
 
     assert response.status_code == 404
 
@@ -87,6 +97,30 @@ def test_should_return_opencode_skills_index_when_enabled(monkeypatch):
     list_skills.assert_awaited_once_with(limit=1000, offset=0, user_api_key_dict=auth)
 
 
+def test_should_return_opencode_remote_config_when_enabled_without_auth():
+    client = _client(
+        {
+            "enabled": True,
+            "opencode": {
+                "enabled": True,
+                "remote_config": {"enabled": True},
+            },
+        }
+    )
+
+    response = client.get("/.well-known/opencode")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "config": {
+            "$schema": "https://opencode.ai/config.json",
+            "skills": {
+                "urls": ["http://testserver/opencode/skills"],
+            },
+        },
+    }
+
+
 def test_should_normalize_opencode_path_without_leading_slash(monkeypatch):
     from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
@@ -104,6 +138,32 @@ def test_should_normalize_opencode_path_without_leading_slash(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"skills": []}
+
+
+def test_should_return_opencode_remote_config_with_custom_paths_and_proxy_base_url(
+    monkeypatch,
+):
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com/root")
+    client = _client(
+        {
+            "enabled": True,
+            "opencode": {
+                "enabled": True,
+                "path": "native/skills",
+                "remote_config": {
+                    "enabled": True,
+                    "path": "/custom/opencode",
+                },
+            },
+        }
+    )
+
+    response = client.get("/custom/opencode")
+
+    assert response.status_code == 200
+    assert response.json()["config"]["skills"]["urls"] == [
+        "https://litellm.example.com/root/native/skills"
+    ]
 
 
 def test_should_return_agent_skills_well_known_index_when_enabled(monkeypatch):
@@ -200,6 +260,25 @@ def test_should_return_opencode_404_when_skill_file_is_missing(monkeypatch):
     assert response.json() == {"detail": "Skill file not found"}
 
 
+def test_should_return_opencode_404_when_no_skills_exist(monkeypatch):
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "list_skills",
+        AsyncMock(return_value=[]),
+    )
+    client = _client(
+        {"enabled": True, "opencode": {"enabled": True}},
+        auth=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    response = client.get("/opencode/skills/missing_skill/SKILL.md")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Skill file not found"}
+
+
 def test_should_return_agent_404_when_skill_file_is_missing(monkeypatch):
     from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
@@ -224,21 +303,47 @@ def test_should_return_agent_404_when_skill_file_is_missing(monkeypatch):
     assert response.json() == {"detail": "Skill file not found"}
 
 
+def test_should_return_agent_404_when_no_skills_exist(monkeypatch):
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "list_skills",
+        AsyncMock(return_value=[]),
+    )
+    client = _client(
+        {"enabled": True, "agent_skills": {"enabled": True}},
+        auth=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    response = client.get("/.well-known/agent-skills/missing-skill/SKILL.md")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Skill file not found"}
+
+
 def test_should_not_duplicate_routes_when_initialized_twice():
     from litellm.proxy.opencode_endpoints.skills_endpoints import (
+        initialize_opencode_remote_config_endpoint,
         initialize_opencode_skills_endpoint,
     )
 
     app = FastAPI()
-    config = {"enabled": True, "opencode": {"enabled": True}}
+    config = {
+        "enabled": True,
+        "opencode": {"enabled": True, "remote_config": {"enabled": True}},
+    }
 
     initialize_opencode_skills_endpoint(app=app, skills_gateway_config=config)
+    initialize_opencode_remote_config_endpoint(app=app, skills_gateway_config=config)
     initialize_opencode_skills_endpoint(app=app, skills_gateway_config=config)
+    initialize_opencode_remote_config_endpoint(app=app, skills_gateway_config=config)
 
     route_paths = [getattr(route, "path", None) for route in app.routes]
     assert route_paths.count("/opencode/skills") == 1
     assert route_paths.count("/opencode/skills/index.json") == 1
     assert route_paths.count("/opencode/skills/{skill_name}/{file_path:path}") == 1
+    assert route_paths.count("/.well-known/opencode") == 1
 
 
 def test_should_serve_legacy_agent_skills_well_known_alias(monkeypatch):
@@ -415,6 +520,8 @@ async def test_should_register_skills_endpoints_from_proxy_config_load(
         "  opencode:\n"
         "    enabled: true\n"
         "    path: /native/skills\n"
+        "    remote_config:\n"
+        "      enabled: true\n"
         "  agent_skills:\n"
         "    enabled: true\n"
     )
@@ -430,4 +537,5 @@ async def test_should_register_skills_endpoints_from_proxy_config_load(
     route_paths = {getattr(route, "path", None) for route in app.routes}
     assert "/native/skills" in route_paths
     assert "/native/skills/index.json" in route_paths
+    assert "/.well-known/opencode" in route_paths
     assert "/.well-known/agent-skills/index.json" in route_paths

@@ -1,6 +1,6 @@
 import re
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
@@ -10,6 +10,8 @@ from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 OPENCODE_SKILLS_DEFAULT_PATH = "/opencode/skills"
+OPENCODE_REMOTE_CONFIG_DEFAULT_PATH = "/.well-known/opencode"
+OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json"
 AGENT_SKILLS_PATHS = ("/.well-known/agent-skills", "/.well-known/skills")
 _MAX_SKILLS = 1000
 
@@ -25,6 +27,14 @@ def _opencode_config_enabled(skills_gateway_config: dict | None) -> bool:
     )
 
 
+def _opencode_remote_config_enabled(skills_gateway_config: dict | None) -> bool:
+    if not _opencode_config_enabled(skills_gateway_config):
+        return False
+    opencode_config = skills_gateway_config.get("opencode", {})
+    remote_config = opencode_config.get("remote_config", {})
+    return isinstance(remote_config, dict) and remote_config.get("enabled") is True
+
+
 def _agent_skills_config_enabled(skills_gateway_config: dict | None) -> bool:
     if not isinstance(skills_gateway_config, dict):
         return False
@@ -36,17 +46,38 @@ def _agent_skills_config_enabled(skills_gateway_config: dict | None) -> bool:
     )
 
 
+def _normalized_route_path(path: object, default: str) -> str:
+    path = str(path or default).strip() or default
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path.rstrip("/") or default
+
+
 def _opencode_path(skills_gateway_config: dict | None) -> str:
     if not isinstance(skills_gateway_config, dict):
         return OPENCODE_SKILLS_DEFAULT_PATH
     opencode_config = skills_gateway_config.get("opencode", {})
     if not isinstance(opencode_config, dict):
         return OPENCODE_SKILLS_DEFAULT_PATH
-    path = opencode_config.get("path") or OPENCODE_SKILLS_DEFAULT_PATH
-    path = str(path).strip() or OPENCODE_SKILLS_DEFAULT_PATH
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return path.rstrip("/") or OPENCODE_SKILLS_DEFAULT_PATH
+    return _normalized_route_path(
+        opencode_config.get("path"),
+        OPENCODE_SKILLS_DEFAULT_PATH,
+    )
+
+
+def _opencode_remote_config_path(skills_gateway_config: dict | None) -> str:
+    if not isinstance(skills_gateway_config, dict):
+        return OPENCODE_REMOTE_CONFIG_DEFAULT_PATH
+    opencode_config = skills_gateway_config.get("opencode", {})
+    if not isinstance(opencode_config, dict):
+        return OPENCODE_REMOTE_CONFIG_DEFAULT_PATH
+    remote_config = opencode_config.get("remote_config", {})
+    if not isinstance(remote_config, dict):
+        return OPENCODE_REMOTE_CONFIG_DEFAULT_PATH
+    return _normalized_route_path(
+        remote_config.get("path"),
+        OPENCODE_REMOTE_CONFIG_DEFAULT_PATH,
+    )
 
 
 def _skill_enabled(skill: LiteLLM_SkillsTable) -> bool:
@@ -130,6 +161,24 @@ async def opencode_skills_index(
     }
 
 
+def _opencode_remote_config_response(
+    request: Request,
+    skills_gateway_config: dict | None,
+) -> dict:
+    from litellm.proxy.utils import get_custom_url
+
+    skills_url = get_custom_url(
+        request_base_url=str(request.base_url),
+        route=_opencode_path(skills_gateway_config),
+    )
+    return {
+        "config": {
+            "$schema": OPENCODE_CONFIG_SCHEMA,
+            "skills": {"urls": [skills_url]},
+        }
+    }
+
+
 async def opencode_skill_file(
     skill_name: str,
     file_path: str,
@@ -208,6 +257,26 @@ def initialize_opencode_skills_endpoint(
     _add_route(app, path, opencode_skills_index)
     _add_route(app, f"{path}/index.json", opencode_skills_index)
     _add_route(app, f"{path}/{{skill_name}}/{{file_path:path}}", opencode_skill_file)
+
+
+def initialize_opencode_remote_config_endpoint(
+    app: FastAPI,
+    skills_gateway_config: dict | None,
+) -> None:
+    if not _opencode_remote_config_enabled(skills_gateway_config):
+        return
+
+    async def opencode_remote_config(request: Request):
+        return _opencode_remote_config_response(
+            request=request,
+            skills_gateway_config=skills_gateway_config,
+        )
+
+    _add_route(
+        app,
+        _opencode_remote_config_path(skills_gateway_config),
+        opencode_remote_config,
+    )
 
 
 def initialize_agent_skills_endpoint(
