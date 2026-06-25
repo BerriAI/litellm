@@ -34,8 +34,6 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
-from litellm.repositories.user_repository import UserRepository
 
 
 def get_new_internal_user_defaults(
@@ -167,6 +165,7 @@ async def _clone_team_default_budget_for_member(
     default_team_budget_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    db_client: Optional[Any] = None,
 ) -> Optional[str]:
     """
     Create a new budget row that copies the values from the team's default
@@ -176,8 +175,13 @@ async def _clone_team_default_budget_for_member(
     Used when adding a new team member without an explicit per-member budget,
     so the member starts with the team default's values but gets their own
     private budget row (which can be edited independently).
+
+    ``db_client`` lets the caller run these writes inside an existing
+    transaction (pass the ``tx`` from ``prisma_client.db.tx()``). When omitted,
+    it falls back to the non-transactional client.
     """
-    default_budget = await BudgetRepository(prisma_client).table.find_unique(
+    db = db_client if db_client is not None else prisma_client.db
+    default_budget = await db.litellm_budgettable.find_unique(
         where={"budget_id": default_team_budget_id}
     )
     if default_budget is None:
@@ -205,7 +209,7 @@ async def _clone_team_default_budget_for_member(
             cloned_data["budget_duration"]
         )
 
-    new_budget = await BudgetRepository(prisma_client).table.create(data=cloned_data)
+    new_budget = await db.litellm_budgettable.create(data=cloned_data)
     return new_budget.budget_id
 
 
@@ -218,6 +222,7 @@ async def add_new_member(
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
     allowed_models: Optional[List[str]] = None,
+    db_client: Optional[Any] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -226,13 +231,21 @@ async def add_new_member(
     - add team member w/ budget to team member table
 
     Returns created/existing user + team membership w/ budget id
+
+    ``db_client`` lets the caller run every write below inside a single
+    transaction (pass the ``tx`` from ``prisma_client.db.tx()``). This is what
+    makes ``/team/member_add`` atomic: the user-table ``teams`` push, the budget
+    row, the team membership and (via the caller) ``members_with_roles`` all
+    commit together or roll back together. When omitted, it falls back to the
+    non-transactional client for backwards compatibility.
     """
+    db = db_client if db_client is not None else prisma_client.db
     returned_user: Optional[LiteLLM_UserTable] = None
     returned_team_membership: Optional[LiteLLM_TeamMembership] = None
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        _returned_user = await UserRepository(prisma_client).table.upsert(
+        _returned_user = await db.litellm_usertable.upsert(
             where={"user_id": new_member.user_id},
             data={
                 "update": {"teams": {"push": [team_id]}},
@@ -247,22 +260,29 @@ async def add_new_member(
         )
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row: Optional[list] = await prisma_client.get_data(
-            key_val={"user_email": new_member.user_email},
-            table_name="user",
-            query_type="find_all",
+        existing_user_row: Optional[list] = await db.litellm_usertable.find_many(
+            where={"user_email": new_member.user_email}
         )
         if existing_user_row is None or (
             isinstance(existing_user_row, list) and len(existing_user_row) == 0
         ):
             new_user_defaults["teams"] = [team_id]
-            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            # upsert on the freshly generated user_id (mirrors the user_id branch
+            # above and the previous insert_data behaviour) so this write runs on
+            # the same transaction client.
+            _returned_user = await db.litellm_usertable.upsert(
+                where={"user_id": new_user_defaults["user_id"]},
+                data={
+                    "update": {"teams": {"push": [team_id]}},
+                    "create": {**new_user_defaults},  # type: ignore
+                },
+            )
 
             if _returned_user is not None:
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            _returned_user = await UserRepository(prisma_client).table.update(
+            _returned_user = await db.litellm_usertable.update(
                 where={"user_id": user_info.user_id},  # type: ignore
                 data={"teams": {"push": [team_id]}},
             )
@@ -287,7 +307,7 @@ async def add_new_member(
             budget_data["max_budget"] = max_budget_in_team
         if allowed_models is not None:
             budget_data["allowed_models"] = allowed_models
-        response = await BudgetRepository(prisma_client).table.create(data=budget_data)
+        response = await db.litellm_budgettable.create(data=budget_data)
 
         _budget_id = response.budget_id
     elif default_team_budget_id is not None:
@@ -300,15 +320,14 @@ async def add_new_member(
             default_team_budget_id=default_team_budget_id,
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
+            db_client=db_client,
         )
     else:
         # No per-member budget and no team default → member gets no budget.
         _budget_id = None
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
-        _returned_team_membership = await TeamMembershipRepository(
-            prisma_client
-        ).table.create(
+        _returned_team_membership = await db.litellm_teammembership.create(
             data={
                 "team_id": team_id,
                 "user_id": returned_user.user_id,
