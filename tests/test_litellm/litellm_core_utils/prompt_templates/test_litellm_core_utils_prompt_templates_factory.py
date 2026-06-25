@@ -2918,3 +2918,124 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for https://github.com/BerriAI/litellm/issues/26060
+# A concatenated-JSON tool call is split into N bedrock toolUse blocks, so its
+# single tool result must be duplicated into N matching toolResults. Otherwise
+# Bedrock 400s on the next turn:
+#   "Expected toolResult blocks ... for the following Ids: tooluse_<id>_1"
+# ---------------------------------------------------------------------------
+
+_CONCATENATED_ARGS = (
+    '{"command": ["ls"]}' '{"command": ["pwd"]}' '{"command": ["whoami"]}'
+)
+_SPLIT_TOOL_ID = "tooluse_ABC123"
+
+
+def _orphan_repro_messages():
+    return [
+        {"role": "user", "content": "run the commands"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": _SPLIT_TOOL_ID,
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": _CONCATENATED_ARGS},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": _SPLIT_TOOL_ID, "content": "command output"},
+    ]
+
+
+def _tool_use_ids(blocks):
+    return [
+        block["toolUse"]["toolUseId"]
+        for message in blocks
+        if message["role"] == "assistant"
+        for block in message["content"]
+        if "toolUse" in block
+    ]
+
+
+def _tool_result_blocks(blocks):
+    return [
+        block["toolResult"]
+        for message in blocks
+        if message["role"] == "user"
+        for block in message["content"]
+        if "toolResult" in block
+    ]
+
+
+def test_bedrock_tool_call_split_count_helper():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_tool_call_split_count,
+    )
+
+    assert _bedrock_tool_call_split_count('{"a": 1}') == 1
+    assert _bedrock_tool_call_split_count(_CONCATENATED_ARGS) == 3
+    assert _bedrock_tool_call_split_count("") == 1
+    assert _bedrock_tool_call_split_count(None) == 1
+
+
+def test_bedrock_converse_split_tool_call_results_are_symmetric():
+    """#26060: 1 concatenated tool call -> 3 toolUse -> must yield 3 toolResults."""
+    result = _bedrock_converse_messages_pt(
+        messages=_orphan_repro_messages(),
+        model="us.anthropic.claude-opus-4-7",
+        llm_provider="bedrock",
+    )
+
+    tool_results = _tool_result_blocks(result)
+    tool_result_ids = [tr["toolUseId"] for tr in tool_results]
+    expected_ids = {_SPLIT_TOOL_ID, f"{_SPLIT_TOOL_ID}_1", f"{_SPLIT_TOOL_ID}_2"}
+
+    assert set(_tool_use_ids(result)) == expected_ids
+    # every toolUse now has a matching toolResult (no orphans)
+    assert set(tool_result_ids) == expected_ids
+    # duplicated results reuse the original (non-empty) content
+    contents = [tr["content"] for tr in tool_results]
+    assert contents[0]
+    assert all(c == contents[0] for c in contents)
+
+
+def test_bedrock_converse_single_tool_call_result_unchanged():
+    """A normal (non-concatenated) tool call still yields exactly one toolResult."""
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tooluse_single",
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": '{"command": ["ls"]}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_single", "content": "ok"},
+    ]
+    result = _bedrock_converse_messages_pt(
+        messages=messages, model="us.anthropic.claude-opus-4-7", llm_provider="bedrock"
+    )
+    assert _tool_use_ids(result) == ["tooluse_single"]
+    assert [tr["toolUseId"] for tr in _tool_result_blocks(result)] == ["tooluse_single"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_async_split_tool_call_results_are_symmetric():
+    """The #26060 fix must also hold for the async converter."""
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=_orphan_repro_messages(),
+        model="us.anthropic.claude-opus-4-7",
+        llm_provider="bedrock",
+    )
+    expected_ids = {_SPLIT_TOOL_ID, f"{_SPLIT_TOOL_ID}_1", f"{_SPLIT_TOOL_ID}_2"}
+    assert set(_tool_use_ids(result)) == expected_ids
+    assert {tr["toolUseId"] for tr in _tool_result_blocks(result)} == expected_ids
