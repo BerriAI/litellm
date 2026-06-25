@@ -25558,8 +25558,18 @@
     },
     "mistral/mistral-ocr-latest": {
         "litellm_provider": "mistral",
-        "ocr_cost_per_page": 0.001,
-        "annotation_cost_per_page": 0.003,
+        "ocr_cost_per_page": 0.004,
+        "annotation_cost_per_page": 0.005,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
+    "mistral/mistral-ocr-4-0": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 0.004,
+        "annotation_cost_per_page": 0.005,
         "mode": "ocr",
         "supported_endpoints": [
             "/v1/ocr"
