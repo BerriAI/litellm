@@ -39,18 +39,30 @@ _rust_ocr_impl: RustOcr | None = None
 
 
 def use_litellm_rust(
-    enabled: bool = True, *, ocr: RustOcr | None | _Unset = _UNSET
+    enabled: bool = True,
+    *,
+    ocr: RustOcr | None | _Unset = _UNSET,
+    realtime: object = _UNSET,
 ) -> None:
-    """Route supported OCR calls through the Rust ``litellm_python_bridge`` extension.
+    """Route supported LiteLLM calls through the Rust ``litellm_python_bridge``
+    extension.
 
-    ``ocr`` injects the bridge callable; when omitted the compiled extension is
-    loaded on demand and any previously injected bridge is preserved. Pass
-    ``ocr=None`` explicitly to clear a prior injection.
+    Each route's bridge callable can be injected via the matching keyword
+    (mostly for tests): pass it as the keyword to inject, omit to preserve any
+    prior injection, or pass ``None`` explicitly to clear. The compiled
+    extension is loaded on demand at call time when no impl is injected.
     """
     global _rust_ocr_enabled, _rust_ocr_impl
     _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
+
+    from litellm.realtime_api.rust_bridge import set_rust_realtime
+
+    if isinstance(realtime, _Unset):
+        set_rust_realtime(enabled)
+    else:
+        set_rust_realtime(enabled, connect=realtime)  # type: ignore[arg-type]
 
 
 def rust_ocr_enabled() -> bool:

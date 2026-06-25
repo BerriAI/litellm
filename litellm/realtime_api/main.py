@@ -31,6 +31,12 @@ from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
+from .rust_bridge import (
+    load_rust_realtime,
+    rust_backend_connect_factory,
+    rust_realtime_enabled,
+    rust_supports_ssl_config,
+)
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
@@ -38,6 +44,36 @@ bedrock_realtime = BedrockRealtime()
 xai_realtime = XAIRealtime()
 vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
+
+
+def _maybe_rust_backend_connect(api_base: Optional[str]) -> Optional[Any]:
+    """Return a Rust-backed ``websockets.connect``-compatible factory, or ``None``.
+
+    Falls back to the Python path when (a) the flag is off, (b) the compiled
+    bridge isn't importable, or (c) the active realtime SSL config isn't one
+    the Rust transport can replicate today (rustls native roots only). Keeps
+    the rollout gated behind exactly the contract LiteLLM users already
+    expect.
+    """
+    if not rust_realtime_enabled():
+        return None
+    connect = load_rust_realtime()
+    if connect is None:
+        from litellm._logging import verbose_logger
+
+        verbose_logger.debug(
+            "Rust realtime bridge unavailable; falling back to Python path"
+        )
+        return None
+    if not rust_supports_ssl_config(get_shared_realtime_ssl_context()):
+        from litellm._logging import verbose_logger
+
+        verbose_logger.debug(
+            "TLS verification is disabled in the SSL config; Rust realtime "
+            "path cannot honor that, falling back to Python"
+        )
+        return None
+    return rust_backend_connect_factory(connect)
 
 
 def _build_litellm_metadata(kwargs: dict) -> dict:
@@ -415,6 +451,8 @@ async def _arealtime(
             or get_secret_str("OPENAI_API_KEY")
         )
 
+        backend_connect = _maybe_rust_backend_connect(api_base)
+
         await openai_realtime.async_realtime(
             model=model,
             websocket=websocket,
@@ -426,6 +464,7 @@ async def _arealtime(
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
+            backend_connect=backend_connect,
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
