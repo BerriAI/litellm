@@ -1056,7 +1056,9 @@ jobs:
           name: Run tests
           command: |
             mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/ocr_tests/**/test_*.py")
+            TEST_FILES=$(printf "%s\n%s\n" \
+              "$(circleci tests glob "tests/ocr_tests/**/test_*.py")" \
+              "tests/test_litellm/ocr/test_rust_bridge.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
