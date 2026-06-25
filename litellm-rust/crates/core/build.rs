@@ -316,7 +316,7 @@ mod tests {{
             LlmProvider::Mistral.default_api_base(),
             Some("https://api.mistral.ai/v1")
         );
-        assert_eq!(LlmProvider::Mistral.api_key_env_var(), Some("MISTRAL_API_KEY"));
+        assert_eq!(LlmProvider::Mistral.api_key_env_var(), None);
     }}
 }}
 "#,

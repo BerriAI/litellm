@@ -1,7 +1,7 @@
 # Adding a provider / route to litellm-rust
 
 - Keep the route contract pure in `crates/core/src/<route>/`: define the typed request/response structs and a provider config trait with no network, env, auth, or logging.
-- Add provider identity to the repo-root `provider_endpoints_support.json`: use the LiteLLM provider slug, display name, docs URL, and endpoint support flags. Put optional stable base URL / API key env var defaults under the top-level `default_creds` map.
+- Add provider identity to the repo-root `provider_endpoints_support.json`: use the LiteLLM provider slug, display name, docs URL, and endpoint support flags. Put optional stable provider-level base URL defaults under the top-level `default_creds` map; keep route-specific API key env vars in provider config/transform code so key resolution has one owner.
 - Put provider-specific transforms in `crates/providers/src/<provider>/<route>/transformation.rs`, mirroring the Python provider tree and exposing a `const <PROVIDER>_<ROUTE>_CONFIG`.
 - The provider config owns three pure steps: map LiteLLM params, transform the LiteLLM request into the provider request, and transform the provider response back into the LiteLLM response.
 - If the provider has a reverse or normalization step, keep it pure and explicit next to the transforms; do not hide reverse mapping inside the HTTP transport.
