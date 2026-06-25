@@ -51,6 +51,31 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     assert any(cache_key in message for message in created_cache_key_logs)
 
 
+def test_safe_cache_lookup_kwargs_preserves_tenant_scope_metadata_only():
+    auth_object = object()
+
+    lookup_kwargs = Cache._get_safe_cache_lookup_kwargs(
+        {
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_team_id": "team-1",
+                "user_api_key_org_id": "org-1",
+                "user_api_key_auth": auth_object,
+                "trace_id": "trace-1",
+            },
+        }
+    )
+
+    assert lookup_kwargs == {
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {
+            "user_api_key_team_id": "team-1",
+            "user_api_key_org_id": "org-1",
+        },
+    }
+
+
 def _embedding_response(prompt_tokens, num_items):
     return EmbeddingResponse(
         model="amazon.titan-embed-image-v1",
