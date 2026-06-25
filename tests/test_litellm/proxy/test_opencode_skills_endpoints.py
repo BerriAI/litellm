@@ -97,7 +97,9 @@ def test_should_return_opencode_skills_index_when_enabled(monkeypatch):
     list_skills.assert_awaited_once_with(limit=1000, offset=0, user_api_key_dict=auth)
 
 
-def test_should_return_opencode_remote_config_when_enabled_without_auth():
+def test_should_return_opencode_remote_config_when_enabled_without_auth(monkeypatch):
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     client = _client(
         {
             "enabled": True,
@@ -119,6 +121,27 @@ def test_should_return_opencode_remote_config_when_enabled_without_auth():
             },
         },
     }
+
+
+def test_should_return_opencode_remote_config_with_server_root_path(monkeypatch):
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/my-custom-path")
+    client = _client(
+        {
+            "enabled": True,
+            "opencode": {
+                "enabled": True,
+                "remote_config": {"enabled": True},
+            },
+        }
+    )
+
+    response = client.get("/.well-known/opencode")
+
+    assert response.status_code == 200
+    assert response.json()["config"]["skills"]["urls"] == [
+        "http://testserver/my-custom-path/opencode/skills"
+    ]
 
 
 def test_should_normalize_opencode_path_without_leading_slash(monkeypatch):
@@ -144,6 +167,7 @@ def test_should_return_opencode_remote_config_with_custom_paths_and_proxy_base_u
     monkeypatch,
 ):
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com/root")
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     client = _client(
         {
             "enabled": True,
