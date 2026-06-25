@@ -5,10 +5,13 @@ Tests that internal callers see all MCP servers while
 external callers only see servers with available_on_public_internet=True.
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 from fastapi import Request
 
+import litellm.proxy.auth.ip_address_utils as ip_mod
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -76,6 +79,38 @@ class TestMCPClientIPExtraction:
         # is classified as external and is_internal_ip("") is False.
         assert result == ""
         assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_no_trusted_ranges_warning_matches_fail_closed_behavior(self, caplog):
+        ip_mod._warned_xff_without_trusted_ranges = False
+
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "203.0.113.5"
+        request.headers = {"x-forwarded-for": "1.2.3.4, 10.0.0.1"}
+        general_settings = {"use_x_forwarded_for": True}
+
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            assert (
+                IPAddressUtils.is_request_from_trusted_proxy(
+                    request, general_settings=general_settings
+                )
+                is False
+            )
+
+        warning = next(
+            record.getMessage()
+            for record in caplog.records
+            if "mcp_trusted_proxy_ranges" in record.getMessage()
+        )
+
+        assert "fails closed" in warning
+        assert "treated as external" in warning
+        assert "client IPs will use the proxy's literal request values" not in warning
+
+        assert (
+            IPAddressUtils.get_mcp_client_ip(request, general_settings=general_settings)
+            == ""
+        )
 
     def test_private_proxy_peer_does_not_grant_internal_access(self):
         # Regression: behind an internal reverse proxy with use_x_forwarded_for
