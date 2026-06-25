@@ -2097,3 +2097,48 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_map_function_does_not_mutate_caller_tools():
+    """Regression test for issue #31343.
+
+    _map_function strips additionalProperties and strict from tool schemas because
+    Gemini does not accept them. Those fields must be removed from a local copy only;
+    the original list passed in by the caller must remain unchanged so that a
+    subsequent OpenAI fallback still receives a valid strict-mode schema.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "my_tool",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string", "description": "Input value."}
+                    },
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    original_additional_props = tools[0]["function"]["parameters"]["additionalProperties"]
+    original_strict = tools[0]["function"]["strict"]
+
+    VertexGeminiConfig()._map_function(value=tools, optional_params={})
+
+    assert tools[0]["function"]["parameters"]["additionalProperties"] == original_additional_props, (
+        "_map_function mutated the caller's tools list: additionalProperties was removed. "
+        "This breaks Gemini-to-OpenAI fallbacks because OpenAI requires additionalProperties=False."
+    )
+    assert tools[0]["function"]["strict"] == original_strict, (
+        "_map_function mutated the caller's tools list: strict was removed."
+    )
+
