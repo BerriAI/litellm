@@ -155,6 +155,8 @@ def _convert_result(
         return _convert_send_result(result, target, request_id=request_id)
     if method in ("tasks/get", "tasks/cancel"):
         return _convert_task(result, target)
+    if method == "tasks/list":
+        return _convert_list_tasks_result(result, target)
     return result
 
 
@@ -214,6 +216,39 @@ def _convert_task(result: JsonDict, target: A2AVersion) -> JsonDict:
     if current == target:
         return result
     return _best_effort(lambda: _task_to(result, target), result, label="task")
+
+
+def _detect_list_tasks_version(result: JsonDict) -> Optional[A2AVersion]:
+    tasks = result.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return None
+    first = tasks[0]
+    if not isinstance(first, dict):
+        return None
+    return "0.3" if "kind" in first else "1.0"
+
+
+def _convert_list_tasks_result(result: JsonDict, target: A2AVersion) -> JsonDict:
+    current = _detect_list_tasks_version(result)
+    if current is None or current == target:
+        return result
+    return _best_effort(
+        lambda: _list_tasks_result_to(result, target),
+        result,
+        label="list tasks result",
+    )
+
+
+def _list_tasks_result_to(result: JsonDict, target: A2AVersion) -> JsonDict:
+    tasks = result.get("tasks")
+    if not isinstance(tasks, list):
+        return result
+    return {
+        **result,
+        "tasks": [
+            _task_to(item, target) if isinstance(item, dict) else item for item in tasks
+        ],
+    }
 
 
 def _task_to(result: JsonDict, target: A2AVersion) -> JsonDict:
@@ -322,6 +357,9 @@ def _validate_stream_event(result: JsonDict, types_v03: ModuleType) -> BaseModel
 
 
 def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
+    if method == "tasks/list":
+        return _lower_list_tasks_params(params)
+
     from a2a.compat.v0_3.conversions import (
         ParseDict,
         pb2_v10,
@@ -366,6 +404,28 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
     if lower is None:
         return params
     return _dump_03(lower(params))
+
+
+def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a.compat.v0_3.conversions import (
+        ParseDict,
+        _CORE_TO_COMPAT_TASK_STATE,
+        pb2_v10,
+    )
+
+    pb = _parse(ParseDict, params, pb2_v10.ListTasksRequest())
+    lowered = MessageToDict(pb, preserving_proto_field_name=False)
+    if pb.status != pb2_v10.TaskState.TASK_STATE_UNSPECIFIED:
+        compat_state = _CORE_TO_COMPAT_TASK_STATE.get(pb.status)
+        if compat_state is not None:
+            lowered["status"] = compat_state.value
+        else:
+            lowered.pop("status", None)
+    else:
+        lowered.pop("status", None)
+    return lowered
 
 
 def _flatten_create_push_notification_params(params: JsonDict) -> JsonDict:

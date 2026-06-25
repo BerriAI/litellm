@@ -143,6 +143,43 @@ def test_request_params_lowering_create_push_notification_config_preserves_task_
     assert out["pushNotificationConfig"]["id"] == "cfg-1"
 
 
+def test_request_params_lowering_list_tasks_to_0_3():
+    out = normalize_request_params(
+        {
+            "contextId": "ctx-1",
+            "pageSize": 10,
+            "status": "TASK_STATE_COMPLETED",
+        },
+        "1.0",
+        method="tasks/list",
+    )
+    assert out["contextId"] == "ctx-1"
+    assert out["pageSize"] == 10
+    assert out["status"] == "completed"
+
+
+def test_list_tasks_result_round_trip_preserves_task_ids():
+    rpc = _rpc(
+        {
+            "tasks": [
+                {
+                    "kind": "task",
+                    "id": "t1",
+                    "contextId": "c1",
+                    "status": {"state": "completed"},
+                }
+            ],
+            "nextPageToken": "tok",
+        }
+    )
+    v1 = normalize_jsonrpc_response(rpc, "1.0", method="tasks/list")
+    assert "kind" not in v1["result"]["tasks"][0]
+    assert v1["result"]["tasks"][0]["id"] == "t1"
+    back = normalize_jsonrpc_response(v1, "0.3", method="tasks/list")
+    assert back["result"]["tasks"][0]["kind"] == "task"
+    assert back["result"]["tasks"][0]["id"] == "t1"
+
+
 def _extended_card_1_0() -> dict:
     return {
         "name": "Card",
