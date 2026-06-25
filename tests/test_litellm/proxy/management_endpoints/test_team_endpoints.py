@@ -9505,13 +9505,16 @@ async def test_add_team_members_to_team_runs_in_single_transaction():
     # Exactly one transaction was opened.
     prisma_client.db.tx.assert_called_once()
 
-    # Every write happened on the transaction client.
+    # Every write happened on the transaction client (max_budget_in_team=10.0
+    # so the budget row is part of the same transaction).
     tx.litellm_usertable.upsert.assert_called_once()
+    tx.litellm_budgettable.create.assert_called_once()
     tx.litellm_teammembership.create.assert_called_once()
     tx.litellm_teamtable.update.assert_called_once()
 
     # And none happened on the direct, non-transactional client.
     prisma_client.db.litellm_usertable.upsert.assert_not_called()
+    prisma_client.db.litellm_budgettable.create.assert_not_called()
     prisma_client.db.litellm_teammembership.create.assert_not_called()
     prisma_client.db.litellm_teamtable.update.assert_not_called()
 

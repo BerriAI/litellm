@@ -267,7 +267,16 @@ async def add_new_member(
             isinstance(existing_user_row, list) and len(existing_user_row) == 0
         ):
             new_user_defaults["teams"] = [team_id]
-            _returned_user = await db.litellm_usertable.create(data=new_user_defaults)  # type: ignore
+            # upsert on the freshly generated user_id (mirrors the user_id branch
+            # above and the previous insert_data behaviour) so this write runs on
+            # the same transaction client.
+            _returned_user = await db.litellm_usertable.upsert(
+                where={"user_id": new_user_defaults["user_id"]},
+                data={
+                    "update": {"teams": {"push": [team_id]}},
+                    "create": {**new_user_defaults},  # type: ignore
+                },
+            )
 
             if _returned_user is not None:
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())

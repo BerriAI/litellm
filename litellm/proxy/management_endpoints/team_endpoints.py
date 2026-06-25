@@ -13,7 +13,7 @@ import asyncio
 import json
 import math
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import fastapi
@@ -2411,8 +2411,13 @@ async def _add_team_members_to_team(
     could leave a user with the team in ``user.teams`` while the team's
     ``members_with_roles`` and the ``LiteLLM_TeamMembership`` row were never
     written — an orphaned, untrackable membership.
+
+    A 60s timeout (matching the other batch transactions in the codebase, e.g.
+    db_spend_update_writer) is set because the endpoint accepts a list of members
+    and issues several sequential writes per member; Prisma's 5s default could be
+    exhausted on larger batches.
     """
-    async with prisma_client.db.tx() as tx:
+    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as tx:
         # Process and add new members
         updated_users, updated_team_memberships = await _process_team_members(
             data=data,

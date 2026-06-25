@@ -1443,6 +1443,22 @@ async def test_create_team_member_add_team_admin(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
+        # /team/member_add now runs inside prisma_client.db.tx(); make the
+        # transaction a passthrough to the (mocked) db so the patched tables
+        # above are exercised without a real DB connection.
+        original_tx = litellm.proxy.proxy_server.prisma_client.db.tx
+
+        class _PassthroughTx:
+            async def __aenter__(self):
+                return litellm.proxy.proxy_server.prisma_client.db
+
+            async def __aexit__(self, *args):
+                return False
+
+        litellm.proxy.proxy_server.prisma_client.db.tx = (
+            lambda *args, **kwargs: _PassthroughTx()
+        )
+
         try:
             await team_member_add(
                 data=team_member_add_request,
@@ -2119,14 +2135,11 @@ async def test_model_info_alias_without_prisma(hidden):
 
     models = resp["data"]
 
-    alias_found = any(
-        m["model_name"] == model_alias
-        for m in models
-    )
+    alias_found = any(m["model_name"] == model_alias for m in models)
 
     assert alias_found is (not hidden)
 
-    
+
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")

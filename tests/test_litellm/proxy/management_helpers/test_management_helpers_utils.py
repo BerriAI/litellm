@@ -466,7 +466,7 @@ async def test_add_new_member_with_user_email_clones_default_budget():
         "teams": [test_team_id],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
         return_value=mock_user_response
     )
 
@@ -526,9 +526,9 @@ async def test_add_new_member_with_user_email_clones_default_budget():
         where={"user_email": test_user_email}
     )
 
-    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
-    insert_call_args = mock_prisma_client.db.litellm_usertable.create.call_args
-    insert_data = insert_call_args.kwargs["data"]
+    mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
+    upsert_call_args = mock_prisma_client.db.litellm_usertable.upsert.call_args
+    insert_data = upsert_call_args.kwargs["data"]["create"]
     assert insert_data["user_email"] == test_user_email
     assert insert_data["teams"] == [test_team_id]
 
