@@ -5,7 +5,9 @@
 //! with the GIL released (via the bridge's [`crate::gil`] chokepoint), keeping
 //! the proxy event loop responsive while Rust does the regex work.
 
-use litellm_ai_gateway::io::guardrails::{config_supported, run_guardrail, Unsupported};
+use litellm_ai_gateway::io::guardrails::{
+    config_supported, run_guardrail, run_guardrails, GuardrailSpec, Unsupported,
+};
 use litellm_core::guardrails::{
     GuardrailInput, GuardrailStatus, InputType, LiteralTerm, LocalPiiConfig, LocalPiiEngine,
     RegexTerm, RequestContext, Scanner, Verdict,
@@ -73,6 +75,52 @@ fn apply_guardrail(py: Python<'_>, request_json: String) -> PyResult<String> {
         }
         Err(Unsupported(reason)) => Err(GuardrailUnsupported::new_err(reason)),
     }
+}
+
+#[derive(Deserialize)]
+struct GuardrailSpecRequest {
+    guardrail_type: String,
+    params: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct ApplyBatchRequest {
+    guardrails: Vec<GuardrailSpecRequest>,
+    input: GuardrailInput,
+    input_type: InputType,
+    #[serde(default)]
+    context: RequestContext,
+}
+
+/// Run all of a request's Rust-eligible guardrails as one set, with block-wins
+/// precedence (a block is evaluated against the original input, never defeated
+/// by an upstream mask) and mask composition. One bridge crossing, GIL released.
+#[pyfunction]
+fn apply_guardrails(py: Python<'_>, request_json: String) -> PyResult<String> {
+    let req: ApplyBatchRequest = serde_json::from_str(&request_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid guardrail batch JSON: {e}")))?;
+
+    let specs: Vec<GuardrailSpec> = req
+        .guardrails
+        .into_iter()
+        .map(|g| GuardrailSpec {
+            guardrail_type: g.guardrail_type,
+            params: g.params,
+        })
+        .collect();
+
+    let outcome = gil::release_gil(py, move || {
+        run_guardrails(&specs, &req.input, req.input_type, &req.context)
+    });
+
+    let response = ApplyResponse {
+        guardrail_status: outcome.status(),
+        verdict: outcome.verdict,
+        provider_response: outcome.provider_response,
+        duration_ms: outcome.duration_ms,
+    };
+    serde_json::to_string(&response)
+        .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize verdict: {e}")))
 }
 
 /// Whether the Rust engine can handle this guardrail type and params. Called at
@@ -168,6 +216,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ContentScanner>()?;
     module.add_class::<PiiEngine>()?;
     module.add_function(wrap_pyfunction!(apply_guardrail, module)?)?;
+    module.add_function(wrap_pyfunction!(apply_guardrails, module)?)?;
     module.add_function(wrap_pyfunction!(guardrail_config_supported, module)?)?;
     module.add(
         "GuardrailUnsupported",

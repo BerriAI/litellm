@@ -51,13 +51,14 @@ def test_pass_verdict_leaves_inputs_unchanged():
     assert out["texts"] == ["hello"]
 
 
-def test_request_carries_type_params_and_inputs():
+def test_request_carries_batch_params_and_inputs():
     capture = {}
     guardrail = _guardrail({"action": "pass"}, capture=capture)
     _apply(guardrail, {"texts": ["hi"]})
     request = capture["request"]
-    assert request["guardrail_type"] == "openai_moderation"
-    assert request["params"] == {"api_key": "sk-test"}
+    # The request now carries the whole guardrail set (here just self).
+    assert request["guardrails"][0]["guardrail_type"] == "openai_moderation"
+    assert request["guardrails"][0]["params"] == {"api_key": "sk-test"}
     assert request["input"]["texts"] == ["hi"]
     assert request["input_type"] == "request"
 

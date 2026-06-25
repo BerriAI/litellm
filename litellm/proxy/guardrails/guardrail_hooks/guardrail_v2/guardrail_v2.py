@@ -134,7 +134,39 @@ class GuardrailV2(CustomGuardrail):
     def _apply(self, request_json: str) -> str:
         if self._apply_guardrail_fn is not None:
             return self._apply_guardrail_fn(request_json)
-        return _load_bridge().apply_guardrail(request_json)
+        return _load_bridge().apply_guardrails(request_json)
+
+    def _collect_batch(
+        self, request_data: dict, input_type: str
+    ) -> "list[GuardrailV2]":
+        """All Rust-backed guardrails active for this request at the same hook as
+        self, so the engine evaluates the whole set at once (block-wins precedence,
+        mask composition) instead of letting Python run them sequentially where a
+        mask can hide content from a later block."""
+        import litellm
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        events = (
+            [GuardrailEventHooks.post_call]
+            if input_type == "response"
+            else [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call]
+        )
+        batch: "list[GuardrailV2]" = []
+        for cb in litellm.callbacks:
+            if not isinstance(cb, GuardrailV2) or cb.event_hook != self.event_hook:
+                continue
+            try:
+                active = any(
+                    cb.should_run_guardrail(data=request_data, event_type=event)
+                    for event in events
+                )
+            except Exception:
+                active = cb is self
+            if active:
+                batch.append(cb)
+        if self not in batch:
+            batch.append(self)
+        return batch
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -144,12 +176,24 @@ class GuardrailV2(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        request_body = (request_data or {}).get("body") or {}
+        rd = request_data or {}
+        # The first Rust guardrail invoked for this request/input_type runs the
+        # whole set; the rest are no-ops so the batch is applied exactly once.
+        marker = f"_litellm_rust_guardrail_batch_{input_type}"
+        if rd.get(marker):
+            out: GenericGuardrailAPIInputs = {}
+            out.update(inputs)
+            return out
+        rd[marker] = True
+
+        batch = self._collect_batch(rd, input_type)
+        request_body = rd.get("body") or {}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
 
         request = {
-            "guardrail_type": self.guardrail_type,
-            "params": self.params,
+            "guardrails": [
+                {"guardrail_type": g.guardrail_type, "params": g.params} for g in batch
+            ],
             "input": {
                 "texts": inputs.get("texts", []),
                 "images": inputs.get("images") or [],
@@ -170,10 +214,8 @@ class GuardrailV2(CustomGuardrail):
                     if logging_obj
                     else None
                 ),
-                "user_api_key_metadata": _extract_user_metadata(request_data or {}),
-                "request_headers": _extract_raw_headers(
-                    request_data or {}, logging_obj
-                ),
+                "user_api_key_metadata": _extract_user_metadata(rd),
+                "request_headers": _extract_raw_headers(rd, logging_obj),
                 "dynamic_params": dynamic_params or {},
                 "litellm_version": litellm_version,
                 "extra_header_allowlist": self.extra_header_allowlist,
@@ -181,7 +223,7 @@ class GuardrailV2(CustomGuardrail):
         }
 
         request_json = json.dumps(request, default=str)
-        # The engine releases the GIL during the provider call, so running it in a
+        # The engine releases the GIL during the provider calls, so running it in a
         # worker thread keeps the event loop responsive.
         result_json = await asyncio.get_running_loop().run_in_executor(
             None, self._apply, request_json
@@ -197,7 +239,7 @@ class GuardrailV2(CustomGuardrail):
                 should_wrap_with_default_message=False,
             )
 
-        out: GenericGuardrailAPIInputs = {}
+        out = {}
         out.update(inputs)
         if action == "mask":
             masked = verdict.get("texts")

@@ -12,6 +12,7 @@ mod http;
 mod provider;
 mod providers;
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use litellm_core::guardrails::{
@@ -19,6 +20,12 @@ use litellm_core::guardrails::{
 };
 
 pub use config_builder::Unsupported;
+
+/// One guardrail to run as part of a request's set.
+pub struct GuardrailSpec {
+    pub guardrail_type: String,
+    pub params: serde_json::Value,
+}
 
 /// Whether the Rust engine can build a config for this guardrail type and params
 /// (without running it). Used at init time to decide Rust vs Python routing.
@@ -48,6 +55,108 @@ pub fn run_guardrail(
     match provider.apply(input, input_type, ctx) {
         Ok(outcome) => Ok(outcome),
         Err(err) => Ok(fail_closed(err, start)),
+    }
+}
+
+/// Run all of a request's guardrails as one set with correct precedence.
+///
+/// Block decisions are evaluated against the ORIGINAL input for every guardrail
+/// first, so a masking guardrail can never hide content from a blocking one
+/// (the order-dependent "mask defeats block" bug of running them sequentially in
+/// Python). The first block wins and short-circuits. If nothing blocks, masking
+/// guardrails are composed by chaining their output, so multiple maskers all
+/// apply. A build or provider failure for any guardrail fails closed.
+pub fn run_guardrails(
+    specs: &[GuardrailSpec],
+    input: &GuardrailInput,
+    input_type: InputType,
+    ctx: &RequestContext,
+) -> GuardrailOutcome {
+    let start = Instant::now();
+
+    let mut providers = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let config = match config_builder::build_config(&spec.guardrail_type, &spec.params) {
+            Ok(config) => config,
+            Err(Unsupported(reason)) => {
+                return fail_closed(ProviderError::InvalidConfig { message: reason }, start)
+            }
+        };
+        match providers::build(config) {
+            Ok(provider) => providers.push(provider),
+            Err(err) => return fail_closed(err, start),
+        }
+    }
+
+    // Phase 1: evaluate every guardrail against the original input. A block from
+    // any guardrail wins immediately; masking outcomes are remembered for phase 2.
+    let mut masker_indexes: Vec<usize> = Vec::new();
+    let mut first_mask: Option<GuardrailOutcome> = None;
+    for (idx, provider) in providers.iter().enumerate() {
+        let outcome = match provider.apply(input, input_type, ctx) {
+            Ok(outcome) => outcome,
+            Err(err) => return fail_closed(err, start),
+        };
+        match outcome.verdict {
+            Verdict::Block { .. } => return outcome,
+            Verdict::Mask { .. } => {
+                if first_mask.is_none() {
+                    first_mask = Some(outcome);
+                }
+                masker_indexes.push(idx);
+            }
+            Verdict::Pass => {}
+        }
+    }
+
+    match masker_indexes.len() {
+        0 => GuardrailOutcome {
+            verdict: Verdict::Pass,
+            provider_response: serde_json::Value::Null,
+            duration_ms: start.elapsed().as_millis() as u64,
+        },
+        // A single masker's phase-1 outcome is already the final result.
+        1 => first_mask.expect("masker recorded"),
+        // Phase 2: compose multiple maskers by chaining masked text forward.
+        _ => compose_masks(&providers, &masker_indexes, input, input_type, ctx, start),
+    }
+}
+
+fn compose_masks(
+    providers: &[Box<dyn provider::Guardrail>],
+    masker_indexes: &[usize],
+    input: &GuardrailInput,
+    input_type: InputType,
+    ctx: &RequestContext,
+    start: Instant,
+) -> GuardrailOutcome {
+    let mut current = input.clone();
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for &idx in masker_indexes {
+        let outcome = match providers[idx].apply(&current, input_type, ctx) {
+            Ok(outcome) => outcome,
+            Err(err) => return fail_closed(err, start),
+        };
+        if let Verdict::Mask {
+            texts,
+            masked_entity_count,
+            ..
+        } = outcome.verdict
+        {
+            current.texts = texts;
+            for (entity, count) in masked_entity_count {
+                *counts.entry(entity).or_insert(0) += count;
+            }
+        }
+    }
+    GuardrailOutcome {
+        verdict: Verdict::Mask {
+            texts: current.texts,
+            masked_entity_count: counts,
+            detections: vec![],
+        },
+        provider_response: serde_json::Value::Null,
+        duration_ms: start.elapsed().as_millis() as u64,
     }
 }
 
@@ -408,6 +517,86 @@ mod tests {
             &RequestContext::default(),
         );
         assert!(result.is_err());
+    }
+
+    fn spec(guardrail_type: &str, params: serde_json::Value) -> GuardrailSpec {
+        GuardrailSpec {
+            guardrail_type: guardrail_type.to_owned(),
+            params,
+        }
+    }
+
+    #[test]
+    fn batch_block_wins_over_mask_regardless_of_order() {
+        // local_pii configured to MASK everything, plus local_pii configured to
+        // BLOCK credit cards. Sequential mask-first would hide the card from the
+        // blocker; the batch must block no matter the order.
+        let mask = spec("local_pii", serde_json::json!({}));
+        let block = spec(
+            "local_pii",
+            serde_json::json!({"pii_entities_config": {"CREDIT_CARD": "BLOCK"}}),
+        );
+        let input = one_text("pay with 4111 1111 1111 1111 now");
+
+        for order in [
+            vec![mask_clone(&mask), mask_clone(&block)],
+            vec![mask_clone(&block), mask_clone(&mask)],
+        ] {
+            let outcome = run_guardrails(
+                &order,
+                &input,
+                InputType::Request,
+                &RequestContext::default(),
+            );
+            assert!(
+                matches!(outcome.verdict, Verdict::Block { .. }),
+                "expected block, got {:?}",
+                outcome.verdict
+            );
+        }
+    }
+
+    fn mask_clone(s: &GuardrailSpec) -> GuardrailSpec {
+        GuardrailSpec {
+            guardrail_type: s.guardrail_type.clone(),
+            params: s.params.clone(),
+        }
+    }
+
+    #[test]
+    fn batch_composes_multiple_maskers() {
+        // One masker for the default entities, plus a deny-list masker for a
+        // custom term. Both masks must appear in the final text.
+        let pii = spec("local_pii", serde_json::json!({}));
+        let deny = spec(
+            "local_pii",
+            serde_json::json!({"deny_list": ["Project Aurora"], "mask_token": "[REDACTED]"}),
+        );
+        let input = one_text("email jane@example.com about Project Aurora");
+        let outcome = run_guardrails(
+            &[pii, deny],
+            &input,
+            InputType::Request,
+            &RequestContext::default(),
+        );
+        match outcome.verdict {
+            Verdict::Mask { texts, .. } => {
+                assert!(texts[0].contains("<EMAIL_ADDRESS>"), "got {}", texts[0]);
+                assert!(texts[0].contains("[REDACTED]"), "got {}", texts[0]);
+            }
+            other => panic!("expected mask, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn batch_passes_when_no_guardrail_fires() {
+        let outcome = run_guardrails(
+            &[spec("local_pii", serde_json::json!({}))],
+            &one_text("nothing sensitive here"),
+            InputType::Request,
+            &RequestContext::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Pass);
     }
 
     #[test]

@@ -183,6 +183,22 @@ model_list:
       model: openai/gpt-5.5
       api_key: os.environ/OPENAI_API_KEY
 
+guardrails:
+  - guardrail_name: "presidio-pii"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_analyzer_api_base: "http://localhost:5102"
+      presidio_anonymizer_api_base: "http://localhost:5101"
+  - guardrail_name: "presidio-block-card"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_analyzer_api_base: "http://localhost:5102"
+      presidio_anonymizer_api_base: "http://localhost:5101"
+      pii_entities_config:
+        CREDIT_CARD: "BLOCK"
+
 general_settings:
   master_key: sk-1234
 
