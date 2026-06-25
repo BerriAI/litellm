@@ -1963,14 +1963,14 @@ class JWTAuthManager:
 
     @staticmethod
     async def _resolve_db_team_fallback(
-        user_object: Optional[LiteLLM_UserTable],
+        user_object: LiteLLM_UserTable | None,
         enforce_team_based_model_access: bool,
         team_id_upsert: bool,
-        prisma_client: Optional[PrismaClient],
+        prisma_client: PrismaClient | None,
         user_api_key_cache: UserApiKeyCache,
-        parent_otel_span: Optional[Span],
+        parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
-    ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
+    ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """
         Resolve a team for a user whose JWT carries no team claims by selecting
         the first of their DB team memberships that loads successfully.
@@ -2011,7 +2011,7 @@ class JWTAuthManager:
     @staticmethod
     def _validate_header_team_in_db_membership(
         team_id: str,
-        user_object: Optional[LiteLLM_UserTable],
+        user_object: LiteLLM_UserTable | None,
     ) -> None:
         """
         A provisional team_id from the x-litellm-team-id header (accepted without
