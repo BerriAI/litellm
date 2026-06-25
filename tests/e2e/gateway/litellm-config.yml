@@ -25,6 +25,8 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   control_plane_url: os.environ/CONTROL_PLANE_URL
   alerts: ["email"]
+  proxy_budget_rescheduler_min_time: 5
+  proxy_budget_rescheduler_max_time: 10
 
 # fallbacks: [{"gpt-4": ["anthropic.claude-3-5-sonnet-20240620-v1:0"]}] #Configure fallbacks for context window exeeded errors (In this example, we will fall back to Claude Sonnet if over 8000 tokens, which is gpt-4's limit)
   # default_fallbacks: ["anthropic.claude-3-haiku-20240307-v1:0"] #Configure fallbacks for any error for every model (the above fallback configurations override this one)
@@ -132,7 +134,7 @@ model_list:
 
   - model_name: openai-realtime
     litellm_params:
-      model: openai/gpt-4o-realtime-preview
+      model: openai/gpt-realtime
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: realtime
