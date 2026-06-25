@@ -551,6 +551,64 @@ async def test_async_logging_hook_skips_api_call_when_payload_incomplete():
 
 
 # ---------------------------------------------------------------------------
+# no-log gate — a no-log request must not reach the external EcoLogits API
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_logging_hook_respects_no_log_flag():
+    """A request marked ``litellm_params["no-log"] = True`` must not POST any
+    metadata to the EcoLogits API.
+
+    ``async_logging_hook`` runs in the first loop of
+    ``async_log_success_event`` — before ``should_run_callback()`` applies the
+    no-log gate to the regular success handlers — so the gate has to be
+    re-applied inside the hook itself.
+    """
+    logger = EcoLogitsLogger()
+    logger.async_http_handler.post = AsyncMock()
+
+    kwargs = _make_kwargs()
+    kwargs["litellm_params"]["no-log"] = True
+    result = _make_response()
+
+    new_kwargs, new_result = await logger.async_logging_hook(
+        kwargs=kwargs, result=result, call_type="completion"
+    )
+
+    logger.async_http_handler.post.assert_not_awaited()
+    # kwargs/result pass through untouched — no enrichment either.
+    assert ECOLOGITS_KWARGS_RESULT_KEY not in new_kwargs["litellm_params"]["metadata"]
+    assert new_result is result
+
+
+@pytest.mark.asyncio
+async def test_async_logging_hook_ignores_no_log_when_globally_disabled(monkeypatch):
+    """``litellm.global_disable_no_log_param`` is the admin override that makes
+    LiteLLM ignore per-request no-log flags. When it's set, a no-log request
+    must still be enriched and posted — mirroring ``should_run_callback``.
+    """
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", True)
+    logger = EcoLogitsLogger()
+    impacts = _impacts_response_payload()
+    logger.async_http_handler.post = AsyncMock(
+        return_value=_stub_http_response(impacts)
+    )
+
+    kwargs = _make_kwargs()
+    kwargs["litellm_params"]["no-log"] = True
+
+    new_kwargs, _ = await logger.async_logging_hook(
+        kwargs=kwargs, result=_make_response(), call_type="completion"
+    )
+
+    logger.async_http_handler.post.assert_awaited_once()
+    assert (
+        new_kwargs["litellm_params"]["metadata"][ECOLOGITS_KWARGS_RESULT_KEY] == impacts
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pipeline integration — enrichment is visible to downstream callbacks
 # ---------------------------------------------------------------------------
 

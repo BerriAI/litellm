@@ -130,6 +130,17 @@ class EcoLogitsLogger(CustomLogger):
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
         try:
+            # Respect the `no-log` gate. This hook runs in the FIRST loop of
+            # async_log_success_event, BEFORE should_run_callback() applies the
+            # no-log gate to the regular success handlers, so we must re-apply
+            # it here — otherwise a no-log request would still POST model,
+            # provider, token count, latency, and zone to the EcoLogits API.
+            if (
+                kwargs.get("litellm_params", {}).get("no-log") is True
+                and not litellm.global_disable_no_log_param
+            ):
+                return kwargs, result
+
             payload = self._build_payload(kwargs=kwargs, result=result)
             if payload is None:
                 return kwargs, result
@@ -229,8 +240,6 @@ class EcoLogitsLogger(CustomLogger):
         * deterministic: ``{"value": 1.3e-5, "unit": "kWh"}``
         * range:         ``{"value": {"min": 1e-5, "max": 2e-5}, "unit": "kWh"}``
 
-        We also tolerate flat ``min`` / ``max`` siblings of ``value`` in case a
-        future API revision exposes them that way.
         """
         raw_value = entry.get("value")
         if isinstance(raw_value, (int, float)):
@@ -239,10 +248,6 @@ class EcoLogitsLogger(CustomLogger):
             for bound in ("min", "max"):
                 if bound in raw_value:
                     yield bound, raw_value[bound]
-
-        for bound in ("min", "max"):
-            if bound in entry:
-                yield bound, entry[bound]
 
     def _build_payload(self, kwargs: dict, result: Any) -> Optional[Dict[str, Any]]:
         provider = kwargs.get("custom_llm_provider") or kwargs.get(
