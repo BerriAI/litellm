@@ -32,6 +32,9 @@ import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
+
+export { serverRootPath };
 
 export { deriveErrorMessage };
 export { ApiError } from "@/lib/http/client";
@@ -46,8 +49,6 @@ const resolveDefaultBase = (fallback: string | null): string | null =>
       ? "http://localhost:4000"
       : fallback;
 const defaultProxyBaseUrl = resolveDefaultBase(null);
-const defaultServerRootPath = "/";
-export let serverRootPath = defaultServerRootPath;
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
 // This survives page navigation and the sessionStorage.clear() in user_dashboard.
@@ -92,7 +93,7 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
-  serverRootPath = receivedServerRootPath;
+  setServerRootPath(receivedServerRootPath);
 };
 
 export const getProxyBaseUrl = (): string => {
