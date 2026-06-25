@@ -81,8 +81,10 @@ class FakeOCRConfig:
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
     rust_bridge.use_litellm_rust(False, ocr=None)
+    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
     rust_bridge.use_litellm_rust(False, ocr=None)
+    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
 @pytest.fixture
@@ -118,6 +120,24 @@ def test_native_bridge_loader_returns_none_when_extension_absent(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     assert rust_bridge_loader.get_native_bridge() is None
+
+
+def test_native_bridge_loader_caches_absent_extension(monkeypatch):
+    real_import = builtins.__import__
+    attempts = 0
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        nonlocal attempts
+        if name == "litellm.rust_bridge" and "_native" in fromlist:
+            attempts += 1
+            raise ImportError
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert attempts == 1
 
 
 def test_native_bridge_available_reflects_loader(monkeypatch):
