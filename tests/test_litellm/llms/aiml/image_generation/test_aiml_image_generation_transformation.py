@@ -21,7 +21,9 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 
 def test_openai_style_model_supports_full_openai_param_surface():
-    params = AimlImageGenerationConfig().get_supported_openai_params("openai/gpt-image-2")
+    params = AimlImageGenerationConfig().get_supported_openai_params(
+        "openai/gpt-image-2"
+    )
     assert {
         "n",
         "size",
@@ -140,4 +142,6 @@ def test_cost_calculator_uses_aiml_pricing_for_gpt_image_2():
             ImageObject(b64_json=None, url="https://example.com/2.png"),
         ]
     )
-    assert aiml_cost_calculator(model="openai/gpt-image-2", image_response=response) == pytest.approx(0.054 * 2)
+    assert aiml_cost_calculator(
+        model="openai/gpt-image-2", image_response=response
+    ) == pytest.approx(0.054 * 2)
