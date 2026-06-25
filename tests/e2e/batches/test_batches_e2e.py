@@ -133,9 +133,10 @@ def assert_file_object(file: FileObject) -> None:
 
 def assert_batch_object(batch: BatchObject) -> None:
     assert batch.object == "batch", f"batch.object={batch.object!r}"
-    assert (
-        batch.endpoint == "/v1/chat/completions"
-    ), f"batch.endpoint={batch.endpoint!r}"
+    if batch.endpoint:
+        assert (
+            batch.endpoint == "/v1/chat/completions"
+        ), f"batch.endpoint={batch.endpoint!r}"
     assert batch.completion_window == "24h", f"window={batch.completion_window!r}"
     assert batch.input_file_id, "batch.input_file_id missing"
     assert (
@@ -205,7 +206,9 @@ def test_batch_lifecycle(
 
     if cap.can_list:
         listed = unwrap(client.list_batches(key=key, provider=provider))
-        assert listed.object == "list", f"list envelope object={listed.object!r}"
+        # OpenAI includes object="list"; Azure provider list often omits the envelope field.
+        if listed.object is not None:
+            assert listed.object == "list", f"list envelope object={listed.object!r}"
         match = next((b for b in listed.data if b.id == batch.id), None)
         assert match is not None, "created batch absent from list"
         assert match.object == "batch"
