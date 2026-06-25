@@ -190,6 +190,8 @@ jobs:
     working_directory: ~/project
     environment:
       UV_PYTHON: "3.11"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "5"
     steps:
       - checkout
       - run:
@@ -243,7 +245,17 @@ jobs:
             if (-not (Select-String -Path $PROFILE -SimpleMatch $cargoBin -Quiet)) {
               Add-Content -Path $PROFILE -Value "`$env:Path = `"$cargoBin;`$env:Path`""
             }
-            uv sync --frozen --group dev --python 3.11
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              Write-Host "uv sync attempt $attempt/5"
+              uv sync --frozen --group dev --python 3.11
+              if ($LASTEXITCODE -eq 0) {
+                break
+              }
+              if ($attempt -eq 5) {
+                exit $LASTEXITCODE
+              }
+              Start-Sleep -Seconds 15
+            }
       - run:
           name: Run Windows-specific test
           command: |
@@ -255,6 +267,7 @@ jobs:
           command: |
             $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
             cargo --version
+            Get-ChildItem -Path "litellm\rust_bridge" -Filter "_native*" -File -ErrorAction SilentlyContinue | Remove-Item -Force
             uv build --wheel --out-dir dist
             uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
 
