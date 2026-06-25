@@ -26,6 +26,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -444,8 +445,20 @@ async def _fetch_global_spend_with_event_coordination(
     """
 
     async def _load_global_spend() -> Optional[float]:
-        sql_query = """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
-        response = await prisma_client.db.query_raw(query=sql_query)
+        if litellm.budget_duration is None:
+            sql_query = (
+                """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
+            )
+            response = await prisma_client.db.query_raw(query=sql_query)
+        else:
+            sql_query = """
+                SELECT SUM("spend") AS total_spend
+                FROM "LiteLLM_SpendLogs"
+                WHERE "startTime" >= NOW() - make_interval(secs => $1::int);
+            """
+            response = await prisma_client.db.query_raw(
+                sql_query, duration_in_seconds(litellm.budget_duration)
+            )
         val = response[0]["total_spend"]
         return float(val) if val is not None else None
 

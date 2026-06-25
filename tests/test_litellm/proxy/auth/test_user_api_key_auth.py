@@ -32,6 +32,7 @@ from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _PendingAutoRegister,
+    _fetch_global_spend_with_event_coordination,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
@@ -42,6 +43,21 @@ from litellm.proxy.auth.user_api_key_auth import (
     get_api_key,
     user_api_key_auth,
 )
+
+
+class _GlobalSpendQueryDB:
+    def __init__(self, total_spend: float):
+        self.total_spend = total_spend
+        self.calls = []
+
+    async def query_raw(self, query=None, *params):
+        self.calls.append((query, params))
+        return [{"total_spend": self.total_spend}]
+
+
+class _GlobalSpendPrismaClient:
+    def __init__(self, total_spend: float):
+        self.db = _GlobalSpendQueryDB(total_spend=total_spend)
 
 
 class _RoutingRequest:
@@ -89,6 +105,25 @@ def test_public_ai_hub_routes_remain_public():
     ):
         assert route in LiteLLMRoutes.public_routes.value
         assert _route_requires_auth_despite_public(route, {}) is False
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_uses_configured_budget_duration(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_duration", "1d")
+    cache = DualCache()
+    prisma_client = _GlobalSpendPrismaClient(total_spend=42.0)
+
+    spend = await _fetch_global_spend_with_event_coordination(
+        cache_key="proxy_admin:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    query, params = prisma_client.db.calls[0]
+    assert spend == 42.0
+    assert '"LiteLLM_SpendLogs"' in query
+    assert "MonthlyGlobalSpend" not in query
+    assert params == (86400,)
 
 
 @pytest.mark.asyncio
