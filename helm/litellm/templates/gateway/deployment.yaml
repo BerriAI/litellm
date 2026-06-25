@@ -25,7 +25,7 @@ spec:
       serviceAccountName: {{ include "litellm.gateway.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccounts.gateway.automount }}
       {{- with .Values.gateway.priorityClassName | default .Values.priorityClassName }}
-      priorityClassName: {{ . }}
+      priorityClassName: {{ . | quote }}
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

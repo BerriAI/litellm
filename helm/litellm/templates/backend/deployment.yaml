@@ -27,7 +27,7 @@ spec:
       serviceAccountName: {{ include "litellm.backend.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccounts.backend.automount }}
       {{- with .Values.backend.priorityClassName | default .Values.priorityClassName }}
-      priorityClassName: {{ . }}
+      priorityClassName: {{ . | quote }}
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
