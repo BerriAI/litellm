@@ -7,12 +7,14 @@ no precedence cascade. It is wildcard-free with an `assert_never` tail, so addin
 an arm fails the type gate (basedpyright `reportMatchNotExhaustive`); a bypassed gate fails loudly
 at runtime instead of returning `None`.
 
-`none` and `api_key` (shared-key source) are live; the remaining arms are `not_implemented`
-stubs that each land in a follow-up PR with their injected seam. The self-contained arms read
-straight from the config and need no collaborator. Pure v2: no imports from v1.
+`none` and `api_key` (shared-key source) are live, as is `authorization_code`, which reads the
+user's token from the injected `OAuthTokenStore`. The remaining arms are `not_implemented` stubs
+that each land in a follow-up PR with their seam. Pure v2: no imports from v1.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 import httpx
 from typing_extensions import assert_never
@@ -20,6 +22,11 @@ from typing_extensions import assert_never
 from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    OAuthToken,
+    OAuthTokenStore,
+    TokenStoreUnavailable,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
@@ -43,12 +50,25 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 )
 
 
+class _NullOAuthTokenStore:
+    """Fail-closed default: with no token store wired, every user reads as not authorized."""
+
+    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        return None
+
+
 class UpstreamCredentialProvider:
     """Produces the one `httpx.Auth` for a `(subject, upstream)` pair, per declared mode.
 
-    Collaborators (the per-mode credential stores and token fetchers) are injected as each arm
-    is built; the live `none` and `api_key`-shared arms read from the config and need none.
+    Collaborators (the per-mode credential stores and token fetchers) are injected as each arm is
+    built; the live `none` and `api_key`-shared arms read from the config and need none, while
+    `authorization_code` reads the user's token from the injected `OAuthTokenStore`.
     """
+
+    def __init__(self, oauth_token_store: Optional[OAuthTokenStore] = None) -> None:
+        self._oauth_token_store: OAuthTokenStore = (
+            oauth_token_store or _NullOAuthTokenStore()
+        )
 
     async def resolve_credentials(
         self, subject: Subject, server: ServerSpec
@@ -65,7 +85,14 @@ class UpstreamCredentialProvider:
             case TokenExchangeConfig():
                 return _not_implemented(AuthSpecKind.token_exchange)
             case AuthorizationCodeConfig():
-                return _not_implemented(AuthSpecKind.authorization_code)
+                token = await self._authz_token(subject, server)
+                if token is None:
+                    return Error(_oauth_challenge(server.server_id))
+                return Ok(
+                    StaticHeaderAuth(
+                        f"Bearer {token.access_token}", header_name="Authorization"
+                    )
+                )
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
@@ -86,8 +113,47 @@ class UpstreamCredentialProvider:
                 )
         assert_never(config.key_source)
 
+    async def _authz_token(
+        self, subject: Subject, server: ServerSpec
+    ) -> Optional[OAuthToken]:
+        """The user's authorization_code token, or None when absent or the store is unreachable.
+
+        A store outage is mapped to None (the OAuth challenge), not raised, so a transient outage
+        does not 500; it is the store, not this resolver, that declines to cache the failure.
+        """
+        try:
+            return await self._oauth_token_store.fetch(
+                subject.subject_id, server.server_id
+            )
+        except TokenStoreUnavailable:
+            return None
+
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
     return Error(
         CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet")
+    )
+
+
+_OAUTH_WWW_AUTHENTICATE = (
+    'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
+)
+
+
+def _oauth_challenge(server_id: str) -> CredError:
+    """The 401 an authorization_code server returns when the user has no usable token.
+
+    Carries the RFC 9728 ``WWW-Authenticate`` challenge that drives the OAuth flow, plus an
+    ``authorization_required`` body. The exact body is reconciled with v1 when the v1-backed token
+    source lands.
+    """
+    message = "Authorization required: complete the OAuth flow for this server."
+    return CredError.of_unauthorized(
+        message,
+        www_authenticate=_OAUTH_WWW_AUTHENTICATE,
+        body={
+            "error": "authorization_required",
+            "server_id": server_id,
+            "message": message,
+        },
     )

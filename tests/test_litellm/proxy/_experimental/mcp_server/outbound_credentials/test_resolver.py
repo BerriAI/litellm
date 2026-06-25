@@ -1,9 +1,9 @@
 """Tests for the resolver dispatch: live arms produce auth, stubbed arms fail closed.
 
-`none` and `api_key` (shared-key source) are implemented; every other arm, plus the `api_key`
-BYOK source, returns a typed `not_implemented` error until its mode lands. Parametrizing the
-stubs over one config each also guards reachability: a dropped `case` would hit `assert_never`
-and raise instead of returning the stub.
+`none`, `api_key` (shared-key source), and `authorization_code` are implemented; every other arm,
+plus the `api_key` BYOK source, returns a typed `not_implemented` error until its mode lands.
+Parametrizing the stubs over one config each also guards reachability: a dropped `case` would hit
+`assert_never` and raise instead of returning the stub.
 """
 
 import httpx
@@ -27,6 +27,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Subject,
     TokenExchangeConfig,
     UpstreamCredentialProvider,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    OAuthToken,
+    TokenStoreUnavailable,
 )
 
 _SUBJECT = Subject(tenant_id="", subject_id="")
@@ -84,12 +88,89 @@ async def test_api_key_shared_honors_authorization_scheme():
     assert _emitted(result.ok)["Authorization"] == "Bearer tok"
 
 
+class _FakeTokenStore:
+    """An OAuthTokenStore returning a canned per-user token (None == not authorized)."""
+
+    def __init__(self, by_user: dict) -> None:
+        self._by_user = by_user
+
+    async def fetch(self, user_id: str, server_id: str):
+        return self._by_user.get((user_id, server_id))
+
+
+@pytest.mark.asyncio
+async def test_authorization_code_emits_bearer_for_a_stored_token():
+    store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="at-alice")})
+    result = await UpstreamCredentialProvider(
+        oauth_token_store=store
+    ).resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
+    )
+    assert isinstance(result, Ok)
+    assert _emitted(result.ok)["Authorization"] == "Bearer at-alice"
+
+
+@pytest.mark.asyncio
+async def test_authorization_code_without_token_is_unauthorized_with_challenge():
+    result = await UpstreamCredentialProvider(
+        oauth_token_store=_FakeTokenStore({})
+    ).resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+    challenge = result.error.unauthorized
+    assert challenge.www_authenticate is not None
+    assert challenge.body is not None
+    assert challenge.body["error"] == "authorization_required"
+
+
+@pytest.mark.asyncio
+async def test_authorization_code_store_unavailable_surfaces_the_challenge():
+    class _Unavailable:
+        async def fetch(self, user_id: str, server_id: str):
+            raise TokenStoreUnavailable("down")
+
+    result = await UpstreamCredentialProvider(
+        oauth_token_store=_Unavailable()
+    ).resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_authorization_code_with_no_store_wired_is_unauthorized():
+    result = await UpstreamCredentialProvider().resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_authorization_code_isolates_by_subject():
+    store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="at-alice")})
+    provider = UpstreamCredentialProvider(oauth_token_store=store)
+    alice = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
+    )
+    bob = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="bob"), _spec(AuthorizationCodeConfig())
+    )
+    assert (
+        isinstance(alice, Ok)
+        and _emitted(alice.ok)["Authorization"] == "Bearer at-alice"
+    )
+    assert isinstance(bob, Error) and bob.error.tag == "unauthorized"
+
+
 _STUBBED = [
     ("api_key_byok", ApiKeyConfig(key_source=Byok())),
     ("passthrough", PassthroughConfig()),
     ("client_credentials", ClientCredentialsConfig()),
     ("token_exchange", TokenExchangeConfig()),
-    ("authorization_code", AuthorizationCodeConfig()),
     ("aws_sigv4", AwsSigV4Config(region="us-east-1")),
 ]
 
