@@ -191,7 +191,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=get_audio_file_name(audio_file),
                 api_key=api_key,
                 original_response=str(e),
             )
