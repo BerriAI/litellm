@@ -3003,11 +3003,10 @@ def test_extract_cache_creation_tokens_zero_when_missing():
 
 
 def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
-    """
-    Anthropic providers report cache tokens at the top level of Usage, and
-    `prompt_tokens` EXCLUDES them. The helper expects `prompt_tokens` to
-    include cache tokens, so cost_per_token must adjust before invoking it —
-    otherwise regular_prompt_tokens goes negative and clamps to 0.
+    """The Anthropic transformer folds cache_read and cache_creation tokens into
+    prompt_tokens (see AnthropicConfig.calculate_usage), so prompt_tokens is
+    cache-inclusive. Custom pricing must not add the cache tokens back; the
+    uncached input is prompt_tokens minus the two cache counts.
     """
     usage = Usage(
         prompt_tokens=2000,
@@ -3038,9 +3037,63 @@ def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
         },
     )
 
-    # Anthropic prompt_tokens=2000 excludes cache. After normalization the
-    # helper sees 2000 + 1500 + 300 = 3800, of which 2000 are uncached.
-    expected = 2000 * 0.000003 + 1500 * 0.0000003 + 300 * 0.00000375 + 100 * 0.000015
+    # prompt_tokens=2000 is cache-inclusive: 1500 read + 300 creation + 200 uncached
+    uncached = 2000 - 1500 - 300
+    expected = (
+        uncached * 0.000003
+        + 1500 * 0.0000003
+        + 300 * 0.00000375
+        + 100 * 0.000015
+    )
+
+    assert cost == pytest.approx(expected)
+
+
+def test_custom_pricing_matches_real_anthropic_transformer_usage():
+    """End-to-end guard using the real Anthropic transformer output. Its
+    prompt_tokens is cache-inclusive, so custom pricing must bill only the
+    uncached input at the input rate, not the cache tokens a second time.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "cache_creation_input_tokens": 700,
+            "cache_read_input_tokens": 200,
+            "output_tokens": 50,
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 1000
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="anthropic/claude-3-5-sonnet",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="anthropic/claude-3-5-sonnet",
+        custom_llm_provider="anthropic",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.0000003,
+            "cache_creation_input_token_cost": 0.00000375,
+        },
+    )
+
+    expected = (
+        100 * 0.000003
+        + 200 * 0.0000003
+        + 700 * 0.00000375
+        + 50 * 0.000015
+    )
 
     assert cost == pytest.approx(expected)
 
