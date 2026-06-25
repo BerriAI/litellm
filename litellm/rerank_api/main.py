@@ -104,6 +104,11 @@ def rerank(
     Reranks a list of documents based on their relevance to the query
     """
     headers: Optional[dict] = kwargs.get("headers")  # type: ignore
+    # Merge extra_headers into headers so all providers receive custom headers
+    # (e.g. x-model-name used by gateway routing). Mirrors the Bedrock branch pattern.
+    _extra_headers: Optional[dict] = kwargs.get("extra_headers")  # type: ignore
+    if _extra_headers:
+        headers = {**(headers or litellm.headers or {}), **_extra_headers}
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
