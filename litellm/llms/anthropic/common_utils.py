@@ -548,8 +548,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return list(set(betas))
 
     @staticmethod
-    def _make_api_key_auth_header(api_key: str, api_base: str | None) -> dict:
-        if (
+    def _make_api_key_auth_header(
+        api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False
+    ) -> dict:
+        if use_bearer_for_custom_base and (
             api_base
             and "api.anthropic.com" not in api_base
             and not api_key.startswith("sk-ant-")
@@ -578,6 +580,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
         api_base: str | None = None,
+        use_bearer_for_custom_base: bool = False,
     ) -> dict:
         betas = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -626,7 +629,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
-            headers.update(self._make_api_key_auth_header(api_key, api_base))
+            headers.update(self._make_api_key_auth_header(api_key, api_base, use_bearer_for_custom_base))
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -657,6 +660,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> Dict:
         if api_base is None and isinstance(litellm_params, dict):
             api_base = litellm_params.get("api_base")
+        use_bearer_for_custom_base: bool = bool(
+            isinstance(litellm_params, dict)
+            and litellm_params.get("use_bearer_for_custom_base", False)
+        )
         # Check for Anthropic OAuth token in headers
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
@@ -713,6 +720,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
             api_base=api_base,
+            use_bearer_for_custom_base=use_bearer_for_custom_base,
         )
 
         headers = {**headers, **anthropic_headers}
@@ -749,19 +757,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_auth_header(
-        api_key: str | None = None, api_base: str | None = None
+        api_key: str | None = None,
+        api_base: str | None = None,
+        use_bearer_for_custom_base: bool = False,
     ) -> dict | None:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
-        Checks ANTHROPIC_API_KEY first (-> x-api-key), then
-        ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
+        Checks ANTHROPIC_API_KEY first (-> x-api-key or Bearer depending on
+        use_bearer_for_custom_base), then ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
         Returns None if neither is available.
         """
         resolved_key = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
-            return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base)
+            return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base, use_bearer_for_custom_base)
         auth_token = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}

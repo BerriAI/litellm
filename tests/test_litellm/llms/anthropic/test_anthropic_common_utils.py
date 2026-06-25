@@ -160,7 +160,7 @@ class TestGetAnthropicHeaders:
         assert "anthropic-dangerous-direct-browser-access" not in headers
 
     def test_custom_api_base_uses_bearer_header(self):
-        """Custom api_base and non-standard API key should produce Authorization: Bearer header."""
+        """Custom api_base and non-standard API key should produce Authorization: Bearer header when opted in."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         config = AnthropicModelInfo()
@@ -171,13 +171,14 @@ class TestGetAnthropicHeaders:
             pdf_used=False,
             is_vertex_request=False,
             api_base="https://ollama.com/",
+            use_bearer_for_custom_base=True,
         )
 
         assert headers["authorization"] == "Bearer my-custom-ollama-token"
         assert "x-api-key" not in headers
 
     def test_custom_api_base_uses_bearer_header_already_starts_with_bearer(self):
-        """If the key already starts with Bearer, use it directly."""
+        """If the key already starts with Bearer and Bearer opt-in is enabled, use it directly."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         config = AnthropicModelInfo()
@@ -188,6 +189,7 @@ class TestGetAnthropicHeaders:
             pdf_used=False,
             is_vertex_request=False,
             api_base="https://ollama.com/",
+            use_bearer_for_custom_base=True,
         )
 
         assert headers["authorization"] == "Bearer my-custom-ollama-token"
@@ -295,7 +297,7 @@ class TestValidateEnvironmentOAuth:
         assert "authorization" not in updated_headers
 
     def test_custom_api_base_via_param(self):
-        """validate_environment with custom api_base via parameter and custom key should use Bearer."""
+        """validate_environment uses Bearer when use_bearer_for_custom_base is set in litellm_params."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         config = AnthropicModelInfo()
@@ -306,7 +308,7 @@ class TestValidateEnvironmentOAuth:
             model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
-            litellm_params={},
+            litellm_params={"use_bearer_for_custom_base": True},
             api_key="custom-api-key",
             api_base="https://custom-gateway.com",
         )
@@ -315,7 +317,7 @@ class TestValidateEnvironmentOAuth:
         assert "x-api-key" not in updated_headers
 
     def test_custom_api_base_via_litellm_params(self):
-        """validate_environment with custom api_base inside litellm_params should use Bearer."""
+        """validate_environment uses Bearer when api_base and use_bearer_for_custom_base are in litellm_params."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         config = AnthropicModelInfo()
@@ -326,7 +328,7 @@ class TestValidateEnvironmentOAuth:
             model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
-            litellm_params={"api_base": "https://custom-gateway.com"},
+            litellm_params={"api_base": "https://custom-gateway.com", "use_bearer_for_custom_base": True},
             api_key="custom-api-key",
             api_base=None,
         )
@@ -1096,10 +1098,10 @@ class TestGetAuthHeader:
             assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
 
     def test_custom_api_base_get_auth_header_uses_bearer(self):
-        """Non-standard API key and custom api_base should return Authorization: Bearer."""
+        """Non-standard API key and custom api_base returns Bearer when use_bearer_for_custom_base=True."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com")
+        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True)
         assert result == {"authorization": "Bearer my-custom-key"}
 
     def test_custom_api_base_get_auth_header_uses_x_api_key_when_standard(self):
