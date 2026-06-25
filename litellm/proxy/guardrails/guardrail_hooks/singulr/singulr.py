@@ -112,6 +112,10 @@ class SingulrGuardrail(CustomGuardrail):
                 if str(m.get("role") or "").lower() == "user" and m.get("content")
             ]
             indirect_texts = [
+                m["content"]
+                for m in messages
+                if str(m.get("role") or "").lower() == "system" and m.get("content")
+            ] + [
                 json.dumps(request_data[k])
                 for k in ("tools", "functions", "response_format")
                 if request_data.get(k)
