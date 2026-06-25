@@ -1098,7 +1098,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        # Normalise scope parts so they are always hashable. `guardrail_mode`
+        # can be a list (e.g. ["pre_call", "post_call"]) and a tuple containing
+        # a list is itself unhashable, causing a TypeError when used as a dict key.
+        normalized_scope = tuple(
+            tuple(part) if isinstance(part, list) else part
+            for part in scope
+        )
+        dedupe_key = (self.__class__.__name__, id(self), *normalized_scope)
         if spans_logged.get(dedupe_key) is True:
             return False
 

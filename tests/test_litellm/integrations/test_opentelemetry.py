@@ -91,6 +91,38 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         otel.tracer.start_span.assert_not_called()
 
     @patch("litellm.integrations.opentelemetry.datetime")
+    def test_guardrail_mode_as_list_does_not_crash(self, mock_datetime):
+        """Regression test for https://github.com/BerriAI/litellm/issues/28486.
+
+        When a guardrail is configured with a list ``mode`` (e.g.
+        ``["pre_call", "post_call"]``), ``_create_guardrail_span`` previously
+        crashed with ``TypeError: unhashable type: 'list'`` inside
+        ``_emit_once``, because the list value was unpacked directly into the
+        tuple used as a ``dict`` key.  Lists are not hashable; only tuples are.
+
+        The fix normalises each scope part in ``_emit_once`` to a tuple when
+        it is a list, so the dedupe key is always hashable.
+        """
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+
+        guardrail_info = {
+            "guardrail_name": "test_guardrail",
+            "guardrail_mode": ["pre_call", "post_call"],  # list-valued mode
+            "start_time": 1609459200.0,
+            "end_time": 1609459201.0,
+        }
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
+
+        # Must not raise TypeError: unhashable type: 'list'
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel.tracer.start_span.assert_called_once()
+
+    @patch("litellm.integrations.opentelemetry.datetime")
     def test_guardrail_response_dict_is_json_serialized(self, mock_datetime):
         """Dict guardrail_response (e.g. OpenAI moderation result) must reach
         the span as a JSON string so downstream pipelines can parse it for
