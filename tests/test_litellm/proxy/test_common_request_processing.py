@@ -2052,6 +2052,22 @@ class TestOverrideOpenAIResponseModel:
 
         assert "model" not in response_obj
 
+    def test_override_model_swallows_setattr_failure(self):
+        class ReadOnlyModelResponse:
+            @property
+            def model(self) -> str:
+                return "downstream-model"
+
+        response_obj = ReadOnlyModelResponse()
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="my-model",
+            log_context="test_context",
+        )
+
+        assert response_obj.model == "downstream-model"
+
 
 class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""
