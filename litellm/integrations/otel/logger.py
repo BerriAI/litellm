@@ -321,7 +321,9 @@ class OpenTelemetryV2(CustomLogger):
                 carrier.span.end(end_time=to_ns(end_time))
             return None
         data = LLMCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
+            payload,
+            capture_content=self.config.capture_content,
+            content_on_span=self.config.capture_span_content,
         )
         end_time_ns = to_ns(end_time)
         if carrier.span is not None:

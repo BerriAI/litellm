@@ -308,11 +308,31 @@ class LLMCallSpanData:
     # dataclass stays hashable and frozen.
     messages_in: tuple[Mapping[str, object], ...] = ()
     choices_out: tuple[Mapping[str, object], ...] = ()
+    # Whether the retained bodies may be stamped as span *attributes*. False
+    # under ``event_only`` capture, where the bodies are kept for span events
+    # only and must not leak onto ``gen_ai.input.messages`` / ``...output...``
+    # (or any vendor vocabulary's) span attributes.
+    content_on_span: bool = True
     system_fingerprint: str | None = None
+
+    @property
+    def span_messages_in(self) -> tuple[Mapping[str, object], ...]:
+        """Request messages exposed to span-attribute mappers — empty when the
+        captured content is bound to events only."""
+        return self.messages_in if self.content_on_span else ()
+
+    @property
+    def span_choices_out(self) -> tuple[Mapping[str, object], ...]:
+        """Response choices exposed to span-attribute mappers — empty when the
+        captured content is bound to events only."""
+        return self.choices_out if self.content_on_span else ()
 
     @classmethod
     def from_standard_logging_payload(
-        cls, payload: "StandardLoggingPayload", capture_content: bool = False
+        cls,
+        payload: "StandardLoggingPayload",
+        capture_content: bool = False,
+        content_on_span: bool | None = None,
     ) -> "LLMCallSpanData":
         params = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -328,9 +348,12 @@ class LLMCallSpanData:
         choices_out = _dicts(response.get("choices"))
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
-        # retained when content capture is enabled (see ``capture_span_content``);
-        # otherwise the content-bearing mappers receive empty sequences and emit
-        # no prompt/response text.
+        # retained when content capture is enabled — for span attributes, span
+        # events, or both (see ``capture_content``). ``content_on_span`` then
+        # decides whether the bodies reach span attributes; under ``event_only``
+        # they are retained but kept off the span, for events alone. With capture
+        # off the content-bearing mappers receive empty sequences and emit no
+        # prompt/response text.
         finish_reasons = _finish_reasons(choices_out)
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
@@ -356,6 +379,9 @@ class LLMCallSpanData:
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
             choices_out=choices_out if capture_content else (),
+            content_on_span=(
+                capture_content if content_on_span is None else content_on_span
+            ),
             system_fingerprint=as_str(response.get("system_fingerprint")),
         )
 

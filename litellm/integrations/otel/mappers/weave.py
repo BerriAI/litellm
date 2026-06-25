@@ -29,7 +29,7 @@ class WeaveMapper:
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         # Weave treats the response choices as the "output" payload.
         "weave.output": lambda d: (
-            json_or_none(list(d.choices_out)) if d.choices_out else None
+            json_or_none(list(d.span_choices_out)) if d.span_choices_out else None
         ),
     }
 

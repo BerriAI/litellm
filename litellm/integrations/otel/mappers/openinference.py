@@ -82,9 +82,11 @@ class OpenInferenceMapper:
         return {
             **collect(cls._LLM_CALL_ATTRS, data),
             **collect(cls._BLOB_ATTRS, data),
-            **cls._messages("llm.input_messages", "input.value", data.messages_in),
+            **cls._messages("llm.input_messages", "input.value", data.span_messages_in),
             **cls._messages(
-                "llm.output_messages", "output.value", output_messages(data)
+                "llm.output_messages",
+                "output.value",
+                output_messages(data.span_choices_out),
             ),
             **cls._tools(data),
         }

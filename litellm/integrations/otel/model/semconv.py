@@ -92,6 +92,20 @@ class GenAI:
     PROMPT_NAME: Final = "gen_ai.prompt.name"
 
 
+class GenAIEvent:
+    """OTel GenAI event names. Prompt/response content is recorded as these
+    events on the LLM-call span under the ``event_only`` / ``span_and_event``
+    capture modes — the event half of ``ContentCapturingMode``."""
+
+    CHOICE: Final = "gen_ai.choice"
+
+    @staticmethod
+    def message(role: str) -> str:
+        """Per-message event name, e.g. ``gen_ai.user.message``. The standard
+        roles (system/user/assistant/tool) yield the canonical semconv names."""
+        return f"gen_ai.{role}.message"
+
+
 class MCP:
     """OTel GenAI MCP (Model Context Protocol) span-attribute keys.
 

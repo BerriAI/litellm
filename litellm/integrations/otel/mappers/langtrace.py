@@ -42,10 +42,12 @@ class LangtraceMapper:
 
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         "llm.prompts": lambda d: (
-            json_or_none(list(d.messages_in)) if d.messages_in else None
+            json_or_none(list(d.span_messages_in)) if d.span_messages_in else None
         ),
         "llm.completions": lambda d: (
-            json_or_none(output_messages(d)) if d.choices_out else None
+            json_or_none(output_messages(d.span_choices_out))
+            if d.span_choices_out
+            else None
         ),
     }
 

@@ -9,7 +9,6 @@ import json
 from typing import Callable, Mapping, Sequence
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
-from litellm.integrations.otel.model.payloads import LLMCallSpanData
 
 
 def drop_none(values: Mapping[str, AttrValue | None]) -> AttributeMap:
@@ -71,6 +70,6 @@ def message_content(message: object) -> str | None:
     return None
 
 
-def output_messages(data: LLMCallSpanData) -> list:
+def output_messages(choices: Sequence[Mapping[str, object]]) -> list[object]:
     """The ``message`` payload of each response choice."""
-    return [c.get("message") for c in data.choices_out if isinstance(c, dict)]
+    return [c.get("message") for c in choices]
