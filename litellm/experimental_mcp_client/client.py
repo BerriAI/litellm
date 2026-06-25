@@ -224,6 +224,7 @@ class MCPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
         aws_auth: Optional[httpx.Auth] = None,
+        resolved_auth: Optional[httpx.Auth] = None,
         sampling_callback: Optional[Callable] = None,
         elicitation_callback: Optional[Callable] = None,
         logging_callback: Optional[Callable] = None,
@@ -237,6 +238,9 @@ class MCPClient:
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
+        # A pre-resolved httpx.Auth (e.g. from the v2 credential resolver) attached to the
+        # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
+        self._resolved_auth: Optional[httpx.Auth] = resolved_auth
         self._last_initialize_instructions: Optional[str] = None
         self._sampling_callback: Optional[Callable] = sampling_callback
         self._elicitation_callback: Optional[Callable] = elicitation_callback
@@ -482,11 +486,15 @@ class MCPClient:
             verbose_logger.debug(
                 f"MCP client using SSL configuration: {type(ssl_config).__name__}"
             )
-            # Use SigV4 auth if configured and no explicit auth provided.
-            # The MCP SDK's sse_client and streamable_http_client call this
-            # factory without passing auth=, so self._aws_auth is used.
-            # For non-SigV4 clients, self._aws_auth is None — no behavior change.
-            effective_auth = auth if auth is not None else self._aws_auth
+            # The MCP SDK's sse_client and streamable_http_client call this factory without
+            # passing auth=, so the fallback is used: a v2-resolved auth if present, else the
+            # SigV4 aws_auth. Both are None for the common case — no behavior change.
+            fallback_auth = (
+                self._resolved_auth
+                if self._resolved_auth is not None
+                else self._aws_auth
+            )
+            effective_auth = auth if auth is not None else fallback_auth
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,

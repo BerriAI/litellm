@@ -1,6 +1,7 @@
 import React from "react";
 import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { Form, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -301,7 +302,7 @@ export function ToolTestPanel({
           {tool.mcp_info.logo_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={tool.mcp_info.logo_url}
+              src={resolveLogoSrc(tool.mcp_info.logo_url)}
               alt={`${tool.mcp_info.server_name} logo`}
               className="w-6 h-6 object-contain"
             />

@@ -508,6 +508,35 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert result[0]["input"] == {"location": "Boston"}
 
 
+def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
+    """Cross-provider ids like ``functions.Bash:0`` must be normalized for Anthropic replay."""
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="functions.Bash:0",
+                        type="function",
+                        function=Function(
+                            name="Bash",
+                            arguments='{"command": "ls"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "functions_Bash_0"
+
+
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     """`translate_openai_response_to_anthropic` should surface assistant text even when tools fire."""
     openai_response = ModelResponse(
@@ -2747,3 +2776,23 @@ def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_an
     cm = result.get("context_management")
     assert cm is not None
     assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
+    """Regression for #30557: the Anthropic tool `type` ("custom") must not be
+    merged into the OpenAI function `parameters`, overwriting parameters.type."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    params = new_tools[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert new_tools[0]["type"] == "function"

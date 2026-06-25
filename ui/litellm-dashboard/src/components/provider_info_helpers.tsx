@@ -1,3 +1,5 @@
+import { resolveLogoSrc } from "@/lib/assetPaths";
+
 export enum Providers {
   A2A_Agent = "A2A Agent",
   AI21 = "Ai21",
@@ -70,9 +72,9 @@ export enum Providers {
   OOBABOOGA = "Oobabooga",
   OpenAI = "OpenAI",
   OPENAI_LIKE = "Openai Like",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
+  OpenAI_Compatible = "OpenAI-Compatible Chat Completions (Together AI, vLLM, etc.)",
   OpenAI_Text = "OpenAI Text Completion",
-  OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
+  OpenAI_Text_Compatible = "OpenAI-Compatible Completions (legacy /v1/completions)",
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
@@ -314,14 +316,16 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
   // Handle special case for "gemini" provider value
   if (providerValue.toLowerCase() === "gemini") {
     const displayName = Providers.Google_AI_Studio;
-    const logo = providerLogoMap[displayName];
+    const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
     return { logo, displayName };
   }
 
-  // Find the enum key by matching provider_map values
-  const enumKey = Object.keys(provider_map).find(
-    (key) => provider_map[key].toLowerCase() === providerValue.toLowerCase(),
-  );
+  // Resolve by the litellm provider slug (e.g. "bedrock_mantle"); fall back to
+  // the enum key (e.g. "BedrockMantle") for callers like the Add Model dropdown
+  // that pass the key instead of the slug.
+  const enumKey =
+    Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === providerValue.toLowerCase()) ??
+    Object.keys(provider_map).find((key) => key.toLowerCase() === providerValue.toLowerCase());
 
   if (!enumKey) {
     return { logo: "", displayName: providerValue };
@@ -329,7 +333,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
   // Get the display name from Providers enum and logo from map
   const displayName = Providers[enumKey as keyof typeof Providers];
-  const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
+  const logo = resolveLogoSrc(providerLogoMap[displayName as keyof typeof providerLogoMap]) ?? "";
 
   return { logo, displayName };
 };

@@ -110,46 +110,32 @@ async def _record_streaming_client_disconnect_if_needed(
         if not disconnected:
             return False
 
-    logging_obj = request_data.get("litellm_logging_obj")  # any-ok: untyped request
-    if logging_obj is not None:  # any-ok: untyped request
-        litellm_params = (
-            logging_obj.model_call_details.setdefault(  # any-ok: untyped request
-                "litellm_params", {}
-            )
-        )
+    logging_obj = request_data.get("litellm_logging_obj")
+    if logging_obj is not None:
+        litellm_params = logging_obj.model_call_details.setdefault("litellm_params", {})
+        _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
         _apply_client_disconnect_metadata(
-            litellm_params.setdefault("metadata", {})  # any-ok: untyped request
-        )
-        _apply_client_disconnect_metadata(
-            logging_obj.model_call_details.setdefault(  # any-ok: untyped request
-                "metadata", {}
-            )
+            logging_obj.model_call_details.setdefault("metadata", {})
         )
 
-    _apply_client_disconnect_metadata(
-        request_data.setdefault("metadata", {})  # any-ok: untyped request
-    )
-    litellm_params = request_data.setdefault(  # any-ok: untyped request
-        "litellm_params", {}  # any-ok: untyped request
-    )
-    _apply_client_disconnect_metadata(
-        litellm_params.setdefault("metadata", {})  # any-ok: untyped request
-    )
+    _apply_client_disconnect_metadata(request_data.setdefault("metadata", {}))
+    litellm_params = request_data.setdefault("litellm_params", {})
+    _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
-        request_data.get("litellm_call_id"),  # any-ok: untyped request
+        request_data.get("litellm_call_id"),
     )
     return True
 
 
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
-    pending_tasks = [task for task in tasks if not task.done()]  # any-ok: untyped task
-    for task in pending_tasks:  # any-ok: untyped task
-        task.cancel()  # any-ok: untyped task
-    for task in pending_tasks:  # any-ok: untyped task
+    pending_tasks = [task for task in tasks if not task.done()]
+    for task in pending_tasks:
+        task.cancel()
+    for task in pending_tasks:
         try:
-            await task  # any-ok: untyped request
+            await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
 
@@ -1051,6 +1037,8 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if not general_settings.get("expose_fallback_errors_to_caller"):
+            self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
             await _authorize_response_file_search_vector_stores(
                 data=self.data,
@@ -1401,24 +1389,22 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        llm_call_task = asyncio.create_task(llm_call)  # any-ok: untyped task
-        tasks.append(llm_call_task)  # any-ok: untyped task
+        llm_call_task = asyncio.create_task(llm_call)
+        tasks.append(llm_call_task)
 
         llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
         try:
-            if general_settings.get(  # any-ok: untyped request
-                "cancel_on_disconnect", False
-            ):
-                responses = await _await_llm_call_cancelling_on_disconnect(  # any-ok: untyped request
-                    request, llm_responses  # any-ok: untyped task
+            if general_settings.get("cancel_on_disconnect", False):
+                responses = await _await_llm_call_cancelling_on_disconnect(
+                    request, llm_responses
                 )
             else:
-                responses = await llm_responses  # any-ok: untyped request
+                responses = await llm_responses
         finally:
-            await _cancel_pending_gather_tasks(tasks)  # any-ok: untyped task
+            await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
 
@@ -2477,18 +2463,16 @@ class ProxyBaseLLMRequestProcessing:
                 recorded_client_disconnect = (
                     await _record_streaming_client_disconnect_if_needed(
                         request,
-                        request_data,  # any-ok: untyped request
-                        client_disconnected,  # any-ok: untyped request
+                        request_data,
+                        client_disconnected,
                     )
                 )
             if recorded_client_disconnect:
-                ProxyLogging._fire_deferred_stream_logging(
-                    request_data  # any-ok: untyped request
-                )
+                ProxyLogging._fire_deferred_stream_logging(request_data)
 
-            if hasattr(response, "aclose"):  # any-ok: untyped request
+            if hasattr(response, "aclose"):
                 try:
-                    await response.aclose()  # any-ok: untyped request
+                    await response.aclose()
                 except BaseException as e:  # noqa: BLE001
                     verbose_proxy_logger.debug(
                         "async_streaming_data_generator: error closing response stream: %s",
@@ -2531,6 +2515,7 @@ class ProxyBaseLLMRequestProcessing:
         debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
         client_disconnected = False
+        delivered_chunk = False
         try:
             str_so_far = ""
             async for (
@@ -2547,36 +2532,38 @@ class ProxyBaseLLMRequestProcessing:
                         "async_data_generator: received streaming chunk - %s", chunk
                     )
 
-                if fast_path:
-                    yield serialize_chunk(chunk)
-                    continue
+                if not fast_path:
+                    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        response=chunk,
+                        data=request_data,
+                        str_so_far=str_so_far,
+                    )
 
-                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=chunk,
-                    data=request_data,
-                    str_so_far=str_so_far,
-                )
+                    if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                        response_str = litellm.get_response_string(response_obj=chunk)
+                        str_so_far += response_str
+                    elif hasattr(chunk, "model_dump"):
+                        try:
+                            d = chunk.model_dump(mode="json", exclude_none=True)
+                            if isinstance(d, dict):
+                                str_so_far += str(d.get("content", ""))
+                        except Exception:
+                            pass
+                    elif isinstance(chunk, dict):
+                        str_so_far += str(chunk.get("content", ""))
 
-                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                    response_str = litellm.get_response_string(response_obj=chunk)
-                    str_so_far += response_str
-                elif hasattr(chunk, "model_dump"):
-                    try:
-                        d = chunk.model_dump(mode="json", exclude_none=True)
-                        if isinstance(d, dict):
-                            str_so_far += str(d.get("content", ""))
-                    except Exception:
-                        pass
-                elif isinstance(chunk, dict):
-                    str_so_far += str(chunk.get("content", ""))
-
-                model_name = request_data.get("model", "")
-                chunk = (
-                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                    model_name = request_data.get("model", "")
+                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
                     )
-                )
+
+                # Set before the yield: an async generator suspends at the yield,
+                # so a GeneratorExit on client disconnect is raised there and any
+                # statement after the yield never runs. The slow-path hook is
+                # awaited above, so a cancellation during it still leaves this
+                # False and refunds.
+                delivered_chunk = True
                 yield serialize_chunk(chunk)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
@@ -2591,6 +2578,14 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict
                 )
                 client_disconnected = True
+            if not delivered_chunk:
+                from litellm.proxy.spend_tracking.budget_reservation import (
+                    release_budget_reservation_on_cancel,
+                )
+
+                await release_budget_reservation_on_cancel(
+                    getattr(user_api_key_dict, "budget_reservation", None)
+                )
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -2624,8 +2619,8 @@ class ProxyBaseLLMRequestProcessing:
         finally:
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,
-                request_data=request_data,  # any-ok: untyped request
-                response=response,  # any-ok: untyped request
+                request_data=request_data,
+                response=response,
                 stream_completed=stream_completed,
                 client_disconnected=client_disconnected,
             )

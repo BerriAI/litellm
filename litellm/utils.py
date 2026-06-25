@@ -192,6 +192,7 @@ from litellm.types.utils import (
     ProviderField,
     ProviderSpecificModelInfo,
     RawRequestTypedDict,
+    SandboxProviders,
     SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
@@ -301,6 +302,7 @@ if TYPE_CHECKING:
         BaseGoogleGenAIGenerateContentConfig,
     )
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.sandbox.transformation import BaseSandboxConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.llms.base_llm.text_to_speech.transformation import (
         BaseTextToSpeechConfig,
@@ -3189,7 +3191,7 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-    elif provider_config is not None:  # handles fireworks ai, and any future providers
+    elif provider_config is not None:  # custom audio transcription config
         supported_params = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
@@ -6043,13 +6045,13 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
-                cache_read_input_token_cost_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                cache_read_input_token_cost_above_200k_tokens_priority=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens_priority", None
                 ),
                 cache_read_input_token_cost_above_272k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens", None
                 ),
-                cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_priority", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
@@ -6073,13 +6075,13 @@ def _get_model_info_helper(
                 input_cost_per_token_above_200k_tokens=_model_info.get(
                     "input_cost_per_token_above_200k_tokens", None
                 ),
-                input_cost_per_token_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                input_cost_per_token_above_200k_tokens_priority=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_priority", None
                 ),
                 input_cost_per_token_above_272k_tokens=_model_info.get(
                     "input_cost_per_token_above_272k_tokens", None
                 ),
-                input_cost_per_token_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                input_cost_per_token_above_272k_tokens_priority=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_priority", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get(
@@ -6137,13 +6139,13 @@ def _get_model_info_helper(
                 output_cost_per_token_above_200k_tokens=_model_info.get(
                     "output_cost_per_token_above_200k_tokens", None
                 ),
-                output_cost_per_token_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                output_cost_per_token_above_200k_tokens_priority=_model_info.get(
                     "output_cost_per_token_above_200k_tokens_priority", None
                 ),
                 output_cost_per_token_above_272k_tokens=_model_info.get(
                     "output_cost_per_token_above_272k_tokens", None
                 ),
-                output_cost_per_token_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                output_cost_per_token_above_272k_tokens_priority=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_priority", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
@@ -8913,8 +8915,6 @@ class ProviderConfigManager:
             )
 
             return AzureSpeechAudioTranscriptionConfig()
-        if litellm.LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
@@ -9070,34 +9070,26 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Mantle serves Responses on two upstream paths. A model takes the
-            # /openai/v1/responses path when its price-map entry declares
-            # use_openai_responses_path (data-driven, so a non-gpt-named frontier
-            # model can be onboarded by JSON alone), or, as a fallback needing no
-            # price-map entry, when its name matches the openai.gpt- frontier
-            # convention (minus gpt-oss) -- this keeps a future gpt-6 routing
-            # correctly before its entry loads. Any other model declared
-            # mode=responses takes the standard /v1/responses path. Everything
-            # else returns None and keeps the chat-completions emulation (see
-            # responses/main.py "config is None").
-            if not model:
-                return None
-            model_lower = model.lower()
-            entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
-            on_openai_path = entry.get("use_openai_responses_path") is True
-            name_is_frontier = (
-                "openai.gpt-" in model_lower and "gpt-oss" not in model_lower
+            # Both decisions are data-driven from the model's price-map entry, with
+            # no model-name logic. Capability (can it serve Responses?) comes from
+            # mantle_supports_responses (supported_endpoints / mode);
+            # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
+            # the chat-completions emulation (responses/main.py "config is None").
+            # The wire path comes from mantle_base_segment, which reads the
+            # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
+            # /openai/v1/responses, everything else (incl. gpt-oss) on
+            # /v1/responses.
+            from litellm.llms.bedrock_mantle.common_utils import (
+                mantle_base_segment,
+                mantle_supports_responses,
             )
-            if on_openai_path or name_is_frontier:
-                return litellm.BedrockMantleResponsesAPIConfig(use_openai_path=True)
-            try:
-                if get_model_info(model, "bedrock_mantle").get("mode") == "responses":
-                    return litellm.BedrockMantleResponsesAPIConfig(
-                        use_openai_path=False
-                    )
-            except Exception:
-                pass
-            return None
+
+            if not model or not mantle_supports_responses(model, litellm.model_cost):
+                return None
+            return litellm.BedrockMantleResponsesAPIConfig(
+                use_openai_path=mantle_base_segment(model, litellm.model_cost)
+                == "openai/v1"
+            )
         return None
 
     @staticmethod
@@ -9704,6 +9696,7 @@ class ProviderConfigManager:
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
+        from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
@@ -9723,11 +9716,30 @@ class ProviderConfigManager:
             SearchProviders.SERPER: SerperSearchConfig,
             SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
+            SearchProviders.TINYFISH: TinyfishSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
             return None
         return config_class()
+
+    @staticmethod
+    def get_provider_sandbox_config(
+        provider: SandboxProviders,
+    ) -> BaseSandboxConfig | None:
+        """
+        Get sandbox (code execution) configuration for a given provider.
+        """
+        from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+        from litellm.llms.opensandbox.sandbox.transformation import (
+            OpenSandboxSandboxConfig,
+        )
+
+        if provider == SandboxProviders.E2B:
+            return E2BSandboxConfig()
+        if provider == SandboxProviders.OPENSANDBOX:
+            return OpenSandboxSandboxConfig()
+        return None
 
     @staticmethod
     def get_provider_text_to_speech_config(

@@ -25,7 +25,6 @@ import litellm
 import litellm.batches.batch_utils as bu
 from litellm.types.utils import Usage
 
-
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
 # Shape: {"response": {"status_code": 200, "body": {... "usage": {...}}}}
@@ -152,36 +151,52 @@ def test_parse_jsonl_malformed_raises():
 
 
 # =========================================================================== #
-# _get_models_from_batch_input_file_content  (distinct body.model, ordered)
+# _iter_batch_input_lines / _iter_batch_input_entries  (JSONL parsing)
 # =========================================================================== #
 
 
-def test_input_models_distinct_ordered():
-    rows = [
+def test_iter_input_lines_skips_blank_and_strips():
+    content = b'{"a":1}\n\n  \n{"b":2}\n'
+    assert list(bu._iter_batch_input_lines(content)) == [b'{"a":1}', b'{"b":2}']
+
+
+def test_iter_input_lines_handles_missing_trailing_newline():
+    assert list(bu._iter_batch_input_lines(b'{"a":1}')) == [b'{"a":1}']
+
+
+def test_iter_input_lines_empty():
+    assert list(bu._iter_batch_input_lines(b"")) == []
+
+
+def test_iter_input_entries_parses_each_row():
+    content = b'{"body": {"model": "gpt-4o"}}\n{"body": {"model": "claude-3"}}\n'
+    assert list(bu._iter_batch_input_entries(content)) == [
         {"body": {"model": "gpt-4o"}},
         {"body": {"model": "claude-3"}},
-        {"body": {"model": "gpt-4o"}},  # dup
-        {"body": {"model": "o1"}},
-    ]
-    assert bu._get_models_from_batch_input_file_content(rows) == [
-        "gpt-4o",
-        "claude-3",
-        "o1",
     ]
 
 
-def test_input_models_skips_missing_body_and_model():
-    rows = [
-        {"body": {"model": "gpt-4o"}},
-        {},  # no body
-        {"body": {}},  # no model
-        {"body": {"model": None}},  # null model
-    ]
-    assert bu._get_models_from_batch_input_file_content(rows) == ["gpt-4o"]
+def test_iter_input_entries_raises_on_malformed_line():
+    # _iter_batch_input_entries raises on a bad row; callers that must survive
+    # bad rows iterate _iter_batch_input_lines and parse per-row instead.
+    with pytest.raises(Exception):
+        list(bu._iter_batch_input_entries(b'{"ok":1}\nnot-json\n'))
 
 
-def test_input_models_empty():
-    assert bu._get_models_from_batch_input_file_content([]) == []
+# =========================================================================== #
+# _estimate_batch_entry_tokens  (regression: an uncountable/malformed row must
+# never contribute zero tokens, or a crafted batch could evade the TPM limit)
+# =========================================================================== #
+
+
+def test_estimate_tokens_scales_with_size():
+    # 4 bytes per token, floored, with a minimum of 1.
+    assert bu._estimate_batch_entry_tokens(b"a" * 40) == 10
+
+
+def test_estimate_tokens_never_zero_for_short_rows():
+    assert bu._estimate_batch_entry_tokens(b"") == 1
+    assert bu._estimate_batch_entry_tokens(b"abc") == 1
 
 
 # =========================================================================== #
@@ -302,50 +317,58 @@ def test_count_tokens_unsupported_shape_is_zero(fake_token_counter):
 
 
 # =========================================================================== #
-# _get_batch_job_input_file_usage  (rate-limit token counting)
+# _count_entry_tokens  (per-entry rate-limit token counting). The individual
+# prompt/input/embedding shapes are covered in test_batch_file_validation.py;
+# here we pin the body-field precedence and the empty/fallback behavior.
 # =========================================================================== #
 
 
-def test_input_usage_messages_path(fake_token_counter):
-    rows = [
-        {"body": {"model": "gpt-4o", "messages": [{"role": "user"}, {"role": "x"}]}}
-    ]
-    usage = bu._get_batch_job_input_file_usage(rows)
-    assert usage.prompt_tokens == 2  # len(messages)
-    assert usage.completion_tokens == 0
-    assert usage.total_tokens == 2
+def test_count_entry_messages_path(fake_token_counter):
+    entry = {"body": {"model": "gpt-4o", "messages": [{"role": "user"}, {"role": "x"}]}}
+    assert bu._count_entry_tokens(entry) == 2  # len(messages)
 
 
-def test_input_usage_prompt_path(fake_token_counter):
-    rows = [{"body": {"model": "gpt-4o", "prompt": "abcd"}}]
-    assert bu._get_batch_job_input_file_usage(rows).prompt_tokens == 4
+def test_count_entry_prompt_path(fake_token_counter):
+    assert bu._count_entry_tokens({"body": {"model": "gpt-4o", "prompt": "abcd"}}) == 4
 
 
-def test_input_usage_input_path(fake_token_counter):
-    rows = [{"body": {"model": "gpt-4o", "input": "ab"}}]
-    assert bu._get_batch_job_input_file_usage(rows).prompt_tokens == 2
+def test_count_entry_input_path(fake_token_counter):
+    assert bu._count_entry_tokens({"body": {"model": "gpt-4o", "input": "ab"}}) == 2
 
 
-def test_input_usage_messages_beats_prompt(fake_token_counter):
-    # messages present -> the prompt field is ignored (continue after messages).
-    rows = [
-        {
-            "body": {
-                "model": "gpt-4o",
-                "messages": [{"role": "user"}],
-                "prompt": "this-should-be-ignored",
-            }
+def test_count_entry_messages_beats_prompt(fake_token_counter):
+    # messages present -> prompt/input are ignored (messages is checked first).
+    entry = {
+        "body": {
+            "model": "gpt-4o",
+            "messages": [{"role": "user"}],
+            "prompt": "this-should-be-ignored",
         }
-    ]
-    assert bu._get_batch_job_input_file_usage(rows).prompt_tokens == 1
+    }
+    assert bu._count_entry_tokens(entry) == 1
 
 
-def test_input_usage_sums_across_rows(fake_token_counter):
-    rows = [
-        {"body": {"model": "m", "prompt": "abc"}},  # 3
-        {"body": {"model": "m", "input": "de"}},  # 2
-    ]
-    assert bu._get_batch_job_input_file_usage(rows).prompt_tokens == 5
+def test_count_entry_prompt_beats_input(fake_token_counter):
+    entry = {"body": {"model": "gpt-4o", "prompt": "abc", "input": "this-is-longer"}}
+    assert bu._count_entry_tokens(entry) == 3
+
+
+def test_count_entry_empty_body_is_zero(fake_token_counter):
+    assert bu._count_entry_tokens({"body": {}}) == 0
+    assert bu._count_entry_tokens({}) == 0
+
+
+def test_count_entry_uses_model_name_fallback(monkeypatch):
+    # No body.model -> the model_name argument is forwarded to the token counter.
+    captured = {}
+
+    def _tc(model=None, text=None, messages=None, **kw):
+        captured["model"] = model
+        return len(text or "")
+
+    monkeypatch.setattr(bu, "token_counter", _tc)
+    bu._count_entry_tokens({"body": {"prompt": "ab"}}, model_name="fallback-model")
+    assert captured["model"] == "fallback-model"
 
 
 # =========================================================================== #
@@ -396,9 +419,7 @@ def test_cost_from_content_completion_cost_path(monkeypatch):
         _success_row(usage=_usage(20, 10)),
     ]
 
-    total = bu._get_batch_job_cost_from_file_content(
-        rows, custom_llm_provider="openai"
-    )
+    total = bu._get_batch_job_cost_from_file_content(rows, custom_llm_provider="openai")
 
     assert total == 1.0  # 2 successful * 0.5
     assert len(calls) == 2  # failed row not costed
@@ -431,9 +452,7 @@ def test_cost_from_content_model_info_path(monkeypatch):
 def test_batch_cost_calculator_generic_path(monkeypatch):
     monkeypatch.setattr(bu, "_get_batch_job_cost_from_file_content", lambda **kw: 4.2)
     assert (
-        bu._batch_cost_calculator(
-            [], custom_llm_provider="openai", model_name="gpt-4o"
-        )
+        bu._batch_cost_calculator([], custom_llm_provider="openai", model_name="gpt-4o")
         == 4.2
     )
 

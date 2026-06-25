@@ -35,6 +35,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
     _calculate_input_cost,
+    _get_token_base_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -296,6 +297,26 @@ def test_generic_cost_per_token_above_200k_tokens():
         * usage.completion_tokens,
         10,
     )
+
+
+def test_get_token_base_cost_picks_highest_crossed_tier():
+    """Regression test for #30345.
+
+    With graduated tiers at 90k and 128k whose keys have different digit lengths, a request
+    crossing both must be billed at the highest tier it crosses (128k), not the lower one that
+    happens to sort first lexicographically.
+    """
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_90k_tokens": 5e-6,
+        "input_cost_per_token_above_128k_tokens": 9e-6,
+    }
+    usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
+
+    prompt_base_cost = _get_token_base_cost(model_info, usage)[0]
+
+    assert prompt_base_cost == 9e-6
 
 
 def test_generic_cost_per_token_gpt54_above_272k_tokens():
@@ -1478,19 +1499,20 @@ def _local_model_cost_map():
 
 @pytest.mark.parametrize("data_residency", ["eu", "us"])
 def test_data_residency_applies_uplift(data_residency, _local_model_cost_map):
-    """gpt-5 should apply the regional processing uplift multiplier when
-    data_residency is set."""
+    """gpt-5.4 should apply the regional processing uplift multiplier when
+    data_residency is set. gpt-5.4+ (released 2026-03-05) carry the 10% uplift;
+    gpt-5 and older models do not."""
     from litellm.types.utils import Usage
 
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
     base = generic_cost_per_token(
-        model="gpt-5",
+        model="gpt-5.4",
         usage=usage,
         custom_llm_provider="openai",
     )
     regional = generic_cost_per_token(
-        model="gpt-5",
+        model="gpt-5.4",
         usage=usage,
         custom_llm_provider="openai",
         data_residency=data_residency,
@@ -1503,6 +1525,23 @@ def test_data_residency_applies_uplift(data_residency, _local_model_cost_map):
     assert regional_total == pytest.approx(base_total * 1.10, rel=1e-9)
     assert regional[0] == pytest.approx(base[0] * 1.10, rel=1e-9)
     assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4o", "gpt-4.1"])
+def test_data_residency_no_uplift_for_pre_march_2026_models(model, _local_model_cost_map):
+    """Models released before 2026-03-05 must not have the regional uplift."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    regional = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai", data_residency="eu"
+    )
+
+    assert base == regional, (
+        f"{model} should not have a regional uplift, but cost changed with data_residency"
+    )
 
 
 def test_data_residency_no_uplift_for_unmarked_model(_local_model_cost_map):
@@ -1534,12 +1573,12 @@ def test_data_residency_none_no_uplift(_local_model_cost_map):
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
     base = generic_cost_per_token(
-        model="gpt-5",
+        model="gpt-5.4",
         usage=usage,
         custom_llm_provider="openai",
     )
     explicit_none = generic_cost_per_token(
-        model="gpt-5",
+        model="gpt-5.4",
         usage=usage,
         custom_llm_provider="openai",
         data_residency=None,
@@ -1555,13 +1594,13 @@ def test_data_residency_composes_with_service_tier(_local_model_cost_map):
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
     priority_base = generic_cost_per_token(
-        model="gpt-5",
+        model="gpt-5.4",
         usage=usage,
         custom_llm_provider="openai",
         service_tier="priority",
     )
     priority_eu = generic_cost_per_token(
-        model="gpt-5",
+        model="gpt-5.4",
         usage=usage,
         custom_llm_provider="openai",
         service_tier="priority",

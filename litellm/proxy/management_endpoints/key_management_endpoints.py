@@ -874,6 +874,8 @@ async def _common_key_generation_helper(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
+        is_proxy_admin=user_api_key_dict.user_role
+        == LitellmUserRoles.PROXY_ADMIN.value,
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
@@ -1793,7 +1795,8 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                _premium_user_check(k)
+                if v:
+                    _premium_user_check(k)
                 casted_metadata[k] = v
 
     except Exception as e:
@@ -2163,6 +2166,7 @@ async def _validate_mcp_servers_for_key_update(
     existing_key_row: Any,
     prisma_client: Any,
     user_api_key_cache: Any,
+    is_proxy_admin: bool,
 ) -> Optional[dict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
@@ -2185,6 +2189,7 @@ async def _validate_mcp_servers_for_key_update(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
+        is_proxy_admin=is_proxy_admin,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
@@ -2421,6 +2426,7 @@ async def _validate_update_key_data(
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            is_proxy_admin=_is_proxy_admin,
         )
         if normalized_object_permission is not None:
             data.object_permission = LiteLLM_ObjectPermissionBase(
@@ -3239,10 +3245,8 @@ async def _get_model_max_budget_current_spend(
         f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
         f"{api_key_hash}:{model}:{budget_config.budget_duration}"
     )
-    current_spend: float | None = (
-        await user_api_key_cache.async_get_cache(  # any-ok: untyped dump
-            key=virtual_key_model_spend_cache_key,
-        )
+    current_spend: float | None = await user_api_key_cache.async_get_cache(
+        key=virtual_key_model_spend_cache_key,
     )
     if current_spend is None:
         model_without_prefix = model.split("/")[-1] if "/" in model else model
@@ -3250,13 +3254,11 @@ async def _get_model_max_budget_current_spend(
             f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
             f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
         )
-        current_spend = (
-            await user_api_key_cache.async_get_cache(  # any-ok: untyped dump
-                key=virtual_key_model_spend_cache_key,
-            )
+        current_spend = await user_api_key_cache.async_get_cache(
+            key=virtual_key_model_spend_cache_key,
         )
     try:
-        return float(current_spend or 0.0)  # any-ok: untyped dump
+        return float(current_spend or 0.0)
     except (TypeError, ValueError):
         return 0.0
 
@@ -3365,27 +3367,17 @@ async def info_key_fn_v2(
                 k_dict = k.model_dump()
             except Exception:
                 k_dict = k.dict()
-            k_token_hash = k_dict.pop("token", None)  # any-ok: untyped dump
+            k_token_hash = k_dict.pop("token", None)
 
-            model_max_budget = (
-                k_dict.get("model_max_budget") or {}  # any-ok: untyped dump
-            )
-            budget_table = (
-                k_dict.get("litellm_budget_table") or {}  # any-ok: untyped dump
-            )
-            if not model_max_budget and isinstance(  # any-ok: untyped dump
-                budget_table, dict  # any-ok: untyped dump
-            ):
-                model_max_budget = (
-                    budget_table.get("model_max_budget") or {}  # any-ok: untyped dump
-                )
-            if model_max_budget and k_token_hash:  # any-ok: untyped dump
-                k_dict["model_max_budget_usage"] = (  # any-ok: untyped dump
-                    await _build_model_max_budget_usage(  # any-ok: untyped dump
-                        api_key_hash=k_token_hash,  # any-ok: untyped dump
-                        model_max_budget=model_max_budget,  # any-ok: untyped dump
-                        user_api_key_cache=user_api_key_cache,
-                    )
+            model_max_budget = k_dict.get("model_max_budget") or {}
+            budget_table = k_dict.get("litellm_budget_table") or {}
+            if not model_max_budget and isinstance(budget_table, dict):
+                model_max_budget = budget_table.get("model_max_budget") or {}
+            if model_max_budget and k_token_hash:
+                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                    api_key_hash=k_token_hash,
+                    model_max_budget=model_max_budget,
+                    user_api_key_cache=user_api_key_cache,
                 )
 
             filtered_key_info.append(k_dict)
@@ -3470,27 +3462,17 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
-        key_token_hash = key_info.pop("token")  # any-ok: untyped dump
+        key_token_hash = key_info.pop("token")
 
-        model_max_budget = (
-            key_info.get("model_max_budget") or {}  # any-ok: untyped dump
-        )
-        budget_table = (
-            key_info.get("litellm_budget_table") or {}  # any-ok: untyped dump
-        )
-        if not model_max_budget and isinstance(  # any-ok: untyped dump
-            budget_table, dict  # any-ok: untyped dump
-        ):
-            model_max_budget = (
-                budget_table.get("model_max_budget") or {}  # any-ok: untyped dump
-            )
-        if model_max_budget and key_token_hash:  # any-ok: untyped dump
-            key_info["model_max_budget_usage"] = (  # any-ok: untyped dump
-                await _build_model_max_budget_usage(  # any-ok: untyped dump
-                    api_key_hash=key_token_hash,  # any-ok: untyped dump
-                    model_max_budget=model_max_budget,  # any-ok: untyped dump
-                    user_api_key_cache=user_api_key_cache,
-                )
+        model_max_budget = key_info.get("model_max_budget") or {}
+        budget_table = key_info.get("litellm_budget_table") or {}
+        if not model_max_budget and isinstance(budget_table, dict):
+            model_max_budget = budget_table.get("model_max_budget") or {}
+        if model_max_budget and key_token_hash:
+            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                api_key_hash=key_token_hash,
+                model_max_budget=model_max_budget,
+                user_api_key_cache=user_api_key_cache,
             )
 
         # Attach object_permission if object_permission_id is set
@@ -5145,7 +5127,7 @@ async def list_keys(
     size: int = Query(10, description="Page size", ge=1, le=100),
     user_id: Optional[str] = Query(
         None,
-        description="Filter keys by user ID. Supports partial matching (substring, case-insensitive).",
+        description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(
@@ -5154,7 +5136,7 @@ async def list_keys(
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(
         None,
-        description="Filter keys by key alias. Supports partial matching (substring, case-insensitive).",
+        description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
@@ -5177,6 +5159,10 @@ async def list_keys(
     project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
     access_group_id: Optional[str] = Query(
         None, description="Filter keys by access group ID"
+    ),
+    substring_matching: bool = Query(
+        False,
+        description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
     ),
 ) -> KeyListResponseObject:
     """
@@ -5259,12 +5245,21 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        use_substring_matching = user_api_key_dict.user_role in [
+        is_proxy_admin = user_api_key_dict.user_role in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
 
-        if not user_id and not use_substring_matching:
+        # Substring matching is opt-in (admin-only). /key/list matched user_id and
+        # key_alias exactly before substring search was added; auto-applying a
+        # substring match to every admin call broke that contract and let a caller
+        # passing an exact user_id (e.g. an integration scoping to one user with an
+        # admin key) receive other users' keys (user_id="alice" -> "alice2"). Exact
+        # by default restores the prior behavior; the dashboard opts in explicitly.
+        use_substring_matching = substring_matching and is_proxy_admin
+
+        # Admins may omit user_id to list all keys; non-admins are scoped to self.
+        if not user_id and not is_proxy_admin:
             user_id = user_api_key_dict.user_id
 
         response = await _list_key_helper(

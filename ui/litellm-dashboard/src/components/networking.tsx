@@ -18,17 +18,6 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
-export const getInProductNudgesCall = async (accessToken: string) => {
-  /**
-   * Get in-product nudges configuration.
-   */
-  try {
-    return await apiClient.get(`/in_product_nudges`, { accessToken });
-  } catch (error) {
-    console.error("Failed to get in-product nudges:", error);
-    throw error;
-  }
-};
 /**
  * Helper file for calls being made to proxy
  */
@@ -43,6 +32,9 @@ import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
+
+export { serverRootPath };
 
 export { deriveErrorMessage };
 export { ApiError } from "@/lib/http/client";
@@ -57,8 +49,6 @@ const resolveDefaultBase = (fallback: string | null): string | null =>
       ? "http://localhost:4000"
       : fallback;
 const defaultProxyBaseUrl = resolveDefaultBase(null);
-const defaultServerRootPath = "/";
-export let serverRootPath = defaultServerRootPath;
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
 // This survives page navigation and the sessionStorage.clear() in user_dashboard.
@@ -103,7 +93,7 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
-  serverRootPath = receivedServerRootPath;
+  setServerRootPath(receivedServerRootPath);
 };
 
 export const getProxyBaseUrl = (): string => {
@@ -2453,6 +2443,9 @@ export const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // /key/list is exact by default; opt in so the key-list search box keeps
+        // matching partial user_id/key_alias.
+        substring_matching: "true",
       },
     });
   } catch (error) {
