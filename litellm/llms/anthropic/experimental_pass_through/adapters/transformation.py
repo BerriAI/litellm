@@ -1397,6 +1397,95 @@ class LiteLLMAnthropicMessagesAdapter:
             return "tool_use"
         return "end_turn"
 
+    @staticmethod
+    def _positive_int(value: object) -> int:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, float) and value.is_integer() and value > 0:
+            return int(value)
+        return 0
+
+    @classmethod
+    def _first_positive_usage_value(
+        cls, usage: Usage, field_names: tuple[str, ...]
+    ) -> int:
+        for field_name in field_names:
+            value = cls._positive_int(getattr(usage, field_name, None))
+            if value > 0:
+                return value
+        return 0
+
+    @classmethod
+    def _first_positive_prompt_tokens_detail_value(
+        cls, usage: Usage, field_names: tuple[str, ...]
+    ) -> int:
+        prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_tokens_details is None:
+            return 0
+
+        for field_name in field_names:
+            if isinstance(prompt_tokens_details, dict):
+                value = cls._positive_int(prompt_tokens_details.get(field_name))
+            else:
+                value = cls._positive_int(
+                    getattr(prompt_tokens_details, field_name, None)
+                )
+            if value > 0:
+                return value
+        return 0
+
+    @classmethod
+    def _get_cache_read_input_tokens(cls, usage: Usage) -> int:
+        explicit_value = cls._first_positive_usage_value(
+            usage, ("cache_read_input_tokens", "_cache_read_input_tokens")
+        )
+        if explicit_value > 0:
+            return explicit_value
+        return cls._first_positive_prompt_tokens_detail_value(usage, ("cached_tokens",))
+
+    @classmethod
+    def _get_cache_creation_input_tokens(cls, usage: Usage) -> int:
+        explicit_value = cls._first_positive_usage_value(
+            usage, ("cache_creation_input_tokens", "_cache_creation_input_tokens")
+        )
+        if explicit_value > 0:
+            return explicit_value
+        return cls._first_positive_prompt_tokens_detail_value(
+            usage, ("cache_creation_tokens", "cache_write_tokens")
+        )
+
+    @classmethod
+    def _translate_openai_usage_to_anthropic_usage_delta(
+        cls, usage: Usage
+    ) -> UsageDelta:
+        cache_read_input_tokens = cls._get_cache_read_input_tokens(usage)
+        cache_creation_input_tokens = cls._get_cache_creation_input_tokens(usage)
+        input_tokens = max(
+            (usage.prompt_tokens or 0)
+            - cache_read_input_tokens
+            - cache_creation_input_tokens,
+            0,
+        )
+
+        usage_delta = UsageDelta(
+            input_tokens=input_tokens,
+            output_tokens=usage.completion_tokens or 0,
+        )
+        if cache_creation_input_tokens > 0:
+            usage_delta["cache_creation_input_tokens"] = cache_creation_input_tokens
+        if cache_read_input_tokens > 0:
+            usage_delta["cache_read_input_tokens"] = cache_read_input_tokens
+        return usage_delta
+
+    @classmethod
+    def _translate_openai_usage_to_anthropic_usage(cls, usage: Usage) -> AnthropicUsage:
+        return cast(
+            AnthropicUsage,
+            cls._translate_openai_usage_to_anthropic_usage_delta(usage),
+        )
+
     def translate_openai_response_to_anthropic(
         self,
         response: ModelResponse,
@@ -1428,32 +1517,12 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
-        uncached_input_tokens = usage.prompt_tokens or 0
-        cached_tokens = 0
-        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-            cached_tokens = (
-                getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
-            )
-            uncached_input_tokens -= cached_tokens
-
-        anthropic_usage = AnthropicUsage(
-            input_tokens=uncached_input_tokens,
-            output_tokens=usage.completion_tokens or 0,
-        )
-        if (
-            hasattr(usage, "_cache_creation_input_tokens")
-            and usage._cache_creation_input_tokens > 0
-        ):
-            anthropic_usage["cache_creation_input_tokens"] = (
-                usage._cache_creation_input_tokens
-            )
-        if cached_tokens > 0:
-            anthropic_usage["cache_read_input_tokens"] = cached_tokens
+        anthropic_usage = self._translate_openai_usage_to_anthropic_usage(usage)
 
         if polyfill_result is not None and polyfill_result.iterations_usage is not None:
             message_iteration: UsageIteration = {
                 "type": "message",
-                "input_tokens": uncached_input_tokens,
+                "input_tokens": anthropic_usage["input_tokens"],
                 "output_tokens": usage.completion_tokens or 0,
             }
             anthropic_usage["iterations"] = list(polyfill_result.iterations_usage) + [message_iteration]  # type: ignore[typeddict-unknown-key]
@@ -1640,35 +1709,9 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 litellm_usage_chunk = None
             if litellm_usage_chunk is not None:
-                uncached_input_tokens = litellm_usage_chunk.prompt_tokens or 0
-                cached_tokens = 0
-                if (
-                    hasattr(litellm_usage_chunk, "prompt_tokens_details")
-                    and litellm_usage_chunk.prompt_tokens_details
-                ):
-                    cached_tokens = (
-                        getattr(
-                            litellm_usage_chunk.prompt_tokens_details,
-                            "cached_tokens",
-                            0,
-                        )
-                        or 0
-                    )
-                    uncached_input_tokens -= cached_tokens
-
-                usage_delta = UsageDelta(
-                    input_tokens=uncached_input_tokens,
-                    output_tokens=litellm_usage_chunk.completion_tokens or 0,
+                usage_delta = self._translate_openai_usage_to_anthropic_usage_delta(
+                    litellm_usage_chunk
                 )
-                if (
-                    hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
-                    and litellm_usage_chunk._cache_creation_input_tokens > 0
-                ):
-                    usage_delta["cache_creation_input_tokens"] = (
-                        litellm_usage_chunk._cache_creation_input_tokens
-                    )
-                if cached_tokens > 0:
-                    usage_delta["cache_read_input_tokens"] = cached_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             message_block = MessageBlockDelta(
