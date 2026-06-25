@@ -225,19 +225,19 @@ async def make_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: (
-                ModelResponse
-            ) = litellm.AmazonConverseConfig()._transform_response(
-                model=model,
-                response=response,
-                model_response=litellm.ModelResponse(),
-                stream=True,
-                logging_obj=logging_obj,
-                optional_params={},
-                api_key="",
-                data=data,
-                messages=messages,
-                encoding=litellm.encoding,
+            model_response: ModelResponse = (
+                litellm.AmazonConverseConfig()._transform_response(
+                    model=model,
+                    response=response,
+                    model_response=litellm.ModelResponse(),
+                    stream=True,
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    api_key="",
+                    data=data,
+                    messages=messages,
+                    encoding=litellm.encoding,
+                )
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
@@ -321,19 +321,19 @@ def make_sync_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: (
-                ModelResponse
-            ) = litellm.AmazonConverseConfig()._transform_response(
-                model=model,
-                response=response,
-                model_response=litellm.ModelResponse(),
-                stream=True,
-                logging_obj=logging_obj,
-                optional_params={},
-                api_key="",
-                data=data,
-                messages=messages,
-                encoding=litellm.encoding,
+            model_response: ModelResponse = (
+                litellm.AmazonConverseConfig()._transform_response(
+                    model=model,
+                    response=response,
+                    model_response=litellm.ModelResponse(),
+                    stream=True,
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    api_key="",
+                    data=data,
+                    messages=messages,
+                    encoding=litellm.encoding,
+                )
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
@@ -1300,7 +1300,9 @@ class BedrockLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = get_async_httpx_client(params=_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
+            client = get_async_httpx_client(
+                params=_params, llm_provider=litellm.LlmProviders.BEDROCK
+            )  # type: ignore
         else:
             client = client  # type: ignore
 

@@ -79,7 +79,8 @@ class RedisClusterCache(RedisCache):
 
             # Create a fresh Redis Cluster client with current settings
             redis_client = redis_async.RedisCluster(
-                startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+                startup_nodes=new_startup_nodes,
+                **cluster_kwargs,  # type: ignore
             )
 
             # Test the connection

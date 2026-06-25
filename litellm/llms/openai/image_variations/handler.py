@@ -73,7 +73,9 @@ class OpenAIImageVariationsHandler:
                 client=client, init_client_params=init_client_params
             )
 
-            raw_response = await client.images.with_raw_response.create_variation(**data)  # type: ignore
+            raw_response = await client.images.with_raw_response.create_variation(
+                **data
+            )  # type: ignore
             response = raw_response.parse()
             response_json = response.model_dump()
 
