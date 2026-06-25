@@ -195,7 +195,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 headers=self.headers,
             ).json()
             if cfg.get("executableId") == "orchestration":
-                valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
+                valid.append(
+                    (dep["deploymentUrl"], dep["createdAt"], cfg.get("name", ""))
+                )
 
         if not valid:
             raise GenAIHubOrchestrationError(
