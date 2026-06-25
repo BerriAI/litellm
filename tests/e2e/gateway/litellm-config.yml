@@ -153,12 +153,16 @@ model_list:
   - model_name: gemini-realtime
     litellm_params:
       model: gemini/gemini-3.1-flash-live-preview
+      api_key: os.environ/GEMINI_API_KEY
     model_info:
       mode: realtime
 
   - model_name: vertex-realtime
     litellm_params:
       model: vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
     model_info:
       mode: realtime
 
