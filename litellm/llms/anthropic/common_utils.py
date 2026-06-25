@@ -549,11 +549,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _make_api_key_auth_header(api_key: str, api_base: str | None) -> dict:
-        # Callers opt in to Bearer auth by passing "Bearer <token>" explicitly.
-        # All other keys continue to use x-api-key to preserve backwards compatibility
-        # with custom api_base endpoints that expect x-api-key rather than Authorization.
-        if api_key.startswith("Bearer "):
-            return {"authorization": api_key}
+        if (
+            api_base
+            and "api.anthropic.com" not in api_base
+            and not api_key.startswith("sk-ant-")
+        ):
+            value = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
+            return {"authorization": value}
         return {"x-api-key": api_key}
 
     def get_anthropic_headers(
