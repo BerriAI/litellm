@@ -2457,7 +2457,8 @@ def test_get_internal_user_header_from_mapping_none_when_absent():
     assert header_name is None
 
 
-def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
     headers = {"X-OpenWebUI-User-Id": "internal-user-123"}
     general_settings = {
@@ -2470,7 +2471,7 @@ def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
         ]
     }
 
-    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         general_settings, user_api_key_dict, headers
     )
 
@@ -2478,10 +2479,11 @@ def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
     assert user_api_key_dict.user_id == "internal-user-123"
 
 
-def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
 
-    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         None, user_api_key_dict, {"X-OpenWebUI-User-Id": "abc"}
     )
     assert result is user_api_key_dict
@@ -2492,11 +2494,104 @@ def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchan
             {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
         ]
     }
-    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         general_settings, user_api_key_dict, {"Other": "value"}
     )
     assert result is user_api_key_dict
     assert user_api_key_dict.user_id is None
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_resolves_email_header_to_internal_user(
+    monkeypatch,
+):
+    import litellm.proxy.auth.auth_checks as auth_checks
+    import litellm.proxy.proxy_server as proxy_server
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Email": "internal@example.com"}
+    general_settings = {
+        "user_header_mappings": [
+            {
+                "header_name": "X-OpenWebUI-User-Email",
+                "litellm_user_role": "internal_user",
+            }
+        ]
+    }
+
+    fake_prisma_client = object()
+    fake_cache = object()
+    fake_user = MagicMock()
+    fake_user.user_id = "internal-user-db-id"
+    fake_user.user_email = "internal@example.com"
+    fake_user.user_role = "internal_user"
+
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", fake_cache)
+    get_user_object_mock = AsyncMock(return_value=fake_user)
+    monkeypatch.setattr(auth_checks, "get_user_object", get_user_object_mock)
+
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id == "internal-user-db-id"
+    assert user_api_key_dict.user_email == "internal@example.com"
+    assert user_api_key_dict.user_role == "internal_user"
+    get_user_object_mock.assert_awaited_once_with(
+        user_id="internal@example.com",
+        prisma_client=fake_prisma_client,
+        user_api_key_cache=fake_cache,
+        user_id_upsert=False,
+        user_email="internal@example.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_can_opt_in_to_user_upsert(
+    monkeypatch,
+):
+    import litellm.proxy.auth.auth_checks as auth_checks
+    import litellm.proxy.proxy_server as proxy_server
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Email": "internal@example.com"}
+    general_settings = {
+        "user_header_mappings": [
+            {
+                "header_name": "X-OpenWebUI-User-Email",
+                "litellm_user_role": "internal_user",
+            }
+        ],
+        "user_header_mappings_upsert_user_id": True,
+    }
+
+    fake_prisma_client = object()
+    fake_cache = object()
+    fake_user = MagicMock()
+    fake_user.user_id = "internal-user-db-id"
+    fake_user.user_email = "internal@example.com"
+    fake_user.user_role = "internal_user"
+
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", fake_cache)
+    get_user_object_mock = AsyncMock(return_value=fake_user)
+    monkeypatch.setattr(auth_checks, "get_user_object", get_user_object_mock)
+
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id == "internal-user-db-id"
+    get_user_object_mock.assert_awaited_once_with(
+        user_id="internal@example.com",
+        prisma_client=fake_prisma_client,
+        user_api_key_cache=fake_cache,
+        user_id_upsert=True,
+        user_email="internal@example.com",
+    )
 
 
 def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():

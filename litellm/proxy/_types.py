@@ -2333,6 +2333,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
+    user_header_mappings_upsert_user_id: bool = Field(
+        default=False,
+        description="When True, email-shaped values resolved from user_header_mappings are upserted into the user table if they do not already exist. Default is False to avoid creating users from untrusted headers.",
+    )
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
