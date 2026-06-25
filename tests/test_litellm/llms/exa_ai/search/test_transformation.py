@@ -80,6 +80,14 @@ def test_text_preferred_over_highlights_for_snippet():
     assert resp.results[0].snippet == "full text"
 
 
+def test_snippet_empty_when_no_text_or_highlights():
+    resp = _config().transform_search_response(
+        _resp({"results": [{"title": "T", "url": "https://e.com"}]}),
+        logging_obj=Mock(),
+    )
+    assert resp.results[0].snippet == ""
+
+
 def test_preserves_per_result_extra_fields():
     """highlights / image / author / favicon / score must survive on each result."""
     resp = _config().transform_search_response(
@@ -106,6 +114,34 @@ def test_preserves_per_result_extra_fields():
     assert dumped["author"] == "Hisse.net"
     assert dumped["favicon"] == "https://e.com/fav.png"
     assert dumped["score"] == 0.42
+
+
+def test_consumed_source_keys_not_duplicated_as_extras():
+    """`text`/`publishedDate` are mapped to snippet/date and must not also be
+    echoed as raw extras (their content is preserved canonically)."""
+    resp = _config().transform_search_response(
+        _resp(
+            {
+                "results": [
+                    {
+                        "title": "T",
+                        "url": "https://e.com",
+                        "text": "body text",
+                        "publishedDate": "2026-06-17T17:06:28.000Z",
+                        "highlights": ["h1"],
+                    }
+                ],
+            }
+        ),
+        logging_obj=Mock(),
+    )
+    dumped = resp.results[0].model_dump()
+    assert dumped["snippet"] == "body text"
+    assert dumped["date"] == "2026-06-17T17:06:28.000Z"
+    assert "text" not in dumped
+    assert "publishedDate" not in dumped
+    # genuinely-extra fields are still preserved
+    assert dumped["highlights"] == ["h1"]
 
 
 def test_preserves_top_level_output_summary_and_grounding():
@@ -172,6 +208,22 @@ def test_empty_results():
 def test_missing_results_key():
     resp = _config().transform_search_response(_resp({}), logging_obj=Mock())
     assert resp.results == []
+
+
+def test_non_dict_result_items_are_skipped():
+    resp = _config().transform_search_response(
+        _resp(
+            {
+                "results": [
+                    "not-a-dict",
+                    {"title": "T", "url": "https://e.com", "text": "x"},
+                ]
+            }
+        ),
+        logging_obj=Mock(),
+    )
+    assert len(resp.results) == 1
+    assert resp.results[0].title == "T"
 
 
 def test_non_list_results_is_safe():

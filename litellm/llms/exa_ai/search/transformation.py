@@ -159,11 +159,23 @@ class ExaAISearchConfig(BaseSearchConfig):
 
         return result_data
 
-    # SearchResult fields populated from dedicated Exa keys. Every *other* key
-    # on an Exa result/response is preserved verbatim via ``extra="allow"`` so
-    # rich Exa data (highlights, images, and the deep-search ``output`` summary
-    # with its grounding citations) is not dropped by the normalization layer.
-    _RESULT_RESERVED_FIELDS = {"title", "url", "snippet", "date", "last_updated"}
+    # Keys excluded when collecting per-result extras: the Exa source keys that
+    # are consumed into canonical SearchResult fields (so they aren't echoed
+    # redundantly), plus the SearchResult field names themselves (so extras can't
+    # collide with the constructor's keyword arguments). Every *other* Exa key is
+    # preserved verbatim via ``extra="allow"`` — highlights, images, and the
+    # deep-search ``output`` summary with its grounding citations.
+    _RESULT_RESERVED_FIELDS = {
+        # consumed Exa source keys
+        "title",
+        "url",
+        "text",
+        "publishedDate",
+        # SearchResult field names
+        "snippet",
+        "date",
+        "last_updated",
+    }
     _RESPONSE_RESERVED_FIELDS = {"results", "object"}
 
     @staticmethod

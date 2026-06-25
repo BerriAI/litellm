@@ -62,6 +62,21 @@ def test_cost_per_token_prefers_provider_reported_cost():
     assert output_cost == 0.0
 
 
+def test_cost_per_token_ignores_non_numeric_provider_cost():
+    # A non-numeric provider_reported_cost must not crash; fall back instead.
+    resp = SearchResponse(results=[], object="search")
+    resp._hidden_params["provider_reported_cost"] = "N/A"
+    input_cost, output_cost = cost_per_token(
+        model="exa_ai/search",
+        custom_llm_provider="exa_ai",
+        call_type="search",
+        number_of_queries=1,
+        response=resp,
+    )
+    assert isinstance(input_cost, float)
+    assert output_cost == 0.0
+
+
 def test_cost_per_token_falls_back_to_price_list_when_no_provider_cost():
     # No provider-reported cost -> fall back to the existing price-list calc
     # (must not crash, must not invent the provider value).

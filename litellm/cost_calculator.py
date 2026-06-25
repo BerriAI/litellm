@@ -589,7 +589,7 @@ def cost_per_token(
         # Prefer the cost reported by the provider in the response (authoritative,
         # and reflects per-search-type pricing the static list cannot capture).
         provider_reported_cost = search_hidden_params.get("provider_reported_cost")
-        if provider_reported_cost is not None:
+        if isinstance(provider_reported_cost, (int, float)):
             return (float(provider_reported_cost), 0.0)
 
         # Otherwise fall back to per-query pricing from the price list.
