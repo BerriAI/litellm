@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
+    AuthorizationCodeConfig,
     CredError,
     NoneConfig,
     ServerSpec,
@@ -61,8 +62,9 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     Dispatches on the declared ``auth_type``. The match is exhaustive over ``MCPAuthType`` with
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
-    modes: ``none`` and the static-header family (``api_key`` plus the Authorization schemes),
-    all shared-key; every other mode returns None and stays on v1.
+    modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
+    all shared-key), and ``oauth2`` per-user tokens (``authorization_code``); client_credentials
+    (M2M), delegated/passthrough oauth2, token exchange, and SigV4 return None and stay on v1.
     """
     if server.is_byok:
         return (
@@ -89,8 +91,17 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
             return _shared_key_spec(
                 server, resource, "Authorization", "Basic", encode=True
             )
-        case MCPAuth.oauth2 | MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
-            return None  # OAuth grants and SigV4 are not migrated yet -> defer to v1
+        case MCPAuth.oauth2:
+            if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
+                return ServerSpec(
+                    server_id=server.server_id,
+                    resource=resource,
+                    config=AuthorizationCodeConfig(),
+                )
+            # client_credentials (M2M) and delegate/passthrough oauth2 stay on v1
+            return None
+        case MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
+            return None  # token exchange and SigV4 are not migrated yet -> defer to v1
     assert_never(auth_type)
 
 
