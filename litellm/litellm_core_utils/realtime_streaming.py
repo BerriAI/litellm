@@ -3,7 +3,6 @@ import concurrent.futures
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, cast
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
@@ -14,6 +13,8 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamSessionEvents,
 )
 from litellm.types.realtime import ALL_DELTA_TYPES
+
+import litellm
 
 from .litellm_logging import Logging as LiteLLMLogging
 

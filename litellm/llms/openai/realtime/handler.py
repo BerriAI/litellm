@@ -12,8 +12,8 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import (
-    RealTimeStreaming,
     RealtimeEventNormalizer,
+    RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
