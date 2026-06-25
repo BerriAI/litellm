@@ -189,6 +189,37 @@ def _normalize_team_metadata_keys(value: Any) -> List[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+_FREEZE_MAX_DEPTH = 16
+
+HashableScope = Union[
+    str,
+    int,
+    float,
+    bool,
+    bytes,
+    None,
+    tuple["HashableScope", ...],
+    frozenset["HashableScope"],
+]
+
+
+def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
+    if _depth >= _FREEZE_MAX_DEPTH:
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_dedupe(item, _depth + 1) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_for_dedupe(item, _depth + 1) for item in value)
+    if isinstance(value, dict):
+        return frozenset(
+            (_freeze_for_dedupe(key, _depth + 1), _freeze_for_dedupe(item, _depth + 1))
+            for key, item in value.items()
+        )
+    if isinstance(value, (str, int, float, bytes)) or value is None:
+        return value
+    return repr(value)
+
+
 @dataclass
 class OpenTelemetryConfig:
     exporter: Union[str, SpanExporter] = "console"
@@ -1073,10 +1104,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
            can be re-read with mutated entries between calls, so dedupe
            must be at entry granularity. Scope: the entry's stable identity.
 
-        ``scope`` parts can be any hashable identity. The marker is stored
-        in ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it
-        is request-local (kwargs is shared across the sync/async callbacks
-        and lifecycle hooks for one request).
+        ``scope`` parts may include unhashable containers (list, dict, set);
+        they are normalized into a hashable shape via ``_freeze_for_dedupe``
+        before keying the marker dict. The marker is stored in
+        ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it is
+        request-local (kwargs is shared across the sync/async callbacks and
+        lifecycle hooks for one request).
         """
         litellm_params = kwargs.get("litellm_params")
         if not isinstance(litellm_params, dict):
@@ -1098,7 +1131,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        dedupe_key = (
+            self.__class__.__name__,
+            id(self),
+            *(_freeze_for_dedupe(part) for part in scope),
+        )
         if spans_logged.get(dedupe_key) is True:
             return False
 
