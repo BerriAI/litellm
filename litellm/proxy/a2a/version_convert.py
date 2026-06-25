@@ -212,7 +212,7 @@ def _send_result_to(
         )
 
     pb = pb2_v10.SendMessageResponse()
-    ParseDict(result, pb)
+    ParseDict(result, pb, ignore_unknown_fields=True)
     return _dump_03(to_compat_send_message_response(pb, request_id).root.result)
 
 
@@ -271,7 +271,7 @@ def _task_to(result: JsonDict, target: A2AVersion) -> JsonDict:
         return MessageToDict(core, preserving_proto_field_name=False)
 
     pb = pb2_v10.Task()
-    ParseDict(result, pb)
+    ParseDict(result, pb, ignore_unknown_fields=True)
     return _dump_03(to_compat_task(pb))
 
 
@@ -319,7 +319,7 @@ def _stream_result_to(
         )
 
     pb = pb2_v10.StreamResponse()
-    ParseDict(result, pb)
+    ParseDict(result, pb, ignore_unknown_fields=True)
     return _dump_03(to_compat_stream_response(pb, request_id).result)
 
 

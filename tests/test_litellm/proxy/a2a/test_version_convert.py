@@ -203,6 +203,50 @@ def test_list_tasks_unspecified_status_is_dropped():
     assert out["contextId"] == "ctx-1"
 
 
+@pytest.mark.parametrize(
+    "method, result",
+    [
+        (
+            "message/send",
+            {
+                "task": {
+                    "id": "t1",
+                    "contextId": "c1",
+                    "status": {"state": "completed"},
+                },
+                "vendorExtraField": "x",
+            },
+        ),
+        (
+            "tasks/get",
+            {
+                "id": "t1",
+                "contextId": "c1",
+                "status": {"state": "completed"},
+                "vendorExtraField": "x",
+            },
+        ),
+    ],
+)
+def test_lowering_1_0_to_0_3_tolerates_unknown_upstream_fields(method, result):
+    out = normalize_jsonrpc_response(_rpc(result), "0.3", method=method)
+    lowered = out["result"]
+    assert lowered["kind"] == "task"
+    assert lowered["id"] == "t1"
+    assert "vendorExtraField" not in lowered
+
+
+def test_stream_event_lowering_1_0_to_0_3_tolerates_unknown_fields():
+    event = {
+        "task": {"id": "t1", "contextId": "c1", "status": {"state": "completed"}},
+        "vendorExtraField": "x",
+    }
+    out = normalize_stream_event(_rpc(event), "0.3", request_id="1")
+    lowered = out["result"]
+    assert lowered["kind"] == "task"
+    assert lowered["id"] == "t1"
+
+
 def test_list_tasks_result_round_trip_preserves_task_ids():
     rpc = _rpc(
         {

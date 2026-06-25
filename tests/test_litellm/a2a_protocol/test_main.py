@@ -57,3 +57,50 @@ async def test_send_message_returns_message_result():
 async def test_send_message_rejects_update_event_final_with_runtime_error():
     with pytest.raises(RuntimeError, match="Message or Task"):
         await _send_message(_FakeClient(_status_update_stream_response()), _request())
+
+
+@pytest.mark.asyncio
+async def test_streaming_trace_id_prefers_logging_trace_id():
+    """The streaming X-LiteLLM-Trace-Id must use the logging object's trace id (same
+    as the non-streaming path), not the JSON-RPC request id, so traces correlate."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from a2a.compat.v0_3.types import (
+        MessageSendParams,
+        SendStreamingMessageRequest,
+    )
+
+    from litellm.a2a_protocol import main as a2a_main
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    request = SendStreamingMessageRequest(
+        id="rpc-1",
+        params=MessageSendParams(
+            message={
+                "messageId": "m1",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+            }
+        ),
+    )
+    logging_obj = MagicMock(spec=Logging)
+    logging_obj.litellm_trace_id = "trace-from-logging"
+
+    captured: dict = {}
+
+    async def _capture(*, base_url, extra_headers=None, streaming=False, **_):
+        captured["extra_headers"] = extra_headers
+        raise RuntimeError("stop")
+
+    with patch.object(
+        a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)
+    ):
+        with pytest.raises(RuntimeError, match="stop"):
+            async for _ in a2a_main.asend_message_streaming(
+                request=request,
+                api_base="http://upstream.local",
+                litellm_logging_obj=logging_obj,
+            ):
+                pass
+
+    assert captured["extra_headers"]["X-LiteLLM-Trace-Id"] == "trace-from-logging"
