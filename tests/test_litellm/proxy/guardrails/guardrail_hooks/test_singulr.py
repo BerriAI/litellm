@@ -82,6 +82,28 @@ class TestSingulrConfiguration:
         guardrail = SingulrGuardrail(api_key="test_key")
         assert guardrail.block_on_error is True
 
+    def test_http_remote_api_base_logs_warning(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.singulr.singulr.verbose_proxy_logger"
+        ) as mock_logger:
+            SingulrGuardrail(api_key="test_key", api_base="http://remote.singulr.ai")
+            mock_logger.warning.assert_called_once()
+            assert "plain HTTP" in mock_logger.warning.call_args.args[0]
+
+    def test_http_localhost_api_base_no_warning(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.singulr.singulr.verbose_proxy_logger"
+        ) as mock_logger:
+            SingulrGuardrail(api_key="test_key", api_base="http://localhost:8000")
+            mock_logger.warning.assert_not_called()
+
+    def test_https_remote_api_base_no_warning(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.singulr.singulr.verbose_proxy_logger"
+        ) as mock_logger:
+            SingulrGuardrail(api_key="test_key", api_base="https://remote.singulr.ai")
+            mock_logger.warning.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Allow decision
@@ -317,7 +339,7 @@ class TestSingulrBuildPayload:
         )
         assert payload["prompt"] == "test from playground"
 
-    def test_request_returns_empty_payload_when_no_user_message_and_no_texts(
+    def test_system_only_request_still_reaches_guardrail_via_indirect_prompt(
         self, singulr_guardrail
     ):
         request_data = {"messages": [{"role": "system", "content": "Only system"}]}

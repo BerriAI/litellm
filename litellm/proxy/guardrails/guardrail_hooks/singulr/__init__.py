@@ -25,7 +25,7 @@ def initialize_guardrail(
         api_key=litellm_params.api_key,
         enforcement_entity_id=getattr(litellm_params, "enforcement_entity_id", None),
         guardrail_id=getattr(litellm_params, "guardrail_id", None),
-        block_on_error=getattr(litellm_params, "block_on_error", True),
+        block_on_error=getattr(litellm_params, "block_on_error", None),
         guardrail_name=guardrail.get(
             "guardrail_name",
             "",

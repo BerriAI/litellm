@@ -6,6 +6,7 @@ Calls the Singulr Guard API to scan messages.
 
 import json
 import os
+from urllib.parse import urlparse
 from typing import Any, Literal, Optional, cast
 
 import httpx
@@ -48,6 +49,18 @@ class SingulrGuardrail(CustomGuardrail):
         self.api_base = (
             api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE
         ).rstrip("/")
+
+        parsed = urlparse(self.api_base)
+        if parsed.scheme == "http" and parsed.hostname not in (
+            "localhost",
+            "127.0.0.1",
+        ):
+            verbose_proxy_logger.warning(
+                "Singulr: api_base %s uses plain HTTP. Guardrail payloads contain "
+                "full message content and will be sent unencrypted. Use HTTPS for "
+                "any non-local endpoint.",
+                self.api_base,
+            )
 
         self.enforcement_entity_id = enforcement_entity_id or os.environ.get(
             "SINGULR_ENFORCEMENT_ENTITY_ID"
