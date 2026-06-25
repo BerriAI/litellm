@@ -7,11 +7,10 @@ the tight window's cap is exceeded, then - once the 30s elapses and the reset jo
 and calls flow again. This exercises the reset_budget_windows TEAM branch (raw SQL over
 LiteLLM_TeamTable.budget_limits, the literal #25109 path), which had no live coverage.
 
-Fails at team creation today: /team/new writes the raw window list straight to the
-Json? column, where Prisma rejects it (500), unlike the key path and /team/update which
-json.dumps it first. Marked xfail(strict=True) so the suite stays green while the bug
-persists and flips to a failure the moment the write is fixed and the marker should be
-removed.
+This also guards the /team/new write path: it must json.dumps the window list into
+the Json? column. A raw list there made Prisma reject the create with a 500 (the key
+path and /team/update already json.dumps first); a regression would fail team creation
+here.
 """
 
 import time
@@ -33,12 +32,6 @@ def _call(client: BudgetClient, key: str):
     return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known proxy bug: /team/new writes budget_limits straight to the Json? "
-    "column and Prisma rejects it (500), unlike the key path and /team/update which "
-    "json.dumps first; remove this marker once that write is fixed",
-)
 def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
     team_id = client.create_team(
         alias=f"e2e-team-window-{unique_marker()}",
