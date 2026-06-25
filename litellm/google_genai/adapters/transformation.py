@@ -726,9 +726,9 @@ class GoogleGenAIAdapter:
                 wrapper.accumulated_tool_calls[tool_call_index]["name"] = function_name
 
             if args_chunk:
-                wrapper.accumulated_tool_calls[tool_call_index][
-                    "arguments"
-                ] += args_chunk
+                wrapper.accumulated_tool_calls[tool_call_index]["arguments"] += (
+                    args_chunk
+                )
 
             # Attempt to parse and emit a complete tool call
             accumulated_data = wrapper.accumulated_tool_calls[tool_call_index]

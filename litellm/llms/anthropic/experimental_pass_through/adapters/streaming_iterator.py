@@ -184,9 +184,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in
         # place, which would otherwise leak across streams.
-        self.current_content_block_start: (
-            "AnthropicStreamWrapper.ContentBlockContentBlockDict"
-        ) = self.TextBlock(
+        self.current_content_block_start: "AnthropicStreamWrapper.ContentBlockContentBlockDict" = self.TextBlock(
             type="text",
             text="",
         )

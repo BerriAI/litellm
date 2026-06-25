@@ -263,9 +263,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if rpm_limit is None:
             rpm_limit = sys.maxsize
 
-        values_to_update_in_cache: List[Tuple[Any, Any]] = (
-            []
-        )  # values that need to get updated in cache, will run a batch_set_cache after this function
+        values_to_update_in_cache: List[
+            Tuple[Any, Any]
+        ] = []  # values that need to get updated in cache, will run a batch_set_cache after this function
 
         # ------------
         # Setup values
@@ -901,11 +901,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         current_minute = datetime.now().strftime("%M")
         precise_minute = f"{current_date}-{current_hour}-{current_minute}"
         request_count_api_key = f"{api_key}::{precise_minute}::request_count"
-        current: Optional[CurrentItemRateLimit] = (
-            await self.internal_usage_cache.async_get_cache(
-                key=request_count_api_key,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
+        current: Optional[
+            CurrentItemRateLimit
+        ] = await self.internal_usage_cache.async_get_cache(
+            key=request_count_api_key,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
         key_remaining_rpm_limit: Optional[int] = None

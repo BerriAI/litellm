@@ -245,7 +245,7 @@ class SlackAlerting(CustomBatchLogger):
                 return
 
             for api_base, latency in _deployment_latency_map.items():
-                _message_to_send += f"\n{api_base}: {round(latency,2)}s"
+                _message_to_send += f"\n{api_base}: {round(latency, 2)}s"
             _message_to_send = "```" + _message_to_send + "```"
             return _message_to_send
 
@@ -272,7 +272,7 @@ class SlackAlerting(CustomBatchLogger):
         if litellm.turn_off_message_logging or litellm.redact_messages_in_exceptions:
             messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
-        slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
+        slow_message = f"`Responses are slow - {round(time_difference_float, 2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         alerting_metadata: dict = {}
         if time_difference_float > self.alerting_threshold:
             # add deployment latencies to alert
@@ -460,7 +460,7 @@ class SlackAlerting(CustomBatchLogger):
             if api_base is None:
                 api_base = ""
             value = replaced_failed_values[top_5_failed[i]]
-            message += f"\t{i+1}. Deployment: `{deployment_name}`, Failed Requests: `{value}`,  API Base: `{api_base}`\n"
+            message += f"\t{i + 1}. Deployment: `{deployment_name}`, Failed Requests: `{value}`,  API Base: `{api_base}`\n"
 
         message += "\n\n*😅 Top Slowest Deployments:*\n\n"
         if not top_5_slowest:
@@ -479,7 +479,7 @@ class SlackAlerting(CustomBatchLogger):
                 ),
             )
             value = round(replaced_slowest_values[top_5_slowest[i]], 3)
-            message += f"\t{i+1}. Deployment: `{deployment_name}`, Latency per output token: `{value}s/token`,  API Base: `{api_base}`\n\n"
+            message += f"\t{i + 1}. Deployment: `{deployment_name}`, Latency per output token: `{value}s/token`,  API Base: `{api_base}`\n\n"
 
         # cache cleanup -> reset values to 0
         latency_cache_keys = [(key, 0) for key in latency_keys]
@@ -595,9 +595,7 @@ class SlackAlerting(CustomBatchLogger):
                 "projected_limit_exceeded",
                 "soft_budget_crossed",
             ]
-        ] = (
-            "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
-        )
+        ] = "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
 
         webhook_event: Optional[WebhookEvent] = None
 
@@ -854,9 +852,9 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[ProviderRegionOutageModel] = (
-            await self.internal_usage_cache.async_get_cache(key=cache_key)
-        )
+        outage_value: Optional[
+            ProviderRegionOutageModel
+        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
 
         # Convert deployment_ids back to set if it was stored as a list
         if outage_value is not None:
@@ -981,7 +979,9 @@ class SlackAlerting(CustomBatchLogger):
         max_alerts_size = 10
         """
         try:
-            outage_value: Optional[OutageModel] = await self.internal_usage_cache.async_get_cache(key=deployment_id)  # type: ignore
+            outage_value: Optional[
+                OutageModel
+            ] = await self.internal_usage_cache.async_get_cache(key=deployment_id)  # type: ignore
             if (
                 getattr(exception, "status_code", None) is None
                 or (
