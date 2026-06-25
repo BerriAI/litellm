@@ -219,7 +219,10 @@ class TestRunwareCompletion:
     @pytest.fixture(autouse=True)
     def _disable_aiohttp(self):
         # respx mocks the httpx transport, so the aiohttp transport must be off.
+        original = getattr(litellm, "disable_aiohttp_transport", False)
         litellm.disable_aiohttp_transport = True
+        yield
+        litellm.disable_aiohttp_transport = original
 
     @pytest.mark.respx()
     def test_completion_mock(self, respx_mock):
