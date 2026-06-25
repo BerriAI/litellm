@@ -247,6 +247,13 @@ def handle_cohere_response(
             for i, tc in enumerate(cohere_response.chatResponse.toolCalls)
         ]
 
+    # Per OpenAI semantics a response carrying tool calls must report
+    # finish_reason="tool_calls". OCI's Cohere protocol has no TOOL_CALLS
+    # finishReason value (it returns "COMPLETE"), so _normalize_oci_finish_reason
+    # yields "stop"; override it when tool calls are present.
+    if tool_calls:
+        finish_reason = "tool_calls"
+
     content: Optional[str] = response_text if response_text else None
 
     # Only include ``tool_calls`` in the message dict when actually present.
@@ -368,6 +375,13 @@ def handle_cohere_stream_chunk(
         ]
 
     finish_reason = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    # OpenAI semantics: the terminal chunk must report finish_reason="tool_calls"
+    # when tool calls were emitted — on this chunk or earlier in the stream. OCI
+    # Cohere's terminal finishReason is "COMPLETE" (normalized to "stop"), and the
+    # terminal chunk suppresses already-emitted tool calls, so rely on
+    # prior_tool_calls_emitted as well.
+    if finish_reason is not None and (tool_calls or prior_tool_calls_emitted):
+        finish_reason = "tool_calls"
 
     return ModelResponseStream(
         choices=[
