@@ -1,4 +1,3 @@
-
 import json
 import os
 import sys
@@ -15,6 +14,7 @@ from fastapi import Request, Response
 from fastapi.datastructures import Headers
 from litellm.proxy.proxy_server import initialize
 from litellm.utils import ModelResponse
+
 
 @pytest.fixture
 def mock_user_api_key_dict():
@@ -41,22 +41,39 @@ def mock_request(request):
     mock_req.headers = Headers({"content-type": "application/json"})
     mock_req.method = "POST"
     mock_req.url.path = request.param.get("path")
-    
+
     async def mock_body():
-        return json.dumps(request.param.get("payload", {})).encode('utf-8')
-    
+        return json.dumps(request.param.get("payload", {})).encode("utf-8")
+
     mock_req.body = mock_body
     return mock_req
 
 
-@pytest.fixture  
+@pytest.fixture
 def mock_response():
     """Create a mock FastAPI response."""
     return MagicMock(spec=Response)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mock_request", [{"path": "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent", "payload": {"contents": [{"parts":[{"text": "The quick brown fox jumps over the lazy dog."}]}]}}], indirect=True)
+@pytest.mark.parametrize(
+    "mock_request",
+    [
+        {
+            "path": "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
+            "payload": {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": "The quick brown fox jumps over the lazy dog."}
+                        ]
+                    }
+                ]
+            },
+        }
+    ],
+    indirect=True,
+)
 async def test_google_generate_content_with_slashes_in_model_name(
     mock_request, mock_response, mock_user_api_key_dict
 ):
@@ -81,9 +98,12 @@ async def test_google_generate_content_with_slashes_in_model_name(
     try:
         await initialize(config=config_fp)
 
-        with patch("litellm.proxy.proxy_server.llm_router.agenerate_content", new_callable=AsyncMock) as mock_agenerate_content:
+        with patch(
+            "litellm.proxy.proxy_server.llm_router.agenerate_content",
+            new_callable=AsyncMock,
+        ) as mock_agenerate_content:
             mock_agenerate_content.return_value = ModelResponse()
-            
+
             await google_generate_content(
                 request=mock_request,
                 model_name="bedrock/claude-sonnet-3.7",

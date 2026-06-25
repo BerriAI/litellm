@@ -38,7 +38,21 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.litellm_core_utils.cloud_storage_security import (
+    is_managed_cloud_storage_uri,
+)
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+    encode_file_id_with_model,
+    extract_file_creation_params,
+    get_credentials_for_model,
+    get_team_provider_credentials,
+    handle_model_based_routing,
+    prepare_data_with_credentials,
+    validate_managed_files_requirement,
+)
 from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
@@ -46,16 +60,6 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-
-from .common_utils import (
-    _is_base64_encoded_unified_file_id,
-    encode_file_id_with_model,
-    extract_file_creation_params,
-    get_credentials_for_model,
-    handle_model_based_routing,
-    prepare_data_with_credentials,
-)
-from .storage_backend_service import StorageBackendFileService
 
 router = APIRouter()
 
@@ -158,6 +162,9 @@ async def route_create_file(
     if target_storage and target_storage != "default":
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
+        )
+        from litellm.proxy.openai_files_endpoints.storage_backend_service import (
+            StorageBackendFileService,
         )
 
         # Extract file data
@@ -281,7 +288,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(  # noqa: PLR0915
+async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
@@ -343,6 +350,11 @@ async def create_file(  # noqa: PLR0915
         target_storage = file_params.target_storage
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
+
+        validate_managed_files_requirement(
+            target_model_names=target_model_names_list, model=model_param
+        )
+
         # Prepare the data for forwarding
 
         # Replace with:
@@ -363,10 +375,10 @@ async def create_file(  # noqa: PLR0915
         expires_after: Optional[FileExpiresAfter] = None
         form_data_raw = await request.form()
         form_data_dict: Dict[str, Any] = dict(form_data_raw)
-        extracted_litellm_metadata: Optional[
-            Dict[str, Any]
-        ] = extract_nested_form_metadata(
-            form_data=form_data_dict, prefix="litellm_metadata["
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = (
+            extract_nested_form_metadata(
+                form_data=form_data_dict, prefix="litellm_metadata["
+            )
         )
         expires_after_anchor = form_data_raw.get("expires_after[anchor]")
         expires_after_seconds_str = form_data_raw.get("expires_after[seconds]")
@@ -581,7 +593,7 @@ async def create_file(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content(  # noqa: PLR0915
+async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,
@@ -665,7 +677,7 @@ async def get_file_content(  # noqa: PLR0915
                 managed_files_obj, "prisma_client", None
             ):
                 prisma_client = getattr(managed_files_obj, "prisma_client")
-                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                db_file = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
@@ -717,6 +729,15 @@ async def get_file_content(  # noqa: PLR0915
                     }
                 )
         else:
+            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
+            # managed-file owner/team check that only runs for unified ids, letting
+            # a caller read another tenant's object by its key. Such objects are only
+            # reachable through their managed unified id.
+            if is_managed_cloud_storage_uri(file_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                )
             # Check for model-based credential routing
             (
                 should_route,
@@ -731,14 +752,50 @@ async def get_file_content(  # noqa: PLR0915
                 check_file_id_encoding=True,
             )
 
+            from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
+                FileContentStreamingHandler,
+            )
+
+            (
+                resolved_custom_llm_provider,
+                resolved_file_id,
+                resolved_streaming_data,
+            ) = FileContentStreamingHandler.resolve_streaming_request_params(
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                data=data,
+                should_route=should_route,
+                original_file_id=original_file_id,
+                credentials=credentials,
+            )
+
+            if FileContentStreamingHandler.should_stream_file_content(
+                custom_llm_provider=resolved_custom_llm_provider,
+            ):
+                verbose_proxy_logger.debug(
+                    "Using streaming file content helper for custom_llm_provider=%s, original_file_id=%s, file_id=%s, model_used=%s",
+                    resolved_custom_llm_provider,
+                    original_file_id,
+                    resolved_file_id,
+                    model_used,
+                )
+                return await FileContentStreamingHandler.get_streaming_file_content_response(
+                    custom_llm_provider=resolved_custom_llm_provider,
+                    file_id=resolved_file_id,
+                    data=resolved_streaming_data,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                )
+
             if should_route:
                 # Use model-based routing with credentials from config
                 prepare_data_with_credentials(
                     data=data,
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                    include_internal_credentials=True,
                 )
-
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
                     **data,
@@ -913,6 +970,7 @@ async def get_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
@@ -1113,9 +1171,13 @@ async def delete_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
-            response = await litellm.afile_delete(**data)  # type: ignore
+            response = await litellm.afile_delete(
+                custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
+                **data,
+            )  # type: ignore
 
             verbose_proxy_logger.debug(
                 f"Deleted file using model: {model_used}"
@@ -1302,14 +1364,20 @@ async def list_files(
                     status_code=400,
                     detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
                 )
-            ## Use router to list fine-tuning jobs for that model
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            data["model"] = target_model_names_list[0]
-            response = await llm_router.afile_list(
+            credentials = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=target_model_names_list[0],
+                operation_context="file list",
+            )
+            prepare_data_with_credentials(data=data, credentials=credentials)
+            response = await litellm.afile_list(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                purpose=purpose,
                 **data,
             )
         else:
@@ -1320,6 +1388,18 @@ async def list_files(
                 or await get_custom_llm_provider_from_request_body(request=request)
                 or "openai"
             )
+
+            # No model/target_model_names pinned: resolve upstream credentials from
+            # the team's deployment for this provider so the call is authenticated
+            # against the team's own account (e.g. the team's openai deployment).
+            team_credentials = get_team_provider_credentials(
+                llm_router=llm_router,
+                team_models=user_api_key_dict.team_models or [],
+                custom_llm_provider=custom_llm_provider,
+                team_id=user_api_key_dict.team_id,
+            )
+            if team_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=team_credentials)
 
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore

@@ -1,6 +1,7 @@
 """
 Base OCR transformation configuration.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
@@ -53,6 +54,7 @@ class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
 
     pages_processed: Optional[int] = None
+    credits: Optional[float] = None
     doc_size_bytes: Optional[int] = None
 
     model_config = {"extra": "allow"}

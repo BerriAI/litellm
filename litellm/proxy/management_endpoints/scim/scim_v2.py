@@ -4,7 +4,8 @@
 This is an enterprise feature and requires a premium license.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+import re
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from fastapi import (
     APIRouter,
@@ -21,7 +22,6 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -38,7 +38,9 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
@@ -49,6 +51,16 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_delete,
 )
 from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
+from litellm.repositories.table_repositories import (
+    InvitationLinkRepository,
+    OrganizationMembershipRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 
@@ -57,14 +69,21 @@ class UserProvisionerHelpers:
 
     @staticmethod
     async def handle_existing_user_by_email(
-        prisma_client, new_user_request: NewUserRequest
+        prisma_client,
+        new_user_request: NewUserRequest,
+        admin_group: Optional[str] = None,
     ) -> Optional[SCIMUser]:
         """
         Check if a user with the given email already exists and update them if found.
 
+        When admin_group is configured the resolved global role on new_user_request
+        is persisted too, so re-upserting an existing email demotes a user who is no
+        longer in the admin group instead of leaving the stale role.
+
         Args:
             prisma_client: Database client
             new_user_request: New user request data
+            admin_group: Configured SCIM admin group, or None to leave role untouched
 
         Returns:
             SCIMUser if user was updated, None if no existing user found
@@ -72,7 +91,7 @@ class UserProvisionerHelpers:
         if not new_user_request.user_email:
             return None
 
-        existing_user = await prisma_client.db.litellm_usertable.find_first(
+        existing_user = await UserRepository(prisma_client).table.find_first(
             where={"user_email": new_user_request.user_email}
         )
 
@@ -80,7 +99,7 @@ class UserProvisionerHelpers:
             return None
 
         # Update the user
-        updated_user = await prisma_client.db.litellm_usertable.update(
+        updated_user = await UserRepository(prisma_client).table.update(
             where={"user_id": existing_user.user_id},
             data={
                 "user_id": new_user_request.user_id,
@@ -88,6 +107,11 @@ class UserProvisionerHelpers:
                 "user_alias": new_user_request.user_alias,
                 "teams": new_user_request.teams,
                 "metadata": safe_dumps(new_user_request.metadata),
+                **(
+                    {"user_role": new_user_request.user_role}
+                    if admin_group is not None
+                    else {}
+                ),
             },
         )
 
@@ -106,6 +130,7 @@ class ScimUserData(TypedDict):
     given_name: Optional[str]
     family_name: Optional[str]
     active: Optional[bool]
+    enterprise: Optional[SCIMEnterpriseUser]
 
 
 class GroupMemberExtractionResult(BaseModel):
@@ -137,7 +162,7 @@ async def _check_user_exists(user_id: str):
     """Check if user exists and return user, raise 404 if not found."""
     prisma_client = await _get_prisma_client_or_raise_exception()
 
-    user = await prisma_client.db.litellm_usertable.find_unique(
+    user = await UserRepository(prisma_client).table.find_unique(
         where={"user_id": user_id}
     )
 
@@ -153,7 +178,7 @@ async def _check_team_exists(team_id: str):
     """Check if team exists and return team, raise 404 if not found."""
     prisma_client = await _get_prisma_client_or_raise_exception()
 
-    team = await prisma_client.db.litellm_teamtable.find_unique(
+    team = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
 
@@ -187,11 +212,15 @@ def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
         "given_name": user.name.givenName if user.name else None,
         "family_name": user.name.familyName if user.name else None,
         "active": user.active,
+        "enterprise": user.enterprise_user,
     }
 
 
 def _build_scim_metadata(
-    given_name: Optional[str], family_name: Optional[str], active: Optional[bool] = None
+    given_name: Optional[str],
+    family_name: Optional[str],
+    active: Optional[bool] = None,
+    enterprise: Optional[SCIMEnterpriseUser] = None,
 ) -> Dict[str, Any]:
     """Build metadata dictionary with SCIM data."""
     metadata: Dict[str, Any] = {
@@ -203,6 +232,11 @@ def _build_scim_metadata(
 
     if active is not None:
         metadata["scim_active"] = active
+
+    if enterprise is not None:
+        metadata[SCIM_ENTERPRISE_METADATA_KEY] = enterprise.model_dump(
+            by_alias=True, exclude_none=True
+        )
 
     return metadata
 
@@ -230,6 +264,117 @@ async def _get_scim_upsert_user_setting() -> bool:
         )
         # Default to True for backward compatibility
         return True
+
+
+ScimUserRole = Literal[
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
+def _default_scim_user_role() -> ScimUserRole:
+    """Non-admin default role for SCIM-provisioned users."""
+    if litellm.default_internal_user_params:
+        configured_role = litellm.default_internal_user_params.get("user_role")
+        if configured_role is not None:
+            return configured_role
+    return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+async def _get_scim_admin_group() -> Optional[str]:
+    """
+    Get the scim_admin_group setting from litellm_settings.
+
+    Returns the configured admin group identifier, or None when unset so callers
+    leave a user's global role untouched (default-safe).
+    """
+    try:
+        from litellm.proxy.proxy_server import proxy_config
+
+        config = await proxy_config.get_config()
+        litellm_settings = config.get("litellm_settings", {}) or {}
+        return litellm_settings.get("scim_admin_group") or None
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Error reading scim_admin_group setting, defaulting to None: {e}"
+        )
+        return None
+
+
+def _resolve_scim_user_role(
+    groups: list[SCIMUserGroup],
+    admin_group: Optional[str],
+    default_role: ScimUserRole,
+) -> Optional[LitellmUserRoles]:
+    """
+    Resolve a user's global proxy role from their SCIM groups.
+
+    Returns None when no admin group is configured, signalling callers to leave
+    the role unchanged. Otherwise grants PROXY_ADMIN when any group matches the
+    admin group by value or display, and falls back to the non-admin default.
+    """
+    if admin_group is None:
+        return None
+    for group in groups:
+        if group.value == admin_group or group.display == admin_group:
+            return LitellmUserRoles.PROXY_ADMIN
+    return default_role
+
+
+async def _scim_groups_from_team_ids(
+    prisma_client: Any, team_ids: list[str]
+) -> list[SCIMUserGroup]:
+    """
+    Build SCIMUserGroup objects from team ids, populating display from each
+    team's alias so admin-group matching by display name works the same way it
+    does on PUT (where SCIM groups carry display names natively).
+    """
+    teams = [
+        await TeamRepository(prisma_client).table.find_unique(
+            where={"team_id": team_id}
+        )
+        for team_id in team_ids
+    ]
+    return [
+        SCIMUserGroup(
+            value=team_id,
+            display=team.team_alias if team is not None else None,
+        )
+        for team_id, team in zip(team_ids, teams)
+    ]
+
+
+async def _recompute_scim_member_roles(
+    prisma_client: Any, user_ids: Iterable[str]
+) -> None:
+    """
+    Recompute and persist each user's global proxy role from their resulting team
+    membership. No-op unless scim_admin_group is configured, so a SCIM group write
+    that drops a member from the admin group demotes them just like the user
+    endpoints do, and the role is left untouched when the feature is off.
+    """
+    admin_group = await _get_scim_admin_group()
+    if admin_group is None:
+        return
+
+    default_role = _default_scim_user_role()
+    for user_id in user_ids:
+        user = await UserRepository(prisma_client).table.find_unique(
+            where={"user_id": user_id}
+        )
+        if user is None:
+            continue
+        resolved_role = _resolve_scim_user_role(
+            await _scim_groups_from_team_ids(prisma_client, user.teams or []),
+            admin_group,
+            default_role,
+        )
+        await UserRepository(prisma_client).table.update(
+            where={"user_id": user_id},
+            data={"user_role": resolved_role},
+        )
 
 
 async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionResult:
@@ -266,7 +411,7 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
                 )
 
             # Check if user exists
-            user = await prisma_client.db.litellm_usertable.find_unique(
+            user = await UserRepository(prisma_client).table.find_unique(
                 where={"user_id": user_id}
             )
 
@@ -308,7 +453,7 @@ async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
     members: List[SCIMMember] = []
 
     for member_id in member_ids:
-        user = await prisma_client.db.litellm_usertable.find_unique(
+        user = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": member_id}
         )
         if user:
@@ -334,6 +479,118 @@ async def _handle_team_membership_changes(
             teams_ids_to_add_user_to=list(teams_to_add),
             teams_ids_to_remove_user_from=list(teams_to_remove),
         )
+
+
+SCIM_BLOCKED_METADATA_KEY = "scim_blocked"
+
+
+def _key_was_scim_blocked(metadata: Any) -> bool:
+    """True if a verification token carries the SCIM-block marker in metadata."""
+    return (
+        isinstance(metadata, dict) and metadata.get(SCIM_BLOCKED_METADATA_KEY) is True
+    )
+
+
+async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
+    """
+    Block or unblock virtual keys owned by a user and invalidate them in the
+    in-memory/redis caches so the change takes effect immediately.
+
+    Each key SCIM blocks is tagged with ``metadata.scim_blocked = True``. On
+    reactivation we only unblock keys carrying that marker, so a key an admin
+    blocked manually for unrelated reasons is left alone.
+
+    Returns the number of keys whose state was flipped.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    prisma_client = await _get_prisma_client_or_raise_exception()
+
+    if blocked:
+        # `blocked` is a nullable column with no default, so existing rows
+        # typically hold NULL; treat NULL as "not blocked" since SQL equality
+        # on NULL would otherwise silently skip them.
+        candidates = await VerificationTokenRepository(prisma_client).table.find_many(
+            where={
+                "user_id": user_id,
+                "OR": [{"blocked": False}, {"blocked": None}],
+            },
+        )
+        affected_keys = candidates
+    else:
+        candidates = await VerificationTokenRepository(prisma_client).table.find_many(
+            where={"user_id": user_id, "blocked": True},
+        )
+        affected_keys = [k for k in candidates if _key_was_scim_blocked(k.metadata)]
+
+    if not affected_keys:
+        return 0
+
+    for key_row in affected_keys:
+        current_metadata: Dict[str, Any] = (
+            dict(key_row.metadata) if isinstance(key_row.metadata, dict) else {}
+        )
+        if blocked:
+            new_metadata = {**current_metadata, SCIM_BLOCKED_METADATA_KEY: True}
+        else:
+            new_metadata = {
+                k: v
+                for k, v in current_metadata.items()
+                if k != SCIM_BLOCKED_METADATA_KEY
+            }
+        await VerificationTokenRepository(prisma_client).table.update(
+            where={"token": key_row.token},
+            data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
+        )
+
+    for key_row in affected_keys:
+        await _delete_cache_key_object(
+            hashed_token=key_row.token,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    verbose_proxy_logger.info(
+        "SCIM: %s %d virtual key(s) for user_id=%s",
+        "blocked" if blocked else "unblocked",
+        len(affected_keys),
+        user_id,
+    )
+    return len(affected_keys)
+
+
+async def _delete_rows_referencing_user(prisma_client: Any, *, user_id: str) -> None:
+    """Drop rows whose foreign keys reference ``LiteLLM_UserTable.user_id``.
+
+    Required before deleting the user row itself, otherwise Postgres rejects
+    the user delete with an FK constraint violation (e.g.
+    ``LiteLLM_InvitationLink_user_id_fkey``).
+    """
+    await InvitationLinkRepository(prisma_client).table.delete_many(
+        where={
+            "OR": [
+                {"user_id": user_id},
+                {"created_by": user_id},
+                {"updated_by": user_id},
+            ]
+        }
+    )
+    await OrganizationMembershipRepository(prisma_client).table.delete_many(
+        where={"user_id": user_id}
+    )
+    await TeamMembershipRepository(prisma_client).table.delete_many(
+        where={"user_id": user_id}
+    )
+
+
+def _scim_active_value(metadata: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """Read the SCIM active flag from a user's metadata dict, if present."""
+    if not metadata:
+        return None
+    value = metadata.get("scim_active")
+    if value is None:
+        return None
+    return bool(value)
 
 
 async def _create_user_if_not_exists(
@@ -730,6 +987,18 @@ async def get_service_provider_config(request: Request):
     return SCIMServiceProviderConfig(meta=meta)
 
 
+def _parse_scim_eq_filter(scim_filter: str) -> Optional[Tuple[str, str]]:
+    """Parse the SCIM equality filters Okta uses before user lifecycle changes."""
+    match = re.match(
+        r"""\s*([\w.]+)\s+eq\s+(['"]?)(.*?)\2\s*$""",
+        scim_filter,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).lower(), match.group(3)
+
+
 # User Endpoints
 @scim_router.get(
     "/Users",
@@ -754,20 +1023,26 @@ async def get_users(
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
-        where_conditions = {}
+        where_conditions: Dict[str, Any] = {}
         if filter:
-            # Very basic filter support - only handling userName eq and emails.value eq
-            if "userName eq" in filter:
-                user_id = filter.split("userName eq ")[1].strip("\"'")
-                where_conditions["user_id"] = user_id
-            elif "emails.value eq" in filter:
-                email = filter.split("emails.value eq ")[1].strip("\"'")
-                where_conditions["user_email"] = email
+            # Okta locates users by userName before deprovisioning. LiteLLM
+            # exposes SCIM userName from user_email, while older SCIM-created
+            # users may still have user_id == userName, so support both.
+            parsed_filter = _parse_scim_eq_filter(filter)
+            if parsed_filter:
+                filter_attribute, filter_value = parsed_filter
+                if filter_attribute == "username":
+                    where_conditions["OR"] = [
+                        {"user_email": filter_value},
+                        {"user_id": filter_value},
+                    ]
+                elif filter_attribute == "emails.value":
+                    where_conditions["user_email"] = filter_value
 
         # Get users from database
-        users: List[
-            LiteLLM_UserTable
-        ] = await prisma_client.db.litellm_usertable.find_many(
+        users: List[LiteLLM_UserTable] = await UserRepository(
+            prisma_client
+        ).table.find_many(
             where=where_conditions,
             skip=(startIndex - 1),
             take=count,
@@ -775,7 +1050,7 @@ async def get_users(
         )
 
         # Get total count for pagination
-        total_count = await prisma_client.db.litellm_usertable.count(
+        total_count = await UserRepository(prisma_client).table.count(
             where=where_conditions
         )
 
@@ -843,7 +1118,7 @@ async def create_user(
 
         # Check if user already exists
         if user.userName:
-            existing_user = await prisma_client.db.litellm_usertable.find_unique(
+            existing_user = await UserRepository(prisma_client).table.find_unique(
                 where={"user_id": user.userName}
             )
             if existing_user:
@@ -857,19 +1132,16 @@ async def create_user(
         # Create user in database
         user_id = user.userName or str(uuid.uuid4())
         metadata = _build_scim_metadata(
-            user_data["given_name"], user_data["family_name"]
+            user_data["given_name"],
+            user_data["family_name"],
+            enterprise=user_data["enterprise"],
         )
 
-        default_role: Optional[
-            Literal[
-                LitellmUserRoles.PROXY_ADMIN,
-                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-                LitellmUserRoles.INTERNAL_USER,
-                LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            ]
-        ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-        if litellm.default_internal_user_params:
-            default_role = litellm.default_internal_user_params.get("user_role")
+        default_role = _default_scim_user_role()
+        admin_group = await _get_scim_admin_group()
+        resolved_role = _resolve_scim_user_role(
+            user.groups or [], admin_group, default_role
+        )
 
         new_user_request = NewUserRequest(
             user_id=user_id,
@@ -878,12 +1150,14 @@ async def create_user(
             teams=user_data["teams"],
             metadata=metadata,
             auto_create_key=False,
-            user_role=default_role,
+            user_role=resolved_role if admin_group is not None else default_role,
         )
 
         # Check if user with email already exists and update if found
         existing_user_scim = await UserProvisionerHelpers.handle_existing_user_by_email(
-            prisma_client=prisma_client, new_user_request=new_user_request
+            prisma_client=prisma_client,
+            new_user_request=new_user_request,
+            admin_group=admin_group,
         )
 
         if existing_user_scim:
@@ -928,40 +1202,58 @@ async def update_user(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_user = await _check_user_exists(user_id)
 
-        # Extract data from SCIM user
+        prev_active = _scim_active_value(existing_user.metadata)
+
         user_data = _extract_scim_user_data(user)
 
-        # Build metadata with SCIM data
-        metadata = _build_scim_metadata(
-            user_data["given_name"], user_data["family_name"], user_data["active"]
+        # SCIM PUT may legally omit `active` (full-replace with the field absent).
+        # Pydantic fills the model default, so distinguish "client sent active"
+        # from "client omitted it" via model_fields_set, and preserve the prior
+        # SCIM active state when omitted — otherwise a vanilla PUT to a
+        # deactivated user would silently re-enable them and unblock their keys.
+        client_set_active = "active" in user.model_fields_set
+        scim_active_for_metadata = (
+            user_data["active"] if client_set_active else prev_active
         )
 
-        # Handle team membership changes
+        metadata = _build_scim_metadata(
+            user_data["given_name"],
+            user_data["family_name"],
+            scim_active_for_metadata,
+            enterprise=user_data["enterprise"],
+        )
+
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams or [],
             new_teams=user_data["teams"],
         )
 
-        # Update user with all new data (full replacement)
         update_data = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
             "teams": user_data["teams"],
-            "metadata": metadata,
+            "metadata": safe_dumps(metadata),
         }
 
-        # Serialize metadata to JSON string for Prisma to avoid GraphQL parsing issues
-        if "metadata" in update_data and isinstance(update_data["metadata"], dict):
-            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        admin_group = await _get_scim_admin_group()
+        if admin_group is not None:
+            update_data["user_role"] = _resolve_scim_user_role(
+                user.groups or [], admin_group, _default_scim_user_role()
+            )
 
-            update_data["metadata"] = safe_dumps(update_data["metadata"])
-
-        updated_user = await prisma_client.db.litellm_usertable.update(
+        updated_user = await UserRepository(prisma_client).table.update(
             where={"user_id": user_id},
             data=update_data,
         )
+
+        if client_set_active:
+            new_active = _scim_active_value(metadata)
+            if new_active is not None and new_active != (
+                True if prev_active is None else prev_active
+            ):
+                await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
         # Convert back to SCIM format
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
@@ -994,7 +1286,7 @@ async def delete_user(
         teams = []
         if existing_user.teams:
             for team_id in existing_user.teams:
-                team = await prisma_client.db.litellm_teamtable.find_unique(
+                team = await TeamRepository(prisma_client).table.find_unique(
                     where={"team_id": team_id}
                 )
                 if team:
@@ -1005,12 +1297,16 @@ async def delete_user(
             current_members = team.members or []
             if user_id in current_members:
                 new_members = [m for m in current_members if m != user_id]
-                await prisma_client.db.litellm_teamtable.update(
+                await TeamRepository(prisma_client).table.update(
                     where={"team_id": team.team_id}, data={"members": new_members}
                 )
 
+        await _set_user_keys_blocked(user_id=user_id, blocked=True)
+
+        await _delete_rows_referencing_user(prisma_client, user_id=user_id)
+
         # Delete user
-        await prisma_client.db.litellm_usertable.delete(where={"user_id": user_id})
+        await UserRepository(prisma_client).table.delete(where={"user_id": user_id})
 
         return Response(status_code=204)
     except Exception as e:
@@ -1242,10 +1538,14 @@ async def patch_user(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_user = await _check_user_exists(user_id)
 
+        prev_active = _scim_active_value(existing_user.metadata)
+
         update_data, final_team_set = _apply_patch_ops(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
+
+        new_active = _scim_active_value(update_data.get("metadata"))
 
         # Handle team membership changes
         await _handle_team_membership_changes(
@@ -1256,16 +1556,29 @@ async def patch_user(
 
         update_data["teams"] = list(final_team_set)
 
+        admin_group = await _get_scim_admin_group()
+        if admin_group is not None:
+            update_data["user_role"] = _resolve_scim_user_role(
+                await _scim_groups_from_team_ids(prisma_client, list(final_team_set)),
+                admin_group,
+                _default_scim_user_role(),
+            )
+
         # Serialize metadata to JSON string for Prisma to avoid GraphQL parsing issues
         if "metadata" in update_data and isinstance(update_data["metadata"], dict):
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
             update_data["metadata"] = safe_dumps(update_data["metadata"])
 
-        updated_user = await prisma_client.db.litellm_usertable.update(
+        updated_user = await UserRepository(prisma_client).table.update(
             where={"user_id": user_id},
             data=update_data,
         )
+
+        if new_active is not None and new_active != (
+            True if prev_active is None else prev_active
+        ):
+            await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
             updated_user
@@ -1309,7 +1622,7 @@ async def get_groups(
                 where_conditions["team_alias"] = team_alias
 
         # Get teams from database
-        teams = await prisma_client.db.litellm_teamtable.find_many(
+        teams = await TeamRepository(prisma_client).table.find_many(
             where=where_conditions,
             skip=(startIndex - 1),
             take=count,
@@ -1317,7 +1630,7 @@ async def get_groups(
         )
 
         # Get total count for pagination
-        total_count = await prisma_client.db.litellm_teamtable.count(
+        total_count = await TeamRepository(prisma_client).table.count(
             where=where_conditions
         )
 
@@ -1405,7 +1718,7 @@ async def create_group(
         team_id = group.id or group.externalId or str(uuid.uuid4())
 
         # Check if team already exists
-        existing_team = await prisma_client.db.litellm_teamtable.find_unique(
+        existing_team = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": team_id}
         )
 
@@ -1432,6 +1745,8 @@ async def create_group(
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
+
+        await _recompute_scim_member_roles(prisma_client, member_result.all_member_ids)
 
         scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
             created_team
@@ -1482,7 +1797,7 @@ async def update_group(
         }
 
         # Update team in database
-        updated_team = await prisma_client.db.litellm_teamtable.update(
+        updated_team = await TeamRepository(prisma_client).table.update(
             where={"team_id": group_id},
             data=update_data,
         )
@@ -1497,6 +1812,19 @@ async def update_group(
             group_id=group_id,
             current_members=current_members,
             final_members=final_members,
+        )
+
+        # A rename can flip whether this group matches scim_admin_group by display
+        # name, so retained members must be re-resolved too, not just the ones whose
+        # membership changed.
+        alias_changed = existing_team.team_alias != group.displayName
+        await _recompute_scim_member_roles(
+            prisma_client,
+            (
+                current_members | final_members
+                if alias_changed
+                else current_members ^ final_members
+            ),
         )
 
         # Convert to SCIM format and return
@@ -1525,21 +1853,25 @@ async def delete_group(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
 
+        member_ids = await _get_team_member_user_ids_from_team(existing_team)
+
         # For each member, remove this team from their teams list
-        for member_id in existing_team.members or []:
-            user = await prisma_client.db.litellm_usertable.find_unique(
+        for member_id in member_ids:
+            user = await UserRepository(prisma_client).table.find_unique(
                 where={"user_id": member_id}
             )
             if user:
                 current_teams = user.teams or []
                 if group_id in current_teams:
                     new_teams = [t for t in current_teams if t != group_id]
-                    await prisma_client.db.litellm_usertable.update(
+                    await UserRepository(prisma_client).table.update(
                         where={"user_id": member_id}, data={"teams": new_teams}
                     )
 
+        await _recompute_scim_member_roles(prisma_client, member_ids)
+
         # Delete team
-        await prisma_client.db.litellm_teamtable.delete(where={"team_id": group_id})
+        await TeamRepository(prisma_client).table.delete(where={"team_id": group_id})
 
         return Response(status_code=204)
 
@@ -1592,7 +1924,7 @@ async def _process_group_patch_operations(
                         detail={"error": "Invalid member: user ID cannot be empty."},
                     )
 
-                user = await prisma_client.db.litellm_usertable.find_unique(
+                user = await UserRepository(prisma_client).table.find_unique(
                     where={"user_id": member_id}
                 )
                 if user:
@@ -1649,7 +1981,7 @@ async def _apply_group_patch_updates(
     update_data["members"] = list(final_members)
 
     # Update team in database
-    updated_team = await prisma_client.db.litellm_teamtable.update(
+    updated_team = await TeamRepository(prisma_client).table.update(
         where={"team_id": group_id},
         data=update_data,
     )
@@ -1721,7 +2053,7 @@ async def patch_group(
 
         # Refresh team data from database to get the latest state after concurrent updates
         # This prevents race conditions when multiple PATCH requests come in simultaneously
-        refreshed_team = await prisma_client.db.litellm_teamtable.find_unique(
+        refreshed_team = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": group_id}
         )
         if refreshed_team:
@@ -1737,8 +2069,22 @@ async def patch_group(
         # Handle user-team relationship changes
         await _handle_group_membership_changes(group_id, current_members, final_members)
 
+        # A rename can flip whether this group matches scim_admin_group by display
+        # name, so retained members must be re-resolved too, not just the ones whose
+        # membership changed.
+        new_alias = update_data.get("team_alias", existing_team.team_alias)
+        alias_changed = new_alias != existing_team.team_alias
+        await _recompute_scim_member_roles(
+            prisma_client,
+            (
+                current_members | final_members
+                if alias_changed
+                else current_members ^ final_members
+            ),
+        )
+
         # Refresh team one more time to get final state after membership changes
-        final_team = await prisma_client.db.litellm_teamtable.find_unique(
+        final_team = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": group_id}
         )
         if final_team:

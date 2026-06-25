@@ -196,7 +196,7 @@ vi.mock("lucide-react", async () => {
 });
 
 // Heavy children -> async factories & local React
-vi.mock("../organisms/regenerate_key_modal", async () => {
+vi.mock("../organisms/RegenerateKeyModal", async () => {
   const React = await import("react");
   function RegenerateKeyModal() {
     return null;

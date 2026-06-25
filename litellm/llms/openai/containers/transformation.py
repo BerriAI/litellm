@@ -6,6 +6,7 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
@@ -17,6 +18,7 @@ from litellm.types.containers.main import (
 from litellm.types.router import GenericLiteLLMParams
 
 from ...base_llm.containers.transformation import BaseContainerConfig
+from .utils import join_container_api_base_path
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -197,7 +199,10 @@ class OpenAIContainerConfig(BaseContainerConfig):
     ) -> Tuple[str, Dict]:
         """Transform the OpenAI container retrieve request."""
         # For container retrieve, we just need to construct the URL
-        url = f"{api_base.rstrip('/')}/{container_id}"
+        encoded_container_id = encode_url_path_segment(
+            container_id, field_name="container_id"
+        )
+        url = join_container_api_base_path(api_base, f"/{encoded_container_id}")
 
         # No additional data needed for GET request
         data: Dict[str, Any] = {}
@@ -229,7 +234,10 @@ class OpenAIContainerConfig(BaseContainerConfig):
         - DELETE /v1/containers/{container_id}
         """
         # Construct the URL for container delete
-        url = f"{api_base.rstrip('/')}/{container_id}"
+        encoded_container_id = encode_url_path_segment(
+            container_id, field_name="container_id"
+        )
+        url = join_container_api_base_path(api_base, f"/{encoded_container_id}")
 
         # No data needed for DELETE request
         data: Dict[str, Any] = {}
@@ -266,7 +274,10 @@ class OpenAIContainerConfig(BaseContainerConfig):
         - GET /v1/containers/{container_id}/files
         """
         # Construct the URL for container files
-        url = f"{api_base.rstrip('/')}/{container_id}/files"
+        encoded_container_id = encode_url_path_segment(
+            container_id, field_name="container_id"
+        )
+        url = join_container_api_base_path(api_base, f"/{encoded_container_id}/files")
 
         # Prepare query parameters
         params: Dict[str, Any] = {}
@@ -310,7 +321,13 @@ class OpenAIContainerConfig(BaseContainerConfig):
         - GET /v1/containers/{container_id}/files/{file_id}/content
         """
         # Construct the URL for container file content
-        url = f"{api_base.rstrip('/')}/{container_id}/files/{file_id}/content"
+        encoded_container_id = encode_url_path_segment(
+            container_id, field_name="container_id"
+        )
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        url = join_container_api_base_path(
+            api_base, f"/{encoded_container_id}/files/{encoded_file_id}/content"
+        )
 
         # No query parameters needed
         params: Dict[str, Any] = {}

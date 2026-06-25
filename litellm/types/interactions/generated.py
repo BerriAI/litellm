@@ -203,6 +203,8 @@ class Status1(Enum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    incomplete = "incomplete"
+    budget_exceeded = "budget_exceeded"
 
 
 class InteractionStatusUpdate(BaseModel):
@@ -386,13 +388,13 @@ class ResponseModality(Enum):
 
 
 class Status3(Enum):
-    UNSPECIFIED = "UNSPECIFIED"
-    IN_PROGRESS = "IN_PROGRESS"
-    REQUIRES_ACTION = "REQUIRES_ACTION"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-    INCOMPLETE = "INCOMPLETE"
+    IN_PROGRESS = "in_progress"
+    REQUIRES_ACTION = "requires_action"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INCOMPLETE = "incomplete"
+    BUDGET_EXCEEDED = "budget_exceeded"
 
 
 class ModelOption(RootModel[str]):
@@ -952,9 +954,6 @@ class Interaction(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1029,9 +1028,6 @@ class CreateModelInteractionParams(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1099,9 +1095,6 @@ class CreateAgentInteractionParams(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    role: Optional[str] = Field(
-        None, description="Output only. The role of the interaction."
-    )
     outputs: Optional[List[Content]] = Field(
         None, description="Output only. Responses from the model."
     )
@@ -1151,9 +1144,114 @@ class InteractionEvent(BaseModel):
     )
 
 
+# ---------------------------------------------------------------
+# New schema SSE event types (Api-Revision: 2026-05-20)
+# These replace the legacy content.* / interaction.start|complete
+# events and will become the only events after June 8, 2026.
+# ---------------------------------------------------------------
+
+
+class StepStart(BaseModel):
+    """Emitted when a new step begins (replaces content.start)."""
+
+    event_type: Literal["step.start"] = "step.start"
+    index: Optional[int] = None
+    step: Optional[Dict[str, Any]] = Field(
+        None,
+        description="The initial step data (type, content, signature, etc.).",
+    )
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
+class StepDelta(BaseModel):
+    """Emitted for incremental step content (replaces content.delta)."""
+
+    event_type: Literal["step.delta"] = "step.delta"
+    index: Optional[int] = None
+    delta: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Incremental content delta (e.g. text, arguments_delta for function calls).",
+    )
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
+class StepStop(BaseModel):
+    """Emitted when a step finishes (replaces content.stop)."""
+
+    event_type: Literal["step.stop"] = "step.stop"
+    index: Optional[int] = None
+    status: Optional[str] = Field(
+        None,
+        description="Step completion status (e.g. 'done').",
+    )
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
+class InteractionCreated(BaseModel):
+    """Emitted when the interaction is first created (replaces interaction.start)."""
+
+    event_type: Literal["interaction.created"] = "interaction.created"
+    interaction: Optional[Dict[str, Any]] = None
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
+class InteractionInProgress(BaseModel):
+    """Emitted while the interaction is running."""
+
+    event_type: Literal["interaction.in_progress"] = "interaction.in_progress"
+    interaction_id: Optional[str] = None
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
+class InteractionCompleted(BaseModel):
+    """Emitted when the interaction finishes (replaces interaction.complete)."""
+
+    event_type: Literal["interaction.completed"] = "interaction.completed"
+    interaction: Optional[Dict[str, Any]] = None
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
+class InteractionRequiresAction(BaseModel):
+    """Emitted when the interaction is paused waiting for a tool result."""
+
+    event_type: Literal["interaction.requires_action"] = "interaction.requires_action"
+    interaction_id: Optional[str] = None
+    event_id: Optional[str] = Field(
+        None,
+        description="The event_id token to be used to resume the interaction stream.",
+    )
+
+
 class InteractionSseEvent(
     RootModel[
         Union[
+            # New schema events (Api-Revision: 2026-05-20)
+            StepStart,
+            StepDelta,
+            StepStop,
+            InteractionCreated,
+            InteractionInProgress,
+            InteractionCompleted,
+            InteractionRequiresAction,
+            # Legacy schema events (Api-Revision: 2026-05-07, removed June 8 2026)
             InteractionEvent,
             InteractionStatusUpdate,
             ContentStart,
@@ -1164,6 +1262,15 @@ class InteractionSseEvent(
     ]
 ):
     root: Union[
+        # New schema events (Api-Revision: 2026-05-20)
+        StepStart,
+        StepDelta,
+        StepStop,
+        InteractionCreated,
+        InteractionInProgress,
+        InteractionCompleted,
+        InteractionRequiresAction,
+        # Legacy schema events (Api-Revision: 2026-05-07, removed June 8 2026)
         InteractionEvent,
         InteractionStatusUpdate,
         ContentStart,
@@ -1193,6 +1300,11 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     Response from the Interactions API.
 
     Wraps the API response with LiteLLM-specific hidden params.
+
+    Schema notes:
+    - New schema (Api-Revision: 2026-05-20, default): response contains ``steps``.
+    - Legacy schema (Api-Revision: 2026-05-07, removed June 8 2026): response contains ``outputs``.
+    Both fields are kept here so callers work with either schema.
     """
 
     id: Optional[str] = None
@@ -1202,8 +1314,10 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
-    role: Optional[str] = None
+    # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
     outputs: Optional[List[Dict[str, Any]]] = None
+    # New schema field (Api-Revision: 2026-05-20).
+    steps: Optional[List[Dict[str, Any]]] = None
     usage: Optional[Dict[str, Any]] = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
@@ -1213,7 +1327,12 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     """
     Streaming response chunk from the Interactions API.
 
-    Event types per OpenAPI spec:
+    New schema event types (Api-Revision: 2026-05-20):
+    - interaction.created, interaction.in_progress, interaction.completed,
+      interaction.requires_action
+    - step.start, step.delta, step.stop
+
+    Legacy event types (Api-Revision: 2026-05-07, removed June 8 2026):
     - interaction.start, interaction.status_update, interaction.complete
     - content.start, content.delta, content.stop
     - error
@@ -1227,10 +1346,17 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
-    role: Optional[str] = None
+    # Legacy schema field (Api-Revision: 2026-05-07). Remove after June 8, 2026.
     outputs: Optional[List[Dict[str, Any]]] = None
+    # New schema field (Api-Revision: 2026-05-20).
+    steps: Optional[List[Dict[str, Any]]] = None
     usage: Optional[Dict[str, Any]] = None
     delta: Optional[Dict[str, Any]] = None
+    # New schema streaming fields
+    index: Optional[int] = None
+    step: Optional[Dict[str, Any]] = None
+    interaction_id: Optional[str] = None
+    interaction: Optional[Dict[str, Any]] = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1257,3 +1383,6 @@ class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
 InteractionTool = Tool
 InteractionToolChoiceConfig = ToolChoiceConfig
 InteractionsAPIOptionalRequestParams = Dict[str, Any]
+
+# Agent interaction execution environment
+InteractionEnvironment = Union[str, Dict[str, Any]]

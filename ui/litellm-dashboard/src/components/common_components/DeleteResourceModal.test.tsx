@@ -70,9 +70,7 @@ describe("DeleteResourceModal", () => {
       { label: "ID", value: undefined },
       { label: "Status", value: "Active" },
     ];
-    renderWithProviders(
-      <DeleteResourceModal {...defaultProps} resourceInformation={resourceInformation} />,
-    );
+    renderWithProviders(<DeleteResourceModal {...defaultProps} resourceInformation={resourceInformation} />);
     expect(screen.getAllByText("-")).toHaveLength(2);
     expect(screen.getByText("Active")).toBeInTheDocument();
   });
@@ -125,9 +123,7 @@ describe("DeleteResourceModal", () => {
 
   it("should reset requiredConfirmation input when modal opens", async () => {
     const user = userEvent.setup();
-    const { rerender } = renderWithProviders(
-      <DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />,
-    );
+    const { rerender } = renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />);
     const input = screen.getByPlaceholderText("DELETE");
     await user.type(input, "DELETE");
     expect(input).toHaveValue("DELETE");
@@ -165,9 +161,7 @@ describe("DeleteResourceModal", () => {
 
   it("should disable delete button when confirmLoading is true even if requiredConfirmation matches", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <DeleteResourceModal {...defaultProps} confirmLoading={true} requiredConfirmation="DELETE" />,
-    );
+    renderWithProviders(<DeleteResourceModal {...defaultProps} confirmLoading={true} requiredConfirmation="DELETE" />);
     const input = screen.getByPlaceholderText("DELETE");
     await user.type(input, "DELETE");
     const deleteButton = screen.getByText("Deleting...").closest("button");

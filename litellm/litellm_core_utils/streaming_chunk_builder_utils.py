@@ -20,6 +20,7 @@ from litellm.types.utils import (
     ServerToolUse,
     Usage,
 )
+from litellm._logging import verbose_logger
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
@@ -80,6 +81,54 @@ class ChunkProcessor:
         return model_response
 
     @staticmethod
+    def apply_provider_assembled_streaming_metadata(
+        response: ModelResponse,
+        chunks: List[Any],
+        logging_obj: Optional[Any] = None,
+    ) -> None:
+        if not chunks:
+            return
+
+        model = getattr(response, "model", None)
+        if not model:
+            return
+
+        custom_llm_provider = None
+        if logging_obj is not None:
+            custom_llm_provider = logging_obj.model_call_details.get(
+                "custom_llm_provider"
+            )
+
+        try:
+            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                get_llm_provider,
+            )
+            from litellm.types.utils import LlmProviders
+            from litellm.utils import ProviderConfigManager
+
+            if custom_llm_provider:
+                provider = LlmProviders(custom_llm_provider)
+            else:
+                _, provider_str, _, _ = get_llm_provider(model)
+                provider = LlmProviders(provider_str)
+
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=provider,
+            )
+            if provider_config is not None:
+                provider_config.apply_assembled_streaming_response_metadata(
+                    response=response,
+                    chunks=chunks,
+                )
+        except Exception as e:
+            verbose_logger.debug(
+                "apply_provider_assembled_streaming_metadata failed for model=%s: %s",
+                model,
+                e,
+            )
+
+    @staticmethod
     def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:
         """
         Chunks:
@@ -119,14 +168,18 @@ class ChunkProcessor:
         model = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint = chunk.get("system_fingerprint", None)
 
-        role = chunk["choices"][0]["delta"]["role"]
+        first_chunk_with_choices = next((c for c in chunks if c.get("choices")), chunk)
+        role = first_chunk_with_choices["choices"][0]["delta"]["role"]
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
+                chunk_finish_reason = None
                 if hasattr(chunk["choices"][0], "finish_reason"):
-                    finish_reason = chunk["choices"][0].finish_reason
+                    chunk_finish_reason = chunk["choices"][0].finish_reason
                 elif "finish_reason" in chunk["choices"][0]:
-                    finish_reason = chunk["choices"][0]["finish_reason"]
+                    chunk_finish_reason = chunk["choices"][0]["finish_reason"]
+                if chunk_finish_reason is not None:
+                    finish_reason = chunk_finish_reason
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -156,13 +209,13 @@ class ChunkProcessor:
         )
         return response
 
-    def get_combined_tool_content(  # noqa: PLR0915
+    def get_combined_tool_content(
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        tool_call_map: Dict[
-            int, Dict[str, Any]
-        ] = {}  # Map to store tool calls by index
+        tool_call_map: Dict[int, Dict[str, Any]] = (
+            {}
+        )  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -551,6 +604,8 @@ class ChunkProcessor:
                 usage_chunk = chunk._hidden_params.get("usage", None)
 
             if usage_chunk is not None:
+                if isinstance(usage_chunk, dict):
+                    usage_chunk = Usage(**usage_chunk)
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if (
                     usage_chunk_dict["prompt_tokens"] is not None
@@ -584,7 +639,18 @@ class ChunkProcessor:
                     hasattr(usage_chunk, "server_tool_use")
                     and usage_chunk.server_tool_use is not None
                 ):
-                    server_tool_use = usage_chunk.server_tool_use
+                    # Coerce dict to ServerToolUse so downstream cost-calc code
+                    # (which accesses .web_search_requests as an attribute)
+                    # doesn't raise AttributeError. Some providers / streaming
+                    # paths leave server_tool_use as a plain dict on the chunk.
+                    if isinstance(usage_chunk.server_tool_use, dict):
+                        server_tool_use = ServerToolUse(**usage_chunk.server_tool_use)
+                    elif isinstance(usage_chunk.server_tool_use, ServerToolUse):
+                        server_tool_use = usage_chunk.server_tool_use
+                    else:
+                        server_tool_use = ServerToolUse.model_validate(
+                            usage_chunk.server_tool_use
+                        )
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
@@ -643,12 +709,12 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = calculated_usage_per_chunk[
             "web_search_requests"
         ]
-        completion_tokens_details: Optional[
-            CompletionTokensDetails
-        ] = calculated_usage_per_chunk["completion_tokens_details"]
-        prompt_tokens_details: Optional[
-            PromptTokensDetailsWrapper
-        ] = calculated_usage_per_chunk["prompt_tokens_details"]
+        completion_tokens_details: Optional[CompletionTokensDetails] = (
+            calculated_usage_per_chunk["completion_tokens_details"]
+        )
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = (
+            calculated_usage_per_chunk["prompt_tokens_details"]
+        )
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(

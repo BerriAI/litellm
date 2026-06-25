@@ -2,7 +2,8 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Dict, List, Optional, Union
+import copy
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -256,6 +257,152 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
         )
 
+    @staticmethod
+    def _is_claude_4_7_model(model: str) -> bool:
+        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+            )
+        )
+
+    @staticmethod
+    def _supports_sampling_params(model: str) -> bool:
+        """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
+        rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
+        a 400 ("`temperature` is deprecated for this model").
+
+        Driven by the ``supports_sampling_params`` flag in the model map; the
+        name check remains only as a fallback for provider-routed ids whose
+        map entries predate the flag."""
+        flag = AnthropicModelInfo._get_model_capability(
+            model, "supports_sampling_params"
+        )
+        if flag is not None:
+            return flag
+        model_lower = model.lower()
+        return not any(
+            v in model_lower
+            for v in (
+                "fable",
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
+
+    @staticmethod
+    def _apply_sampling_param(
+        optional_params: dict,
+        model: str,
+        param: str,
+        value: Any,
+        drop_params: bool,
+        output_key: str,
+    ) -> None:
+        """Forward ``temperature``/``top_p``/``top_k`` to
+        ``optional_params[output_key]`` unless the model removed sampling
+        params, in which case drop the param (with drop_params) or raise a
+        clean client-side 400."""
+        if AnthropicModelInfo._supports_sampling_params(model) or (
+            param == "temperature" and value == 1
+        ):
+            optional_params[output_key] = value
+        elif not (litellm.drop_params or drop_params):
+            supported_hint = (
+                "Only temperature=1 is supported. " if param == "temperature" else ""
+            )
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support {param}={value}. {supported_hint}"
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+
+    @staticmethod
+    def _model_map_lookup_candidates(model: str) -> List[str]:
+        """Model-map keys to try for ``model``, stripping bedrock/vertex
+        prefixes so a provider-routed Claude still resolves to its entry."""
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        return candidates
+
+    @staticmethod
+    def _get_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the model map, or None when
+        no entry declares it."""
+        try:
+            for cand in AnthropicModelInfo._model_map_lookup_candidates(model):
+                value = litellm.model_cost.get(cand, {}).get(key)
+                if isinstance(value, bool):
+                    return value
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _supports_model_capability(model: str, key: str) -> bool:
+        """Check a boolean capability ``key`` in the model map.
+
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
+        """
+        from litellm.utils import _supports_factory
+
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider="anthropic",
+                key=key,
+            ):
+                return True
+        except Exception:
+            pass
+        return AnthropicModelInfo._get_model_capability(model, key) is True
+
+    @staticmethod
+    def _is_adaptive_thinking_model(model: str) -> bool:
+        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
+
+        Driven by the ``supports_adaptive_thinking`` flag in the model map; the
+        4.6/4.7 name checks remain only as a fallback for provider-routed ids
+        whose map entries predate the flag.
+        """
+        if AnthropicModelInfo._supports_model_capability(
+            model, "supports_adaptive_thinking"
+        ):
+            return True
+        return AnthropicModelInfo._is_claude_4_6_model(
+            model
+        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
@@ -263,14 +410,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Check if effort parameter is being used and requires a beta header.
 
         Returns True if effort-related parameters are present and
-        the model requires the effort beta header. Claude 4.6 models
+        the model requires the effort beta header. Claude 4.6+ models
         use output_config as a stable API feature — no beta header needed.
         """
         if not optional_params:
             return False
 
-        # Claude 4.6 models use output_config as a stable API feature — no beta header needed
-        if model and self._is_claude_4_6_model(model):
+        # Claude 4.6+ models use output_config as a stable API feature — no beta header needed
+        if model and self._is_adaptive_thinking_model(model):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
@@ -464,9 +611,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
-                headers[
-                    "anthropic-beta"
-                ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -637,6 +784,209 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
         return AnthropicTokenCounter()
+
+
+def strip_advisor_blocks_from_messages(
+    messages: List[Any], replace_with_text: bool = False
+) -> List[Any]:
+    """
+    Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
+    from assistant message content.
+
+    Prevents Anthropic 400 invalid_request_error: if advisor_tool_result blocks
+    exist in history but the advisor tool is not in the tools array, the API rejects
+    the request. This happens when the user has removed the advisor tool for cost
+    control or on a follow-up turn.
+
+    Args:
+        messages: Conversation history to process (mutated in-place).
+        replace_with_text: When True, replace the advisor exchange with an
+            <advisor_feedback> text block so the executor retains the semantic
+            context of what the advisor said.  When False (default), strip silently.
+    """
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        # Collect advisor server_tool_use ids and their advice text (for replace mode).
+        advisor_id_to_text: dict = {}
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "server_tool_use"
+                and block.get("name") == "advisor"
+            ):
+                bid = block.get("id")
+                if bid:
+                    advisor_id_to_text[bid] = None  # text filled in below
+
+        if not advisor_id_to_text:
+            continue
+
+        # If replacing, collect the advisor response text from advisor_tool_result blocks.
+        if replace_with_text:
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "advisor_tool_result"
+                    and block.get("tool_use_id") in advisor_id_to_text
+                ):
+                    raw = block.get("content") or ""
+                    text = (
+                        raw
+                        if isinstance(raw, str)
+                        else next(
+                            (
+                                b.get("text", "")
+                                for b in raw
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            ),
+                            "",
+                        )
+                    )
+                    advisor_id_to_text[block["tool_use_id"]] = text
+
+        new_content = []
+        for block in content:
+            if not isinstance(block, dict):
+                new_content.append(block)
+                continue
+            is_advisor_use = (
+                block.get("type") == "server_tool_use"
+                and block.get("name") == "advisor"
+                and block.get("id") in advisor_id_to_text
+            )
+            is_advisor_result = (
+                block.get("type") == "advisor_tool_result"
+                and block.get("tool_use_id") in advisor_id_to_text
+            )
+            if is_advisor_use:
+                if replace_with_text:
+                    advice = advisor_id_to_text.get(block.get("id")) or ""
+                    if advice:
+                        new_content.append(
+                            {
+                                "type": "text",
+                                "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>",
+                            }
+                        )
+                # else: drop silently
+            elif is_advisor_result:
+                pass  # always drop — replaced above (or stripped)
+            else:
+                new_content.append(block)
+
+        message["content"] = new_content
+    return messages
+
+
+def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
+    """
+    Detect Anthropic 400 when encrypted thinking signatures in history do not match
+    the current deployment (e.g. user rotated API key or switched model endpoint).
+
+    Example API message:
+    messages.N.content.M: Invalid `signature` in `thinking` block
+    """
+    if not error_text:
+        return False
+    lower = error_text.lower()
+    return (
+        "invalid" in lower
+        and "signature" in lower
+        and "thinking" in lower
+        and "block" in lower
+    )
+
+
+def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
+    """
+    Return a new message list with thinking / redacted_thinking content blocks removed
+    from each message. Used to recover from invalid thinking signatures on retry.
+
+    Messages whose content is a list and becomes empty after stripping are omitted,
+    since Anthropic rejects empty content arrays.
+    """
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        mm = copy.deepcopy(m)
+        content = mm.get("content")
+        if isinstance(content, list):
+            filtered = [
+                b
+                for b in content
+                if not (
+                    isinstance(b, dict)
+                    and b.get("type") in ("thinking", "redacted_thinking")
+                )
+            ]
+            if not filtered:
+                continue
+            mm["content"] = filtered
+        out.append(mm)
+    return out
+
+
+def strip_thinking_blocks_from_anthropic_messages_request_dict(
+    data: Dict[str, Any],
+) -> None:
+    """
+    Mutate an Anthropic Messages-style request dict: strip thinking blocks from
+    ``messages`` and remove the top-level ``thinking`` extended-thinking param.
+    """
+    msgs = data.get("messages")
+    if isinstance(msgs, list):
+        data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
+    data.pop("thinking", None)
+
+
+def strip_empty_text_blocks_from_anthropic_messages(
+    messages: List[Any],
+) -> List[Any]:
+    """
+    Return a new message list with empty or whitespace-only ``{"type": "text"}``
+    content blocks removed.
+
+    Anthropic's API rejects requests containing such blocks with
+    ``"messages: text content blocks must be non-empty"``, but assistant
+    messages from Anthropic routinely arrive with ``{"type": "text", "text": ""}``
+    alongside ``tool_use`` blocks (see anthropics/anthropic-sdk-python#461).
+    Multi-turn tool-use clients (e.g. Claude Code) loop these prior responses
+    back as conversation history, which then causes the next request to 400
+    on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
+    handles this in ``anthropic_messages_pt``; this helper provides the
+    equivalent guarantee for the native Anthropic Messages path.
+
+    Messages whose content is a list and becomes empty after stripping are
+    omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
+    The caller's list and its content blocks are never mutated; modified
+    messages are returned as shallow copies with a fresh content list.
+    """
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        content = m["content"]
+        filtered = [b for b in content if not _is_empty_text_block(b)]
+        if len(filtered) == len(content):
+            out.append(m)
+        elif filtered:
+            out.append({**m, "content": filtered})
+    return out
+
+
+def _is_empty_text_block(block: Any) -> bool:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return False
+    text = block.get("text")
+    return not isinstance(text, str) or not text.strip()
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

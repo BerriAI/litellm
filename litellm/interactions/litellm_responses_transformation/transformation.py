@@ -45,10 +45,10 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Transform input
         if input is not None:
-            responses_request[
-                "input"
-            ] = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
-                input
+            responses_request["input"] = (
+                LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+                    input
+                )
             )
 
         # Transform system_instruction -> instructions
@@ -226,29 +226,37 @@ class LiteLLMResponsesInteractionsConfig:
         - Map status
         - Extract usage
         """
-        # Extract text from outputs
-        outputs = []
+        # Extract text from outputs and build both `outputs` (legacy) and `steps` (new schema).
+        outputs: List[Dict[str, Any]] = []
+        steps: List[Dict[str, Any]] = []
         if hasattr(responses_response, "output") and responses_response.output:
             for output_item in responses_response.output:
                 # Use getattr with None default to safely access content
                 content = getattr(output_item, "content", None)
                 if content is not None:
                     content_items = content if isinstance(content, list) else [content]
+                    model_output_contents: List[Dict[str, Any]] = []
                     for content_item in content_items:
                         # Check if content_item has text attribute
                         text = getattr(content_item, "text", None)
                         if text is not None:
-                            outputs.append(
-                                {
-                                    "type": "text",
-                                    "text": text,
-                                }
-                            )
+                            # Use independent dict instances so mutations to one
+                            # of `outputs` / `steps` don't leak into the other.
+                            outputs.append({"type": "text", "text": text})
+                            model_output_contents.append({"type": "text", "text": text})
                         elif (
                             isinstance(content_item, dict)
                             and content_item.get("type") == "text"
                         ):
-                            outputs.append(content_item)
+                            outputs.append({**content_item})
+                            model_output_contents.append({**content_item})
+                    if model_output_contents:
+                        steps.append(
+                            {
+                                "type": "model_output",
+                                "content": model_output_contents,
+                            }
+                        )
 
         # Convert created_at to ISO string
         created_at = getattr(responses_response, "created_at", None)
@@ -270,12 +278,14 @@ class LiteLLMResponsesInteractionsConfig:
         else:
             interactions_status = status
 
-        # Build interactions response
+        # Build interactions response — populate both `outputs` (legacy schema) and
+        # `steps` (new schema) so callers work regardless of which schema they expect.
         interactions_response_dict: Dict[str, Any] = {
             "id": getattr(responses_response, "id", ""),
             "object": "interaction",
             "status": interactions_status,
             "outputs": outputs,
+            "steps": steps,
             "model": model or getattr(responses_response, "model", ""),
             "created": created,
         }
@@ -289,9 +299,6 @@ class LiteLLMResponsesInteractionsConfig:
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
             }
-
-        # Add role
-        interactions_response_dict["role"] = "model"
 
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created

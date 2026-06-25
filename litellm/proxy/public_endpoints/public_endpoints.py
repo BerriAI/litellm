@@ -4,9 +4,9 @@ import re
 from importlib.resources import files
 from typing import Any, Dict, List, Optional
 
-import litellm
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
     BlogPost,
@@ -14,8 +14,10 @@ from litellm.litellm_core_utils.get_blog_posts import (
     GetBlogPosts,
     get_blog_posts,
 )
-from litellm.proxy._types import CommonProxyErrors
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+)
+from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -30,6 +32,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
 from litellm.types.utils import LlmProviders
 
 router = APIRouter()
+
 
 # ---------------------------------------------------------------------------
 # /public/endpoints — helpers
@@ -153,18 +156,17 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[ModelGroupInfoProxy],
 )
 async def public_model_hub():
     import litellm
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _convert_health_check_to_dict,
+    )
     from litellm.proxy.proxy_server import (
         _get_model_group_info,
         llm_router,
         prisma_client,
-    )
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
     )
 
     if llm_router is None:
@@ -208,10 +210,9 @@ async def public_model_hub():
 @router.get(
     "/public/agent_hub",
     tags=["[beta] Agents", "public"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[AgentCard],
 )
-async def get_agents():
+async def get_agents(request: Request):
     import litellm
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
@@ -219,18 +220,21 @@ async def get_agents():
 
     if litellm.public_agent_groups is None:
         return []
-    agent_card_list = [
-        agent.agent_card_params
+
+    proxy_base = str(request.base_url).rstrip("/")
+    return [
+        {
+            **(agent.agent_card_params or {}),
+            "url": f"{proxy_base}/a2a/{agent.agent_id}",
+        }
         for agent in agents
         if agent.agent_id in litellm.public_agent_groups
     ]
-    return agent_card_list
 
 
 @router.get(
     "/public/mcp_hub",
     tags=["[beta] MCP", "public"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[MCPPublicServer],
 )
 async def get_mcp_servers():
@@ -245,6 +249,52 @@ async def get_mcp_servers():
         )
         for server in public_mcp_servers
     ]
+
+
+@router.get(
+    "/public/skill_hub",
+    tags=["public", "Claude Code Marketplace"],
+)
+async def public_skill_hub():
+    """Return enabled (public) Claude Code skills — no auth required."""
+    from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+        _get_prisma_client,
+    )
+    from litellm.types.proxy.claude_code_endpoints import (
+        ListPluginsResponse,
+        PluginListItem,
+    )
+
+    try:
+        prisma_client = await _get_prisma_client()
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(
+            where={"enabled": True}
+        )
+        items = []
+        for plugin in plugins:
+            raw = plugin.manifest_json or {}
+            manifest = json.loads(raw) if isinstance(raw, str) else raw
+            items.append(
+                PluginListItem(
+                    id=plugin.id,
+                    name=plugin.name,
+                    enabled=plugin.enabled,
+                    created_at=str(plugin.created_at) if plugin.created_at else None,
+                    updated_at=str(plugin.updated_at) if plugin.updated_at else None,
+                    source=manifest.get("source", {}),
+                    description=manifest.get("description"),
+                    version=manifest.get("version"),
+                    category=manifest.get("category"),
+                    keywords=manifest.get("keywords"),
+                    author=manifest.get("author"),
+                    homepage=manifest.get("homepage"),
+                    domain=manifest.get("domain"),
+                    namespace=manifest.get("namespace"),
+                )
+            )
+        return ListPluginsResponse(plugins=items, count=len(items))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get(

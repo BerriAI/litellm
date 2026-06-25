@@ -20,31 +20,34 @@ async def test_dataforseo_search_basic():
     """
     os.environ["DATAFORSEO_LOGIN"] = "test_login"
     os.environ["DATAFORSEO_PASSWORD"] = "test_password"
-    
+
     mock_response = SearchResponse(
         object="search",
         results=[
             SearchResult(
                 title="Latest AI Developments in 2025",
                 url="https://example.com/ai-news",
-                snippet="Recent advances in artificial intelligence have shown remarkable progress in machine learning and neural networks."
+                snippet="Recent advances in artificial intelligence have shown remarkable progress in machine learning and neural networks.",
             ),
             SearchResult(
                 title="AI Research Breakthroughs",
                 url="https://example.com/ai-research",
-                snippet="Scientists announce breakthrough in AI technology with new models achieving unprecedented accuracy."
-            )
-        ]
+                snippet="Scientists announce breakthrough in AI technology with new models achieving unprecedented accuracy.",
+            ),
+        ],
     )
-    
-    with patch("litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_search", new_callable=AsyncMock) as mock_search:
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_search",
+        new_callable=AsyncMock,
+    ) as mock_search:
         mock_search.return_value = mock_response
-        
+
         response = await litellm.asearch(
             query="latest developments in AI",
             search_provider="dataforseo",
         )
-        
+
         assert response.object == "search"
         assert len(response.results) == 2
         assert response.results[0].title == "Latest AI Developments in 2025"

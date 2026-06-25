@@ -110,6 +110,153 @@ class TestTransformation:
         )
         assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "a" * 40
 
+    def test_agent_extra_headers_merged_into_signed_headers_jwt(self):
+        """agent_extra_headers should appear on the outbound request (JWT path)."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=SAMPLE_LITELLM_PARAMS,
+            agent_extra_headers={"x-mcp-token": "mcp-abc", "x-tenant": "t1"},
+        )
+        assert headers["x-mcp-token"] == "mcp-abc"
+        assert headers["x-tenant"] == "t1"
+
+    def test_agent_extra_headers_signed_for_sigv4(self):
+        """agent_extra_headers must be present in the dict passed to _sign_request."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        litellm_params_no_key = {
+            "model": SAMPLE_MODEL,
+            "custom_llm_provider": "bedrock",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region_name": "us-west-2",
+        }
+
+        captured: dict = {}
+
+        def fake_sign(self, headers, **kwargs):
+            captured.update(headers)
+            return headers, b'{"jsonrpc":"2.0"}'
+
+        with patch(
+            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
+            new=fake_sign,
+        ):
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=litellm_params_no_key,
+                agent_extra_headers={"x-mcp-token": "mcp-abc"},
+            )
+        assert captured.get("x-mcp-token") == "mcp-abc"
+
+    def test_reserved_headers_filtered_from_agent_extra_headers(self):
+        """
+        Reserved AWS / AgentCore headers in agent_extra_headers must NOT overwrite
+        the values the proxy sets from trusted server-side config, otherwise a
+        caller could spoof the runtime user identity via the x-a2a-{agent}-*
+        header rewrite.
+        """
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        litellm_params_with_user = {
+            **SAMPLE_LITELLM_PARAMS,
+            "runtimeUserId": "legit-user",
+        }
+
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=litellm_params_with_user,
+            agent_extra_headers={
+                # Spoofing attempt — must be dropped.
+                "x-amzn-bedrock-agentcore-runtime-user-id": "victim-user",
+                "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": "spoofed-session",
+                "Authorization": "Bearer attacker-token",
+                "Host": "attacker.example.com",
+                "x-amz-content-sha256": "deadbeef",
+                # Legitimate per-request header — must pass through.
+                "x-mcp-token": "mcp-abc",
+            },
+        )
+
+        # Legitimate header is preserved.
+        assert headers["x-mcp-token"] == "mcp-abc"
+
+        # Reserved headers from agent_extra_headers must not appear at all
+        # (case-insensitive) — only the proxy/signer-controlled values may.
+        normalized = {k.lower(): v for k, v in headers.items()}
+
+        # Runtime user id is the value set from litellm_params, NOT the spoof.
+        assert normalized["x-amzn-bedrock-agentcore-runtime-user-id"] == "legit-user"
+        # Session id is the auto-generated one, not the spoofed value.
+        assert (
+            normalized["x-amzn-bedrock-agentcore-runtime-session-id"]
+            != "spoofed-session"
+        )
+        # Authorization is the JWT bearer set by the signer, not the spoof.
+        assert normalized["authorization"] == "Bearer test-jwt-token"
+        # Host / x-amz-* must not have been carried over from the client.
+        assert normalized.get("host") != "attacker.example.com"
+        assert normalized.get("x-amz-content-sha256") != "deadbeef"
+
+    def test_reserved_headers_filtered_before_sigv4_signing(self):
+        """
+        Reserved headers in agent_extra_headers must be stripped BEFORE the
+        SigV4 signer sees them, so the signature does not bind a spoofed
+        runtime user identity into a valid SigV4 request.
+        """
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        litellm_params_no_key = {
+            "model": SAMPLE_MODEL,
+            "custom_llm_provider": "bedrock",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region_name": "us-west-2",
+            "runtimeUserId": "legit-user",
+        }
+
+        captured: dict = {}
+
+        def fake_sign(self, headers, **kwargs):
+            captured.update(headers)
+            return headers, b'{"jsonrpc":"2.0"}'
+
+        with patch(
+            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
+            new=fake_sign,
+        ):
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=litellm_params_no_key,
+                agent_extra_headers={
+                    "x-amzn-bedrock-agentcore-runtime-user-id": "victim-user",
+                    "x-amz-date": "20990101T000000Z",
+                    "authorization": "Bearer attacker",
+                    "x-mcp-token": "mcp-abc",
+                },
+            )
+
+        normalized = {k.lower(): v for k, v in captured.items()}
+        assert normalized["x-amzn-bedrock-agentcore-runtime-user-id"] == "legit-user"
+        assert normalized.get("x-amz-date") != "20990101T000000Z"
+        assert normalized.get("authorization") != "Bearer attacker"
+        # Non-reserved header still makes it into the signed dict.
+        assert captured.get("x-mcp-token") == "mcp-abc"
+
     def test_sigv4_auth_when_no_api_key(self):
         """When no api_key, falls through to SigV4 signing."""
         from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -136,10 +283,12 @@ class TestTransformation:
             "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
             return_value=(fake_sigv4_headers, fake_body),
         ):
-            _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=litellm_params_no_key,
+            _, headers, _ = (
+                BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                    request_id="req-001",
+                    params=SAMPLE_PARAMS,
+                    litellm_params=litellm_params_no_key,
+                )
             )
         # SigV4 produces an Authorization header starting with "AWS4-HMAC-SHA256"
         assert "Authorization" in headers
@@ -197,6 +346,39 @@ class TestNonStreaming:
 
             # Verify response is passed through
             assert result["result"]["message"]["parts"][0]["text"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_agent_extra_headers_forwarded_on_outbound_post(self):
+        """End-to-end: agent_extra_headers from the bridge land on the HTTP POST."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": "req-001",
+            "result": {},
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "litellm.a2a_protocol.providers.bedrock_agentcore.handler.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            config = BedrockAgentCoreA2AConfig()
+            await config.handle_non_streaming(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=SAMPLE_LITELLM_PARAMS,
+                agent_extra_headers={"x-mcp-token": "mcp-abc"},
+            )
+
+            sent_headers = mock_client.post.call_args.kwargs["headers"]
+            assert sent_headers.get("x-mcp-token") == "mcp-abc"
 
     @pytest.mark.asyncio
     async def test_a2a_error_response_passthrough(self):
@@ -299,6 +481,7 @@ class TestHandlerIntegration:
                 params=SAMPLE_PARAMS,
                 api_base=None,
                 litellm_params=SAMPLE_LITELLM_PARAMS,
+                agent_extra_headers=None,
             )
 
     @pytest.mark.asyncio

@@ -10,14 +10,18 @@ import NotificationsManager from "./molecules/notifications_manager";
 import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
+  skillHubPublicCall,
+  getProxyBaseUrl,
   getPublicModelHubInfo,
   getUiConfig,
   mcpHubPublicServersCall,
   modelHubPublicModelsCall,
 } from "./networking";
-import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
-import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
-import { MessageType } from "./playground/chat_ui/types";
+import { Plugin } from "./claude_code_plugins/types";
+import SkillHubDashboard from "./AIHub/SkillHubDashboard";
+import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
+import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 
 const { TabPane } = Tabs;
@@ -70,12 +74,11 @@ interface AgentCard {
   [key: string]: any;
 }
 
-interface MCPServerData {
+export interface MCPServerData {
   server_id: string;
   name: string;
   alias?: string | null;
   server_name: string;
-  url: string;
   transport: string;
   spec_path?: string | null;
   auth_type: string;
@@ -91,6 +94,73 @@ interface PublicModelHubProps {
   accessToken?: string | null;
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
 }
+
+export const publicMCPHubColumns = (showMcpModal: (server: MCPServerData) => void): ColumnDef<MCPServerData>[] => [
+  {
+    header: "Server Name",
+    accessorKey: "server_name",
+    enableSorting: true,
+    cell: ({ row }) => (
+      <div className="overflow-hidden">
+        <Tooltip title={row.original.server_name}>
+          <Button
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
+            onClick={() => showMcpModal(row.original)}
+          >
+            {row.original.server_name}
+          </Button>
+        </Tooltip>
+      </div>
+    ),
+    size: 150,
+  },
+  {
+    header: "Description",
+    accessorKey: "mcp_info.description",
+    enableSorting: false,
+    cell: ({ row }) => {
+      const description = String(row.original.mcp_info?.description ?? "-");
+      const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
+      return (
+        <Tooltip title={description}>
+          <Text className="text-sm text-gray-700">{truncated}</Text>
+        </Tooltip>
+      );
+    },
+    size: 250,
+  },
+  {
+    header: "Transport",
+    accessorKey: "transport",
+    enableSorting: true,
+    cell: ({ row }) => {
+      const transport = row.original.transport;
+      return (
+        <Tag color="blue" className="text-xs uppercase">
+          {transport}
+        </Tag>
+      );
+    },
+    size: 100,
+  },
+  {
+    header: "Auth Type",
+    accessorKey: "auth_type",
+    enableSorting: true,
+    cell: ({ row }) => {
+      const authType = row.original.auth_type;
+      const color = authType === "none" ? "gray" : "green";
+      return (
+        <Tag color={color} className="text-xs capitalize">
+          {authType}
+        </Tag>
+      );
+    },
+    size: 100,
+  },
+];
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
@@ -118,8 +188,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentCard>(null);
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
-  const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
+  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
+  const [skillLoading, setSkillLoading] = useState<boolean>(false);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -180,11 +251,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         setUsefulLinks(publicModelHubInfo.useful_links || {});
       };
 
+      const fetchSkillData = async () => {
+        try {
+          setSkillLoading(true);
+          const response = await skillHubPublicCall();
+          setSkillHubData(response.plugins ?? []);
+        } catch (error) {
+          console.error("There was an error fetching the public skill data", error);
+        } finally {
+          setSkillLoading(false);
+        }
+      };
+
       fetchPublicModelHubInfo();
 
       fetchPublicData();
       fetchAgentData();
       fetchMcpData();
+      fetchSkillData();
     };
 
     initializeAndFetch();
@@ -871,112 +955,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     },
   ];
 
-  const publicMCPHubColumns = (): ColumnDef<MCPServerData>[] => [
-    {
-      header: "Server Name",
-      accessorKey: "server_name",
-      enableSorting: true,
-      cell: ({ row }) => (
-        <div className="overflow-hidden">
-          <Tooltip title={row.original.server_name}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
-              onClick={() => showMcpModal(row.original)}
-            >
-              {row.original.server_name}
-            </Button>
-          </Tooltip>
-        </div>
-      ),
-      size: 150,
-    },
-    {
-      header: "Description",
-      accessorKey: "mcp_info.description",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const description = String(row.original.mcp_info?.description ?? "-");
-        const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
-        return (
-          <Tooltip title={description}>
-            <Text className="text-sm text-gray-700">{truncated}</Text>
-          </Tooltip>
-        );
-      },
-      size: 250,
-    },
-    {
-      header: "URL",
-      accessorKey: "url",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const url = row.original.url ?? "";
-        const truncated = url.length > 40 ? url.substring(0, 40) + "..." : url;
-        return (
-          <Tooltip title={url}>
-            <div className="flex items-center space-x-2">
-              <Text className="text-xs font-mono">{truncated}</Text>
-              <Copy
-                onClick={() => copyToClipboard(url)}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 w-3 h-3"
-              />
-            </div>
-          </Tooltip>
-        );
-      },
-      size: 200,
-    },
-    {
-      header: "Transport",
-      accessorKey: "transport",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const transport = row.original.transport;
-        return (
-          <Tag color="blue" className="text-xs uppercase">
-            {transport}
-          </Tag>
-        );
-      },
-      size: 100,
-    },
-    {
-      header: "Auth Type",
-      accessorKey: "auth_type",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const authType = row.original.auth_type;
-        const color = authType === "none" ? "gray" : "green";
-        return (
-          <Tag color={color} className="text-xs capitalize">
-            {authType}
-          </Tag>
-        );
-      },
-      size: 100,
-    },
-  ];
-
   return (
     <ThemeProvider accessToken={accessToken}>
       <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
         {/* Navigation - only show when not embedded */}
-        {!isEmbedded && (
-          <Navbar
-            userID={null}
-            userEmail={null}
-            userRole={null}
-            premiumUser={false}
-            setProxySettings={setProxySettings}
-            proxySettings={proxySettings}
-            accessToken={accessToken || null}
-            isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
-          />
-        )}
+        {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
         <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
           {/* Embedded Explainer - only shown when embedded in dashboard */}
@@ -1281,7 +1264,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
 
                   <ModelDataTable
-                    columns={publicMCPHubColumns()}
+                    columns={publicMCPHubColumns(showMcpModal)}
                     data={filteredMcpData}
                     isLoading={mcpLoading}
                     defaultSorting={[{ id: "server_name", desc: false }]}
@@ -1294,6 +1277,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
                 </TabPane>
               )}
+
+              {/* Skill Hub Tab */}
+              <TabPane tab="Skill Hub" key="skills">
+                <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+              </TabPane>
             </Tabs>
           </Card>
         </div>
@@ -1881,18 +1869,6 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                     <Text className="font-medium">Description:</Text>
                     <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
                   </div>
-                  <div className="col-span-2">
-                    <Text className="font-medium">URL:</Text>
-                    <a
-                      href={selectedMcpServer.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 text-sm break-all flex items-center space-x-2"
-                    >
-                      <span>{selectedMcpServer.url}</span>
-                      <ExternalLinkIcon className="w-4 h-4" />
-                    </a>
-                  </div>
                 </div>
               </div>
 
@@ -1920,7 +1896,7 @@ import asyncio
 config = {
     "mcpServers": {
         "${selectedMcpServer.server_name}": {
-            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234"
             }
@@ -1960,7 +1936,7 @@ import asyncio
 config = {
     "mcpServers": {
         "${selectedMcpServer.server_name}": {
-            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234"
             }

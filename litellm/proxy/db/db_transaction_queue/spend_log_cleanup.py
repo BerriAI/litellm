@@ -5,24 +5,38 @@ from typing import Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
+    SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS,
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_JOB_NAME,
+    SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES,
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
+    SpendLogsPartitionManager,
+)
 from litellm.proxy.utils import PrismaClient
 
 
 class SpendLogCleanup:
     """
     Handles cleaning up old spend logs based on maximum retention period.
-    Deletes logs in batches to prevent timeouts.
+
+    When LiteLLM_SpendLogs is range-partitioned, expired data is reclaimed by
+    dropping whole partitions (instant, frees disk immediately). Otherwise it
+    falls back to deleting logs in batches.
     Uses PodLockManager to ensure only one pod runs cleanup in multi-pod deployments.
     """
 
-    def __init__(self, general_settings=None, redis_cache: Optional[RedisCache] = None):
+    def __init__(
+        self,
+        general_settings=None,
+        redis_cache: Optional[RedisCache] = None,
+        partition_manager: Optional[SpendLogsPartitionManager] = None,
+    ):
         self.batch_size = SPEND_LOG_CLEANUP_BATCH_SIZE
         self.retention_seconds: Optional[int] = None
+        self.partition_manager = partition_manager or SpendLogsPartitionManager()
         from litellm.proxy.proxy_server import general_settings as default_settings
 
         self.general_settings = general_settings or default_settings
@@ -74,6 +88,7 @@ class SpendLogCleanup:
         """
         total_deleted = 0
         run_count = 0
+        consecutive_failures = 0
         while True:
             if run_count > SPEND_LOG_RUN_LOOPS:
                 verbose_proxy_logger.info(
@@ -82,18 +97,61 @@ class SpendLogCleanup:
                 break
             # Step 1: Find logs and delete them in one go without fetching to application
             # Delete in batches, limited by self.batch_size
-            deleted_count = await prisma_client.db.execute_raw(
-                """
-                DELETE FROM "LiteLLM_SpendLogs"
-                WHERE "request_id" IN (
-                    SELECT "request_id" FROM "LiteLLM_SpendLogs"
-                    WHERE "startTime" < $1::timestamptz
-                    LIMIT $2
+            try:
+                deleted_result = await prisma_client.db.execute_raw(
+                    """
+                    DELETE FROM "LiteLLM_SpendLogs"
+                    WHERE ("request_id", "startTime") IN (
+                        SELECT "request_id", "startTime" FROM "LiteLLM_SpendLogs"
+                        WHERE "startTime" < $1::timestamptz
+                        LIMIT $2
+                    )
+                    """,
+                    cutoff_date,
+                    self.batch_size,
                 )
-                """,
-                cutoff_date,
-                self.batch_size,
-            )
+            except Exception as batch_exc:
+                # A single batch failure (e.g. Prisma/DB timeout) must not abort
+                # the whole run — subsequent batches may still succeed.
+                consecutive_failures += 1
+                verbose_proxy_logger.exception(
+                    "Spend log cleanup batch failed "
+                    "(run_count=%d, consecutive_failures=%d, batch_size=%d, "
+                    "cutoff=%s, total_deleted_so_far=%d): %s: %s",
+                    run_count,
+                    consecutive_failures,
+                    self.batch_size,
+                    cutoff_date.isoformat(),
+                    total_deleted,
+                    type(batch_exc).__name__,
+                    batch_exc,
+                )
+                if (
+                    consecutive_failures
+                    >= SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES
+                ):
+                    verbose_proxy_logger.error(
+                        "Aborting spend log cleanup after %d consecutive batch "
+                        "failures; total deleted before abort: %d",
+                        consecutive_failures,
+                        total_deleted,
+                    )
+                    break
+                await asyncio.sleep(SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS)
+                continue
+
+            consecutive_failures = 0
+
+            deleted_count = 0
+            if isinstance(deleted_result, int):
+                deleted_count = deleted_result
+            else:
+                verbose_proxy_logger.error(
+                    f"Unexpected execute_raw return type for spend log cleanup: {type(deleted_result)}; "
+                    "aborting cleanup to avoid infinite loop"
+                )
+                break
+
             verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
 
             if deleted_count == 0:
@@ -149,15 +207,41 @@ class SpendLogCleanup:
                 seconds=float(self.retention_seconds)
             )
             verbose_proxy_logger.info(
-                f"Deleting logs older than {cutoff_date.isoformat()}"
+                f"Removing logs older than {cutoff_date.isoformat()}"
             )
 
-            # Perform the actual deletion
-            total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-            verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
+            if self.general_settings.get(
+                "use_spend_logs_partitioning", False
+            ) and await self.partition_manager.is_partitioned(prisma_client):
+                await self.partition_manager.ensure_partitions(prisma_client)
+                dropped = await self.partition_manager.drop_partitions_older_than(
+                    prisma_client, cutoff_date
+                )
+                verbose_proxy_logger.info(
+                    "Dropped %d expired spend-log partitions: %s",
+                    len(dropped),
+                    dropped,
+                )
+                # DROP only reclaims whole expired partitions. Expired rows can
+                # still sit in the DEFAULT partition (backfill, coverage gaps)
+                # or in a partition that spans the cutoff, so retention must
+                # also delete those stragglers row-wise.
+                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                verbose_proxy_logger.info(
+                    f"Deleted {total_deleted} expired logs not covered by dropped partitions"
+                )
+            else:
+                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
+            # .exception() captures the traceback; str(e) alone on a Prisma/DB
+            # timeout is often empty and gives operators no signal to diagnose.
+            verbose_proxy_logger.exception(
+                "Error during spend log cleanup: %s: %s",
+                type(e).__name__,
+                e,
+            )
             return  # Return after error handling
         finally:
             # Only release the lock if it was actually acquired

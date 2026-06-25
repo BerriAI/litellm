@@ -9,6 +9,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
 
@@ -92,10 +93,19 @@ class AgentRegistry:
     ########### DB management helpers for agents ###########
     ############################################################
     async def add_agent_to_db(
-        self, agent: AgentConfig, prisma_client: PrismaClient, created_by: str
+        self,
+        agent: AgentConfig,
+        prisma_client: PrismaClient,
+        created_by: str,
+        agent_id: Optional[str] = None,
     ) -> AgentResponse:
         """
-        Add an agent to the database
+        Add an agent to the database.
+
+        If ``agent_id`` is provided, it is used as the primary key for the new
+        row (otherwise the DB generates a UUID). Callers pass an explicit ID
+        when the agent_card_params must reference the agent's own URL before
+        the row exists, e.g. the A2A merge in ``create_agent``.
         """
         try:
             agent_name = agent.get("agent_name")
@@ -145,6 +155,8 @@ class AgentRegistry:
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
+            if agent_id is not None:
+                create_data["agent_id"] = agent_id
             if static_headers_val is not None:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:
@@ -163,7 +175,7 @@ class AgentRegistry:
                     create_data[rate_field] = _val
 
             # Create agent in DB
-            created_agent = await prisma_client.db.litellm_agentstable.create(
+            created_agent = await AgentsRepository(prisma_client).table.create(
                 data=create_data,
                 include={"object_permission": True},
             )
@@ -171,13 +183,13 @@ class AgentRegistry:
             created_agent_dict = created_agent.model_dump()
             if created_agent.object_permission is not None:
                 try:
-                    created_agent_dict[
-                        "object_permission"
-                    ] = created_agent.object_permission.model_dump()
+                    created_agent_dict["object_permission"] = (
+                        created_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    created_agent_dict[
-                        "object_permission"
-                    ] = created_agent.object_permission.dict()
+                    created_agent_dict["object_permission"] = (
+                        created_agent.object_permission.dict()
+                    )
             return AgentResponse(**created_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {str(e)}")
@@ -189,7 +201,7 @@ class AgentRegistry:
         Delete an agent from the database
         """
         try:
-            deleted_agent = await prisma_client.db.litellm_agentstable.delete(
+            deleted_agent = await AgentsRepository(prisma_client).table.delete(
                 where={"agent_id": agent_id}
             )
             return dict(deleted_agent)
@@ -218,7 +230,7 @@ class AgentRegistry:
             The patched agent
         """
         try:
-            existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+            existing_agent = await AgentsRepository(prisma_client).table.find_unique(
                 where={"agent_id": agent_id}
             )
             if existing_agent is not None:
@@ -271,7 +283,7 @@ class AgentRegistry:
                 if object_permission_id is not None:
                     update_data["object_permission_id"] = object_permission_id
             # Patch agent in DB
-            patched_agent = await prisma_client.db.litellm_agentstable.update(
+            patched_agent = await AgentsRepository(prisma_client).table.update(
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
@@ -283,13 +295,13 @@ class AgentRegistry:
             patched_agent_dict = patched_agent.model_dump()
             if patched_agent.object_permission is not None:
                 try:
-                    patched_agent_dict[
-                        "object_permission"
-                    ] = patched_agent.object_permission.model_dump()
+                    patched_agent_dict["object_permission"] = (
+                        patched_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    patched_agent_dict[
-                        "object_permission"
-                    ] = patched_agent.object_permission.dict()
+                    patched_agent_dict["object_permission"] = (
+                        patched_agent.object_permission.dict()
+                    )
             return AgentResponse(**patched_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error patching agent in DB: {str(e)}")
@@ -357,9 +369,9 @@ class AgentRegistry:
                     update_data[rate_field] = _val
 
             if agent.get("object_permission") is not None:
-                existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
-                    where={"agent_id": agent_id}
-                )
+                existing_agent = await AgentsRepository(
+                    prisma_client
+                ).table.find_unique(where={"agent_id": agent_id})
                 existing_object_permission_id = (
                     existing_agent.object_permission_id
                     if existing_agent is not None
@@ -375,7 +387,7 @@ class AgentRegistry:
                     update_data["object_permission_id"] = object_permission_id
 
             # Update agent in DB
-            updated_agent = await prisma_client.db.litellm_agentstable.update(
+            updated_agent = await AgentsRepository(prisma_client).table.update(
                 where={"agent_id": agent_id},
                 data=update_data,
                 include={"object_permission": True},
@@ -384,13 +396,13 @@ class AgentRegistry:
             updated_agent_dict = updated_agent.model_dump()
             if updated_agent.object_permission is not None:
                 try:
-                    updated_agent_dict[
-                        "object_permission"
-                    ] = updated_agent.object_permission.model_dump()
+                    updated_agent_dict["object_permission"] = (
+                        updated_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    updated_agent_dict[
-                        "object_permission"
-                    ] = updated_agent.object_permission.dict()
+                    updated_agent_dict["object_permission"] = (
+                        updated_agent.object_permission.dict()
+                    )
             return AgentResponse(**updated_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error updating agent in DB: {str(e)}")
@@ -403,7 +415,7 @@ class AgentRegistry:
         Get all agents from the database
         """
         try:
-            agents_from_db = await prisma_client.db.litellm_agentstable.find_many(
+            agents_from_db = await AgentsRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
                 include={"object_permission": True},
             )
@@ -414,9 +426,9 @@ class AgentRegistry:
                 # object_permission is eagerly loaded via include above
                 if agent.object_permission is not None:
                     try:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent.object_permission.model_dump()
+                        agent_dict["object_permission"] = (
+                            agent.object_permission.model_dump()
+                        )
                     except Exception:
                         agent_dict["object_permission"] = agent.object_permission.dict()
                 agents.append(agent_dict)

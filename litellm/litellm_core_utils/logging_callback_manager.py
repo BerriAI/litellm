@@ -221,6 +221,13 @@ class LoggingCallbackManager:
             headers = callback_config.get("headers")
             event_types = callback_config.get("event_types")
             log_format = callback_config.get("log_format")
+            max_retries = max(0, int(callback_config.get("max_retries", 0) or 0))
+            retry_delay_value = callback_config.get("retry_delay")
+            retry_delay = max(
+                0.0,
+                float(0.0 if retry_delay_value is None else retry_delay_value),
+            )
+            timeout = callback_config.get("timeout")
 
             if endpoint is None or headers is None:
                 verbose_logger.warning(
@@ -236,6 +243,9 @@ class LoggingCallbackManager:
                 and cached_logger.headers == headers
                 and cached_logger.event_types == event_types
                 and cached_logger.log_format == log_format
+                and cached_logger.max_retries == max_retries
+                and cached_logger.retry_delay == retry_delay
+                and cached_logger.timeout == timeout
             ):
                 return cached_logger
 
@@ -244,6 +254,9 @@ class LoggingCallbackManager:
                 headers=headers,
                 event_types=event_types,
                 log_format=log_format,
+                max_retries=max_retries,
+                retry_delay=retry_delay,
+                timeout=timeout,
             )
             _generic_api_logger_cache[callback] = new_logger
             return new_logger
@@ -380,6 +393,22 @@ class LoggingCallbackManager:
             + litellm._async_success_callback
             + litellm._async_failure_callback
         )
+
+    def remove_callback_from_all_lists(self, obj, require_self=False) -> None:
+        """
+        Remove a callback object from every callback list it may have been
+        promoted into, so a re-initialized callback leaves no stale instance behind.
+        """
+        for callback_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            self.remove_callback_from_list_by_object(
+                callback_list, obj, require_self=require_self
+            )
 
     def get_active_additional_logging_utils_from_custom_logger(
         self,

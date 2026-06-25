@@ -56,7 +56,10 @@ from litellm.types.utils import (
     Usage,
 )
 
-from ...anthropic.chat.transformation import AnthropicConfig
+from ...anthropic.chat.transformation import (
+    REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
+    AnthropicConfig,
+)
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
@@ -330,9 +333,30 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
         if "reasoning_effort" in non_default_params and "claude" in model:
-            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort=non_default_params.get("reasoning_effort"), model=model
+            reasoning_effort_value = non_default_params.get("reasoning_effort")
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort_value,
+                model=model,
+                llm_provider="databricks",
             )
+            if mapped_thinking is None:
+                optional_params.pop("thinking", None)
+                optional_params.pop("output_config", None)
+            else:
+                optional_params["thinking"] = mapped_thinking
+                if AnthropicConfig._is_adaptive_thinking_model(model):
+                    mapped_effort: Optional[str] = None
+                    if isinstance(reasoning_effort_value, str):
+                        mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            reasoning_effort_value
+                        )
+                    if mapped_effort is None:
+                        AnthropicConfig._raise_invalid_reasoning_effort(
+                            model=model,
+                            value=reasoning_effort_value,
+                            llm_provider="databricks",
+                        )
+                    optional_params["output_config"] = {"effort": mapped_effort}
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -353,8 +377,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -362,8 +385,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -615,7 +637,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 headers=response_headers,
             )
 
-        model_response.model = completion_response["model"]
+        _custom_llm_provider = litellm_params.get("custom_llm_provider") or "databricks"
+        _response_model = completion_response.get("model") or ""
+        model_response.model = f"{_custom_llm_provider}/{_response_model}"
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))

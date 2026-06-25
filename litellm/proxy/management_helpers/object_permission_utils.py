@@ -4,14 +4,17 @@ organizations, teams, and keys.
 """
 
 import json
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import (
@@ -48,10 +51,10 @@ async def attach_object_permission_to_dict(
 
     object_permission_id = data_dict.get("object_permission_id")
     if object_permission_id:
-        object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": object_permission_id},
-            )
+        object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.find_unique(
+            where={"object_permission_id": object_permission_id},
         )
         if object_permission:
             # Convert to dict if needed
@@ -106,10 +109,10 @@ async def handle_update_object_permission_common(
     )
     existing_object_permissions_dict: Dict = {}
 
-    existing_object_permission = (
-        await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": object_permission_id_to_use},
-        )
+    existing_object_permission = await ObjectPermissionRepository(
+        prisma_client
+    ).table.find_unique(
+        where={"object_permission_id": object_permission_id_to_use},
     )
 
     # Update the object permission
@@ -137,14 +140,14 @@ async def handle_update_object_permission_common(
     #########################################################
     # Commit the update to the LiteLLM_ObjectPermissionTable
     #########################################################
-    created_object_permission_row = (
-        await prisma_client.db.litellm_objectpermissiontable.upsert(
-            where={"object_permission_id": object_permission_id_to_use},
-            data={
-                "create": existing_object_permissions_dict,
-                "update": existing_object_permissions_dict,
-            },
-        )
+    created_object_permission_row = await ObjectPermissionRepository(
+        prisma_client
+    ).table.upsert(
+        where={"object_permission_id": object_permission_id_to_use},
+        data={
+            "create": existing_object_permissions_dict,
+            "update": existing_object_permissions_dict,
+        },
     )
 
     verbose_proxy_logger.debug(
@@ -183,7 +186,7 @@ async def _set_object_permission(
             clean_data["mcp_tool_permissions"]
         )
 
-    created_permission = await prisma_client.db.litellm_objectpermissiontable.create(
+    created_permission = await ObjectPermissionRepository(prisma_client).table.create(
         data=clean_data
     )
 
@@ -192,8 +195,158 @@ async def _set_object_permission(
     return data_json
 
 
+def _dedupe_preserving_order(values: List[str]) -> List[str]:
+    seen: Set[str] = set()
+    result: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
+    return identifier in {
+        getattr(server, "server_id", None),
+        getattr(server, "alias", None),
+        getattr(server, "server_name", None),
+        getattr(server, "name", None),
+    }
+
+
+async def _get_db_mcp_servers_by_identifiers(
+    identifiers: Set[str],
+    prisma_client: Optional[PrismaClient],
+) -> List[Any]:
+    if prisma_client is None or not identifiers:
+        return []
+
+    identifier_list = list(identifiers)
+    return await MCPServerRepository(prisma_client).table.find_many(
+        where={
+            "OR": [
+                {"server_id": {"in": identifier_list}},
+                {"alias": {"in": identifier_list}},
+                {"server_name": {"in": identifier_list}},
+            ]
+        }
+    )
+
+
+async def _resolve_mcp_server_identifiers_to_ids(
+    identifiers: Set[str],
+    prisma_client: Optional[PrismaClient],
+) -> Dict[str, Set[str]]:
+    """
+    Resolve MCP permission entries written as server_id, alias, or server_name
+    to canonical server IDs.
+
+    DB rows are authoritative when available; the in-memory registry is still
+    consulted for config-file servers, which are not persisted in the MCP table.
+    """
+    if not identifiers:
+        return {}
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    resolved: Dict[str, Set[str]] = {identifier: set() for identifier in identifiers}
+
+    for server in await _get_db_mcp_servers_by_identifiers(
+        identifiers=identifiers,
+        prisma_client=prisma_client,
+    ):
+        server_id = getattr(server, "server_id", None)
+        if not server_id:
+            continue
+        for identifier in identifiers:
+            if _mcp_server_identifier_matches(server, identifier):
+                resolved[identifier].add(server_id)
+
+    for registry_key, server in global_mcp_server_manager.get_registry().items():
+        server_id = getattr(server, "server_id", None) or registry_key
+        if not server_id:
+            continue
+        for identifier in identifiers:
+            if identifier == registry_key or _mcp_server_identifier_matches(
+                server, identifier
+            ):
+                resolved[identifier].add(server_id)
+
+    return resolved
+
+
+def _rewrite_object_permission_mcp_servers(
+    object_permission: dict,
+    identifier_to_server_ids: Dict[str, Set[str]],
+) -> None:
+    mcp_servers = object_permission.get("mcp_servers")
+    if not isinstance(mcp_servers, list):
+        return
+
+    normalized_servers: List[str] = []
+    for identifier in mcp_servers:
+        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
+            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
+            continue
+        normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
+    object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
+
+
+def _rewrite_object_permission_mcp_tool_permissions(
+    object_permission: dict,
+    identifier_to_server_ids: Dict[str, Set[str]],
+) -> None:
+    mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
+    if not isinstance(mcp_tool_permissions, dict):
+        return
+
+    normalized_tool_permissions: Dict[str, List[str]] = {}
+    for identifier, tools in mcp_tool_permissions.items():
+        if not isinstance(tools, list):
+            tools = []
+        for server_id in sorted(identifier_to_server_ids.get(identifier, [])):
+            normalized_tool_permissions.setdefault(server_id, [])
+            normalized_tool_permissions[server_id].extend(tools)
+
+    object_permission["mcp_tool_permissions"] = {
+        server_id: _dedupe_preserving_order(tools)
+        for server_id, tools in normalized_tool_permissions.items()
+    }
+
+
+def _rewrite_object_permission_mcp_identifiers(
+    object_permission: Optional[dict],
+    identifier_to_server_ids: Dict[str, Set[str]],
+) -> None:
+    if not object_permission or not isinstance(object_permission, dict):
+        return
+
+    _rewrite_object_permission_mcp_servers(
+        object_permission=object_permission,
+        identifier_to_server_ids=identifier_to_server_ids,
+    )
+    _rewrite_object_permission_mcp_tool_permissions(
+        object_permission=object_permission,
+        identifier_to_server_ids=identifier_to_server_ids,
+    )
+
+
+def _flatten_resolved_mcp_server_ids(
+    identifier_to_server_ids: Dict[str, Set[str]],
+) -> Set[str]:
+    return {
+        server_id
+        for server_ids in identifier_to_server_ids.values()
+        for server_id in server_ids
+    }
+
+
 async def _resolve_team_allowed_mcp_servers(
     team_object_permission: "LiteLLM_ObjectPermissionTable",
+    prisma_client: Optional[PrismaClient] = None,
 ) -> Set[str]:
     """
     Resolve the full set of MCP server IDs a team has access to.
@@ -217,7 +370,15 @@ async def _resolve_team_allowed_mcp_servers(
     if isinstance(raw_tool_perms, str):
         raw_tool_perms = json.loads(raw_tool_perms)
     tool_perm_servers: List[str] = list(raw_tool_perms.keys())
-    return set(direct_servers + access_group_servers + tool_perm_servers)
+    raw_servers = set(direct_servers + access_group_servers + tool_perm_servers)
+    resolved_servers = await _resolve_mcp_server_identifiers_to_ids(
+        identifiers=raw_servers,
+        prisma_client=prisma_client,
+    )
+    unresolved_servers = {
+        server_id for server_id in raw_servers if not resolved_servers.get(server_id)
+    }
+    return _flatten_resolved_mcp_server_ids(resolved_servers) | unresolved_servers
 
 
 def _get_allow_all_keys_server_ids() -> Set[str]:
@@ -231,6 +392,7 @@ def _get_allow_all_keys_server_ids() -> Set[str]:
 
 async def _get_team_allowed_mcp_servers(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    prisma_client: Optional[PrismaClient] = None,
 ) -> Set[str]:
     """
     Get the full set of MCP server IDs a team allows.
@@ -245,7 +407,10 @@ async def _get_team_allowed_mcp_servers(
     if team_object_permission is None:
         return set()
 
-    return await _resolve_team_allowed_mcp_servers(team_object_permission)
+    return await _resolve_team_allowed_mcp_servers(
+        team_object_permission=team_object_permission,
+        prisma_client=prisma_client,
+    )
 
 
 def _extract_requested_mcp_server_ids(
@@ -265,6 +430,7 @@ def _extract_requested_mcp_server_ids(
     mcp_servers = object_permission.get("mcp_servers")
     if isinstance(mcp_servers, list):
         server_ids.update(mcp_servers)
+        server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
 
     mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
     if isinstance(mcp_tool_permissions, dict):
@@ -302,7 +468,8 @@ def _extract_requested_mcp_toolsets(
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[dict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
-):
+    prisma_client: Optional[PrismaClient] = None,
+) -> Optional[dict]:
     """
     Validate that MCP servers requested on a key are within the allowed scope.
 
@@ -322,21 +489,49 @@ async def validate_key_mcp_servers_against_team(
 
     # Nothing to validate
     if not requested_servers and not requested_access_groups and not requested_toolsets:
-        return
+        return object_permission
 
     allow_all_keys_servers = _get_allow_all_keys_server_ids()
-    team_allowed_servers = await _get_team_allowed_mcp_servers(team_obj)
+    team_allowed_servers = await _get_team_allowed_mcp_servers(
+        team_obj=team_obj,
+        prisma_client=prisma_client,
+    )
 
     # Combined allowed set = team servers + allow_all_keys servers
     all_allowed_servers = team_allowed_servers | allow_all_keys_servers
 
     # Validate requested server IDs
     if requested_servers:
-        disallowed_servers = requested_servers - all_allowed_servers
+        # Normalize aliases/names before authorization. Only entries that do not
+        # resolve to a server in the DB or config registry are treated as stale.
+        identifier_to_server_ids = await _resolve_mcp_server_identifiers_to_ids(
+            identifiers=requested_servers,
+            prisma_client=prisma_client,
+        )
+        stale_identifiers = {
+            identifier
+            for identifier in requested_servers
+            if not identifier_to_server_ids.get(identifier)
+        }
+        if stale_identifiers:
+            verbose_proxy_logger.warning(
+                "validate_key_mcp_servers_against_team: ignoring stale MCP server "
+                f"identifiers (no longer in registry or DB): {sorted(stale_identifiers)}"
+            )
+        _rewrite_object_permission_mcp_identifiers(
+            object_permission=object_permission,
+            identifier_to_server_ids=identifier_to_server_ids,
+        )
+        active_requested_servers = _flatten_resolved_mcp_server_ids(
+            identifier_to_server_ids
+        )
+
+        disallowed_servers = active_requested_servers - all_allowed_servers
         if disallowed_servers:
             if team_obj is not None:
+                team_id = team_obj.team_id
                 detail = (
-                    f"Key requests MCP servers not allowed by team '{team_obj.team_id}': "
+                    f"Key requests MCP servers not allowed by team '{team_id}': "
                     f"{sorted(disallowed_servers)}. "
                     f"Team allows: {sorted(team_allowed_servers)}. "
                     f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
@@ -365,8 +560,9 @@ async def validate_key_mcp_servers_against_team(
         disallowed_groups = requested_access_groups - team_access_groups
         if disallowed_groups:
             if team_obj is not None:
+                team_id = team_obj.team_id
                 detail = (
-                    f"Key requests MCP access groups not allowed by team '{team_obj.team_id}': "
+                    f"Key requests MCP access groups not allowed by team '{team_id}': "
                     f"{sorted(disallowed_groups)}. "
                     f"Team allows: {sorted(team_access_groups)}."
                 )
@@ -390,13 +586,62 @@ async def validate_key_mcp_servers_against_team(
         if team_mcp_toolsets:
             disallowed_toolsets = requested_toolsets - set(team_mcp_toolsets)
             if disallowed_toolsets:
+                team_id = team_obj.team_id
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
                         "error": (
-                            f"Key requests MCP toolsets not allowed by team '{team_obj.team_id}': "
+                            f"Key requests MCP toolsets not allowed by team '{team_id}': "
                             f"{sorted(disallowed_toolsets)}. "
                             f"Team allows: {sorted(team_mcp_toolsets)}."
                         )
                     },
                 )
+
+    return object_permission
+
+
+def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[str]:
+    """Return search_tool_name values from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return []
+    raw = object_permission.get("search_tools")
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw if x]
+
+
+async def validate_key_search_tools_against_team(
+    object_permission: Optional[dict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+) -> None:
+    """
+    Validate key object_permission.search_tools is a subset of the team's allowlist.
+
+    Empty team allowlist means no restriction at team layer (skip).
+    """
+    requested = _extract_requested_search_tools(object_permission)
+    if not requested:
+        return
+
+    team_tools: List[str] = []
+    if team_obj is not None and team_obj.object_permission is not None:
+        st = team_obj.object_permission.search_tools
+        if st:
+            team_tools = list(st)
+
+    if not team_tools:
+        return
+
+    disallowed = set(requested) - set(team_tools)
+    if disallowed:
+        team_id = team_obj.team_id if team_obj is not None else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"Key requests search tools not allowed by team '{team_id}': "
+                    f"{sorted(disallowed)}. Team allows: {sorted(team_tools)}."
+                )
+            },
+        )

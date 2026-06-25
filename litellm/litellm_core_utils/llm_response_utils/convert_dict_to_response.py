@@ -144,6 +144,19 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
 
     choice_list: List[StreamingChoices] = []
 
+    if not response_object.get("choices"):
+        from litellm.exceptions import APIError
+
+        raise APIError(
+            status_code=500,
+            message=(
+                "LiteLLM: provider returned a response with no 'choices'. "
+                f"Raw keys: {list(response_object.keys())}"
+            ),
+            llm_provider="",
+            model="",
+        )
+
     for idx, choice in enumerate(response_object["choices"]):
         if (
             choice["message"].get("tool_calls", None) is not None
@@ -213,6 +226,20 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 
     model_response_object = ModelResponseStream()
     choice_list: List[StreamingChoices] = []
+
+    if not response_object.get("choices"):
+        from litellm.exceptions import APIError
+
+        raise APIError(
+            status_code=500,
+            message=(
+                "LiteLLM: provider returned a response with no 'choices'. "
+                f"Raw keys: {list(response_object.keys())}"
+            ),
+            llm_provider="",
+            model="",
+        )
+
     for idx, choice in enumerate(response_object["choices"]):
         delta = Delta(**choice["message"])
         finish_reason = choice.get("finish_reason", None)
@@ -444,7 +471,7 @@ def _should_convert_tool_call_to_json_mode(
     return False
 
 
-def convert_to_model_response_object(  # noqa: PLR0915
+def convert_to_model_response_object(
     response_object: Optional[dict] = None,
     model_response_object: Optional[
         Union[
@@ -536,9 +563,20 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 return convert_to_streaming_response(response_object=response_object)
             choice_list: List[Choices] = []
 
-            assert response_object["choices"] is not None and isinstance(
+            if not response_object.get("choices") or not isinstance(
                 response_object["choices"], Iterable
-            )
+            ):
+                from litellm.exceptions import APIError
+
+                raise APIError(
+                    status_code=500,
+                    message=(
+                        "LiteLLM: provider returned a response with no 'choices'. "
+                        f"Raw keys: {list(response_object.keys())}"
+                    ),
+                    llm_provider="",
+                    model="",
+                )
 
             for idx, choice in enumerate(response_object["choices"]):
                 ## HANDLE JSON MODE - anthropic returns single function call]
@@ -594,11 +632,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     if "thinking_blocks" in choice["message"]:
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
-
-                    if reasoning_content:
-                        provider_specific_fields[
-                            "reasoning_content"
-                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -787,9 +820,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params[
-                    "audio_transcription_duration"
-                ] = response_object["_audio_transcription_duration"]
+                model_response_object._hidden_params["audio_transcription_duration"] = (
+                    response_object["_audio_transcription_duration"]
+                )
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -816,7 +849,12 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 model_response_object.results = response_object["results"]
 
             return model_response_object
-    except Exception:
+    except Exception as e:
+        from litellm.exceptions import APIError
+
+        if isinstance(e, APIError):
+            raise
+
         received_args = dict(
             response_object=response_object,
             model_response_object=model_response_object,
@@ -824,8 +862,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
             stream=stream,
             start_time=start_time,
             end_time=end_time,
-            hidden_params=hidden_params,
-            _response_headers=_response_headers,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
         raise Exception(

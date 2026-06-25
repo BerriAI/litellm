@@ -215,7 +215,7 @@ describe("useKeys", () => {
     expect(result.current.error).toBeNull();
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -252,7 +252,7 @@ describe("useKeys", () => {
     expect(result.current.data).toBeUndefined();
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -305,7 +305,7 @@ describe("useKeys", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
-      `/key/list?page=${page}&size=${pageSize}&return_full_object=true&include_team_keys=true&include_created_by_keys=true`,
+      `/key/list?page=${page}&size=${pageSize}&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true`,
       {
         method: "GET",
         headers: {
@@ -339,7 +339,7 @@ describe("useKeys", () => {
 
     expect(result.current.data).toEqual(emptyResponse);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -388,7 +388,7 @@ describe("useKeys", () => {
 
     expect(result.current.data).toEqual(paginatedResponse);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=2&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=2&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -410,10 +410,7 @@ describe("useKeys", () => {
       }),
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { projectID: "project-1" }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { projectID: "project-1" }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -436,10 +433,7 @@ describe("useKeys", () => {
       }),
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { projectID: "project-1", teamID: "team-1" }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { projectID: "project-1", teamID: "team-1" }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -456,10 +450,7 @@ describe("useKeys", () => {
       json: async () => mockKeysResponse,
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { projectID: null }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { projectID: null }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -527,7 +518,7 @@ describe("useDeletedKeys", () => {
     expect(result.current.error).toBeNull();
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -584,7 +575,7 @@ describe("useDeletedKeys", () => {
     expect(result.current.data).toBeUndefined();
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -637,7 +628,7 @@ describe("useDeletedKeys", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
-      `/key/list?page=${page}&size=${pageSize}&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true`,
+      `/key/list?page=${page}&size=${pageSize}&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true`,
       {
         method: "GET",
         headers: {
@@ -671,7 +662,7 @@ describe("useDeletedKeys", () => {
 
     expect(result.current.data).toEqual(emptyResponse);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {
@@ -720,7 +711,7 @@ describe("useDeletedKeys", () => {
 
     expect(result.current.data).toEqual(paginatedResponse);
     expect(mockFetch).toHaveBeenCalledWith(
-      "/key/list?page=2&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      "/key/list?page=2&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true&substring_matching=true",
       {
         method: "GET",
         headers: {

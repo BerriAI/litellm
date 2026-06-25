@@ -17,8 +17,16 @@ from litellm.constants import (
     MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
     MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
+    MCP_PER_USER_TOKEN_DEFAULT_TTL,
+    MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS,
+    MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
+from litellm.proxy._experimental.mcp_server.auth import token_exchange
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -43,12 +51,23 @@ class MCPOAuth2TokenCache(InMemoryCache):
     def _get_lock(self, server_id: str) -> asyncio.Lock:
         return self._locks.setdefault(server_id, asyncio.Lock())
 
-    async def async_get_token(self, server: "MCPServer") -> Optional[str]:
+    @staticmethod
+    def _has_client_credentials_config(server: "MCPServer") -> bool:
+        return bool(server.client_id and server.client_secret and server.token_url)
+
+    async def async_get_token(
+        self,
+        server: "MCPServer",
+        *,
+        require_client_credentials_flow: bool = True,
+    ) -> Optional[str]:
         """Return a valid access token, fetching or refreshing as needed.
 
         Returns ``None`` when the server lacks client credentials config.
         """
-        if not server.has_client_credentials:
+        if require_client_credentials_flow and not server.has_client_credentials:
+            return None
+        if not self._has_client_credentials_config(server):
             return None
 
         server_id = server.server_id
@@ -152,19 +171,142 @@ class MCPOAuth2TokenCache(InMemoryCache):
 mcp_oauth2_token_cache = MCPOAuth2TokenCache()
 
 
+def _compute_per_user_token_ttl(server: "MCPServer", expires_in: Optional[int]) -> int:
+    """Compute Redis TTL for a per-user token.
+
+    Uses server.token_storage_ttl_seconds when configured; otherwise derives
+    TTL from expires_in minus the expiry buffer; falls back to the default TTL.
+    """
+    if server.token_storage_ttl_seconds is not None:
+        return max(server.token_storage_ttl_seconds, 1)
+    if expires_in is not None:
+        return max(
+            expires_in - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS,
+            1,
+        )
+    return MCP_PER_USER_TOKEN_DEFAULT_TTL
+
+
+class MCPPerUserTokenCache:
+    """Redis-backed cache for per-user OAuth2 access tokens.
+
+    Uses LiteLLM's existing ``user_api_key_cache`` (DualCache with optional
+    Redis backend).  Tokens are NaCl-encrypted with ``encrypt_value_helper``
+    before storage so they are safe at rest in Redis.
+
+    Redis key format: ``mcp:per_user_token:{user_id}:{server_id}``
+    Redis value: ``encrypt_value_helper(access_token)`` — URL-safe base64
+    """
+
+    def _cache_key(self, user_id: str, server_id: str) -> str:
+        return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
+
+    async def get(self, user_id: str, server_id: str) -> Optional[str]:
+        """Return the plaintext access_token, or None on miss/error."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+            key = self._cache_key(user_id, server_id)
+            encrypted = await user_api_key_cache.async_get_cache(key)
+            if encrypted is None:
+                return None
+            plaintext = decrypt_value_helper(
+                encrypted,
+                key="mcp_per_user_token",
+                exception_type="debug",
+            )
+            return plaintext or None
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.get failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
+            return None
+
+    async def set(
+        self,
+        user_id: str,
+        server_id: str,
+        access_token: str,
+        ttl: int,
+    ) -> None:
+        """Store NaCl-encrypted access_token in Redis with the given TTL."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+            key = self._cache_key(user_id, server_id)
+            encrypted = encrypt_value_helper(access_token)
+            await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
+                user_id,
+                server_id,
+                ttl,
+            )
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.set failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
+
+    async def delete(self, user_id: str, server_id: str) -> None:
+        """Invalidate the cached token (removes from both in-memory and Redis layers)."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+            key = self._cache_key(user_id, server_id)
+            await user_api_key_cache.async_delete_cache(key)
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.delete failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
+
+
+mcp_per_user_token_cache = MCPPerUserTokenCache()
+
+
 async def resolve_mcp_auth(
     server: "MCPServer",
     mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+    subject_token: Optional[str] = None,
 ) -> Optional[Union[str, Dict[str, str]]]:
     """Resolve the auth value for an MCP server.
 
     Priority:
     1. ``mcp_auth_header`` — per-request/per-user override
-    2. OAuth2 client_credentials token — auto-fetched and cached
-    3. ``server.authentication_token`` — static token from config/DB
+    2. OAuth2 Token Exchange (OBO / RFC 8693) — exchange user token for scoped token
+    3. OAuth2 client_credentials token — auto-fetched and cached
+    4. ``server.authentication_token`` — static token from config/DB
     """
     if mcp_auth_header:
         return mcp_auth_header
+    if server.has_token_exchange_config:
+        if subject_token:
+            return await token_exchange.mcp_token_exchange_handler.exchange_token(
+                subject_token, server
+            )
+        # No subject_token — fall back to client_credentials using the same client
+        # credentials and token_url so M2M scenarios still work.
+        if server.client_id and server.client_secret and server.token_url:
+            return await mcp_oauth2_token_cache.async_get_token(
+                server,
+                require_client_credentials_flow=False,
+            )
+        # OBO configured but no subject_token and missing client credentials — warn
+        # rather than silently proceeding unauthenticated.
+        verbose_logger.warning(
+            "MCP server '%s' is configured for token exchange (OBO) but no subject_token "
+            "was provided and client credentials (client_id/client_secret/token_url) are "
+            "incomplete. The request will proceed without authentication.",
+            server.server_id,
+        )
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token

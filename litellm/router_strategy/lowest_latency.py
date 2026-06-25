@@ -35,9 +35,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
-    def log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update latency usage on success
@@ -143,7 +141,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
+                    ][1:] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -155,13 +153,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "time_to_first_token", []
                         ).append(time_to_first_token)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            : self.routing_args.max_latency_list_size - 1
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["time_to_first_token"] = (
+                            request_count_dict[id]["time_to_first_token"][1:]
+                            + [time_to_first_token]
+                        )
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -244,7 +239,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     else:
                         request_count_dict[id]["latency"] = request_count_dict[id][
                             "latency"
-                        ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
+                        ][1:] + [1000.0]
 
                     await self.router_cache.async_set_cache(
                         key=latency_key,
@@ -262,9 +257,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    async def async_log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update latency usage on success
@@ -371,7 +364,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
+                    ][1:] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -383,13 +376,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "time_to_first_token", []
                         ).append(time_to_first_token)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            : self.routing_args.max_latency_list_size - 1
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["time_to_first_token"] = (
+                            request_count_dict[id]["time_to_first_token"][1:]
+                            + [time_to_first_token]
+                        )
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -419,7 +409,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    def _get_available_deployments(  # noqa: PLR0915
+    def _get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,

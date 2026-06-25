@@ -2,10 +2,7 @@ import React from "react";
 import { Select, Skeleton } from "antd";
 import { TeamOutlined } from "@ant-design/icons";
 import { Text } from "@tremor/react";
-import {
-  useAccessGroups,
-  AccessGroupResponse,
-} from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { useAccessGroups, AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 export interface AccessGroupSelectorProps {
   value?: string[];
@@ -87,15 +84,10 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
         style={{ width: "100%", ...style }}
         className={`rounded-md ${className ?? ""}`}
         notFoundContent={
-          isError ? (
-            <span className="text-red-500">Failed to load access groups</span>
-          ) : (
-            "No access groups found"
-          )
+          isError ? <span className="text-red-500">Failed to load access groups</span> : "No access groups found"
         }
         filterOption={(input, option) => {
-          const searchText =
-            options.find((opt) => opt.value === option?.value)?.searchText ?? "";
+          const searchText = options.find((opt) => opt.value === option?.value)?.searchText ?? "";
           return searchText.toLowerCase().includes(input.toLowerCase());
         }}
         optionLabelProp="selectedLabel"

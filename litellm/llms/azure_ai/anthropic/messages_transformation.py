@@ -1,6 +1,7 @@
 """
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -19,6 +20,9 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     The only difference is authentication - Azure uses x-api-key header (not api-key)
     and Azure endpoint format.
     """
+
+    def should_strip_billing_metadata(self) -> bool:
+        return True
 
     def validate_anthropic_messages_environment(
         self,

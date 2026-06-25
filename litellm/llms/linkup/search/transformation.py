@@ -3,6 +3,7 @@ Calls Linkup's /search endpoint to search the web.
 
 Linkup API Reference: https://docs.linkup.so/pages/documentation/api-reference/endpoint/post-search
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 
 import httpx
@@ -60,7 +61,13 @@ class LinkupSearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("LINKUP_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("LINKUP_API_KEY",),
+            base_env_var="LINKUP_API_BASE",
+            default_api_base=self.LINKUP_API_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "LINKUP_API_KEY is not set. Set `LINKUP_API_KEY` environment variable."

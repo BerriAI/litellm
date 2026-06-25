@@ -3,13 +3,7 @@ import { Modal, Form, Input, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
-import {
-  validatePluginName,
-  isValidSemanticVersion,
-  isValidEmail,
-  isValidUrl,
-  parseKeywords,
-} from "./helpers";
+import { validatePluginName, isValidSemanticVersion, isValidEmail, isValidUrl, parseKeywords } from "./helpers";
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -32,15 +26,97 @@ const PREDEFINED_CATEGORIES = [
   "Documentation",
 ];
 
-const AddPluginForm: React.FC<AddPluginFormProps> = ({
-  visible,
-  onClose,
-  accessToken,
-  onSuccess,
-}) => {
+interface ParsedSource {
+  source: "github" | "url" | "git-subdir";
+  repo?: string;
+  url?: string;
+  path?: string;
+}
+
+interface ParsePreview {
+  parsed: ParsedSource;
+  label: string;
+  suggestedName: string;
+}
+
+function parseGitHubUrl(raw: string): ParsePreview | null {
+  // Strip protocol and trailing slashes/spaces
+  let s = raw
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+
+  if (!s.startsWith("github.com/")) return null;
+
+  // Remove "github.com/"
+  const rest = s.slice("github.com/".length);
+  const parts = rest.split("/");
+
+  if (parts.length < 2) return null;
+
+  const org = parts[0];
+  const repo = parts[1];
+  const repoBase = repo.replace(/\.git$/, "");
+
+  // github.com/org/repo  (exactly 2 parts, or ends with .git)
+  if (parts.length === 2 || (parts.length === 2 && repoBase)) {
+    return {
+      parsed: { source: "github", repo: `${org}/${repoBase}` },
+      label: `GitHub repo — ${org}/${repoBase}`,
+      suggestedName: repoBase,
+    };
+  }
+
+  // github.com/org/repo/tree/branch/folder or /blob/branch/folder/FILE.md
+  if (parts.length >= 5 && (parts[2] === "tree" || parts[2] === "blob")) {
+    // parts[3] = branch, parts[4..] = path segments
+    const pathParts = parts.slice(4);
+    // If last segment looks like a file (has extension), drop it
+    const lastPart = pathParts[pathParts.length - 1];
+    if (lastPart && lastPart.includes(".")) {
+      pathParts.pop();
+    }
+    if (pathParts.length === 0) {
+      // Path resolved to repo root — treat as plain github source
+      return {
+        parsed: { source: "github", repo: `${org}/${repoBase}` },
+        label: `GitHub repo — ${org}/${repoBase}`,
+        suggestedName: repoBase,
+      };
+    }
+    const subPath = pathParts.join("/");
+    const suggestedName = pathParts[pathParts.length - 1];
+    return {
+      parsed: {
+        source: "git-subdir",
+        url: `https://github.com/${org}/${repoBase}`,
+        path: subPath,
+      },
+      label: `GitHub subdir — ${org}/${repoBase} @ ${subPath}`,
+      suggestedName,
+    };
+  }
+
+  return null;
+}
+
+const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [sourceType, setSourceType] = useState<"github" | "url" | "git-subdir">("github");
+  const [urlPreview, setUrlPreview] = useState<ParsePreview | null>(null);
+
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    const preview = parseGitHubUrl(val);
+    setUrlPreview(preview);
+    if (preview) {
+      // Auto-fill name only if it's currently empty
+      const currentName = form.getFieldValue("name");
+      if (!currentName) {
+        form.setFieldsValue({ name: preview.suggestedName });
+      }
+    }
+  };
 
   const handleSubmit = async (values: any) => {
     if (!accessToken) {
@@ -48,98 +124,60 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
       return;
     }
 
-    // Validate plugin name
+    if (!urlPreview) {
+      MessageManager.error("Please enter a valid GitHub URL");
+      return;
+    }
+
     if (!validatePluginName(values.name)) {
-      MessageManager.error(
-        "Plugin name must be kebab-case (lowercase letters, numbers, and hyphens only)"
-      );
+      MessageManager.error("Skill name must be kebab-case (lowercase letters, numbers, and hyphens only)");
       return;
     }
 
-    // Validate semantic version if provided
     if (values.version && !isValidSemanticVersion(values.version)) {
-      MessageManager.error(
-        "Version must be in semantic versioning format (e.g., 1.0.0)"
-      );
+      MessageManager.error("Version must be in semantic versioning format (e.g., 1.0.0)");
       return;
     }
 
-    // Validate email if provided
     if (values.authorEmail && !isValidEmail(values.authorEmail)) {
       MessageManager.error("Invalid email format");
       return;
     }
 
-    // Validate homepage URL if provided
     if (values.homepage && !isValidUrl(values.homepage)) {
       MessageManager.error("Invalid homepage URL format");
       return;
     }
 
-    // Validate git URL for url/git-subdir source types
-    if ((sourceType === "url" || sourceType === "git-subdir") && values.url && !isValidUrl(values.url)) {
-      MessageManager.error("Invalid git URL format");
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      // Build plugin data
       const pluginData: any = {
         name: values.name.trim(),
-        source:
-          sourceType === "github"
-            ? {
-                source: "github",
-                repo: values.repo.trim(),
-              }
-            : sourceType === "git-subdir"
-            ? {
-                source: "git-subdir",
-                url: values.url.trim(),
-                path: values.path.trim(),
-              }
-            : {
-                source: "url",
-                url: values.url.trim(),
-              },
+        source: urlPreview.parsed,
       };
 
-      // Add optional fields
-      if (values.version) {
-        pluginData.version = values.version.trim();
-      }
-      if (values.description) {
-        pluginData.description = values.description.trim();
-      }
+      if (values.version) pluginData.version = values.version.trim();
+      if (values.description) pluginData.description = values.description.trim();
       if (values.authorName || values.authorEmail) {
         pluginData.author = {};
-        if (values.authorName) {
-          pluginData.author.name = values.authorName.trim();
-        }
-        if (values.authorEmail) {
-          pluginData.author.email = values.authorEmail.trim();
-        }
+        if (values.authorName) pluginData.author.name = values.authorName.trim();
+        if (values.authorEmail) pluginData.author.email = values.authorEmail.trim();
       }
-      if (values.homepage) {
-        pluginData.homepage = values.homepage.trim();
-      }
-      if (values.category) {
-        pluginData.category = values.category;
-      }
-      if (values.keywords) {
-        pluginData.keywords = parseKeywords(values.keywords);
-      }
+      if (values.homepage) pluginData.homepage = values.homepage.trim();
+      if (values.category) pluginData.category = values.category;
+      if (values.keywords) pluginData.keywords = parseKeywords(values.keywords);
+      if (values.domain) pluginData.domain = values.domain.trim();
+      if (values.namespace) pluginData.namespace = values.namespace.trim();
 
       await registerClaudeCodePlugin(accessToken, pluginData);
-      MessageManager.success("Plugin registered successfully");
+      MessageManager.success("Skill registered successfully");
       form.resetFields();
-      setSourceType("github");
+      setUrlPreview(null);
       onSuccess();
       onClose();
     } catch (error) {
-      console.error("Error registering plugin:", error);
-      MessageManager.error("Failed to register plugin");
+      console.error("Error registering skill:", error);
+      MessageManager.error("Failed to register skill");
     } finally {
       setIsSubmitting(false);
     }
@@ -147,147 +185,77 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
   const handleCancel = () => {
     form.resetFields();
-    setSourceType("github");
+    setUrlPreview(null);
     onClose();
   };
 
-  const handleSourceTypeChange = (value: "github" | "url" | "git-subdir") => {
-    setSourceType(value);
-    // Clear repo/url/path fields when switching
-    form.setFieldsValue({ repo: undefined, url: undefined, path: undefined });
-  };
-
   return (
-    <Modal
-      title="Add New Claude Code Plugin"
-      open={visible}
-      onCancel={handleCancel}
-      footer={null}
-      width={700}
-      className="top-8"
-    >
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={handleSubmit}
-        className="mt-4"
-      >
-        {/* Plugin Name */}
+    <Modal title="Add New Skill" open={visible} onCancel={handleCancel} footer={null} width={700} className="top-8">
+      <Form form={form} layout="vertical" onFinish={handleSubmit} className="mt-4">
+        {/* Smart URL Input */}
         <Form.Item
-          label="Plugin Name"
-          name="name"
-          rules={[
-            { required: true, message: "Please enter plugin name" },
-            {
-              pattern: /^[a-z0-9-]+$/,
-              message:
-                "Name must be kebab-case (lowercase, numbers, hyphens only)",
-            },
-          ]}
-          tooltip="Unique identifier in kebab-case format (e.g., my-awesome-plugin)"
+          label="GitHub URL"
+          name="skillUrl"
+          rules={[{ required: true, message: "Please enter a GitHub URL" }]}
+          tooltip="Paste a GitHub URL — repo, folder, or file link. E.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill"
         >
-          <Input placeholder="my-awesome-plugin" className="rounded-lg" />
-        </Form.Item>
-
-        {/* Source Type */}
-        <Form.Item
-          label="Source Type"
-          name="sourceType"
-          initialValue="github"
-          rules={[{ required: true, message: "Please select source type" }]}
-        >
-          <Select onChange={handleSourceTypeChange} className="rounded-lg">
-            <Option value="github">GitHub</Option>
-            <Option value="url">Git URL</Option>
-            <Option value="git-subdir">Git Subdir</Option>
-          </Select>
-        </Form.Item>
-
-        {/* GitHub Repository */}
-        {sourceType === "github" && (
-          <Form.Item
-            label="GitHub Repository"
-            name="repo"
-            rules={[
-              { required: true, message: "Please enter repository" },
-              {
-                pattern: /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/,
-                message: "Repository must be in format: org/repo",
-              },
-            ]}
-            tooltip="Format: organization/repository (e.g., anthropics/claude-code)"
-          >
-            <Input placeholder="anthropics/claude-code" className="rounded-lg" />
-          </Form.Item>
-        )}
-
-        {/* Git URL */}
-        {(sourceType === "url" || sourceType === "git-subdir") && (
-          <Form.Item
-            label="Git URL"
-            name="url"
-            rules={[{ required: true, message: "Please enter git URL" }]}
-            tooltip="Full git URL to the repository"
-          >
-            <Input
-              type="url"
-              placeholder="https://github.com/org/repo.git"
-              className="rounded-lg"
-            />
-          </Form.Item>
-        )}
-
-        {/* Git Subdir Path */}
-        {sourceType === "git-subdir" && (
-          <Form.Item
-            label="Subdirectory Path"
-            name="path"
-            rules={[
-              { required: true, message: "Please enter subdirectory path" },
-              {
-                pattern: /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$/,
-                message:
-                  "Path must be relative segments (alphanumeric, dots, hyphens, underscores), e.g. plugins/plugin-name",
-              },
-            ]}
-            tooltip="Path to the plugin directory within the repository (e.g., plugins/plugin-name)"
-          >
-            <Input
-              placeholder="plugins/plugin-name"
-              className="rounded-lg"
-            />
-          </Form.Item>
-        )}
-
-        {/* Version */}
-        <Form.Item
-          label="Version (Optional)"
-          name="version"
-          tooltip="Semantic version (e.g., 1.0.0)"
-        >
-          <Input placeholder="1.0.0" className="rounded-lg" />
-        </Form.Item>
-
-        {/* Description */}
-        <Form.Item
-          label="Description (Optional)"
-          name="description"
-          tooltip="Brief description of what the plugin does"
-        >
-          <TextArea
-            rows={3}
-            placeholder="A plugin that helps with..."
-            maxLength={500}
+          <Input
+            placeholder="https://github.com/org/repo/tree/main/my-skill"
             className="rounded-lg"
+            onChange={handleUrlChange}
           />
         </Form.Item>
 
-        {/* Category */}
+        {/* Parsed preview */}
+        {urlPreview && (
+          <div className="mb-4 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+            Detected: {urlPreview.label}
+          </div>
+        )}
+
+        {/* Skill Name */}
         <Form.Item
-          label="Category (Optional)"
-          name="category"
-          tooltip="Select a category or enter a custom one"
+          label="Skill Name"
+          name="name"
+          rules={[
+            { required: true, message: "Please enter skill name" },
+            {
+              pattern: /^[a-z0-9-]+$/,
+              message: "Name must be kebab-case (lowercase, numbers, hyphens only)",
+            },
+          ]}
+          tooltip="Unique identifier in kebab-case format (e.g., my-skill)"
         >
+          <Input placeholder="my-skill" className="rounded-lg" />
+        </Form.Item>
+
+        {/* Domain and Namespace — side by side */}
+        <div className="flex gap-4">
+          <Form.Item
+            label="Domain (Optional)"
+            name="domain"
+            tooltip="Top-level grouping in the Skill Hub (e.g., Productivity)"
+            className="flex-1"
+          >
+            <Input placeholder="Productivity" className="rounded-lg" />
+          </Form.Item>
+          <Form.Item
+            label="Namespace (Optional)"
+            name="namespace"
+            tooltip="Sub-grouping within domain (e.g., workflows)"
+            className="flex-1"
+          >
+            <Input placeholder="workflows" className="rounded-lg" />
+          </Form.Item>
+        </div>
+
+        {/* Description */}
+        <Form.Item label="Description (Optional)" name="description" tooltip="Brief description of what the skill does">
+          <TextArea rows={3} placeholder="A skill that helps with..." maxLength={500} className="rounded-lg" />
+        </Form.Item>
+
+        {/* Category */}
+        <Form.Item label="Category (Optional)" name="category" tooltip="Select a category or enter a custom one">
           <Select
             placeholder="Select or type a category"
             allowClear
@@ -304,20 +272,17 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         </Form.Item>
 
         {/* Keywords */}
-        <Form.Item
-          label="Keywords (Optional)"
-          name="keywords"
-          tooltip="Comma-separated list of keywords for search"
-        >
+        <Form.Item label="Keywords (Optional)" name="keywords" tooltip="Comma-separated list of keywords for search">
           <Input placeholder="search, web, api" className="rounded-lg" />
         </Form.Item>
 
+        {/* Version */}
+        <Form.Item label="Version (Optional)" name="version" tooltip="Semantic version (e.g., 1.0.0)">
+          <Input placeholder="1.0.0" className="rounded-lg" />
+        </Form.Item>
+
         {/* Author Name */}
-        <Form.Item
-          label="Author Name (Optional)"
-          name="authorName"
-          tooltip="Name of the plugin author or organization"
-        >
+        <Form.Item label="Author Name (Optional)" name="authorName" tooltip="Name of the skill author or organization">
           <Input placeholder="Your Name or Organization" className="rounded-lg" />
         </Form.Item>
 
@@ -326,33 +291,19 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
           label="Author Email (Optional)"
           name="authorEmail"
           rules={[{ type: "email", message: "Please enter a valid email" }]}
-          tooltip="Contact email for the plugin author"
+          tooltip="Contact email for the skill author"
         >
           <Input type="email" placeholder="author@example.com" className="rounded-lg" />
-        </Form.Item>
-
-        {/* Homepage */}
-        <Form.Item
-          label="Homepage (Optional)"
-          name="homepage"
-          rules={[{ type: "url", message: "Please enter a valid URL" }]}
-          tooltip="URL to the plugin's homepage or documentation"
-        >
-          <Input type="url" placeholder="https://example.com" className="rounded-lg" />
         </Form.Item>
 
         {/* Submit Buttons */}
         <Form.Item className="mb-0 mt-6">
           <div className="flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={handleCancel}
-              disabled={isSubmitting}
-            >
+            <Button variant="secondary" onClick={handleCancel} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button type="submit" loading={isSubmitting}>
-              {isSubmitting ? "Registering..." : "Register Plugin"}
+              {isSubmitting ? "Adding..." : "Add Skill"}
             </Button>
           </div>
         </Form.Item>

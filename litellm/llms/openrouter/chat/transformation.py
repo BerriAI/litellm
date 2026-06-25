@@ -50,11 +50,15 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
     ) -> dict:
+        # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
+        if non_default_params.get("reasoning_effort") == "max":
+            non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
+
         mapped_openai_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
@@ -70,9 +74,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params[
-            "extra_body"
-        ] = extra_body  # openai client supports `extra_body` param
+        mapped_openai_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
         return mapped_openai_params
 
     def _supports_cache_control_in_content(self, model: str) -> bool:

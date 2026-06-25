@@ -43,10 +43,10 @@ class ResponsesSessionHandler:
         verbose_proxy_logger.debug(
             "inside get_chat_completion_message_history_for_previous_response_id"
         )
-        all_spend_logs: List[
-            SpendLogsPayload
-        ] = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
-            previous_response_id
+        all_spend_logs: List[SpendLogsPayload] = (
+            await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                previous_response_id
+            )
         )
         verbose_proxy_logger.debug(
             "found %s spend logs for this response id", len(all_spend_logs)

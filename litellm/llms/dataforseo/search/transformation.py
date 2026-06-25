@@ -3,6 +3,7 @@ Calls DataForSEO SERP API to search the web.
 
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
+
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
@@ -60,8 +61,17 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         password = get_secret_str("DATAFORSEO_PASSWORD")
 
         # If api_key is provided in "login:password" format, use it
+        caller_supplied_credentials = bool(api_key and ":" in api_key)
         if api_key and ":" in api_key:
             login, password = api_key.split(":", 1)
+
+        if not caller_supplied_credentials and login and password:
+            self._assert_trusted_api_base_for_server_credential(
+                api_base,
+                self.DATAFORSEO_API_BASE,
+                "DATAFORSEO_API_BASE",
+                "DATAFORSEO_LOGIN",
+            )
 
         if not login:
             raise ValueError(

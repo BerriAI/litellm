@@ -16,6 +16,7 @@ export const populateGuardrailProviders = (providerParamsResponse: Record<string
   providers.PresidioPII = "Presidio PII";
   providers.Bedrock = "Bedrock Guardrail";
   providers.Lakera = "Lakera";
+  providers.LlmAsAJudge = "LiteLLM LLM as a Judge";
 
   // Add dynamic providers from API response
   Object.entries(providerParamsResponse).forEach(([key, value]) => {
@@ -48,6 +49,11 @@ export const guardrail_provider_map: Record<string, string> = {
   LitellmContentFilter: "litellm_content_filter",
   ToolPermission: "tool_permission",
   BlockCodeExecution: "block_code_execution",
+  Promptguard: "promptguard",
+  LlmAsAJudge: "llm_as_a_judge",
+  Xecguard: "xecguard",
+  QostodianNexus: "qostodian_nexus",
+  Repelloai: "repelloai",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -102,6 +108,11 @@ export const shouldRenderContentFilterConfigSettings = (provider: string | null)
   return providerEnum === "LiteLLM Content Filter";
 };
 
+export const shouldRenderLLMJudgeFields = (provider: string | null) => {
+  if (!provider) return false;
+  return guardrail_provider_map[provider] === "llm_as_a_judge";
+};
+
 const asset_logos_folder = "../ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
@@ -113,6 +124,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
+  "Cisco AI Defense": `${asset_logos_folder}cisco.png`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
   "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
   "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,
@@ -121,11 +133,17 @@ export const guardrailLogoMap: Record<string, string> = {
   "Lasso Guardrail": `${asset_logos_folder}lasso.png`,
   "Pangea Guardrail": `${asset_logos_folder}pangea.png`,
   "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
+  "Cato Networks Guardrail": `${asset_logos_folder}cato_networks.svg`,
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,
+  PromptGuard: `${asset_logos_folder}promptguard.svg`,
+  XecGuard: `${asset_logos_folder}xecguard.svg`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
-  "Akto": `${asset_logos_folder}akto.svg`,
+  "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
+  Akto: `${asset_logos_folder}akto.svg`,
+  "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
+  "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
@@ -149,3 +167,35 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string;
 
   return { logo: logo || "", displayName: displayName || guardrailValue };
 };
+
+/** Tri-state UI value for `litellm_params.skip_system_message_in_guardrail` (inherit = use global). */
+export type SkipSystemMessageChoice = "inherit" | "yes" | "no";
+
+export function skipSystemMessageToChoice(v: boolean | null | undefined): SkipSystemMessageChoice {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "inherit";
+}
+
+/** Create flow: omit key when inheriting global default. */
+export function choiceToSkipSystemForCreate(choice: SkipSystemMessageChoice | undefined): boolean | undefined {
+  if (choice === "yes") return true;
+  if (choice === "no") return false;
+  return undefined;
+}
+
+/** Tri-state UI value for `litellm_params.skip_tool_message_in_guardrail` (inherit = use global). */
+export type SkipToolMessageChoice = "inherit" | "yes" | "no";
+
+export function skipToolMessageToChoice(v: boolean | null | undefined): SkipToolMessageChoice {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "inherit";
+}
+
+/** Create flow: omit key when inheriting global default. */
+export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefined): boolean | undefined {
+  if (choice === "yes") return true;
+  if (choice === "no") return false;
+  return undefined;
+}

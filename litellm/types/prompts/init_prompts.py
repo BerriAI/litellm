@@ -73,9 +73,9 @@ class PromptTemplateBase(BaseModel):
 class PromptInfoResponse(BaseModel):
     prompt_spec: PromptSpec
     raw_prompt_template: Optional[PromptTemplateBase] = None
-    environments: Optional[
-        List[str]
-    ] = None  # All environments this prompt is deployed to
+    environments: Optional[List[str]] = (
+        None  # All environments this prompt is deployed to
+    )
 
 
 class ListPromptsResponse(BaseModel):

@@ -61,6 +61,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in Gemini File Search store.
@@ -75,6 +76,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             content_type: MIME type
             chunks: Ignored - Gemini handles chunking
             embeddings: Ignored - Gemini handles embedding
+            existing_file_id: Existing provider file ID, unsupported for Gemini
 
         Returns:
             Tuple of (vector_store_id, file_id)
@@ -143,7 +145,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         Returns:
             Store name (format: fileSearchStores/xxxxxxx)
         """
-        url = f"{base_url}/fileSearchStores?key={api_key}"
+        url = f"{base_url}/fileSearchStores"
 
         request_body = {"displayName": display_name}
 
@@ -154,7 +156,10 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         response = await client.post(
             url,
             json=request_body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
         )
 
         if response.status_code != 200:
@@ -228,7 +233,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         # base_url is like: https://generativelanguage.googleapis.com/v1beta
         # We need: https://generativelanguage.googleapis.com/upload/v1beta/{store_id}:uploadToFileSearchStore
         api_base = base_url.replace("/v1beta", "")  # Get base without version
-        url = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore?key={api_key}"
+        url = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
 
         # Build request body with chunking config and metadata if provided
         request_body: Dict[str, Any] = {"displayName": filename}
@@ -263,6 +268,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             "X-Goog-Upload-Header-Content-Length": str(file_size),
             "X-Goog-Upload-Header-Content-Type": content_type,
             "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
         }
 
         verbose_logger.debug(f"Initiating resumable upload: {url}")

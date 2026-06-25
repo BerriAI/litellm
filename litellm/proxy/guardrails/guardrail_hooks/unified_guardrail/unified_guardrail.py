@@ -52,6 +52,20 @@ def _get_a2a_request_id(
 endpoint_guardrail_translation_mappings = None
 
 
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
+    if "litellm_metadata" not in data:
+        from litellm.llms.base_llm.guardrail_translation.base_translation import (
+            BaseTranslation,
+        )
+
+        user_metadata = BaseTranslation.transform_user_api_key_dict_to_metadata(
+            user_api_key_dict
+        )
+        if user_metadata:
+            data["litellm_metadata"] = user_metadata
+
+
 class UnifiedLLMGuardrails(CustomLogger):
     def __init__(
         self,
@@ -120,6 +134,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -177,6 +193,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
         return await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -227,6 +245,20 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
+        # Fallback: resolve call_type from logging_obj for pass-through endpoints
+        if call_type is None:
+            litellm_logging_obj = data.get("litellm_logging_obj")
+            logging_call_type = (
+                getattr(litellm_logging_obj, "call_type", None)
+                if litellm_logging_obj is not None
+                else None
+            )
+            if logging_call_type in (
+                CallTypes.pass_through.value,
+                CallTypes.allm_passthrough_route.value,
+            ):
+                call_type = logging_call_type
+
         if call_type is None:
             return response
 
@@ -256,7 +288,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         return response
 
-    async def async_post_call_streaming_iterator_hook(  # noqa: PLR0915
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,

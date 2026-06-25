@@ -120,50 +120,29 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { findByText } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
     expect(await findByText("Model Management", {}, { timeout: 10000 })).toBeInTheDocument();
-  }, 15000);
+  });
 
   it("should show Missing provider banner by default", async () => {
     localStorageMock.clear();
     const queryClient = createQueryClient();
     const { findByText } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
     expect(await findByText("Missing a provider?", {}, { timeout: 10000 })).toBeInTheDocument();
-  }, 15000);
+  });
 
   it("should hide Missing provider banner when dismiss button is clicked and persist to localStorage", async () => {
     localStorageMock.clear();
     const queryClient = createQueryClient();
     const { findByText, queryByText, container } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
 
@@ -180,7 +159,7 @@ describe("ModelsAndEndpointsView", () => {
 
     // LocalStorage should be updated
     expect(localStorageMock.getItem("hideMissingProviderBanner")).toBe("true");
-  }, 15000);
+  });
 
   it("should show compact Request Provider button when banner is dismissed", async () => {
     // Set localStorage to hide banner
@@ -188,14 +167,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { findByText, queryByText } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: [] }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
 
@@ -209,7 +181,7 @@ describe("ModelsAndEndpointsView", () => {
     const requestProviderLinks = document.querySelectorAll('a[href="https://models.litellm.ai/?request=true"]');
     // There should be a compact button when banner is hidden
     expect(requestProviderLinks.length).toBeGreaterThan(0);
-  }, 15000);
+  });
 
   it("should pass model IDs (not model names) to HealthCheckComponent as all_models_on_proxy", async () => {
     mockHealthCheckComponent.mockClear();
@@ -228,14 +200,7 @@ describe("ModelsAndEndpointsView", () => {
     const queryClient = createQueryClient();
     const { getByRole } = render(
       <QueryClientProvider client={queryClient}>
-        <ModelsAndEndpointsView
-          token="123"
-          modelData={{ data: modelDataWithIds.data }}
-          keys={[]}
-          setModelData={() => {}}
-          premiumUser={false}
-          teams={[]}
-        />
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
       </QueryClientProvider>,
     );
 

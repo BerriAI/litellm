@@ -24,7 +24,7 @@ async def test_health_and_chat_completion():
             assert response.status == 200
             readiness_response = await response.json()
             # Accept both "healthy" (new format) and "connected" (legacy format)
-            # since this test runs against both source builds and pip-installed versions
+            # since this test runs against both source builds and packaged installs
             assert readiness_response["status"] in ("healthy", "connected")
 
         # Test liveness endpoint

@@ -1,6 +1,7 @@
 """
 Main Search function for LiteLLM.
 """
+
 import asyncio
 import contextvars
 from functools import partial
@@ -242,10 +243,10 @@ def search(
             raise ValueError("All items in query list must be strings")
 
         # Get provider config
-        search_provider_config: Optional[
-            BaseSearchConfig
-        ] = ProviderConfigManager.get_provider_search_config(
-            provider=SearchProviders(search_provider),
+        search_provider_config: Optional[BaseSearchConfig] = (
+            ProviderConfigManager.get_provider_search_config(
+                provider=SearchProviders(search_provider),
+            )
         )
 
         if search_provider_config is None:
@@ -282,6 +283,7 @@ def search(
         complete_url = search_provider_config.get_complete_url(
             api_base=api_base,
             optional_params=optional_params,
+            api_key=api_key,
         )
 
         # Pre Call logging

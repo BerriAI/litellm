@@ -80,9 +80,7 @@ describe("PolicySelector", () => {
 
   it("should render", () => {
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
-    renderWithProviders(
-      <PolicySelector accessToken="tok" onChange={mockOnChange} />
-    );
+    renderWithProviders(<PolicySelector accessToken="tok" onChange={mockOnChange} />);
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
@@ -99,7 +97,7 @@ describe("PolicySelector", () => {
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies });
     const onPoliciesLoaded = vi.fn();
     renderWithProviders(
-      <PolicySelector accessToken="tok" onChange={mockOnChange} onPoliciesLoaded={onPoliciesLoaded} />
+      <PolicySelector accessToken="tok" onChange={mockOnChange} onPoliciesLoaded={onPoliciesLoaded} />,
     );
     await waitFor(() => {
       expect(onPoliciesLoaded).toHaveBeenCalledWith(policies);
@@ -108,9 +106,7 @@ describe("PolicySelector", () => {
 
   it("should show a disabled placeholder when disabled prop is true", () => {
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
-    renderWithProviders(
-      <PolicySelector accessToken="tok" onChange={mockOnChange} disabled />
-    );
+    renderWithProviders(<PolicySelector accessToken="tok" onChange={mockOnChange} disabled />);
     expect(screen.getByRole("combobox")).toBeDisabled();
   });
 

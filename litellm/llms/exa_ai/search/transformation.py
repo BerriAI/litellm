@@ -3,6 +3,7 @@ Calls Exa AI's /search endpoint to search the web.
 
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -64,7 +65,13 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("EXA_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("EXA_API_KEY",),
+            base_env_var="EXA_API_BASE",
+            default_api_base=self.EXA_AI_API_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "EXA_API_KEY is not set. Set `EXA_API_KEY` environment variable."

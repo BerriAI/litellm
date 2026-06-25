@@ -34,13 +34,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     wait: DEBOUNCE_MS,
   });
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteTeams(
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     pageSize,
     debouncedSearch || undefined,
     organizationId,
@@ -62,8 +56,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    const scrollRatio =
-      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
     if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
     }
@@ -96,6 +89,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
       onPopupScroll={handlePopupScroll}
       loading={isLoading}
       notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
+      data-testid="team-dropdown"
       popupRender={(menu) => (
         <>
           {menu}
@@ -109,8 +103,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     >
       {teams.map((team) => (
         <Select.Option key={team.team_id} value={team.team_id}>
-          <span className="font-medium">{team.team_alias}</span>{" "}
-          <Text type="secondary">({team.team_id})</Text>
+          <span className="font-medium">{team.team_alias}</span> <Text type="secondary">({team.team_id})</Text>
         </Select.Option>
       ))}
     </Select>

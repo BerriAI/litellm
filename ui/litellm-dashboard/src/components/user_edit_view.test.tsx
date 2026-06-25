@@ -1,6 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { UserEditView } from "./user_edit_view";
 
@@ -85,9 +85,19 @@ vi.mock("@tremor/react", async (importOriginal) => {
     return React.createElement("option", { value, title }, childText || title || value);
   };
   SelectItem.displayName = "SelectItem";
+  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts.
+  // A file-level vi.mock fully replaces the setup-level mock, so without this
+  // the real Tremor Button leaks through and its useTooltip(300) schedules a
+  // native setTimeout that fires post-teardown -> "window is not defined".
+  const Button = React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
+    React.createElement("button", { ...props, ref }, children),
+  );
+  const TremorTooltip = ({ children }: any) => React.createElement(React.Fragment, null, children);
   return {
     ...actual,
     SelectItem,
+    Button,
+    Tooltip: TremorTooltip,
   };
 });
 
@@ -138,6 +148,10 @@ describe("UserEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("should render", async () => {

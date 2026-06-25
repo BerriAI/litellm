@@ -210,16 +210,134 @@
     "default_model_placeholder": "claude-3-opus"
   },
   {
+    "provider": "BedrockMantle",
+    "provider_display_name": "Amazon Bedrock Mantle",
+    "litellm_provider": "bedrock_mantle",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Bedrock Mantle API Key",
+        "placeholder": null,
+        "tooltip": "Bearer token for the Bedrock Mantle OpenAI-compatible endpoint. You can provide the raw token or the environment variable (e.g. `os.environ/BEDROCK_MANTLE_API_KEY`). Leave blank to authenticate with AWS SigV4 credentials instead.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_access_key_id",
+        "label": "AWS Access Key ID",
+        "placeholder": null,
+        "tooltip": "Used for AWS SigV4 auth when no API key is set. You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_secret_access_key",
+        "label": "AWS Secret Access Key",
+        "placeholder": null,
+        "tooltip": "Used for AWS SigV4 auth when no API key is set. You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_token",
+        "label": "AWS Session Token",
+        "placeholder": null,
+        "tooltip": "Temporary credentials session token. You can provide the raw token or the environment variable (e.g. `os.environ/MY_SESSION_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_region_name",
+        "label": "AWS Region Name",
+        "placeholder": "us-east-1",
+        "tooltip": "Region of the Bedrock Mantle endpoint. Defaults to us-east-1. You can provide the raw value or the environment variable (e.g. `os.environ/AWS_REGION_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_name",
+        "label": "AWS Session Name",
+        "placeholder": "my-session",
+        "tooltip": "Name for the AWS session. You can provide the raw value or the environment variable (e.g. `os.environ/MY_SESSION_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_profile_name",
+        "label": "AWS Profile Name",
+        "placeholder": "default",
+        "tooltip": "AWS profile name to use for authentication. You can provide the raw value or the environment variable (e.g. `os.environ/MY_PROFILE_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_role_name",
+        "label": "AWS Role Name",
+        "placeholder": "MyRole",
+        "tooltip": "AWS IAM role name to assume. You can provide the raw value or the environment variable (e.g. `os.environ/MY_ROLE_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_web_identity_token",
+        "label": "AWS Web Identity Token",
+        "placeholder": null,
+        "tooltip": "Web identity token for OIDC authentication. You can provide the raw token or the environment variable (e.g. `os.environ/MY_WEB_IDENTITY_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://bedrock-mantle.us-east-1.api.aws",
+        "tooltip": "Optional. Custom Bedrock Mantle endpoint. Defaults to https://bedrock-mantle.<region>.api.aws. You can provide the raw value or the environment variable (e.g. `os.environ/BEDROCK_MANTLE_API_BASE`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "bedrock_mantle/openai.gpt-oss-120b"
+  },
+  {
     "provider": "Anthropic",
     "provider_display_name": "Anthropic",
     "litellm_provider": "anthropic",
     "credential_fields": [
       {
+        "key": "api_base",
+        "label": "Upstream API Base",
+        "placeholder": "https://api.anthropic.com",
+        "tooltip": "Optional. Where the proxy forwards requests upstream. Leave blank to use Anthropic's public API. Set this only for private Anthropic deployments or reverse proxies. Do NOT set this to your LiteLLM proxy URL — that causes a recursive loop.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "api_key",
         "label": "API Key",
         "placeholder": "sk-",
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Leave empty for BYOK (bring-your-own-key) flows, where clients forward their own Anthropic key via the x-api-key header. Requires the 'Forward LLM provider auth headers' UI setting to be enabled.",
+        "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null
@@ -1233,6 +1351,16 @@
     "provider_display_name": "Google AI Studio",
     "litellm_provider": "gemini",
     "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://generativelanguage.googleapis.com/v1beta",
+        "tooltip": "Leave blank to let LiteLLM pick the right Gemini API version automatically (v1alpha for Gemini 3+ models, v1beta otherwise). Override only when fronting Gemini through a custom gateway; if you do, include the version prefix (e.g. /v1beta) but not the trailing slash. LiteLLM appends '/models/{model}:generateContent'.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
       {
         "key": "api_key",
         "label": "API Key",
@@ -2559,6 +2687,24 @@
       }
     ],
     "default_model_placeholder": "snowflake/mistral-7b"
+  },
+  {
+    "provider": "Soniox",
+    "provider_display_name": "Soniox",
+    "litellm_provider": "soniox",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Soniox API Key",
+        "placeholder": null,
+        "tooltip": "Currently only the async Speech-to-Text REST API (api.soniox.com) is supported. Realtime STT (stt-rt.soniox.com) and TTS (tts-rt.soniox.com) are not yet available.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "soniox/stt-async-v5"
   },
   {
     "provider": "TEXT_COMPLETION_CODESTRAL",

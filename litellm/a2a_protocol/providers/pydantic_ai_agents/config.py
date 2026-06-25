@@ -21,16 +21,17 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         request_id: str,
         params: Dict[str, Any],
         api_base: Optional[str] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Handle non-streaming request to Pydantic AI agent."""
-        if not api_base:
-            raise ValueError("api_base is required for Pydantic AI agents")
+        if api_base is None:
+            raise ValueError("api_base is required for PydanticAIProviderConfig")
         return await PydanticAIHandler.handle_non_streaming(
             request_id=request_id,
             params=params,
             api_base=api_base,
             timeout=kwargs.get("timeout", 60.0),
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         )
 
     async def handle_streaming(
@@ -50,5 +51,6 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
             timeout=kwargs.get("timeout", 60.0),
             chunk_size=kwargs.get("chunk_size", 50),
             delay_ms=kwargs.get("delay_ms", 10),
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         ):
             yield chunk

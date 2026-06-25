@@ -69,6 +69,7 @@ class TeamListItem(LiteLLM_TeamTable):
     """A team item in the paginated list response, enriched with computed fields."""
 
     members_count: int = 0
+    keys_count: int = 0
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None
@@ -114,3 +115,11 @@ class BulkTeamMemberAddResponse(BaseModel):
     successful_additions: int
     failed_additions: int
     updated_team: Optional[Dict[str, Any]] = None
+
+
+class TeamMemberInfoResponse(LiteLLM_TeamMembership):
+    """Response for GET /team/{team_id}/members/me — caller's own membership row."""
+
+    role: Optional[str] = None
+    user_email: Optional[str] = None
+    team_alias: Optional[str] = None

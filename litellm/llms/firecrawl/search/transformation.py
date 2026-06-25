@@ -3,6 +3,7 @@ Calls Firecrawl's /search endpoint to search the web.
 
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -60,7 +61,13 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("FIRECRAWL_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("FIRECRAWL_API_KEY",),
+            base_env_var="FIRECRAWL_API_BASE",
+            default_api_base=self.FIRECRAWL_API_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "FIRECRAWL_API_KEY is not set. Set `FIRECRAWL_API_KEY` environment variable."
@@ -184,9 +191,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         if isinstance(data, list):
             # Self-hosted Firecrawl (v1) format: data is a flat list of results
             for result in data:
-                snippet = (
-                    result.get("markdown") or result.get("description", "")
-                )
+                snippet = result.get("markdown") or result.get("description", "")
                 search_result = SearchResult(
                     title=result.get("title", ""),
                     url=result.get("url", ""),

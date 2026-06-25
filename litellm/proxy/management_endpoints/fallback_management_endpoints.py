@@ -7,6 +7,7 @@ POST /fallback - Create or update fallbacks for a specific model
 GET /fallback/{model} - Get fallbacks for a specific model
 DELETE /fallback/{model} - Delete fallbacks for a specific model
 """
+
 # pyright: reportMissingImports=false
 
 import json
@@ -26,6 +27,7 @@ else:
         # fastapi is only required for proxy, not for SDK usage
         pass
 
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -156,7 +158,7 @@ async def create_fallback(
 
         # Save to database - convert router_settings to JSON string
         router_settings_json = json.dumps(router_settings)
-        await prisma_client.db.litellm_config.upsert(
+        await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={
                 "create": {
@@ -335,7 +337,7 @@ async def delete_fallback(
 
         # Save to database - convert router_settings to JSON string
         router_settings_json = json.dumps(router_settings)
-        await prisma_client.db.litellm_config.upsert(
+        await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={
                 "create": {

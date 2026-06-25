@@ -53,9 +53,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
-        updates: List[
-            SpendUpdateQueueItem
-        ] = await self.flush_all_updates_from_in_memory_queue()
+        updates: List[SpendUpdateQueueItem] = (
+            await self.flush_all_updates_from_in_memory_queue()
+        )
         aggregated_updates = self._get_aggregated_spend_update_queue_item(updates)
         for update in aggregated_updates:
             await self.update_queue.put(update)

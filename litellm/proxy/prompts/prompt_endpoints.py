@@ -19,7 +19,10 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.path_utils import safe_filename
+from litellm.repositories.table_repositories import PromptRepository
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,
@@ -206,7 +209,7 @@ async def get_next_version_for_prompt(
     Returns:
         Next version number (1 if no versions exist, max_version + 1 otherwise)
     """
-    existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
+    existing_prompts = await PromptRepository(prisma_client).table.find_many(
         where={"prompt_id": prompt_id, "environment": environment}
     )
 
@@ -439,7 +442,7 @@ async def get_prompt_versions(
         where_clause: Dict[str, Any] = {"prompt_id": base_prompt_id}
         if environment:
             where_clause["environment"] = environment
-        db_prompts = await prisma_client.db.litellm_prompttable.find_many(
+        db_prompts = await PromptRepository(prisma_client).table.find_many(
             where=where_clause,
             order={"version": "desc"},
         )
@@ -610,7 +613,7 @@ async def get_prompt_info(
     # Query all environments this prompt exists in (lightweight: distinct on environment)
     all_environments: List[str] = []
     if prisma_client is not None:
-        all_prompt_rows = await prisma_client.db.litellm_prompttable.find_many(
+        all_prompt_rows = await PromptRepository(prisma_client).table.find_many(
             where={"prompt_id": base_prompt_id},
             distinct=["environment"],
         )
@@ -632,7 +635,7 @@ async def get_prompt_info(
         }
         if requested_version is not None:
             where_clause["version"] = requested_version
-        env_prompts = await prisma_client.db.litellm_prompttable.find_many(
+        env_prompts = await PromptRepository(prisma_client).table.find_many(
             where=where_clause,
             order={"version": "desc"},
             take=1,
@@ -750,7 +753,7 @@ async def create_prompt(
         )
 
         # Store prompt in db with version
-        prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
+        prompt_db_entry = await PromptRepository(prisma_client).table.create(
             data={
                 "prompt_id": request.prompt_id,
                 "version": new_version,
@@ -846,7 +849,7 @@ async def update_prompt(
         )
 
         # Check if any version of this prompt exists (in any environment)
-        existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
+        existing_prompts = await PromptRepository(prisma_client).table.find_many(
             where={"prompt_id": base_prompt_id}
         )
 
@@ -875,7 +878,7 @@ async def update_prompt(
         )
 
         # Store new version in db
-        prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
+        prompt_db_entry = await PromptRepository(prisma_client).table.create(
             data={
                 "prompt_id": base_prompt_id,
                 "version": new_version,
@@ -991,7 +994,7 @@ async def delete_prompt(
             delete_where["environment"] = environment
 
         # Delete versions from the database (scoped to environment if provided)
-        await prisma_client.db.litellm_prompttable.delete_many(where=delete_where)
+        await PromptRepository(prisma_client).table.delete_many(where=delete_where)
 
         # Remove matching prompts from memory — scope to environment if provided
         if environment:
@@ -1103,7 +1106,7 @@ async def patch_prompt(
         if requested_version is not None:
             find_where["version"] = requested_version
 
-        db_rows = await prisma_client.db.litellm_prompttable.find_many(
+        db_rows = await PromptRepository(prisma_client).table.find_many(
             where=find_where,
             order={"version": "desc"},
             take=1,
@@ -1161,7 +1164,7 @@ async def patch_prompt(
             update_data["created_by"] = user_api_key_dict.user_id
 
         # Update by primary key (id) to target exactly one row
-        updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
+        updated_prompt_db_entry = await PromptRepository(prisma_client).table.update(
             where={"id": target_row.id},
             data=update_data,
         )
@@ -1294,6 +1297,13 @@ async def test_prompt(
         }
         data.update(optional_params)
 
+        is_request_body_safe(
+            request_body=data,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            model=data.get("model", ""),
+        )
+
         # Use ProxyBaseLLMRequestProcessing to go through all proxy logic
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         result = await base_llm_response_processor.base_process_llm_request(
@@ -1322,6 +1332,8 @@ async def test_prompt(
 
     except HTTPException as e:
         raise e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error testing prompt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1356,8 +1368,8 @@ async def convert_prompt_file_to_json(
         # Read file content
         file_content = await file.read()
 
-        # Create temporary file
-        temp_file_path = Path(tempfile.mkdtemp()) / file.filename
+        # Create temporary file — use safe_filename to prevent path traversal
+        temp_file_path = Path(tempfile.mkdtemp()) / safe_filename(file.filename)
         temp_file_path.write_bytes(file_content)
 
         # Create a PromptManager instance just for conversion

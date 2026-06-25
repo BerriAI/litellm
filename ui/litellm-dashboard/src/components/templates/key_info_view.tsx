@@ -20,7 +20,7 @@ import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
 
@@ -33,6 +33,20 @@ interface KeyInfoViewProps {
   teams: any[] | null;
   backButtonText?: string;
 }
+
+// Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
+// litellm/proxy/_types.py) that the key-edit form submits as arrays/strings, where
+// "empty" means "unset". The loop below drops them when they're empty-and-were-empty
+// so a non-premium edit of unrelated fields doesn't trip the server's premium gate.
+//
+// Boolean premium fields (e.g. disable_global_guardrails) do NOT belong here: false is
+// a real value, not "empty", so isEmptyValue(false) is false and the loop would never
+// drop it — we'd resend false on every edit and trip the gate. Booleans get their own
+// "send only when changed" guard instead (see disable_global_guardrails below).
+const PREMIUM_METADATA_FIELDS = ["policies", "guardrails", "prompts", "tags", "allowed_passthrough_routes"] as const;
+
+const isEmptyValue = (v: unknown): boolean =>
+  v == null || (Array.isArray(v) && v.length === 0) || (typeof v === "string" && v.trim() === "");
 
 /**
  * ─────────────────────────────────────────────────────────────────────────
@@ -98,7 +112,7 @@ export default function KeyInfoView({
               console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
               guardrailsMap[policyName] = [];
             }
-          })
+          }),
         );
         setPolicyGuardrails(guardrailsMap);
       } catch (error) {
@@ -146,6 +160,28 @@ export default function KeyInfoView({
         delete formValues.prompts;
       }
 
+      // Drop premium metadata fields that are empty AND were empty before.
+      // The /key/update response echoes defaults like `policies: []` back into
+      // state; without this, the next save resends `[]` and trips the premium
+      // gate in prepare_metadata_fields for non-premium users.
+      for (const field of PREMIUM_METADATA_FIELDS) {
+        const previousValue =
+          (currentKeyData.metadata as Record<string, unknown> | undefined)?.[field] ??
+          (currentKeyData as unknown as Record<string, unknown>)[field];
+        if (isEmptyValue(formValues[field]) && isEmptyValue(previousValue)) {
+          delete formValues[field];
+        }
+      }
+
+      // disable_global_guardrails is premium-gated server-side; only send it when it
+      // changed so a non-premium edit of unrelated fields isn't blocked by that gate.
+      const previousDisableGlobalGuardrails = Boolean(
+        (currentKeyData.metadata as Record<string, unknown> | undefined)?.disable_global_guardrails,
+      );
+      if (Boolean(formValues.disable_global_guardrails) === previousDisableGlobalGuardrails) {
+        delete formValues.disable_global_guardrails;
+      }
+
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
@@ -160,7 +196,11 @@ export default function KeyInfoView({
       }
 
       if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [], toolsets: [] };
+        const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || {
+          servers: [],
+          accessGroups: [],
+          toolsets: [],
+        };
         formValues.object_permission = {
           ...currentKeyData.object_permission,
           mcp_servers: servers || [],
@@ -211,11 +251,13 @@ export default function KeyInfoView({
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-            ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
+            ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
+              ? { logging: formValues.logging_settings }
+              : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
-                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-              }
+                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+                }
               : {}),
           };
         } catch (error) {
@@ -230,11 +272,13 @@ export default function KeyInfoView({
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-          ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
+          ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
+            ? { logging: formValues.logging_settings }
+            : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
-              litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-            }
+                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+              }
             : {}),
         };
       }
@@ -368,17 +412,23 @@ export default function KeyInfoView({
   };
 
   return (
-    <div className="w-full h-screen p-4">
+    <div className="w-full h-full overflow-y-auto p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",
           keyId: currentKeyData.token_id || currentKeyData.token,
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
-          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          userAlias: currentKeyData.user?.user_alias ?? null,
+          createdBy:
+            currentKeyData.created_by_user?.user_alias ||
+            currentKeyData.created_by_user?.user_email ||
+            currentKeyData.created_by ||
+            "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+          expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
         onBack={onClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
@@ -388,9 +438,7 @@ export default function KeyInfoView({
         backButtonText={backButtonText}
         regenerateDisabled={!premiumUser}
         regenerateTooltip={
-          !premiumUser
-            ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
-            : undefined
+          !premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : undefined
         }
       />
 
@@ -453,8 +501,8 @@ export default function KeyInfoView({
           <strong>$0</strong>?
         </p>
         <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
-          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is
-          preserved in logs. This resets the current period spend counter, the same as an automatic budget reset.
+          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is preserved
+          in logs. This resets the current period spend counter, the same as an automatic budget reset.
         </p>
       </Modal>
 
@@ -475,7 +523,7 @@ export default function KeyInfoView({
                   <Text>
                     of{" "}
                     {currentKeyData.max_budget !== null
-                      ? `$${formatNumberWithCommas(currentKeyData.max_budget)}`
+                      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
                       : "Unlimited"}
                   </Text>
                 </div>
@@ -586,12 +634,10 @@ export default function KeyInfoView({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card className="overflow-y-auto max-h-[65vh]">
+            <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && canModifyKey && (
-                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
-                )}
+                {!isEditing && canModifyKey && <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>}
               </div>
 
               {isEditing ? (
@@ -699,10 +745,10 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                            {tag}
-                          </span>
-                        ))
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {tag}
+                            </span>
+                          ))
                         : "No tags specified"}
                     </div>
                   </div>
@@ -712,10 +758,10 @@ export default function KeyInfoView({
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                            {prompt}
-                          </span>
-                        ))
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {prompt}
+                            </span>
+                          ))
                         : "No prompts specified"}
                     </Text>
                   </div>
@@ -739,12 +785,12 @@ export default function KeyInfoView({
                     <Text className="font-medium">Allowed Pass Through Routes</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
-                        currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                            {route}
-                          </span>
-                        ))
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {route}
+                            </span>
+                          ))
                         : "No pass through routes specified"}
                     </Text>
                   </div>

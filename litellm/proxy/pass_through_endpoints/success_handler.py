@@ -11,7 +11,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import StandardPassThroughResponseObject
-from litellm.utils import executor as thread_pool_executor
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -46,6 +45,8 @@ class PassThroughEndpointLogging:
             "search",
             "batchPredictionJobs",
             "predictLongRunning",
+            "embedContent",
+            "batchEmbedContents",
         ]
 
         # Anthropic
@@ -92,19 +93,15 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         **kwargs,
     ):
-        """Helper function to handle both sync and async logging operations"""
-        # Submit to thread pool for sync logging
-        thread_pool_executor.submit(
-            logging_obj.success_handler,
-            standard_logging_response_object,
-            start_time,
-            end_time,
-            cache_hit,
-            **kwargs,
-        )
-
-        # Handle async logging
-        await logging_obj.async_success_handler(
+        """Log pass-through success via the shared async dispatch path."""
+        # Always reached from pass_through_async_success_handler, which runs in
+        # an async context. call_type is "pass_through_endpoint" here, so the
+        # passthrough guard in dispatch_success_handlers already forces the
+        # async handler to run; pass prefer_async_handlers explicitly to match
+        # the streaming sibling (_route_streaming_logging_to_handler) and keep
+        # async-only loggers (e.g. the proxy spend logger) firing regardless of
+        # how the call-type classification evolves.
+        await logging_obj.dispatch_success_handlers(
             result=(
                 json.dumps(result)
                 if isinstance(result, dict)
@@ -113,6 +110,7 @@ class PassThroughEndpointLogging:
             start_time=start_time,
             end_time=end_time,
             cache_hit=False,
+            prefer_async_handlers=True,
             **kwargs,
         )
 
@@ -283,9 +281,9 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
-        return_dict[
-            "standard_logging_response_object"
-        ] = standard_logging_response_object
+        return_dict["standard_logging_response_object"] = (
+            standard_logging_response_object
+        )
 
         return_dict["kwargs"] = kwargs
         return return_dict
@@ -308,9 +306,9 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        logging_obj.model_call_details[
-            "passthrough_logging_payload"
-        ] = passthrough_logging_payload
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
         if self.is_assemblyai_route(url_route):
             if (
                 AssemblyAIPassthroughLoggingHandler._should_log_request(
@@ -436,14 +434,19 @@ class PassThroughEndpointLogging:
         return False
 
     def is_openai_route(self, url_route: str):
-        """Check if the URL route is an OpenAI API route."""
+        """Check if the URL route is an OpenAI API route.
+
+        Uses the URL-aware helper so that non-OpenAI Azure Cognitive Services
+        (Speech, Vision, Language, ...) sharing the `*.cognitiveservices.azure.com`
+        / `*.openai.azure.com` domains are not misclassified as OpenAI routes.
+        """
         if not url_route:
             return False
-        parsed_url = urlparse(url_route)
-        return parsed_url.hostname and (
-            "api.openai.com" in parsed_url.hostname
-            or "openai.azure.com" in parsed_url.hostname
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            _is_openai_compatible_url,
         )
+
+        return _is_openai_compatible_url(url_route)
 
     def is_gemini_route(
         self, url_route: str, custom_llm_provider: Optional[str] = None
@@ -455,7 +458,16 @@ class PassThroughEndpointLogging:
         return False
 
     def _is_supported_openai_endpoint(self, url_route: str) -> bool:
-        """Check if the OpenAI endpoint is supported by the passthrough logging handler."""
+        """Check if the OpenAI endpoint is supported by the passthrough logging handler.
+
+        The Responses API route is included because
+        `openai_passthrough_handler` has a dedicated `elif is_responses:`
+        branch that knows how to extract usage + cost from the
+        Responses-API on-the-wire shape. Without including it here, the
+        outer dispatch filters Responses calls out before reaching the
+        handler — the inner branch is then unreachable and Responses
+        calls land in `LiteLLM_SpendLogs` with zero tokens / zero spend.
+        """
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
@@ -466,6 +478,7 @@ class PassThroughEndpointLogging:
                 url_route
             )
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
         )
 
     def _set_cost_per_request(
@@ -487,8 +500,8 @@ class PassThroughEndpointLogging:
             kwargs["response_cost"] = passthrough_logging_payload.get(
                 "cost_per_request"
             )
-            logging_obj.model_call_details[
-                "response_cost"
-            ] = passthrough_logging_payload.get("cost_per_request")
+            logging_obj.model_call_details["response_cost"] = (
+                passthrough_logging_payload.get("cost_per_request")
+            )
 
         return kwargs

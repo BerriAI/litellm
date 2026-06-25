@@ -29,8 +29,21 @@ from litellm.types.utils import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _use_local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
 class TestGPTImageCostCalculator:
-    """Test the OpenAI gpt-image-1 cost calculator"""
+    """Test the OpenAI gpt-image cost calculator"""
 
     def test_gpt_image_1_cost_with_text_only(self):
         """Test cost calculation with only text input tokens"""
@@ -149,6 +162,44 @@ class TestGPTImageCostCalculator:
 
         assert cost == 0.0
 
+    def test_gpt_image_2_cost_with_text_and_image_tokens(self):
+        """Test cost calculation for gpt-image-2 token pricing"""
+        from litellm.llms.openai.image_generation.cost_calculator import cost_calculator
+
+        usage = Usage(
+            prompt_tokens=600,
+            completion_tokens=5000,
+            total_tokens=5600,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                image_tokens=500,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=1000,
+                image_tokens=4000,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/image.jpg")],
+        )
+        image_response.usage = usage
+
+        cost = cost_calculator(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+        # GPT Image 2 pricing:
+        # Text input: 100 * $5/1M = 0.0005
+        # Image input: 500 * $8/1M = 0.004
+        # Text output: 1000 * $10/1M = 0.01
+        # Image output: 4000 * $30/1M = 0.12
+        expected_cost = 0.0005 + 0.004 + 0.01 + 0.12
+        assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
+
 
 class TestGPTImageCostRouting:
     """Test that gpt-image models are properly routed to the token-based calculator"""
@@ -180,6 +231,33 @@ class TestGPTImageCostRouting:
         )
 
         expected_cost = 0.0005 + 0.2
+        assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
+
+    def test_openai_gpt_image_2_routes_to_token_calculator(self):
+        """Test that OpenAI gpt-image-2 routes to token-based calculator"""
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=5000,
+            total_tokens=5100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100),
+            completion_tokens_details=CompletionTokensDetailsWrapper(image_tokens=5000),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/image.jpg")],
+        )
+        image_response.usage = usage
+
+        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model="gpt-image-2",
+            completion_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+        expected_cost = 0.0005 + 0.15
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
     def test_openai_dalle_routes_to_pixel_calculator(self):

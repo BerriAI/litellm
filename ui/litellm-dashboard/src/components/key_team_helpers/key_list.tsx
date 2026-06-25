@@ -13,6 +13,7 @@ export interface Team {
   organization_id: string;
   created_at: string;
   keys: KeyResponse[];
+  keys_count?: number;
   members_with_roles: Member[];
   spend: number;
   access_group_ids?: string[];
@@ -53,6 +54,7 @@ export interface KeyResponse {
   organization_id: string | null;
   org_id?: string | null;
   created_at: string;
+  created_by?: string;
   updated_at: string;
   last_active: string | null;
   team_spend: number;
@@ -95,6 +97,7 @@ export interface KeyResponse {
     agent_access_groups?: string[];
   };
   access_group_ids?: string[];
+  budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
   last_rotation_at?: string;

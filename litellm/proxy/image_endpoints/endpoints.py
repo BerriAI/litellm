@@ -173,6 +173,16 @@ async def image_generation(
             )
         )
 
+        # Call response headers hook (matches base_process_llm_request behavior)
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
+
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -284,6 +294,13 @@ async def image_edit_api(
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
+
+    for _field in ("image", "mask"):
+        if _field in data and isinstance(data[_field], str):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
+            )
 
     # Ensure prompt exists in data (default to None for models that don't require it)
     if "prompt" not in data:
