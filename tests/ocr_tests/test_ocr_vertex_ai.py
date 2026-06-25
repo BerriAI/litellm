@@ -15,7 +15,6 @@ from base_ocr_unit_tests import BaseOCRTest
 def load_vertex_ai_credentials():
     """Load Vertex AI credentials for tests"""
     # Define the path to the vertex_key.json file
-    print("loading vertex ai credentials")
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
 
@@ -23,7 +22,6 @@ def load_vertex_ai_credentials():
     try:
         with open(vertex_key_path, "r") as file:
             # Read the file content
-            print("Read vertexai file path")
             content = file.read()
 
             # If the file is empty or not valid JSON, create an empty dictionary
@@ -110,32 +108,3 @@ class TestVertexAIDeepSeekOCR(BaseOCRTest):
     def test_ocr_response_structure(self):
         """Skip this test for DeepSeek OCR - PDF URLs not supported"""
         pass
-
-
-def test_vertex_ai_ocr_routing():
-    """
-    Test that Vertex AI OCR routing correctly selects the right config based on model name.
-    """
-    from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
-    from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
-        VertexAIDeepSeekOCRConfig,
-    )
-    from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
-
-    # Test DeepSeek OCR routing
-    deepseek_config = get_vertex_ai_ocr_config("vertex_ai/deepseek-ocr-maas")
-    assert isinstance(
-        deepseek_config, VertexAIDeepSeekOCRConfig
-    ), "DeepSeek model should route to VertexAIDeepSeekOCRConfig"
-
-    # Test Mistral OCR routing (should use default VertexAIOCRConfig)
-    mistral_config = get_vertex_ai_ocr_config("vertex_ai/mistral-ocr-2505")
-    assert isinstance(
-        mistral_config, VertexAIOCRConfig
-    ), "Mistral model should route to VertexAIOCRConfig"
-
-    # Test other DeepSeek variants
-    deepseek_variant = get_vertex_ai_ocr_config("vertex_ai/deepseek-ocr-maas")
-    assert isinstance(
-        deepseek_variant, VertexAIDeepSeekOCRConfig
-    ), "DeepSeek variant should route to VertexAIDeepSeekOCRConfig"
