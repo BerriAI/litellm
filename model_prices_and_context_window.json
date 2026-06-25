@@ -276,7 +276,7 @@
     "aiml/openai/gpt-image-2": {
         "litellm_provider": "aiml",
         "metadata": {
-            "notes": "OpenAI gpt-image-2 via AI/ML API - flagship multimodal image generation and editing model with reasoning and 2K output"
+            "notes": "OpenAI gpt-image-2 via AI/ML API - flagship multimodal image generation and editing model with reasoning and 2K output. output_cost_per_image is AI/ML's published medium-quality rate; like the other aiml image entries it is billed as a flat per-image price"
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.054,
