@@ -11,6 +11,18 @@ use super::types::{ImageEditInputFile, ImageEditRequestData, ImageEditResponseDa
 pub trait ImageEditProviderConfig: Send + Sync {
     fn supported_image_edit_params(&self) -> &'static [&'static str];
 
+    fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<String>;
+
+    fn complete_url(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<String>;
+
     fn map_image_edit_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
         let mut mapped_params = Map::new();
         for (param, value) in non_default_params {

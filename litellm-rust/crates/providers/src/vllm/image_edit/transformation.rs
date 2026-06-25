@@ -62,6 +62,22 @@ impl ImageEditProviderConfig for VllmImageEditConfig {
         SUPPORTED_IMAGE_EDIT_PARAMS
     }
 
+    fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<String> {
+        resolve_api_key(api_key, env_lookup)
+    }
+
+    fn complete_url(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<String> {
+        complete_url(api_base, env_lookup)
+    }
+
     fn transform_image_edit_request(
         &self,
         model: &str,

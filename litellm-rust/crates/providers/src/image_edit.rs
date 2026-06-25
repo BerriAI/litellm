@@ -15,7 +15,6 @@ use litellm_core::image_edit::types::{ImageEditInputFile, ImageEditRequestFormat
 use litellm_core::{CoreResult, LlmProvider};
 use serde_json::{Map, Value};
 
-use crate::vllm::image_edit::transformation as vllm;
 use crate::vllm::image_edit::transformation::VLLM_IMAGE_EDIT_CONFIG;
 
 const IMAGE_EDIT_TIMEOUT_SECS: u64 = 600;
@@ -126,8 +125,8 @@ pub async fn image_edit(request: ImageEditRequest<'_>) -> CoreResult<Value> {
     let config = image_edit_config_for(provider)
         .ok_or_else(|| CoreError::InvalidProvider(provider.to_string()))?;
 
-    let api_key = vllm::resolve_api_key(request.api_key, &|key| std::env::var(key).ok());
-    let url = vllm::complete_url(request.api_base, &|key| std::env::var(key).ok())?;
+    let api_key = config.resolve_api_key(request.api_key, &|key| std::env::var(key).ok());
+    let url = config.complete_url(request.api_base, &|key| std::env::var(key).ok())?;
     let filtered_params = config.map_image_edit_params(&request.optional_params);
     let transformed = config.transform_image_edit_request(
         request.model,
