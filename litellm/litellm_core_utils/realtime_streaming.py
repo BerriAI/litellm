@@ -1055,21 +1055,18 @@ class RealTimeStreaming:
 
                     if await self._handle_raw_backend_message(event, raw_response):
                         continue
+
+                    event = self._normalize_event_for_ga_client(event)
                     self.store_message(event)
 
                     if not self._client_wants_beta:
-                        await self.websocket.send_text(
-                            self._event_to_client_json(event)
-                        )
+                        await self.websocket.send_text(json.dumps(event))
                         continue
 
-                    event = self._normalize_event_for_ga_client(event)
                     translated = self._translate_event_to_beta(event)
                     if translated is None:
                         continue
-                    await self.websocket.send_text(
-                        raw_response if translated is event else json.dumps(translated)
-                    )
+                    await self.websocket.send_text(json.dumps(translated))
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.exception(
@@ -1201,8 +1198,7 @@ class RealTimeStreaming:
 
         Returns None when the event must be dropped (the GA-only
         conversation.item.done has no beta counterpart). Returns the original
-        event object unchanged when no translation applies, so the caller can
-        forward the raw frame without re-serializing; otherwise returns a
+        event object unchanged when no translation applies; otherwise returns a
         translated copy.
         """
         event_type = event.get("type", "")

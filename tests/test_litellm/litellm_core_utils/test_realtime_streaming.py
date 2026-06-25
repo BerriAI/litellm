@@ -475,6 +475,75 @@ async def test_backend_to_client_normalizes_empty_response_usage():
 
 
 @pytest.mark.asyncio
+async def test_backend_to_client_beta_receives_normalized_events():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "event_id": "e1",
+                    "item_id": "i1",
+                    "response_id": "r1",
+                    "delta": '{"city":"Paris"}',
+                    "call_id": "c1",
+                    "previous_item_id": None,
+                }
+            ).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
+    assert sent["type"] == "response.function_call_arguments.delta"
+    assert sent["output_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backend_to_client_stores_normalized_events_for_logging():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "response.done",
+                    "response": {
+                        "id": "r1",
+                        "object": "realtime.response",
+                        "output": [],
+                        "status": "completed",
+                        "status_details": None,
+                        "usage": {},
+                    },
+                }
+            ).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
+    assert sent["response"]["usage"]["total_tokens"] == 0
+    assert streaming.messages[0]["response"]["usage"]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
 async def test_client_ack_messages_keeps_beta_session_shape_for_beta_clients():
     client_ws = MagicMock()
     client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
