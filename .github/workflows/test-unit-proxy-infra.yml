@@ -30,6 +30,7 @@ jobs:
         tests/test_litellm/proxy/experimental
         tests/test_litellm/proxy/common_utils
         tests/test_litellm/proxy/logging_endpoints
+        tests/test_litellm/proxy/rust_control_plane_endpoints
         tests/test_litellm/proxy/test_*.py
       workers: 2
       reruns: 2

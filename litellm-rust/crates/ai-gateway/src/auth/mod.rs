@@ -1,12 +1,20 @@
 //! Gateway authentication, as an axum **extractor** (the idiomatic pattern —
 //! keeps handlers clean and auth testable).
 //!
-//! For now this is a single **master key**: any caller presenting it as
-//! `Authorization: Bearer <key>` may invoke the gateway. Per-key auth, budgets,
-//! and rate limits are delegated to the Python proxy in a later phase.
+//! For now this supports both the local **master key** and virtual keys resolved
+//! through the Python control plane. Routes receive the resolved identity and can
+//! pass it to logging/billing paths for spend attribution.
 //!
-//! A handler opts in by adding [`RequireMasterKey`] to its arguments; auth then
-//! runs during extraction, before the handler body. Routes never re-implement it.
+//! A handler opts in by adding an auth extractor to its arguments; auth then runs
+//! during extraction, before the handler body. Routes never re-implement it.
+
+pub mod cache;
+pub mod client;
+pub mod user_api_key;
+
+pub use cache::KeyCache;
+pub use client::{AuthError, KeyAuthenticator};
+pub use user_api_key::UserApiKeyAuth;
 
 use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;

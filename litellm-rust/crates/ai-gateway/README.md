@@ -17,12 +17,69 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
-- **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
+- **Auth:** `Authorization: Bearer <key>` — the master key (admin) or a virtual key validated by the LiteLLM proxy (see below). Fails closed.
 - **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
 - **Request logs:** POSTed to a LiteLLM proxy at `/v1/rust_control_plane/logs` (see [Request logging](#request-logging))
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to
 > read the config once at boot. The realtime hot path never touches Python.
+
+## Authentication — delegated to the LiteLLM proxy
+
+The gateway does **not** re-implement key validation. It delegates virtual-key auth
+to the LiteLLM proxy's FastAPI **control plane**, so keys, budgets, rate limits, and
+route/model permissions are enforced in exactly one place. A client presents
+`Authorization: Bearer <key>` on the `/v1/realtime` upgrade:
+
+- **Master key** (`LITELLM_MASTER_KEY`) → treated as proxy admin, checked locally
+  (constant-time compare). No network call.
+- **Virtual key** (`sk-…`) → the gateway POSTs `{api_key, route, model}` to the proxy's
+  **`POST /v1/rust_control_plane/authentication`**, which runs the proxy's real `user_api_key_auth`
+  (key lookup, expiry, budget, rate-limit, and route **+ model** permissions via
+  `can_key_call_model`) and returns the resolved identity. **By default every
+  connection re-verifies** (no caching), so budget/block/rate-limit are enforced
+  per connection. This is cheap here because realtime auth is **per long-lived
+  connection, not per request** — one verify per voice session, not a 10k-RPS
+  load. A bounded ≤200-entry cache is available for future high-RPS *per-request*
+  routes via `LITELLM_AUTH_CACHE_TTL_SECS > 0`, which trades budget/rate-limit
+  freshness (bounded by the TTL) for fewer control-plane calls — like the proxy's
+  own ~60s auth cache. Realtime session usage is reported back to the proxy with
+  the resolved key/user/team metadata, so key and team spend logs keep their
+  normal attribution.
+
+Data plane → control plane is itself authenticated with a **dedicated data-plane key**
+(NOT the master key — least privilege): the gateway sends
+`X-LiteLLM-Data-Plane-Key: $LITELLM_DATA_PLANE_KEY` and the proxy rejects any call
+without it. Set the **same** secret on both sides.
+
+```text
+client ──Bearer sk-…──▶ ai-gateway ──POST /v1/rust_control_plane/authentication──▶ LiteLLM proxy
+                         (X-LiteLLM-Data-Plane-Key)                    user_api_key_auth()
+                         re-verify per connection (cache opt-in)   → UserAPIKeyAuth | 401
+```
+
+### Wiring it up
+
+On the **LiteLLM proxy** (control plane) — expose the verify endpoint:
+
+```bash
+export LITELLM_DATA_PLANE_KEY=<dedicated-secret>   # a NEW secret, not the master key
+litellm --config proxy_config.yaml                 # serves POST /v1/rust_control_plane/authentication
+```
+
+On the **gateway** (data plane) — point it at the proxy:
+
+```bash
+export LITELLM_DATA_PLANE_KEY=<same-secret>
+export LITELLM_AUTH_VERIFY_URL=https://<proxy-host>/v1/rust_control_plane/authentication
+./litellm-ai-gateway
+```
+
+Fails closed: a missing/wrong data-plane key, an unreachable proxy, or a rejected
+key all yield `401`. Revocation and budget changes take effect within the cache
+TTL (if caching is enabled via `LITELLM_AUTH_CACHE_TTL_SECS`; off by default →
+every connection re-verifies). Keep the proxy on a private network — the verify
+endpoint is internal-only and excluded from the public OpenAPI spec.
 
 ## Configuration (config.yaml)
 
@@ -62,14 +119,17 @@ overridden at deploy time (e.g. a Render secret file mounted at the same path).
 | Var | Required | Default | Purpose |
 |---|---|---|---|
 | `LITELLM_CONFIG_PATH` | yes (config mode) | — | Path to the config.yaml the gateway loads its `model_list` from. The Docker image defaults this to `/app/config.yaml`. |
-| `LITELLM_MASTER_KEY` | yes | — | Bearer token clients must send. Unset ⇒ all `/v1/realtime` requests are rejected (fail closed). |
+| `LITELLM_MASTER_KEY` | yes | — | Admin bearer token (checked locally, no proxy call). Unset ⇒ the master-key path is disabled. |
+| `LITELLM_DATA_PLANE_KEY` | for virtual keys | — | Dedicated secret the gateway sends as `X-LiteLLM-Data-Plane-Key` to authenticate itself to the proxy's verify endpoint. **Must match the proxy's `LITELLM_DATA_PLANE_KEY`.** Not the master key. |
+| `LITELLM_AUTH_VERIFY_URL` | for virtual keys | `http://localhost:4000/v1/rust_control_plane/authentication` | The proxy's verify endpoint the gateway delegates virtual-key auth to. |
+| `LITELLM_AUTH_CACHE_TTL_SECS` | no | `0` | Verified-key cache TTL. **`0` = off (default)** → every connection re-verifies (budget/rate-limit enforced each time); cheap for realtime since auth is per-connection. Set `> 0` only for high-RPS per-request routes, trading budget/rate-limit freshness for fewer proxy calls. |
 | `OPENAI_API_KEY` | yes | — | Upstream OpenAI key. Referenced by config.yaml as `os.environ/OPENAI_API_KEY` for the gateway→OpenAI dial. |
 | `HOST` | no | `127.0.0.1` | **Set to `0.0.0.0` in any container/deploy** or external traffic is refused. |
 | `PORT` | no | `4001` | Listen port. Render and most PaaS inject this automatically. |
 | `LITELLM_PROXY_BASE_URL` | no | `http://localhost:4000` | LiteLLM proxy that request logs are POSTed to. See [Request logging](#request-logging). |
 
-> Secrets (`LITELLM_MASTER_KEY`, `OPENAI_API_KEY`) are never baked into the image
-> or `render.yaml` — inject them at deploy time only.
+> Secrets (`LITELLM_MASTER_KEY`, `LITELLM_DATA_PLANE_KEY`, `OPENAI_API_KEY`) are never
+> baked into the image or `render.yaml` — inject them at deploy time only.
 
 ### Lean env stand-in (fallback)
 
@@ -150,9 +210,11 @@ WebSockets, so the public endpoint is `wss://<service>.onrender.com/v1/realtime`
 `crates/ai-gateway/render.yaml` describes the service (Docker runtime,
 `healthCheckPath: /health/readiness`, repo-root `dockerContext: .`,
 `dockerfilePath: ./litellm-rust/crates/ai-gateway/Dockerfile`,
-`LITELLM_CONFIG_PATH: /app/config.yaml`). `LITELLM_MASTER_KEY` and
-`OPENAI_API_KEY` are `sync: false` — set them in the dashboard after the first
-deploy. To use a non-default model_list, mount a **Render Secret File** at
+`LITELLM_CONFIG_PATH: /app/config.yaml`). `LITELLM_MASTER_KEY`,
+`LITELLM_DATA_PLANE_KEY`, `LITELLM_AUTH_VERIFY_URL`, and `OPENAI_API_KEY` are
+`sync: false` — set them in the dashboard after the first deploy (the data-plane
+key + verify URL wire virtual-key auth to the proxy; see **Authentication**
+above). To use a non-default model_list, mount a **Render Secret File** at
 `/app/config.yaml`. Point a Render Blueprint at this repo/branch and apply.
 
 ### Option B — Render API
@@ -175,7 +237,8 @@ curl -X POST https://api.render.com/v1/services \
     }
   }'
 # then set env vars LITELLM_MASTER_KEY, OPENAI_API_KEY, HOST=0.0.0.0,
-# LITELLM_CONFIG_PATH=/app/config.yaml
+# LITELLM_CONFIG_PATH=/app/config.yaml, and (for virtual-key auth)
+# LITELLM_DATA_PLANE_KEY + LITELLM_AUTH_VERIFY_URL
 ```
 
 Health check path **must** be `/health/readiness`. `autoDeploy` is off by default

@@ -1,4 +1,4 @@
-"""Unit tests for POST /v1/callbacks/logs (replay logging payloads → callbacks)."""
+"""Unit tests for POST /v1/rust_control_plane/logs."""
 
 import time
 
@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+from litellm.proxy.rust_control_plane_endpoints.logging_endpoints import (
     CallbackLogsReplayer,
     ingest_callback_logs,
 )
@@ -17,6 +17,12 @@ from litellm.types.proxy.callback_logs_endpoints import (
 )
 
 REQ_ID = "cb-logs-unit-test-1"
+BUDGET_RESERVATION = {
+    "reserved_cost": 0.5,
+    "entries": [{"counter_key": "spend:key:rust-gateway-test-key"}],
+    "finalized": False,
+    "input_cost": 0.1,
+}
 
 
 def _sample_payload(**overrides):
@@ -37,6 +43,7 @@ def _sample_payload(**overrides):
             "user_api_key_hash": "rust-gateway-test-key",
             "user_api_key_user_id": "user-cb-logs-test",
             "user_api_key_team_id": "team-cb-logs-test",
+            "user_api_key_budget_reservation": BUDGET_RESERVATION,
         },
         "messages": [{"role": "user", "content": "hi"}],
     }
@@ -47,7 +54,7 @@ def _sample_payload(**overrides):
 def test_epoch_to_datetime_handles_float_and_fallback():
     dt = CallbackLogsReplayer._epoch_to_datetime(1_700_000_000.5)
     assert dt.year == 2023
-    # Non-numeric input must not raise — falls back to "now".
+    # Non-numeric input must not raise -- falls back to "now".
     assert CallbackLogsReplayer._epoch_to_datetime(None) is not None
 
 
@@ -63,6 +70,7 @@ def test_build_logging_obj_seeds_model_call_details():
     assert md["user_api_key"] == "rust-gateway-test-key"
     assert md["user_api_key_user_id"] == "user-cb-logs-test"
     assert md["user_api_key_team_id"] == "team-cb-logs-test"
+    assert md["user_api_key_budget_reservation"] is BUDGET_RESERVATION
 
 
 def test_response_obj_carries_usage():

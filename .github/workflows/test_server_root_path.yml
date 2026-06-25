@@ -105,6 +105,16 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Disable unavailable Microsoft apt mirrors
+        run: |
+          mapfile -t microsoft_sources < <(
+            sudo grep -rl "packages.microsoft.com" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true
+          )
+          for source_file in "${microsoft_sources[@]}"; do
+            echo "Disabling unavailable apt source: ${source_file}"
+            sudo mv "${source_file}" "${source_file}.disabled"
+          done
+
       - name: Install UI deps and Chromium
         working-directory: ui/litellm-dashboard
         run: |

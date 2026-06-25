@@ -1,8 +1,7 @@
 //! `GET /v1/realtime` (WebSocket).
 //!
 //! This file is the **axum surface**: `router()`, the handler, and the small
-//! socket↔events adapter. The pure logic (no axum) lives in [`service`]. Auth is
-//! the `RequireMasterKey` extractor, so the handler stays thin.
+//! socket↔events adapter. The pure logic (no axum) lives in [`service`].
 
 mod service;
 
@@ -22,7 +21,7 @@ use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
-use crate::auth::RequireMasterKey;
+use crate::auth::UserApiKeyAuth;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::RequestMetadata;
 use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
@@ -53,11 +52,27 @@ struct RealtimeQuery {
     model: String,
 }
 
-/// Auth runs via the `RequireMasterKey` extractor. We validate the model BEFORE
-/// the upgrade so failures are clean HTTP (400/404), not a socket that opens then
+fn request_metadata_for_auth(auth: &UserApiKeyAuth, master_key: Option<&str>) -> RequestMetadata {
+    let user_api_key_hash = auth.api_key.clone().or_else(|| {
+        auth.is_proxy_admin()
+            .then(|| master_key.map(crate::auth::hash_token))
+            .flatten()
+    });
+
+    RequestMetadata {
+        user_api_key_hash,
+        user_api_key_user_id: auth.user_id.clone(),
+        user_api_key_team_id: auth.team_id.clone(),
+        user_api_key_budget_reservation: auth.budget_reservation.clone(),
+    }
+}
+
+/// Auth runs via the `UserApiKeyAuth` extractor (master key → admin, otherwise
+/// cache then the swappable authenticator). We validate the model BEFORE the
+/// upgrade so failures are clean HTTP (400/404), not a socket that opens then
 /// closes, then hand the socket to `bridge`.
 async fn handle(
-    _auth: RequireMasterKey,
+    auth: UserApiKeyAuth,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Query(query): Query<RealtimeQuery>,
@@ -80,7 +95,7 @@ async fn handle(
     let loggers = state.loggers.clone();
     let master_key = state.master_key.clone();
     let model = query.model;
-    Ok(ws.on_upgrade(move |socket| bridge(socket, router, pool, loggers, master_key, model)))
+    Ok(ws.on_upgrade(move |socket| bridge(socket, router, pool, loggers, auth, master_key, model)))
 }
 
 /// Adapt the axum socket (text frames) to the typed-event `Stream`/`Sink` the
@@ -97,23 +112,18 @@ async fn bridge(
     router: Arc<ModelRouter>,
     pool: Arc<RealtimePool>,
     loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    auth: UserApiKeyAuth,
     master_key: Option<Arc<str>>,
     model: String,
 ) {
     let (ws_sink, ws_stream) = socket.split();
 
-    // Attribute the spend log to the key that authenticated this session (the
-    // master key — the gateway is master-key auth). A non-null user_api_key_hash
-    // is required for the Python spend logger to write a SpendLogs row.
-    //
-    // SECURITY: hash the key — never send the raw credential. This field fans out
-    // to spend logs and every callback integration; the SHA-256 (matching the
-    // proxy's hash_token) keeps the plaintext master key out of all of them while
-    // still matching the key's hash in LiteLLM_SpendLogs.
-    let metadata = RequestMetadata {
-        user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
-        ..RequestMetadata::default()
-    };
+    // Attribute the spend log to the key that authenticated this session. For a
+    // virtual key, the Python verifier returns the already-hashed key + user/team
+    // attribution. For the local master-key fast path, hash the master key here.
+    // A non-null user_api_key_hash is required for the Python spend logger to
+    // write a SpendLogs row.
+    let metadata = request_metadata_for_auth(&auth, master_key.as_deref());
 
     // Owned by THIS task only. The splice observes it via a synchronous `&mut`
     // callback (below), so there is no Arc/Mutex/atomic on the per-frame hot
@@ -163,4 +173,51 @@ async fn bridge(
         SessionStatus::Failure
     };
     collector.log_messages(status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_metadata_uses_virtual_key_identity() {
+        let metadata = request_metadata_for_auth(
+            &UserApiKeyAuth {
+                api_key: Some("hashed-key".to_string()),
+                user_id: Some("user-1".to_string()),
+                team_id: Some("team-1".to_string()),
+                budget_reservation: Some(serde_json::json!({
+                    "reserved_cost": 0.5,
+                    "entries": [{"counter_key": "spend:key:hashed-key"}],
+                    "finalized": false,
+                    "input_cost": 0.1
+                })),
+                ..UserApiKeyAuth::default()
+            },
+            Some("sk-master"),
+        );
+
+        assert_eq!(metadata.user_api_key_hash.as_deref(), Some("hashed-key"));
+        assert_eq!(metadata.user_api_key_user_id.as_deref(), Some("user-1"));
+        assert_eq!(metadata.user_api_key_team_id.as_deref(), Some("team-1"));
+        assert_eq!(
+            metadata
+                .user_api_key_budget_reservation
+                .as_ref()
+                .and_then(|reservation| reservation.get("reserved_cost"))
+                .and_then(serde_json::Value::as_f64),
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn request_metadata_hashes_master_key_for_local_admin_fast_path() {
+        let metadata = request_metadata_for_auth(&UserApiKeyAuth::admin(), Some("sk-master"));
+        let expected_hash = crate::auth::hash_token("sk-master");
+
+        assert_eq!(
+            metadata.user_api_key_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+    }
 }

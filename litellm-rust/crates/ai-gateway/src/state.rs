@@ -18,4 +18,16 @@ pub struct AppState {
     /// (`RealtimePool::disabled()`) when `REALTIME_POOL_SIZE=0`, in which case
     /// every realtime connect fresh-dials exactly as before.
     pub realtime_pool: Arc<RealtimePool>,
+    /// Verifies virtual keys. A trait object so the v0 "call Python" backend can be
+    /// swapped for a native Rust one at startup without touching routes or state.
+    pub authenticator: Arc<dyn crate::auth::KeyAuthenticator>,
+    /// Bounded TTL cache of verified keys, in front of `authenticator`.
+    pub key_cache: Arc<crate::auth::KeyCache>,
+}
+
+impl AppState {
+    /// Constant-time check of `token` against the configured master key.
+    pub fn is_master_key(&self, token: &str) -> bool {
+        crate::auth::user_api_key::is_master_key(self.master_key.as_deref(), token)
+    }
 }

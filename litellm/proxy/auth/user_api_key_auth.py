@@ -2435,6 +2435,7 @@ async def _run_centralized_common_checks(
 
     await _reserve_budget_after_common_checks(
         user_api_key_auth_obj=user_api_key_auth_obj,
+        request=request,
         request_data=request_data,
         route=route,
         llm_router=llm_router,
@@ -2458,6 +2459,7 @@ async def _noop_none() -> None:
 
 async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
+    request: Optional[Request],
     request_data: dict,
     route: str,
     llm_router: Optional[Any],
@@ -2473,6 +2475,8 @@ async def _reserve_budget_after_common_checks(
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
     if skip_budget_checks:
+        return
+    if request is not None and getattr(request.state, "skip_budget_reservation", False):
         return
     if general_settings.get("disable_budget_reservation") is True:
         verbose_proxy_logger.warning(

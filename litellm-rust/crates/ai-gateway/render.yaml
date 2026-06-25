@@ -27,8 +27,17 @@ services:
         value: /app/config.yaml
       - key: HOST
         value: 0.0.0.0
-      # Bearer token clients must send on /v1/realtime (fail closed if unset).
+      # Admin bearer token, checked locally (no proxy call). Fail closed if unset.
       - key: LITELLM_MASTER_KEY
+        sync: false
+      # Delegate virtual-key auth to the LiteLLM proxy (see README → "Authentication").
+      # Dedicated secret authenticating the gateway to the proxy's verify endpoint;
+      # must match the proxy's LITELLM_DATA_PLANE_KEY. NOT the master key.
+      - key: LITELLM_DATA_PLANE_KEY
+        sync: false
+      # The proxy's Rust control-plane verify endpoint, e.g.
+      # https://<proxy-host>/v1/rust_control_plane/authentication
+      - key: LITELLM_AUTH_VERIFY_URL
         sync: false
       # Referenced by config.yaml as os.environ/OPENAI_API_KEY for the upstream dial.
       - key: OPENAI_API_KEY

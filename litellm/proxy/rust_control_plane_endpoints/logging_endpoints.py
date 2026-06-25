@@ -31,12 +31,7 @@ from litellm.types.proxy.callback_logs_endpoints import (
     CallbackLogsResponse,
 )
 
-# Routes the Python proxy exposes for the Rust data-plane gateway to call into
-# (logging today; auth/budgets later). Namespaced under /v1/rust_control_plane so
-# they're clearly distinct from the proxy's own control-plane/management routes.
-rust_control_plane_router = APIRouter(
-    prefix="/v1/rust_control_plane", tags=["rust control plane"]
-)
+router = APIRouter(prefix="/v1/rust_control_plane", tags=["rust control plane"])
 
 
 class CallbackLogsReplayer:
@@ -99,6 +94,9 @@ class CallbackLogsReplayer:
             "user_api_key_team_id": metadata.get("user_api_key_team_id"),
             "user_api_key_org_id": metadata.get("user_api_key_org_id"),
             "user_api_key_end_user_id": metadata.get("user_api_key_end_user_id"),
+            "user_api_key_budget_reservation": metadata.get(
+                "user_api_key_budget_reservation"
+            ),
             "spend_logs_metadata": metadata.get("spend_logs_metadata"),
         }
 
@@ -185,7 +183,7 @@ class CallbackLogsReplayer:
         )
 
 
-@rust_control_plane_router.post(
+@router.post(
     "/logs",
     dependencies=[Depends(user_api_key_auth)],
 )
