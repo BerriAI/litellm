@@ -699,7 +699,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
-                if len(thinking_blocks) > 0:
+                if (
+                    len(thinking_blocks) > 0
+                    and model is not None
+                    and ("anthropic" in model.lower() or "claude" in model.lower())
+                ):
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
                 new_messages.append(assistant_message)
 
