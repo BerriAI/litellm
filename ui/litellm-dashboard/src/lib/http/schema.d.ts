@@ -30940,6 +30940,11 @@ export interface components {
              * @description Requests per minute limit for this team member
              */
             rpm_limit?: number | null;
+            /**
+             * Spend
+             * @description Reset this team member's accrued spend to the given value (admin only). Typically 0 to clear usage.
+             */
+            spend?: number | null;
             /** Team Id */
             team_id: string;
             /**
@@ -30962,6 +30967,8 @@ export interface components {
             max_budget_in_team?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Team Id */
             team_id: string;
             /** Tpm Limit */
