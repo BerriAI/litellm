@@ -1648,3 +1648,161 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         custom_llm_provider="bedrock",
     )
     assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-opus-4-8",
+        "global.anthropic.claude-opus-4-7-v1:0",
+    ],
+)
+def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(model):
+    """clear_thinking_20251015 without a top-level ``thinking`` field must inject
+    ``thinking.type=adaptive`` plus ``output_config.effort`` on adaptive-thinking
+    models (Opus 4.7/4.8). The legacy ``thinking.type=enabled`` shape is rejected
+    by Bedrock for these models (issue #29188)."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model=model
+    )
+
+    assert changed is True
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"]["effort"] == "low"
+
+
+def test_bedrock_clear_thinking_converts_legacy_enabled_budget_to_effort():
+    """A legacy ``thinking.type=enabled`` with a budget on an adaptive model is
+    translated to ``adaptive`` + ``output_config.effort`` derived from the budget
+    rather than forwarded as the rejected ``enabled`` shape."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "thinking": {"type": "enabled", "budget_tokens": 12000},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="us.anthropic.claude-opus-4-8"
+    )
+
+    assert changed is True
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"]["effort"] == "high"
+
+
+def test_bedrock_clear_thinking_keeps_enabled_for_non_adaptive_models():
+    """Non-adaptive extended-thinking models (e.g. Opus 4.5) still use the legacy
+    ``thinking.type=enabled`` + ``budget_tokens`` shape, which they accept."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    request = {
+        "max_tokens": 32000,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    changed = cfg._ensure_thinking_for_clear_thinking_context_management(
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+    )
+
+    assert changed is True
+    assert request["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    }
+    assert "output_config" not in request
+
+
+def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
+    """End-to-end: a Claude Code clear_thinking payload (no ``thinking`` field) on
+    Opus 4.8 must produce a Bedrock Invoke body with adaptive thinking and an
+    effort, never ``thinking.type.enabled``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"]["effort"] == "low"
+
+
+def test_bedrock_invoke_transform_normalizes_system_role_message_into_system():
+    """Bedrock Invoke rejects ``role: "system"`` entries in ``messages`` on some
+    Claude aliases; they must be moved into the top-level ``system`` field
+    (Anthropic Messages carries that content there)."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "system", "content": "You are a careful assistant."},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert all(m.get("role") != "system" for m in result["messages"])
+    assert result["messages"] == [{"role": "user", "content": "hi"}]
+    assert result["system"] == [
+        {"type": "text", "text": "You are a careful assistant."}
+    ]
+
+
+def test_bedrock_invoke_transform_merges_system_role_into_existing_system():
+    """A ``role: "system"`` message is appended to any pre-existing top-level
+    ``system`` content rather than replacing it."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "system", "content": "Follow the user's formatting."},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "stream": False,
+            "system": "Base system prompt.",
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "hi"}]
+    assert result["system"] == [
+        {"type": "text", "text": "Base system prompt."},
+        {"type": "text", "text": "Follow the user's formatting."},
+    ]

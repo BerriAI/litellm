@@ -1490,6 +1490,66 @@ class TestClaudeOpus48AdaptiveThinking:
 
     @pytest.mark.parametrize(
         "model",
+        [
+            "claude-fable-5",
+            "anthropic.claude-fable-5",
+            "us.anthropic.claude-fable-5",
+            "bedrock/invoke/us.anthropic.claude-fable-5",
+            "vertex_ai/claude-fable-5",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-8-some-future-suffix",
+            "us.anthropic.claude-fable-5-preview",
+        ],
+    )
+    def test_adaptive_thinking_name_fallback_for_unmapped_aliases(self, model):
+        """When the cost map has no entry (unknown provider alias), Opus 4.8 and
+        Fable 5 must still be detected as adaptive via the name fallback so the
+        Bedrock path does not emit the rejected legacy ``thinking.type=enabled``."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("claude-opus-4-8", True),
+            ("us.anthropic.claude-opus-4-8", True),
+            ("claude-opus-4-7", False),
+            ("claude-fable-5", False),
+        ],
+    )
+    def test_is_claude_4_8_model(self, model, expected):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_claude_4_8_model(model) is expected
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("claude-fable-5", True),
+            ("us.anthropic.claude-fable-5", True),
+            ("claude-opus-4-8", False),
+            ("claude-sonnet-4-6", False),
+        ],
+    )
+    def test_is_claude_fable_5_model(self, model, expected):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_claude_fable_5_model(model) is expected
+
+    @pytest.mark.parametrize(
+        "model",
         ["claude-opus-4-5", "claude-3-7-sonnet", "claude-3-5-haiku-20241022"],
     )
     def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):

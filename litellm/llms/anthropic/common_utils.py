@@ -276,6 +276,33 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
+    def _is_claude_4_8_model(model: str) -> bool:
+        """Check if the model is a Claude 4.8 model (Opus 4.8)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
+
+    @staticmethod
+    def _is_claude_fable_5_model(model: str) -> bool:
+        """Check if the model is a Claude Fable 5 model."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "fable-5",
+                "fable_5",
+                "fable.5",
+            )
+        )
+
+    @staticmethod
     def _supports_sampling_params(model: str) -> bool:
         """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
         rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
@@ -406,16 +433,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
 
         Driven by the ``supports_adaptive_thinking`` flag in the model map; the
-        4.6/4.7 name checks remain only as a fallback for provider-routed ids
-        whose map entries predate the flag.
+        4.6/4.7/4.8 and Fable 5 name checks remain only as a fallback for
+        provider-routed ids whose map entries predate the flag (e.g. an
+        ``us.anthropic.claude-fable-5`` alias that is not a known LiteLLM
+        provider alias).
         """
         if AnthropicModelInfo._supports_model_capability(
             model, "supports_adaptive_thinking"
         ):
             return True
-        return AnthropicModelInfo._is_claude_4_6_model(
-            model
-        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+        return (
+            AnthropicModelInfo._is_claude_4_6_model(model)
+            or AnthropicModelInfo._is_claude_4_7_model(model)
+            or AnthropicModelInfo._is_claude_4_8_model(model)
+            or AnthropicModelInfo._is_claude_fable_5_model(model)
+        )
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None

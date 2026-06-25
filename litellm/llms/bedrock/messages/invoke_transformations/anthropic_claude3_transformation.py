@@ -80,6 +80,51 @@ class AmazonAnthropicClaudeMessagesConfig(
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
+    @staticmethod
+    def _as_system_content_blocks(value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, str):
+            return [{"type": "text", "text": value}]
+        return [value]
+
+    def _normalize_system_role_messages_for_bedrock(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
+        some Claude aliases; Anthropic Messages carries that content in the
+        top-level ``system`` field. Move any such entries into ``system`` before
+        the Invoke request is built."""
+        messages = anthropic_messages_request.get("messages")
+        if not isinstance(messages, list):
+            return
+        system_role_messages = [
+            m for m in messages if isinstance(m, dict) and m.get("role") == "system"
+        ]
+        if not system_role_messages:
+            return
+
+        anthropic_messages_request["messages"] = [
+            m
+            for m in messages
+            if not (isinstance(m, dict) and m.get("role") == "system")
+        ]
+        system_content = [
+            block
+            for source in (
+                anthropic_messages_request.get("system"),
+                *(m.get("content") for m in system_role_messages),
+            )
+            for block in self._as_system_content_blocks(source)
+        ]
+        filtered_system = self._filter_billing_headers_from_system(system_content)
+        if filtered_system:
+            anthropic_messages_request["system"] = filtered_system
+        else:
+            anthropic_messages_request.pop("system", None)
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -270,14 +315,27 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not self._supports_extended_thinking_on_bedrock(model):
             return False
 
+        is_adaptive_thinking_model = AnthropicModelInfo._is_adaptive_thinking_model(
+            model
+        )
+
         thinking = anthropic_messages_request.get("thinking")
         if isinstance(thinking, dict):
             t = thinking.get("type")
-            if t in ("enabled", "adaptive"):
+            if t == "adaptive":
                 return False
-            # ``disabled`` or unknown — replace with enabled so clear_thinking is valid
+            if t == "enabled" and not is_adaptive_thinking_model:
+                return False
+            if t == "enabled":
+                budget_tokens = int(
+                    thinking.get("budget_tokens") or BEDROCK_MIN_THINKING_BUDGET_TOKENS
+                )
+                self._inject_adaptive_thinking_for_clear_thinking(
+                    anthropic_messages_request, budget_tokens, model
+                )
+                return True
             verbose_logger.debug(
-                "Bedrock clear_thinking_20251015: replacing thinking=%s with minimal enabled thinking",
+                "Bedrock clear_thinking_20251015: replacing thinking=%s with minimal thinking config",
                 thinking,
             )
 
@@ -292,6 +350,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             )
             return False
 
+        if is_adaptive_thinking_model:
+            self._inject_adaptive_thinking_for_clear_thinking(
+                anthropic_messages_request, budget, model
+            )
+            return True
+
         anthropic_messages_request["thinking"] = {
             "type": "enabled",
             "budget_tokens": budget,
@@ -301,6 +365,37 @@ class AmazonAnthropicClaudeMessagesConfig(
             budget,
         )
         return True
+
+    @staticmethod
+    def _effort_from_thinking_budget(budget_tokens: int) -> str:
+        if budget_tokens >= 24000:
+            return "xhigh"
+        if budget_tokens >= 10000:
+            return "high"
+        if budget_tokens >= 5000:
+            return "medium"
+        return "low"
+
+    def _inject_adaptive_thinking_for_clear_thinking(
+        self, anthropic_messages_request: Dict, budget_tokens: int, model: str
+    ) -> None:
+        """Adaptive-thinking models (Opus 4.7/4.8, Fable 5) reject
+        ``thinking.type=enabled`` on Bedrock. Use ``thinking.type=adaptive`` plus
+        an ``output_config.effort`` derived from the budget so ``clear_thinking``
+        stays valid without the legacy shape."""
+        output_config = anthropic_messages_request.get("output_config")
+        if not isinstance(output_config, dict):
+            output_config = {}
+        output_config.setdefault(
+            "effort", self._effort_from_thinking_budget(budget_tokens)
+        )
+        anthropic_messages_request["output_config"] = output_config
+        anthropic_messages_request["thinking"] = {"type": "adaptive"}
+        verbose_logger.debug(
+            "Bedrock clear_thinking_20251015: injected adaptive thinking with effort=%s for model=%s",
+            output_config.get("effort"),
+            model,
+        )
 
     def _is_claude_opus_4_5(self, model: str) -> bool:
         """
@@ -584,6 +679,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
+        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
