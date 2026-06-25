@@ -629,7 +629,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
-            headers.update(self._make_api_key_auth_header(api_key, api_base, use_bearer_for_custom_base))
+            headers.update(
+                self._make_api_key_auth_header(
+                    api_key, api_base, use_bearer_for_custom_base
+                )
+            )
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -771,7 +775,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
-            return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base, use_bearer_for_custom_base)
+            return AnthropicModelInfo._make_api_key_auth_header(
+                resolved_key, api_base, use_bearer_for_custom_base
+            )
         auth_token = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}
