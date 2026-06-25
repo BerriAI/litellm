@@ -2945,3 +2945,239 @@ async def test_discovery_caches_upstream_metadata():
         global_mcp_server_manager.registry.clear()
 
     assert fake_client.get.await_count == 1
+
+
+def _make_passthrough_server(*, server_id: str, url):
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=server_id,
+        name=server_id,
+        server_name=server_id,
+        alias=server_id,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        url=url,
+        extra_headers=["Authorization"],
+        oauth_passthrough=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_protected_resource_passthrough_falls_back_to_path_candidate():
+    """A pass-through server whose host-only oauth-protected-resource probe
+    misses falls back to the RFC 9728 §3.1 path-suffix form and proxies that
+    payload, rewriting ``resource`` to the gateway URL."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    de._OAUTH_METADATA_CACHE.clear()
+    global_mcp_server_manager.registry.clear()
+    server = _make_passthrough_server(server_id="pr_path", url="https://up.example.com/mcp")
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    host_miss = MagicMock()
+    host_miss.status_code = 404
+    path_hit = MagicMock()
+    path_hit.status_code = 200
+    path_hit.json.return_value = {
+        "resource": "https://up.example.com/mcp",
+        "authorization_servers": ["https://idp.example/"],
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[host_miss, path_hit])
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            response = await de._build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name="pr_path",
+                use_standard_pattern=False,
+            )
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        global_mcp_server_manager.registry.clear()
+
+    assert [call.args[0] for call in fake_client.get.await_args_list] == [
+        "https://up.example.com/.well-known/oauth-protected-resource",
+        "https://up.example.com/.well-known/oauth-protected-resource/mcp",
+    ]
+    assert response["authorization_servers"] == ["https://idp.example/"]
+    assert response["resource"] == "https://litellm.example.com/pr_path/mcp"
+
+
+@pytest.mark.asyncio
+async def test_protected_resource_passthrough_network_error_raises_502():
+    """Transport failures fetching the upstream oauth-protected-resource
+    metadata surface as HTTP 502 rather than a fabricated gateway response."""
+    import httpx
+
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    de._OAUTH_METADATA_CACHE.clear()
+    global_mcp_server_manager.registry.clear()
+    server = _make_passthrough_server(server_id="pr_neterr", url="https://up.example.com/mcp")
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=httpx.ConnectError("upstream down"))
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await de._build_oauth_protected_resource_response(
+                    request=mock_request,
+                    mcp_server_name="pr_neterr",
+                    use_standard_pattern=False,
+                )
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        global_mcp_server_manager.registry.clear()
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_protected_resource_passthrough_no_metadata_raises_502():
+    """When the upstream has no usable oauth-protected-resource metadata, a
+    pass-through server must not fall through to gateway metadata; it returns
+    HTTP 502 so clients are never pointed at the wrong IdP."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    de._OAUTH_METADATA_CACHE.clear()
+    global_mcp_server_manager.registry.clear()
+    server = _make_passthrough_server(server_id="pr_none", url="https://up.example.com/mcp")
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    miss = MagicMock()
+    miss.status_code = 404
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(return_value=miss)
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await de._build_oauth_protected_resource_response(
+                    request=mock_request,
+                    mcp_server_name="pr_none",
+                    use_standard_pattern=False,
+                )
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        global_mcp_server_manager.registry.clear()
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_get_oauth_metadata_json_returns_none_on_failures():
+    """``_get_oauth_metadata_json`` swallows transport errors, non-200 status,
+    and undecodable bodies, returning ``None`` so the caller falls back to the
+    relay."""
+    import httpx
+
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+
+    discovery_url = "https://idp.example/.well-known/oauth-authorization-server"
+    patch_target = "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+
+    raising_client = MagicMock()
+    raising_client.get = AsyncMock(side_effect=httpx.ConnectError("down"))
+    with patch(patch_target, return_value=raising_client):
+        assert await de._get_oauth_metadata_json(discovery_url) is None
+
+    non200_response = MagicMock()
+    non200_response.status_code = 500
+    non200_client = MagicMock()
+    non200_client.get = AsyncMock(return_value=non200_response)
+    with patch(patch_target, return_value=non200_client):
+        assert await de._get_oauth_metadata_json(discovery_url) is None
+
+    bad_json_response = MagicMock()
+    bad_json_response.status_code = 200
+    bad_json_response.json.side_effect = ValueError("not json")
+    bad_json_client = MagicMock()
+    bad_json_client.get = AsyncMock(return_value=bad_json_response)
+    with patch(patch_target, return_value=bad_json_client):
+        assert await de._get_oauth_metadata_json(discovery_url) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_upstream_authorization_server_metadata_url_guards():
+    """A missing or schemeless upstream URL short-circuits to ``None`` without
+    attempting any network fetch."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+
+    no_url = _make_oauth2_server(server_id="no_url", url=None)
+    schemeless = _make_oauth2_server(server_id="bad_url", url="not-a-valid-url")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        side_effect=AssertionError("must not fetch when URL is unusable"),
+    ):
+        assert await de._fetch_upstream_authorization_server_metadata(no_url) is None
+        assert await de._fetch_upstream_authorization_server_metadata(schemeless) is None
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorization_server_endpoint_wrappers_delegate():
+    """The standard and legacy authorization-server discovery routes delegate
+    to the shared builder with the request and server name."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+
+    mock_request = MagicMock(spec=Request)
+    sentinel = {"issuer": "https://idp.example"}
+
+    with patch.object(
+        de,
+        "_build_oauth_authorization_server_response",
+        new=AsyncMock(return_value=sentinel),
+    ) as builder:
+        standard = await de.oauth_authorization_server_mcp_standard(mock_request, "srv_std")
+        legacy = await de.oauth_authorization_server_legacy(mock_request, "srv_legacy")
+
+    assert standard is sentinel
+    assert legacy is sentinel
+    assert builder.await_args_list[0].kwargs == {
+        "request": mock_request,
+        "mcp_server_name": "srv_std",
+    }
+    assert builder.await_args_list[1].kwargs == {
+        "request": mock_request,
+        "mcp_server_name": "srv_legacy",
+    }
