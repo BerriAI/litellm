@@ -187,6 +187,12 @@ async def handle_a2a_localhost_retry(
             "Install it with: pip install a2a-sdk"
         )
 
+    if agent_card is None:
+        raise RuntimeError(
+            "Cannot retry A2A localhost URL fix: no agent card is available to "
+            "rewrite, so the upstream URL cannot be corrected."
+        )
+
     request_type = "streaming " if is_streaming else ""
     verbose_logger.warning(
         f"A2A {request_type}request to '{error.localhost_url}' failed: {error.original_error}. "
@@ -215,6 +221,5 @@ async def handle_a2a_localhost_retry(
         ),
     )
     new_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
-    if agent_card is not None:
-        new_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
+    new_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
     return new_client

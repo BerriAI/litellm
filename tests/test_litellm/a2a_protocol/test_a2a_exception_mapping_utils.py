@@ -80,6 +80,30 @@ async def test_localhost_retry_raises_when_no_stashed_client():
     mock_create.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_localhost_retry_raises_when_agent_card_is_none():
+    """With no agent card to rewrite, the retry must fail with a clear error instead
+    of calling create_client(None, ...) and surfacing an opaque SDK TypeError."""
+    a2a_client = MagicMock()
+    a2a_client._litellm_httpx_client = MagicMock()
+
+    with (
+        patch.object(emu, "A2A_SDK_AVAILABLE", True),
+        patch.object(emu, "set_agent_card_url") as mock_set_url,
+        patch.object(emu, "create_client", new=AsyncMock()) as mock_create,
+    ):
+        with pytest.raises(RuntimeError, match="no agent card is available"):
+            await emu.handle_a2a_localhost_retry(
+                error=_localhost_error(),
+                agent_card=None,
+                a2a_client=a2a_client,
+                is_streaming=False,
+            )
+
+    mock_set_url.assert_not_called()
+    mock_create.assert_not_called()
+
+
 def test_get_a2a_client_agent_card_reads_sdk_private_card():
     from litellm.a2a_protocol.main import _get_a2a_client_agent_card
 
