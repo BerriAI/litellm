@@ -1042,6 +1042,48 @@ async def test_get_agent_card_normalizes_0_3_discovery_card():
 
 
 @pytest.mark.asyncio
+async def test_get_agent_card_0_3_card_with_a2a_version_1_0_header():
+    """Regression: 0.3 card normalized to 1.0 must not KeyError on debug log."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.agent_card_params = {
+        "name": "Test Agent",
+        "description": "A test agent",
+        "url": "http://backend-agent:10001",
+        "version": "1.0.0",
+        "capabilities": {"streaming": True},
+        "skills": [
+            {"id": "s1", "name": "skill one", "description": "d", "tags": ["t"]}
+        ],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+    }
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {"a2a-version": "1.0"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "url" not in body
+    assert body["supportedInterfaces"][0]["url"] == (
+        "http://localhost:4000/a2a/test-agent"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_extended_agent_card_uses_proxy_base_url_when_set(monkeypatch):
     """Regression: proxied extended cards must rewrite url to the public proxy base."""
     from litellm.proxy._types import UserAPIKeyAuth

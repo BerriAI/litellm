@@ -545,7 +545,9 @@ async def get_agent_card(
         served_version = _served_version(agent, request)
         agent_card = normalize_agent_card(agent_card, served_version)
 
-        verbose_proxy_logger.debug(f"Returning agent card for '{agent_id}' with proxy URL: {agent_card['url']}")
+        verbose_proxy_logger.debug(
+            f"Returning agent card for '{agent_id}' with proxy URL: {proxy_url}"
+        )
         return JSONResponse(content=agent_card)
 
     except HTTPException:
