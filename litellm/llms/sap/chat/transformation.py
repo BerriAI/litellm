@@ -182,22 +182,18 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def _resolve_deployment_url(self) -> str:
         client = litellm.module_level_client
-        deployments = client.get(
-            f"{self.base_url}/lm/deployments", headers=self.headers
-        ).json()
+        deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
 
         valid: List[Tuple[str, str, str]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") != "orchestration":
                 continue
             cfg = client.get(
-                f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
+                f"{self.base_url}/lm/configurations/{dep['configurationId']}",
                 headers=self.headers,
             ).json()
             if cfg.get("executableId") == "orchestration":
-                valid.append(
-                    (dep["deploymentUrl"], dep["createdAt"], cfg.get("name", ""))
-                )
+                valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
 
         if not valid:
             raise GenAIHubOrchestrationError(
