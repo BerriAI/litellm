@@ -12,12 +12,58 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import ModelResponse
+
+
+def _resolve_item_references_to_previous_response_id(
+    request_input: Union[str, ResponseInputParam, None],
+) -> Optional[str]:
+    """When a Responses API client sends prior turn items as opaque
+    ``item_reference`` entries (``@ai-sdk/openai`` with default ``store: true``
+    does this), resolve them to the original ``previous_response_id`` so the
+    existing session handler can rebuild conversation history.
+
+    Scans the input list for items of type ``item_reference``, decodes the
+    most recent one through the envelope codec, and returns the result in the
+    ``resp_<env>`` form that ``async_responses_api_session_handler`` already
+    accepts. Returns ``None`` when no decodable references are present.
+    """
+    if not isinstance(request_input, list):
+        return None
+    refs = [
+        item
+        for item in request_input
+        if isinstance(item, dict) and item.get("type") == "item_reference"
+    ]
+    if not refs:
+        return None
+    for ref in reversed(refs):
+        decoded = ResponsesAPIRequestUtils._decode_item_envelope(ref.get("id", ""))
+        if decoded:
+            return decoded
+    return None
+
+
+def _strip_item_references(
+    request_input: Union[str, ResponseInputParam, None],
+) -> Union[str, ResponseInputParam, None]:
+    """Filter ``item_reference`` items out of the input list so the standard
+    message transformer does not see opaque references it cannot inline.
+    Non-list inputs pass through unchanged.
+    """
+    if not isinstance(request_input, list):
+        return request_input
+    return [
+        item
+        for item in request_input
+        if not (isinstance(item, dict) and item.get("type") == "item_reference")
+    ]
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -102,6 +148,22 @@ class LiteLLMCompletionTransformationHandler:
         previous_response_id: Optional[str] = responses_api_request.get(
             "previous_response_id"
         )
+        # When the caller did not supply ``previous_response_id`` explicitly,
+        # try to derive it from any ``item_reference`` entries in the input.
+        # Vercel ``@ai-sdk/openai`` with default ``store: true`` sends prior
+        # turn items as references instead of inlining them, so without this
+        # the bridge would treat each turn as a fresh conversation.
+        if not previous_response_id:
+            resolved = _resolve_item_references_to_previous_response_id(request_input)
+            if resolved:
+                previous_response_id = resolved
+                request_input = _strip_item_references(request_input)
+                litellm_completion_request[
+                    "messages"
+                ] = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=request_input,
+                    responses_api_request=responses_api_request,
+                )
         if previous_response_id:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
