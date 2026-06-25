@@ -7,8 +7,11 @@ external callers only see servers with available_on_public_internet=True.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import Request
+from pydantic import ValidationError
 
+from litellm.proxy._types import ConfigGeneralSettings
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -191,6 +194,19 @@ class TestResolveNumTrustedHops:
         with patch("litellm.proxy.auth.ip_address_utils.verbose_proxy_logger") as mock_logger:
             assert IPAddressUtils._resolve_num_trusted_hops(2) == 2
         mock_logger.warning.assert_not_called()
+
+
+class TestConfigGeneralSettingsHopsValidation:
+    """mcp_xff_num_trusted_hops must reject sub-minimum values at config-parse time."""
+
+    @pytest.mark.parametrize("bad_value", [0, -1])
+    def test_below_minimum_is_rejected(self, bad_value):
+        with pytest.raises(ValidationError):
+            ConfigGeneralSettings(mcp_xff_num_trusted_hops=bad_value)
+
+    def test_valid_value_and_unset_are_accepted(self):
+        assert ConfigGeneralSettings(mcp_xff_num_trusted_hops=1).mcp_xff_num_trusted_hops == 1
+        assert ConfigGeneralSettings().mcp_xff_num_trusted_hops is None
 
 
 class TestXffTrustedHopsAccessControl:
