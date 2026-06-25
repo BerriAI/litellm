@@ -376,6 +376,7 @@ class _CallbackCapabilities:
     has_iterator_override: bool = False
     has_streaming_chunk_override: bool = False
     has_guardrail: bool = False
+    has_during_call_hook: bool = False
     has_pre_call_override: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
@@ -385,6 +386,14 @@ class _CallbackCapabilities:
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: Tuple[Any, ...] = field(default_factory=tuple)
+
+
+def _has_native_during_call_hook(callback: CustomLogger) -> bool:
+    base_hook = CustomLogger.async_moderation_hook
+    callback_hook = getattr(type(callback), "async_moderation_hook", base_hook)
+    return getattr(callback_hook, "__func__", callback_hook) is not getattr(
+        base_hook, "__func__", base_hook
+    )
 
 
 class ProxyLogging:
@@ -1685,6 +1694,7 @@ class ProxyLogging:
         has_iterator_override = False
         has_streaming_chunk_override = False
         has_guardrail = False
+        has_during_call_hook = False
         has_pre_call_override = False
         iterator_overrides: List[Tuple[Any, str]] = []  # (callback, kind)
         resolved_callbacks: List[Any] = []
@@ -1706,6 +1716,9 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
+                has_during_call_hook = True
+            elif _has_native_during_call_hook(resolved):
+                has_during_call_hook = True
             # Use the same leaf-class ``__dict__`` check as the other hook
             # capabilities: only callbacks that actually override the hook
             # contribute to the flag. Setting this for every ``CustomLogger``
@@ -1746,6 +1759,7 @@ class ProxyLogging:
             or any(kind == "apply_guardrail" for _, kind in iterator_overrides),
             has_streaming_chunk_override=has_streaming_chunk_override,
             has_guardrail=has_guardrail,
+            has_during_call_hook=has_during_call_hook,
             has_pre_call_override=has_pre_call_override,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
@@ -1794,7 +1808,7 @@ class ProxyLogging:
 
     @staticmethod
     def has_during_call_guardrails() -> bool:
-        return ProxyLogging._callback_capabilities().has_guardrail
+        return ProxyLogging._callback_capabilities().has_during_call_hook
 
     async def during_call_hook(
         self,
@@ -1803,18 +1817,19 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ):
         """
-        Runs the CustomGuardrail's async_moderation_hook() in parallel
+        Runs during-call async_moderation_hook() callbacks in parallel
         """
-        # Fast path: skip the entire guardrail scan when no CustomGuardrail
-        # callbacks are registered. Saves per-request iteration over
+        # Fast path: skip the entire guardrail scan when no during-call
+        # moderation callbacks are registered. Saves per-request iteration over
         # ``litellm.callbacks`` plus an ``asyncio.gather([])`` round trip on
-        # deployments with no guardrails configured.
-        if not ProxyLogging._callback_capabilities().has_guardrail:
+        # deployments with no during-call checks configured.
+        caps = ProxyLogging._callback_capabilities()
+        if not caps.has_during_call_hook:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks = []
 
-        for callback in litellm.callbacks:
+        for callback in caps.resolved_callbacks:
             if isinstance(callback, CustomGuardrail):
                 ################################################################
                 # Check if guardrail should be run for GuardrailEventHooks.during_call hook
@@ -1870,6 +1885,18 @@ class ProxyLogging:
                             call_type=call_type,  # type: ignore
                         ),
                     )
+                guardrail_tasks.append(guardrail_task)
+            elif _has_native_during_call_hook(callback):
+                if call_type == CallTypes.call_mcp_tool.value:
+                    continue
+                guardrail_task = self._run_guardrail_task_with_enrichment(
+                    callback,
+                    callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,  # type: ignore
+                        call_type=call_type,  # type: ignore
+                    ),
+                )
                 guardrail_tasks.append(guardrail_task)
 
         # Step 2: Run all guardrail tasks in parallel
