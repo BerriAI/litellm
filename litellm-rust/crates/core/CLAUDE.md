@@ -31,6 +31,10 @@ input or output. Parse wire bytes into typed structs/enums at the host edge;
 `RealtimeTransformResult`, `OcrRequestData`). A `type`-style discriminator is a
 typed field on a struct, not a raw string threaded through the API.
 
+This is enforced by the crate's Clippy policy: `litellm-core` denies dynamic
+JSON escape hatches such as `serde_json::Value`, `serde_json::Map`,
+`serde_json::Number`, and `serde_json::json!` in core code.
+
 ## Structure
 
 Use route names directly under `src/`: `ocr`, future `messages`,
