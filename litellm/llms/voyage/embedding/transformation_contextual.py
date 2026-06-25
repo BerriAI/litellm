@@ -109,6 +109,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         return {
             "inputs": input,
             "model": model,
+            "chunk_size": 32000,
             **optional_params,
         }
 
