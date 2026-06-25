@@ -1116,11 +1116,15 @@ class TestCommonRequestProcessingHelpers:
             (
                 'data: {"error": {"code": 99, "message": "too low"}}',
                 None,
-            ),  # Integer code too low
+            ),  # Integer code too low (< 100, likely invalid data)
             (
-                'data: {"error": {"code": 600, "message": "too high"}}',
-                None,
-            ),  # Integer code too high
+                'data: {"error": {"code": 600, "message": "vendor error"}}',
+                502,
+            ),  # Non-standard code >= 600 → mapped to 502 for failure handling
+            (
+                'data: {"error": {"code": 1302, "message": "rate limit"}}',
+                502,
+            ),  # Vendor-specific rate limit code (ZAI/ZhipuAI) → mapped to 502
             (
                 'data: {"id": "123", "content": "hello"}',
                 None,

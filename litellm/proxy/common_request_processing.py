@@ -251,9 +251,28 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                         # Not a valid integer string, treat as if no valid code was found for this check
                         pass
 
-                # Ensure error_code is a valid HTTP status code
-                if error_code is not None and 100 <= error_code <= 599:
-                    return error_code
+                if error_code is not None:
+                    if 100 <= error_code <= 599:
+                        # Standard HTTP status code
+                        return error_code
+                    elif error_code >= 600:
+                        # Vendor-specific error codes outside the standard HTTP
+                        # range (e.g., ZAI/ZhipuAI 1302 rate limit, DashScope
+                        # throttling codes). Previously these were silently
+                        # dropped (returned None), causing the proxy to treat
+                        # the SSE chunk as normal content — the error was
+                        # forwarded to the client as a 200 response, and router
+                        # fallback/cooldown never triggered.
+                        #
+                        # Map to 502 (Bad Gateway) so that failure handling
+                        # (retry, fallback, cooldown) fires correctly. The
+                        # original vendor code is preserved in the warning log
+                        # for debugging.
+                        verbose_proxy_logger.warning(
+                            f"SSE error code {error_code} is outside standard HTTP range "
+                            f"(100-599); mapping to 502 for failure handling"
+                        )
+                        return 502
                 elif (
                     error_code_raw is not None
                 ):  # Log if original code was present but not valid
