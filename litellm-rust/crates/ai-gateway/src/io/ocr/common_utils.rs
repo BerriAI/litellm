@@ -13,6 +13,9 @@ use litellm_core::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
 };
 use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use litellm_core::providers::reducto::ocr::transformation::{
+    REDUCTO_PARSE_LEGACY_CONFIG, REDUCTO_PARSE_V3_CONFIG,
+};
 use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
 use litellm_core::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
@@ -46,6 +49,8 @@ pub(super) fn ocr_provider_config(
         "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
         "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
         "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
+        "reducto" if model == "parse-v3" => Some(&REDUCTO_PARSE_V3_CONFIG),
+        "reducto" if model == "parse-legacy" => Some(&REDUCTO_PARSE_LEGACY_CONFIG),
         _ => None,
     }
 }
@@ -293,6 +298,138 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         .cloned()
         .ok_or_else(|| CoreError::InvalidRequest("OCR document must be an object".to_string()))?;
     transformed.insert(field.to_string(), Value::String(data_uri));
+    Ok(Value::Object(transformed))
+}
+
+fn decode_reducto_data_uri(source_url: &str) -> CoreResult<(Vec<u8>, String)> {
+    let (header, encoded) = source_url.split_once(',').ok_or_else(|| {
+        CoreError::InvalidRequest("Invalid Reducto data URI provided.".to_string())
+    })?;
+    if !header.contains(";base64") {
+        return Err(CoreError::InvalidRequest(
+            "Reducto only supports base64-encoded data URIs.".to_string(),
+        ));
+    }
+    let mime = header
+        .strip_prefix("data:")
+        .and_then(|value| value.split(';').next())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
+        CoreError::InvalidRequest("Invalid Reducto base64 payload provided.".to_string())
+    })?;
+    Ok((bytes, mime))
+}
+
+fn reducto_upload_url(parse_url: &str) -> CoreResult<Url> {
+    let mut url = Url::parse(parse_url)
+        .map_err(|err| CoreError::InvalidRequest(format!("invalid Reducto parse URL: {err}")))?;
+    let path = url.path().trim_end_matches('/');
+    let base_path = path
+        .strip_suffix("/parse")
+        .unwrap_or(path)
+        .trim_end_matches('/');
+    url.set_path(&format!("{base_path}/upload"));
+    url.set_query(None);
+    Ok(url)
+}
+
+fn reducto_auth_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+        .cloned()
+        .collect()
+}
+
+async fn upload_reducto_bytes(
+    bytes: Vec<u8>,
+    mime: String,
+    parse_url: &str,
+    headers: &[(String, String)],
+    timeout: Option<Duration>,
+) -> CoreResult<String> {
+    let upload_url = reducto_upload_url(parse_url)?;
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name("document")
+        .mime_str(&mime)
+        .map_err(|err| {
+            CoreError::InvalidRequest(format!("invalid Reducto upload MIME type: {err}"))
+        })?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let mut request_builder = http_client().post(upload_url).multipart(form);
+    for (key, value) in reducto_auth_headers(headers) {
+        request_builder = request_builder.header(key, value);
+    }
+    if let Some(duration) = timeout {
+        request_builder = request_builder.timeout(duration);
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    if !status.is_success() {
+        return Err(CoreError::Http {
+            status: status.as_u16(),
+            body: truncate_error_body(&text),
+        });
+    }
+    let response_json: Value = serde_json::from_str(&text).map_err(|err| {
+        CoreError::InvalidResponse(format!("invalid Reducto upload response JSON: {err}"))
+    })?;
+    response_json
+        .get("file_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CoreError::InvalidResponse(format!(
+                "Reducto /upload returned 200 without a file_id; got payload={response_json}"
+            ))
+        })
+}
+
+pub(super) async fn upload_reducto_document(
+    document: Value,
+    parse_url: &str,
+    headers: &[(String, String)],
+    timeout: Option<Duration>,
+) -> CoreResult<Value> {
+    let Some((field, source_url)) = document_url_field(&document)? else {
+        return Err(CoreError::InvalidRequest(
+            "Reducto expected OCR preprocessing to produce document_url or image_url".to_string(),
+        ));
+    };
+    if source_url.starts_with("reducto://") {
+        return Ok(document);
+    }
+    if source_url.starts_with("http://") || source_url.starts_with("https://") {
+        return Err(CoreError::InvalidRequest(
+            "Reducto requires type='file' (auto-uploaded) or a reducto:// id. Plain http(s) URLs are not supported; upload the file first."
+                .to_string(),
+        ));
+    }
+    if !source_url.starts_with("data:") {
+        return Err(CoreError::InvalidRequest(
+            "Reducto requires a reducto:// id or a base64 data URI after OCR preprocessing."
+                .to_string(),
+        ));
+    }
+
+    let (bytes, mime) = decode_reducto_data_uri(source_url)?;
+    let file_id = upload_reducto_bytes(bytes, mime, parse_url, headers, timeout).await?;
+    let mut transformed = document
+        .as_object()
+        .cloned()
+        .ok_or_else(|| CoreError::InvalidRequest("OCR document must be an object".to_string()))?;
+    transformed.insert(field.to_string(), Value::String(file_id));
     Ok(Value::Object(transformed))
 }
 

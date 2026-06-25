@@ -8,7 +8,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::{OcrAuthStrategy, OcrResponseHandling};
+use litellm_core::ocr::transformation::{
+    OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
+};
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
@@ -16,7 +18,7 @@ mod common_utils;
 
 use common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
-    string_headers, truncate_error_body,
+    string_headers, truncate_error_body, upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -88,15 +90,20 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         &env_lookup,
     )?;
     let filtered_params = config.map_ocr_params(&request.optional_params);
-    let document = if config.requires_data_uri_document() {
-        convert_document_url_to_data_uri(request.document).await?
-    } else {
-        request.document
+    let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
+    let document = match config.document_preparation() {
+        OcrDocumentPreparation::None => request.document,
+        OcrDocumentPreparation::DataUri => {
+            convert_document_url_to_data_uri(request.document).await?
+        }
+        OcrDocumentPreparation::ReductoUpload => {
+            upload_reducto_document(request.document, &url, &upstream_headers, request.timeout)
+                .await?
+        }
     };
     let body = config
         .transform_ocr_request(model, document, filtered_params)?
         .data;
-    let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
 
     let mut request_builder = http_client().post(&url).json(&body);
     for (key, value) in &upstream_headers {
@@ -220,6 +227,8 @@ mod tests {
             .expect("vertex deepseek config resolves")
             .supported_ocr_params()
             .contains(&"temperature"));
+        assert!(ocr_provider_config("reducto", "parse-v3").is_some());
+        assert!(ocr_provider_config("reducto", "parse-legacy").is_some());
         assert!(ocr_provider_config("openai", "gpt-4o").is_none());
     }
 

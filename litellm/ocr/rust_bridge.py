@@ -1,9 +1,8 @@
 """
-Optional Rust-backed OCR path.
+Rust-backed OCR path.
 
-Enable with ``litellm.use_litellm_rust()``; the sync ``litellm.ocr()`` entrypoint
-then routes supported Mistral calls through the compiled ``litellm.rust_bridge._native``
-extension, which performs the whole OCR call (URL, headers, HTTP, parse) in Rust.
+Supported OCR providers route through the compiled ``litellm.rust_bridge._native``
+extension by default.
 
 No module-level ``litellm`` imports keep this a leaf so ``litellm/ocr/main.py``
 can import it statically without forming an import cycle.
@@ -11,7 +10,6 @@ can import it statically without forming an import cycle.
 
 from __future__ import annotations
 
-import os
 from typing import Awaitable, Final, Protocol, cast
 
 
@@ -56,43 +54,25 @@ class _Unset:
 _UNSET: Final[_Unset] = _Unset()
 
 
-def _env_enables_rust_ocr() -> bool:
-    return os.getenv("LITELLM_USE_RUST_OCR", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-_rust_ocr_enabled = _env_enables_rust_ocr()
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
 
 
-def use_litellm_rust(
-    enabled: bool = True,
-    *,
+def _set_rust_ocr_bridge(
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
 ) -> None:
-    """Route supported OCR calls through the packaged Rust extension.
+    """Configure OCR bridge injection for tests.
 
-    ``ocr`` and ``aocr`` inject bridge callables; when omitted the compiled
-    extension is loaded on demand and any previously injected bridge is
-    preserved. Pass ``None`` explicitly to clear a prior injection.
+    ``ocr`` and ``aocr`` inject bridge callables. When omitted, any previously
+    injected bridge is preserved. Pass ``None`` explicitly to clear a prior
+    injection.
     """
-    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    _rust_ocr_enabled = enabled
+    global _rust_ocr_impl, _rust_aocr_impl
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
-
-
-def rust_ocr_enabled() -> bool:
-    """Whether the Rust OCR path has been turned on via ``use_litellm_rust()``."""
-    return _rust_ocr_enabled
 
 
 def load_rust_ocr() -> RustOcr | None:

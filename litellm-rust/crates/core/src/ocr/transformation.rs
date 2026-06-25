@@ -25,6 +25,13 @@ pub enum OcrResponseHandling {
     AzureDocumentIntelligencePoll,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrDocumentPreparation {
+    None,
+    DataUri,
+    ReductoUpload,
+}
+
 pub trait OcrProviderConfig: Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
@@ -71,6 +78,14 @@ pub trait OcrProviderConfig: Sync {
 
     fn requires_data_uri_document(&self) -> bool {
         false
+    }
+
+    fn document_preparation(&self) -> OcrDocumentPreparation {
+        if self.requires_data_uri_document() {
+            OcrDocumentPreparation::DataUri
+        } else {
+            OcrDocumentPreparation::None
+        }
     }
 
     fn response_handling(&self) -> OcrResponseHandling {

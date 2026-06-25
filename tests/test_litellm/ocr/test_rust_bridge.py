@@ -1,4 +1,4 @@
-"""Tests for the optional Rust-backed OCR path (``litellm/ocr/rust_bridge.py``)."""
+"""Tests for the Rust-backed OCR path (``litellm/ocr/rust_bridge.py``)."""
 
 import importlib
 import builtins
@@ -151,41 +151,9 @@ class RecordingLogging:
         }
 
 
-class FakeOCRConfig:
-    """A stand-in ``BaseOCRConfig`` that echoes the request it would build."""
-
-    def __init__(self, api_key_env_var: str = "MISTRAL_API_KEY") -> None:
-        self.api_key_env_var = api_key_env_var
-
-    def get_api_key_env_var(self) -> str:
-        return self.api_key_env_var
-
-    def validate_environment(
-        self,
-        *,
-        headers: dict[str, object],
-        model: str,
-        api_key: str | None,
-        api_base: str | None,
-        litellm_params: dict[str, object],
-    ) -> dict[str, object]:
-        return {"Authorization": f"Bearer {api_key}", **headers}
-
-    def get_complete_url(
-        self,
-        *,
-        api_base: str | None,
-        model: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-    ) -> str:
-        return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
-
-
 def build_prepared_request(
     *,
     logging_obj: RecordingLogging | None = None,
-    provider_config: FakeOCRConfig | None = None,
     model: str = "mistral-ocr-latest",
     document: dict[str, object] = DOCUMENT,
     api_key: str | None = "sk-test",
@@ -203,7 +171,6 @@ def build_prepared_request(
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
-        provider_config=provider_config or FakeOCRConfig(),
         optional_params=optional_params or {},
         litellm_params=litellm_params or {},
         effective_timeout=timeout,
@@ -212,47 +179,34 @@ def build_prepared_request(
 
 
 @pytest.fixture(autouse=True)
-def _reset_rust_flag():
-    """Keep the global toggle isolated between tests."""
-    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
+def _reset_rust_bridge():
+    """Keep the global bridge state isolated between tests."""
+    rust_bridge._set_rust_ocr_bridge(ocr=None, aocr=None)
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
+    rust_bridge._set_rust_ocr_bridge(ocr=None, aocr=None)
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
 @pytest.fixture
 def fake_bridge():
-    """Enable the Rust path with an injected recording bridge (no native wheel)."""
+    """Inject a recording bridge."""
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    rust_bridge._set_rust_ocr_bridge(ocr=bridge)
     return bridge
 
 
 @pytest.fixture
 def fake_async_bridge():
-    """Enable the async Rust path with an injected recording bridge."""
+    """Inject an async recording bridge."""
     bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, aocr=bridge)
+    rust_bridge._set_rust_ocr_bridge(aocr=bridge)
     return bridge
-
-
-def test_use_litellm_rust_toggles_flag():
-    assert rust_bridge.rust_ocr_enabled() is False
-    litellm.use_litellm_rust()
-    assert rust_bridge.rust_ocr_enabled() is True
-    litellm.use_litellm_rust(False)
-    assert rust_bridge.rust_ocr_enabled() is False
-
-
-def test_env_var_enables_rust_ocr(monkeypatch):
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-    assert rust_bridge._env_enables_rust_ocr() is True
 
 
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    rust_bridge._set_rust_ocr_bridge(ocr=bridge)
     assert rust_bridge.load_rust_ocr() is bridge
 
 
@@ -296,25 +250,16 @@ def test_native_bridge_available_reflects_loader(monkeypatch):
 
 def test_load_rust_aocr_returns_injected_impl():
     bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, aocr=bridge)
+    rust_bridge._set_rust_ocr_bridge(aocr=bridge)
     assert rust_bridge.load_rust_aocr() is bridge
 
 
-def test_toggle_without_ocr_arg_preserves_injected_impl():
-    """Regression: routine enable/disable calls must not clobber a prior injection.
-
-    Earlier, ``use_litellm_rust()`` unconditionally assigned the keyword default
-    of ``None`` to ``_rust_ocr_impl``, silently dropping a custom bridge whenever
-    a caller toggled the flag without re-passing ``ocr=``.
-    """
+def test_bridge_injection_preserves_unspecified_impl():
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, ocr=bridge, aocr=async_bridge)
+    rust_bridge._set_rust_ocr_bridge(ocr=bridge, aocr=async_bridge)
 
-    litellm.use_litellm_rust(False)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
-    litellm.use_litellm_rust(True)
+    rust_bridge._set_rust_ocr_bridge()
     assert rust_bridge.load_rust_ocr() is bridge
     assert rust_bridge.load_rust_aocr() is async_bridge
 
@@ -327,9 +272,9 @@ def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     )
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, ocr=bridge, aocr=async_bridge)
+    rust_bridge._set_rust_ocr_bridge(ocr=bridge, aocr=async_bridge)
 
-    litellm.use_litellm_rust(True, ocr=None, aocr=None)
+    rust_bridge._set_rust_ocr_bridge(ocr=None, aocr=None)
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
 
@@ -342,7 +287,6 @@ def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
         "get_native_bridge",
         lambda: None,
     )
-    litellm.use_litellm_rust(True)  # no impl injected; extension isn't built in CI
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
 
@@ -360,7 +304,6 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
         lambda: fake_module,
     )
 
-    litellm.use_litellm_rust(True)  # enabled, no impl injected -> import the extension
     assert rust_bridge.load_rust_ocr() is fake_module.ocr
     assert rust_bridge.load_rust_aocr() is fake_module.aocr
 
@@ -396,10 +339,7 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         "api_key": "sk-test",
         "api_base": "https://proxy.internal",
         "custom_llm_provider": "mistral",
-        "extra_headers": {
-            "Authorization": "Bearer sk-test",
-            "x-trace-id": "trace-1",
-        },
+        "extra_headers": {"x-trace-id": "trace-1"},
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
     }
@@ -421,7 +361,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
 
 
-def test_run_rust_ocr_uses_provider_api_key_env_var():
+def test_run_rust_ocr_resolves_reducto_key():
     bridge = RecordingBridge()
     resolver_calls = []
 
@@ -432,15 +372,15 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
     ocr_main._run_rust_ocr(
         rust_ocr=bridge,
         prepared_request=build_prepared_request(
-            provider_config=FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY"),
-            model="provider-ocr-model",
+            custom_llm_provider="reducto",
+            model="parse-v3",
             api_key=None,
             timeout=None,
         ),
         resolve_api_key=_resolver,
     )
 
-    assert resolver_calls == ["PROVIDER_OCR_API_KEY"]
+    assert resolver_calls == ["REDUCTO_API_KEY"]
     assert bridge.calls[0]["api_key"] == "sk-provider-env"
 
 
@@ -573,15 +513,11 @@ def test_run_rust_ocr_runs_pre_call_logging():
     complete_input = additional_args["complete_input_dict"]
     assert complete_input["document"] == DOCUMENT
     assert complete_input["include_image_base64"] is True
-    # The logged request mirrors what Rust sends: resolved URL + headers.
-    assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
-    assert additional_args["headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert additional_args["api_base"] == "https://api.mistral.ai/v1"
+    assert additional_args["headers"] == {"x-trace-id": "trace-1"}
 
 
-def test_ocr_routes_to_rust_when_enabled(fake_bridge):
+def test_ocr_routes_to_rust_by_default(fake_bridge):
     response = litellm.ocr(
         model=MODEL,
         document=DOCUMENT,
@@ -599,15 +535,12 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     # Raw OCR params ride along in optional_params; Rust filters to supported keys.
     assert call["optional_params"].get("include_image_base64") is True
 
 
-def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
+def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
     response = litellm.ocr(
         model="azure_ai/pixtral-12b-2409",
         document=DOCUMENT,
@@ -631,7 +564,7 @@ def test_ocr_exception_type_uses_resolved_provider_context(
         return CapturedException("wrapped")
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
-    litellm.use_litellm_rust(True, ocr=RaisingBridge())
+    rust_bridge._set_rust_ocr_bridge(ocr=RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -641,7 +574,7 @@ def test_ocr_exception_type_uses_resolved_provider_context(
 
 
 @pytest.mark.asyncio
-async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
+async def test_aocr_routes_to_async_rust_by_default(fake_async_bridge):
     response = await litellm.aocr(
         model=MODEL,
         document=DOCUMENT,
@@ -658,10 +591,7 @@ async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     assert call["optional_params"].get("include_image_base64") is True
 
 
@@ -676,7 +606,7 @@ async def test_aocr_exception_type_uses_resolved_provider_context(
         return CapturedException("wrapped")
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
-    litellm.use_litellm_rust(True, aocr=RaisingAsyncBridge())
+    rust_bridge._set_rust_ocr_bridge(aocr=RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -703,55 +633,10 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
     assert fake_bridge.calls[0]["timeout_seconds"] == float(request_timeout)
 
 
-def test_ocr_does_not_route_to_rust_when_disabled():
-    """With the flag off, the bridge must not be consulted even if an impl exists."""
-    bridge = RecordingBridge()
-    litellm.use_litellm_rust(False, ocr=bridge)
-
-    assert rust_bridge.rust_ocr_enabled() is False
-    # The impl stays available for injection, but the disabled flag gates usage,
-    # so ocr() never reaches the Rust path (asserted via the enabled-path test).
-    assert bridge.calls == []
-
-
-def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
-    """Rust enabled but no bridge available (no injected impl, no compiled wheel):
-    ocr() must degrade to the Python HTTP handler instead of raising."""
+def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
     monkeypatch.setattr(ocr_main, "load_rust_ocr", lambda: None)
-    litellm.use_litellm_rust(True)  # enabled, but load_rust_ocr() returns None in CI
 
-    captured = {}
+    with pytest.raises(Exception) as exc_info:
+        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    def fake_handler_ocr(**kwargs):
-        captured["called"] = True
-        return OCRResponse(pages=[], model="mistral-ocr-latest", object="ocr")
-
-    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
-
-    response = litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
-
-    assert captured.get("called") is True  # Python path was used
-    assert isinstance(response, OCRResponse)
-
-
-def test_ocr_provider_configs_expose_api_key_env_vars():
-    from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
-        AzureDocumentIntelligenceOCRConfig,
-    )
-    from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
-    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
-    from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
-        VertexAIDeepSeekOCRConfig,
-    )
-    from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
-
-    assert BaseOCRConfig().get_api_key_env_var() is None
-    assert MistralOCRConfig().get_api_key_env_var() == "MISTRAL_API_KEY"
-    assert AzureAIOCRConfig().get_api_key_env_var() == "AZURE_AI_API_KEY"
-    assert (
-        AzureDocumentIntelligenceOCRConfig().get_api_key_env_var()
-        == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
-    )
-    assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
-    assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
+    assert "Rust OCR bridge is required" in str(exc_info.value)
