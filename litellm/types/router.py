@@ -189,7 +189,11 @@ class CredentialLiteLLMParams(BaseModel):
     aws_region_name: Optional[str] = None
     aws_bedrock_runtime_endpoint: Optional[str] = None
     aws_bedrock_project_id: Optional[str] = None
+    ## AWS BEDROCK BATCH / S3 ##
     s3_bucket_name: Optional[str] = None
+    s3_region_name: Optional[str] = None
+    s3_encryption_key_id: Optional[str] = None
+    aws_batch_role_arn: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -262,11 +266,6 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # quality-router params
     quality_router_config: Optional[Dict] = None
     quality_router_default_model: Optional[str] = None
-
-    # Batch/File API Params
-    s3_bucket_name: Optional[str] = None
-    s3_encryption_key_id: Optional[str] = None
-    gcs_bucket_name: Optional[str] = None
 
     # Vector Store Params
     vector_store_id: Optional[str] = None
