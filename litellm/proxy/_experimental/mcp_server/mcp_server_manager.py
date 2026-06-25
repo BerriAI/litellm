@@ -4144,10 +4144,16 @@ class MCPServerManager:
         emitted so admins can diagnose stale/typo permission entries — the
         downstream access-check denies them when compared against the
         concrete request server_id.
+
+        The ``all-proxy-mcps`` sentinel expands to every server in the live
+        registry, so an entity granted it stays in sync as servers are added
+        or removed without re-editing its permission list.
         """
         if not identifiers:
             return []
         registry = self.get_registry()
+        if SpecialMCPServerNames.all_proxy_mcp_servers.value in identifiers:
+            return list(registry.keys())
         expanded: Set[str] = set()
         for identifier in identifiers:
             if identifier in registry:

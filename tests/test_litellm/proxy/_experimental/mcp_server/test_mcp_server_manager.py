@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPEnvVarScope,
     MCPTransport,
+    SpecialMCPServerNames,
 )
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
@@ -110,6 +111,54 @@ class TestMCPServerManager:
         assert added_server.command == "python"
         assert added_server.args == ["-m", "server"]
         assert added_server.env == {"DEBUG": "1", "TEST": "1"}
+
+    async def test_expand_permission_list_all_proxy_mcps_sentinel(self):
+        """The all-proxy-mcps sentinel expands to every server in the live
+        registry and re-expands against servers registered later, so a grant
+        stays current without the permission list being re-edited."""
+        manager = MCPServerManager()
+
+        async def _register(server_id: str):
+            await manager.add_server(
+                LiteLLM_MCPServerTable(
+                    server_id=server_id,
+                    alias=server_id,
+                    description="",
+                    url=None,
+                    transport=MCPTransport.stdio,
+                    command="python",
+                    args=["-m", "server"],
+                    env={},
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
+            )
+
+        await _register("srv-a")
+        await _register("srv-b")
+
+        sentinel = SpecialMCPServerNames.all_proxy_mcp_servers.value
+
+        assert set(manager.expand_permission_list([sentinel])) == {"srv-a", "srv-b"}
+
+        # The sentinel dominates: mixing it with a concrete id still grants all.
+        assert set(manager.expand_permission_list([sentinel, "srv-a"])) == {
+            "srv-a",
+            "srv-b",
+        }
+
+        # A server registered after the grant is included with no re-edit.
+        await _register("srv-c")
+        assert set(manager.expand_permission_list([sentinel])) == {
+            "srv-a",
+            "srv-b",
+            "srv-c",
+        }
+
+        # Without the sentinel, only the named server resolves — proving the
+        # full-registry result above comes from the sentinel branch, not a
+        # blanket "return everything".
+        assert manager.expand_permission_list(["srv-a"]) == ["srv-a"]
 
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""

@@ -2985,6 +2985,7 @@ class SpecialModelNames(enum.Enum):
 
 class SpecialMCPServerNames(enum.Enum):
     no_mcp_servers = "no-mcp-servers"
+    all_proxy_mcp_servers = "all-proxy-mcps"
 
 
 class SpecialProxyStrings(enum.Enum):

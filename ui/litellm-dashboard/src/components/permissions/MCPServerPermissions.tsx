@@ -4,7 +4,7 @@ import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/
 import { Tooltip } from "antd";
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { ALL_PROXY_MCPS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
@@ -96,11 +96,12 @@ export function MCPServerPermissions({
   };
 
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
+  const grantsAllProxyMcps = mcpServers.includes(ALL_PROXY_MCPS_SENTINEL);
 
   // Merge servers and access groups into one list
   const mergedItems = [
     ...mcpServers
-      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL)
+      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCPS_SENTINEL)
       .map((server) => ({ type: "server", value: server })),
     ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
   ];
@@ -111,8 +112,8 @@ export function MCPServerPermissions({
       <div className="flex items-center gap-2">
         <ServerIcon className="h-4 w-4 text-blue-600" />
         <Text className="font-semibold text-gray-900">MCP Servers</Text>
-        <Badge color={blocksAllMcpServers ? "red" : "blue"} size="xs">
-          {blocksAllMcpServers ? "Blocked" : totalCount}
+        <Badge color={blocksAllMcpServers ? "red" : grantsAllProxyMcps ? "green" : "blue"} size="xs">
+          {blocksAllMcpServers ? "Blocked" : grantsAllProxyMcps ? "All" : totalCount}
         </Badge>
       </div>
 
@@ -121,6 +122,13 @@ export function MCPServerPermissions({
           <ServerIcon className="h-4 w-4 text-red-400" />
           <Text className="text-red-700 text-sm">
             No MCP servers — this key is blocked from all MCP servers, including its team&apos;s servers
+          </Text>
+        </div>
+      ) : grantsAllProxyMcps ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 border border-green-200">
+          <ServerIcon className="h-4 w-4 text-green-500" />
+          <Text className="text-green-700 text-sm">
+            All proxy MCP servers — access to every MCP server registered on the proxy, including ones added later
           </Text>
         </div>
       ) : totalCount > 0 ? (
