@@ -3725,10 +3725,10 @@ if MCP_AVAILABLE:
     async def _check_oauth2_upstream_auth(
         scope: Scope,
         user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_servers: Optional[List[str]],
-        oauth2_headers: Optional[Dict[str, str]],
+        mcp_servers: Optional[list[str]],
+        oauth2_headers: Optional[dict[str, str]],
         client_ip: Optional[str],
-        allowed_server_ids: Optional[Set[str]] = None,
+        allowed_server_ids: Optional[set[str]] = None,
     ) -> None:
         """Probe gateway-managed per-user OAuth2 upstreams with the token the
         request would actually use so a stale or revoked token surfaces as an
