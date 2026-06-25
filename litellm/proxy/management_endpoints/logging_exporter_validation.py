@@ -110,32 +110,6 @@ def validate_logging_exporter_assignment(
     _validate_exporters_shape_and_names(metadata.get(LOGGING_EXPORTERS_KEY))
 
 
-def validate_team_logging_exporter_assignment(
-    metadata: Optional[dict],
-    user_api_key_dict: UserAPIKeyAuth,
-    is_team_admin: bool,
-) -> None:
-    """``metadata.logging_exporters`` validator for ``/team/update`` only.
-
-    Proxy admins and team-admins of the team being edited may write the field;
-    every name still has to resolve to a registered logging credential.
-    """
-    if not isinstance(metadata, dict) or LOGGING_EXPORTERS_KEY not in metadata:
-        return
-    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    if not (is_proxy_admin or is_team_admin):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": (
-                    "Only the proxy admin or a team admin of this team can assign "
-                    "logging exporters"
-                )
-            },
-        )
-    _validate_exporters_shape_and_names(metadata.get(LOGGING_EXPORTERS_KEY))
-
-
 def validate_key_logging_exporter_assignment(
     metadata: Optional[dict],
     user_api_key_dict: UserAPIKeyAuth,

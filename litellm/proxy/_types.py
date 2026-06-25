@@ -771,11 +771,6 @@ class LiteLLMRoutes(enum.Enum):
         # POST and DELETE stay proxy-admin only via is_admin_gated_credential_info.
         "/credentials",
         "/credentials/{credential_name}",
-        # /team/update enforces team-admin / proxy-admin via _verify_team_access
-        # in the handler. Added so a team-admin can write fields they're
-        # entitled to (including metadata.logging_exporters under the new
-        # validate_team_logging_exporter_assignment gate).
-        "/team/update",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

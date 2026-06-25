@@ -16,7 +16,6 @@ from litellm.proxy.management_endpoints.logging_exporter_validation import (
     validate_credential_access,
     validate_key_logging_exporter_assignment,
     validate_logging_exporter_assignment,
-    validate_team_logging_exporter_assignment,
 )
 
 
@@ -136,74 +135,6 @@ def test_validate_credential_access_rejects_bad_shape(access):
     with pytest.raises(HTTPException) as exc:
         validate_credential_access({"access": access})
     assert exc.value.status_code == 400
-
-
-# --- team-scoped validator (LIT-3850 follow-up) -----------------------------
-
-
-def test_team_admin_can_set_logging_exporters(_registry):
-    """A team-admin of the team being edited may write the field."""
-    validate_team_logging_exporter_assignment(
-        metadata={"logging_exporters": ["langfuse-eu"]},
-        user_api_key_dict=_member(),
-        is_team_admin=True,
-    )
-
-
-def test_team_validator_proxy_admin_always_passes(_registry):
-    """Proxy admin skips the team-admin check entirely."""
-    validate_team_logging_exporter_assignment(
-        metadata={"logging_exporters": ["langfuse-eu"]},
-        user_api_key_dict=_admin(),
-        is_team_admin=False,
-    )
-
-
-def test_team_validator_forbids_random_member(_registry):
-    """A non-admin caller who is NOT team-admin of the target team is rejected."""
-    with pytest.raises(HTTPException) as exc:
-        validate_team_logging_exporter_assignment(
-            metadata={"logging_exporters": ["langfuse-eu"]},
-            user_api_key_dict=_member(),
-            is_team_admin=False,
-        )
-    assert exc.value.status_code == 403
-
-
-def test_team_validator_still_rejects_unknown_credential(_registry):
-    """Even a team-admin can only pick names registered as logging credentials."""
-    with pytest.raises(HTTPException) as exc:
-        validate_team_logging_exporter_assignment(
-            metadata={"logging_exporters": ["does-not-exist"]},
-            user_api_key_dict=_member(),
-            is_team_admin=True,
-        )
-    assert exc.value.status_code == 400
-
-
-def test_team_validator_still_rejects_provider_credential(_registry):
-    """A team-admin can't smuggle in a provider credential as a logging exporter."""
-    with pytest.raises(HTTPException) as exc:
-        validate_team_logging_exporter_assignment(
-            metadata={"logging_exporters": ["openai-key"]},
-            user_api_key_dict=_member(),
-            is_team_admin=True,
-        )
-    assert exc.value.status_code == 400
-
-
-def test_team_validator_noop_when_absent(_registry):
-    """An /team/update that doesn't touch logging_exporters skips the gate."""
-    validate_team_logging_exporter_assignment(
-        metadata={"other": 1},
-        user_api_key_dict=_member(),
-        is_team_admin=False,
-    )
-    validate_team_logging_exporter_assignment(
-        metadata=None,
-        user_api_key_dict=_member(),
-        is_team_admin=False,
-    )
 
 
 # --- key-scoped validator (LIT-3850 follow-up) ------------------------------

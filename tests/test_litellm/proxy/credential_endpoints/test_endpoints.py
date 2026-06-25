@@ -341,6 +341,42 @@ async def test_team_admin_can_append_own_team_to_access(
 
 
 @pytest.mark.asyncio
+async def test_provider_credential_patch_forbidden_for_non_admin(
+    _connected_db, monkeypatch
+):
+    """A team-admin (or any non-admin) cannot PATCH a non-logging credential.
+
+    The route gate was widened to let team-admins reach /credentials/{name}
+    for logging-credential access edits. A provider credential is not
+    is_admin_gated_credential_info, so the decider block is skipped; without
+    an explicit else-branch a team-admin could rotate the upstream api_key.
+    """
+    provider_cred = CredentialItem(
+        credential_name="openai-prod",
+        credential_values={"api_key": "sk-real"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [provider_cred])
+    _connected_db.find_by_name = AsyncMock(return_value=provider_cred)
+    _connected_db.update_by_name = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.update_credential(
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            credential=CredentialItem(
+                credential_name="openai-prod",
+                credential_values={"api_key": "sk-stolen"},
+                credential_info={},
+            ),
+            credential_name="openai-prod",
+            user_api_key_dict=_member(),
+        )
+    assert exc.value.status_code == 403
+    _connected_db.update_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_team_admin_can_revoke_own_team_grant(
     _connected_db, _patch_team_admin_lookup, monkeypatch
 ):

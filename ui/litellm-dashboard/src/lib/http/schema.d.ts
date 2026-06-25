@@ -2423,6 +2423,11 @@ export interface paths {
         /**
          * Get Credentials
          * @description [BETA] endpoint. This might change unexpectedly.
+         *
+         *     Proxy admins see every credential (values masked). Team-admins see only
+         *     logging-typed destinations so they can self-assign them; provider
+         *     credentials stay invisible. Plain authenticated callers fall through the
+         *     same logging-only filter (route gate already requires team-admin status).
          */
         get: operations["get_credentials_credentials_get"];
         put?: never;
@@ -2499,6 +2504,11 @@ export interface paths {
         /**
          * Update Credential
          * @description [BETA] endpoint. This might change unexpectedly.
+         *
+         *     Both ``credential_values`` and ``credential_info`` are optional; a team-admin
+         *     typically patches only ``credential_info.access`` to grant or revoke their
+         *     own team. A proxy admin may patch either or both. See
+         *     ``decide_credential_patch`` for the exact contract.
          */
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
@@ -31331,6 +31341,27 @@ export interface components {
             workers: components["schemas"]["WorkerRegistryEntry"][];
         };
         /**
+         * UpdateCredentialItem
+         * @description PATCH body for ``/credentials/{name}``.
+         *
+         *     Both ``credential_values`` and ``credential_info`` are optional so a caller
+         *     can patch one without sending the other (team-admins patching access without
+         *     knowing the upstream secrets; proxy admins rotating values without touching
+         *     access). ``credential_name`` is optional because most patches don't rename.
+         */
+        UpdateCredentialItem: {
+            /** Credential Info */
+            credential_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Credential Name */
+            credential_name?: string | null;
+            /** Credential Values */
+            credential_values?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
          */
@@ -37059,7 +37090,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
         responses: {
@@ -43683,13 +43714,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *         Every rate-limit condition surfaced by litellm — whether it originated from
-             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *         max-iterations, etc.) — is raised as an instance of this class.
+             *     Every rate-limit condition surfaced by litellm — whether it originated from
+             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *     max-iterations, etc.) — is raised as an instance of this class.
              *
-             *         The :attr:`category` attribute lets callers distinguish the source. See
-             *         :class:`RateLimitErrorCategory` for the available values.
+             *     The :attr:`category` attribute lets callers distinguish the source. See
+             *     :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {

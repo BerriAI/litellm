@@ -51,42 +51,50 @@ async def _caller_team_admin_ids(
     """Set of team_ids the caller is team-admin of.
 
     Empty when the caller has no user_id, no DB connection, or no admin
-    membership on any team.
-
-    Reads the caller's team_id list off ``LiteLLM_UserTable.teams`` (cached
-    array of team_ids the user belongs to) and fetches only those rows from
-    the team table -- the lookup is proportional to the caller's team count,
-    not the workspace's. ``members_with_roles`` is a Postgres JSON column so
-    Prisma can't filter on the admin role; that match is done in Python.
+    membership on any team. Uses the shared ``get_user_object`` and
+    ``get_team_object`` helpers so the lookup benefits from the proxy's
+    in-process cache and OTEL span propagation; ``members_with_roles`` is a
+    JSON column so the admin-role match is still done in Python.
     """
     if user_api_key_dict.user_id is None or prisma_client is None:
         return frozenset()
+    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
     try:
-        user_row = await prisma_client.db.litellm_usertable.find_unique(  # type: ignore[attr-defined]
-            where={"user_id": user_api_key_dict.user_id}
-        )
-        user_team_ids = list(getattr(user_row, "teams", None) or []) if user_row else []
-        if not user_team_ids:
-            return frozenset()
-        teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[attr-defined]
-            where={"team_id": {"in": user_team_ids}}
+        user_obj = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,  # type: ignore[arg-type]
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
         )
     except Exception:
-        # Best-effort; surface a clear log and treat the caller as having no
-        # team-admin teams. The PATCH decider will return Deny on any patch
-        # other than a no-op, which is the safe fallback.
-        verbose_proxy_logger.exception("team-admin lookup failed")
+        verbose_proxy_logger.exception("team-admin lookup (user fetch) failed")
         return frozenset()
-    return frozenset(
-        team.team_id
-        for team in teams
+    if user_obj is None or not getattr(user_obj, "teams", None):
+        return frozenset()
+
+    team_ids: list[str] = [tid for tid in user_obj.teams if isinstance(tid, str)]
+    admin_of: list[str] = []
+    for team_id in team_ids:
+        try:
+            team_obj = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,  # type: ignore[arg-type]
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:
+            continue
         if any(
-            isinstance(member, dict)
-            and member.get("user_id") == user_api_key_dict.user_id
-            and member.get("role") == "admin"
-            for member in (getattr(team, "members_with_roles", None) or [])
-        )
-    )
+            member.user_id == user_api_key_dict.user_id and member.role == "admin"
+            for member in (team_obj.members_with_roles or [])
+        ):
+            admin_of.append(team_id)
+    return frozenset(admin_of)
 
 
 def _credential_in_memory(credential_name: str) -> Optional[CredentialItem]:
@@ -481,6 +489,12 @@ async def update_credential(
         if isinstance(decision, Deny):
             raise HTTPException(status_code=403, detail={"error": decision.reason})
         assert isinstance(decision, Allow)
+    else:
+        # Non-logging (provider) credential. The route gate was widened to let
+        # team-admins reach this handler for logging-credential PATCHes; without
+        # this branch a non-admin caller could rotate a provider credential's
+        # api_key. PATCH on provider credentials remains proxy-admin only.
+        _require_proxy_admin(user_api_key_dict)
     validate_credential_access(credential.credential_info)
 
     # Translate the partial patch into a full CredentialItem for the downstream
