@@ -103,6 +103,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # bypassing spend and budget accounting.
         self._pending_usage_metadata: Optional[dict] = None
 
+    def _include_function_response_id(self) -> bool:
+        """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
+        return True
+
     @staticmethod
     def _usage_detail_alias(details: Any, defaults: Dict[str, int]) -> Dict[str, Any]:
         if not isinstance(details, dict):
@@ -604,10 +608,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
 
         # Build Gemini toolResponse format
-        function_response = {
-            "id": call_id,
-            "response": output_dict,
-        }
+        function_response: dict[str, Any] = {"response": output_dict}
+        if self._include_function_response_id() and call_id:
+            function_response["id"] = call_id
         if function_name:
             function_response["name"] = function_name
 
@@ -1752,9 +1755,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 tool_call_temperature = tool_call_generation_config.get("temperature")
                 if tool_call_temperature is not None:
-                    tool_call_done_event["response"][
-                        "temperature"
-                    ] = tool_call_temperature
+                    tool_call_done_event["response"]["temperature"] = (
+                        tool_call_temperature
+                    )
                 tool_call_max_output_tokens = tool_call_generation_config.get(
                     "maxOutputTokens"
                 )

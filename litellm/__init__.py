@@ -80,6 +80,7 @@ from litellm.constants import (
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
+    request_timeout_explicitly_set as request_timeout_explicitly_set,
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
@@ -389,12 +390,8 @@ require_managed_files: bool = (
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
-caching: bool = (
-    False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-caching_with_models: bool = (
-    False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
+caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 cache: Optional["Cache"] = (
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
@@ -415,9 +412,7 @@ forward_traceparent_to_llm_provider: bool = False
 
 _current_cost = 0.0  # private variable, used if max budget is set
 error_logs: Dict = {}
-add_function_to_prompt: bool = (
-    False  # if function calling not supported by api, append function call details to system prompt
-)
+add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
@@ -484,9 +479,7 @@ prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
-disable_copilot_system_to_assistant: bool = (
-    False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
-)
+disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
@@ -506,17 +499,13 @@ if TYPE_CHECKING:
 
 
 ######## Networking Settings ########
-use_aiohttp_transport: bool = (
-    True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
-)
+use_aiohttp_transport: bool = True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = (
     False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 )
-force_ipv4: bool = (
-    False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-)
+force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -550,12 +539,12 @@ output_parse_pii: bool = False
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
-cost_discount_config: Dict[str, float] = (
-    {}
-)  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
-cost_margin_config: Dict[str, Union[float, Dict[str, float]]] = (
-    {}
-)  # Provider-specific or global cost margins. Examples:
+cost_discount_config: Dict[
+    str, float
+] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+cost_margin_config: Dict[
+    str, Union[float, Dict[str, float]]
+] = {}  # Provider-specific or global cost margins. Examples:
 # Percentage: {"openai": 0.10} = 10% margin
 # Fixed: {"openai": {"fixed_amount": 0.001}} = $0.001 per request
 # Global: {"global": 0.05} = 5% global margin on all providers
@@ -673,6 +662,7 @@ elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
+darkbloom_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -927,6 +917,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
             publicai_models.add(key)
+        elif value.get("litellm_provider") == "darkbloom":
+            darkbloom_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1075,6 +1067,7 @@ model_list = list(
     | dashscope_models
     | moonshot_models
     | publicai_models
+    | darkbloom_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1179,6 +1172,7 @@ models_by_provider: dict = {
     "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
+    "darkbloom": darkbloom_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
@@ -1400,6 +1394,7 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .ocr.rust_bridge import use_litellm_rust
 from .rag.main import *
 from .sandbox.main import *
 from .search.main import *
@@ -1450,9 +1445,9 @@ from . import rag
 from .types.llms.custom_llm import CustomLLMItem
 
 custom_provider_map: List[CustomLLMItem] = []
-_custom_providers: List[str] = (
-    []
-)  # internal helper util, used to track names of custom providers
+_custom_providers: List[
+    str
+] = []  # internal helper util, used to track names of custom providers
 disable_hf_tokenizer_download: Optional[bool] = (
     None  # disable huggingface tokenizer download. Defaults to openai clk100
 )
@@ -1921,9 +1916,6 @@ if TYPE_CHECKING:
     )
     from .llms.fireworks_ai.completion.transformation import (
         FireworksAITextCompletionConfig as FireworksAITextCompletionConfig,
-    )
-    from .llms.fireworks_ai.audio_transcription.transformation import (
-        FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig,
     )
     from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
         FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig,

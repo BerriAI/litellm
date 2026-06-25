@@ -262,14 +262,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   useEffect(() => {
     if (isTeamModalVisible) {
       const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
+      const isOrgAdmin = userRole !== "Admin";
 
-      // If there's exactly one organization the user is admin for, preselect it
-      if (adminOrgs.length === 1) {
+      // Org admins must scope a team to an org, so with exactly one we preselect it.
+      // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
+      if (isOrgAdmin && adminOrgs.length === 1) {
         const org = adminOrgs[0];
         form.setFieldValue("organization_id", org.organization_id);
         setCurrentOrgForCreateTeam(org);
       } else {
-        // Reset the organization selection for multiple orgs
         form.setFieldValue("organization_id", currentOrg?.organization_id || null);
         setCurrentOrgForCreateTeam(currentOrg);
       }
@@ -1132,7 +1133,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           : []
                       }
                       help={
-                        isSingleOrg
+                        isOrgAdmin && isSingleOrg
                           ? "You can only create teams within this organization"
                           : isOrgAdmin
                             ? "required"
@@ -1142,7 +1143,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       <Select
                         showSearch
                         allowClear={!isOrgAdmin}
-                        disabled={isSingleOrg}
+                        disabled={isOrgAdmin && isSingleOrg}
                         placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
                         onChange={(value) => {
                           form.setFieldValue("organization_id", value);

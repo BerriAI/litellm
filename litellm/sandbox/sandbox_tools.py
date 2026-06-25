@@ -40,11 +40,14 @@ def _iter_valid_tools(tools: list[dict]) -> Iterator[tuple[str, dict]]:
                 "sandbox_tools: skipping entry missing 'sandbox_provider': %r", tool
             )
             continue
-        yield name, {
-            "sandbox_provider": provider,
-            "api_key": _resolve_secret_value(params.get("api_key")),
-            "api_base": _resolve_secret_value(params.get("api_base")),
-        }
+        yield (
+            name,
+            {
+                "sandbox_provider": provider,
+                "api_key": _resolve_secret_value(params.get("api_key")),
+                "api_base": _resolve_secret_value(params.get("api_base")),
+            },
+        )
 
 
 def register_sandbox_tools(tools: list[dict]) -> None:

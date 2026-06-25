@@ -799,7 +799,9 @@ def function_setup(
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                        callback,
+                        internal_usage_cache=None,
+                        llm_router=None,  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -809,13 +811,21 @@ def function_setup(
                 if callback not in litellm.input_callback:
                     litellm.input_callback.append(callback)  # type: ignore
                 if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_success_callback(
+                        callback
+                    )  # type: ignore
                 if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_failure_callback(
+                        callback
+                    )  # type: ignore
                 if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )  # type: ignore
                 if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                        callback
+                    )  # type: ignore
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )
@@ -1486,9 +1496,9 @@ def client(original_function):
                 )
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
-            assert (
-                logging_obj is not None
-            ), "logging_obj should not be None after function_setup"
+            assert logging_obj is not None, (
+                "logging_obj should not be None after function_setup"
+            )
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
@@ -1810,9 +1820,9 @@ def client(original_function):
                 )
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
-            assert (
-                logging_obj is not None
-            ), "logging_obj should not be None after function_setup"
+            assert logging_obj is not None, (
+                "logging_obj should not be None after function_setup"
+            )
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
@@ -2311,7 +2321,9 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier,
+            revision=revision,
+            auth_token=auth_token,  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -3163,8 +3175,9 @@ def get_optional_params_transcription(
             keys = list(non_default_params.keys())
             for k in keys:
                 if (
-                    drop_params is True or litellm.drop_params is True
-                ) and k not in supported_params:  # drop the unsupported non-default values
+                    (drop_params is True or litellm.drop_params is True)
+                    and k not in supported_params
+                ):  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
@@ -3191,7 +3204,7 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-    elif provider_config is not None:  # handles fireworks ai, and any future providers
+    elif provider_config is not None:  # custom audio transcription config
         supported_params = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
@@ -3294,8 +3307,9 @@ def get_optional_params_image_gen(
             keys = list(non_default_params.keys())
             for k in keys:
                 if (
-                    litellm.drop_params is True or drop_params is True
-                ) and k not in supported_params:  # drop the unsupported non-default values
+                    (litellm.drop_params is True or drop_params is True)
+                    and k not in supported_params
+                ):  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
                     passed_params.pop(k, None)
                 elif k not in supported_params:
@@ -3971,11 +3985,7 @@ def pre_process_non_default_params(
         non_default_params, list
     ):  # fixes https://github.com/BerriAI/litellm/issues/4933
         tools = non_default_params["tools"]
-        for (
-            tool
-        ) in (
-            tools
-        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+        for tool in tools:  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
             tool_function = tool.get("function", {})
             parameters = tool_function.get("parameters", None)
             if parameters is not None:
@@ -5740,8 +5750,8 @@ def _get_potential_model_names(
             model=model, custom_llm_provider=custom_llm_provider
         )
         combined_stripped_model_name = stripped_model_name
-    elif custom_llm_provider and model.startswith(
-        custom_llm_provider + "/"
+    elif (
+        custom_llm_provider and model.startswith(custom_llm_provider + "/")
     ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
         split_model = model.split("/", 1)[1]
         combined_model_name = model
@@ -7938,7 +7948,9 @@ class ModelResponseIterator:
     def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
         if convert_to_delta is True:
             _stream_response = ModelResponseStream()
-            _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
+            _stream_response.choices[0].delta.content = model_response.choices[
+                0
+            ].message.content  # type: ignore
             self.model_response: Union[ModelResponse, ModelResponseStream] = (
                 _stream_response
             )
@@ -8915,8 +8927,6 @@ class ProviderConfigManager:
             )
 
             return AzureSpeechAudioTranscriptionConfig()
-        if litellm.LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
@@ -9733,9 +9743,14 @@ class ProviderConfigManager:
         Get sandbox (code execution) configuration for a given provider.
         """
         from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+        from litellm.llms.opensandbox.sandbox.transformation import (
+            OpenSandboxSandboxConfig,
+        )
 
         if provider == SandboxProviders.E2B:
             return E2BSandboxConfig()
+        if provider == SandboxProviders.OPENSANDBOX:
+            return OpenSandboxSandboxConfig()
         return None
 
     @staticmethod

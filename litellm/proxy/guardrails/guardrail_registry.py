@@ -479,7 +479,9 @@ class InMemoryGuardrailHandler:
             sig = inspect.signature(initializer)
             if "llm_router" in sig.parameters:
                 custom_guardrail_callback = initializer(
-                    litellm_params, guardrail, llm_router  # type: ignore
+                    litellm_params,
+                    guardrail,
+                    llm_router,  # type: ignore
                 )
             else:
                 custom_guardrail_callback = initializer(litellm_params, guardrail)
