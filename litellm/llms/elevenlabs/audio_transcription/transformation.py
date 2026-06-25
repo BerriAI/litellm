@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-
 """
 
 from itertools import groupby
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 from httpx import Headers, Response
 
@@ -230,8 +230,8 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
 
 def _words_from_channels(
-    transcripts: List[ElevenLabsSTTChunk],
-) -> Tuple[ElevenLabsSTTWord, ...]:
+    transcripts: list[ElevenLabsSTTChunk],
+) -> tuple[ElevenLabsSTTWord, ...]:
     """
     Flatten per-channel transcripts into a single time-ordered word stream, using
     the channel as the speaker so the two sides of e.g. a stereo call don't collide
@@ -252,8 +252,8 @@ def _words_from_channels(
 
 
 def _build_segments(
-    words: Tuple[ElevenLabsSTTWord, ...],
-) -> List[OpenAIDiarizedSegment]:
+    words: tuple[ElevenLabsSTTWord, ...],
+) -> list[OpenAIDiarizedSegment]:
     spoken = (w for w in words if w.type == "word" and w.start is not None)
     groups = (tuple(group) for _, group in groupby(spoken, key=lambda w: w.speaker_id))
     return [
@@ -270,8 +270,8 @@ def _build_segments(
 
 
 def _openai_words(
-    words: Tuple[ElevenLabsSTTWord, ...],
-) -> List[OpenAITranscriptionWord]:
+    words: tuple[ElevenLabsSTTWord, ...],
+) -> list[OpenAITranscriptionWord]:
     return [
         OpenAITranscriptionWord(
             word=w.text,

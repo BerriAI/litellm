@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -17,13 +17,13 @@ class ElevenLabsSTTChunk(BaseModel):
     text: str = ""
     language_code: Optional[str] = None
     language_probability: Optional[float] = None
-    words: List[ElevenLabsSTTWord] = Field(default_factory=list)
+    words: list[ElevenLabsSTTWord] = Field(default_factory=list)
     channel_index: Optional[int] = None
     audio_duration_secs: Optional[float] = None
 
 
 class ElevenLabsSTTMultichannelResponse(BaseModel):
-    transcripts: List[ElevenLabsSTTChunk]
+    transcripts: list[ElevenLabsSTTChunk]
     audio_duration_secs: Optional[float] = None
 
 
