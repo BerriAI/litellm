@@ -2024,6 +2024,7 @@ if MCP_AVAILABLE:
             refresh_token=payload.refresh_token,
             expires_in=payload.expires_in,
             scopes=payload.scopes,
+            client_id=payload.client_id,
         )
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
@@ -2035,6 +2036,7 @@ if MCP_AVAILABLE:
             has_credential=True,
             expires_at=expires_at,
             is_expired=False,
+            has_refresh_token=bool(stored.get("refresh_token")) if stored else False,
         )
 
     @router.delete(
@@ -2115,6 +2117,7 @@ if MCP_AVAILABLE:
             expires_at=expires_at,
             is_expired=is_expired,
             connected_at=cred.get("connected_at"),
+            has_refresh_token=bool(cred.get("refresh_token")),
         )
 
     @router.get(

@@ -951,6 +951,7 @@ async def store_user_oauth_credential(
     refresh_token: Optional[str] = None,
     expires_in: Optional[int] = None,
     scopes: Optional[List[str]] = None,
+    client_id: Optional[str] = None,
     skip_byok_guard: bool = False,
 ) -> None:
     """Persist an OAuth2 access token for a user+server pair.
@@ -958,6 +959,10 @@ async def store_user_oauth_credential(
     The payload is JSON-serialised and stored encrypted in the same
     ``credential_b64`` column used by BYOK.  A ``"type": "oauth2"`` key
     differentiates it from plain BYOK API keys.
+
+    ``client_id`` is persisted for servers that mint a per-user OAuth client via
+    dynamic client registration: that id has no static home on the server and is
+    required to refresh the token later.
     """
 
     expires_at: Optional[str] = None
@@ -977,6 +982,8 @@ async def store_user_oauth_credential(
         payload["expires_at"] = expires_at
     if scopes:
         payload["scopes"] = scopes
+    if client_id:
+        payload["client_id"] = client_id
 
     # Guard against silently overwriting a BYOK credential with an OAuth token.
     # Skip the guard when the caller knows the row is already an OAuth2 credential
@@ -1087,8 +1094,15 @@ async def refresh_user_oauth_token(
     refresh_token: Optional[str] = cred.get("refresh_token")
     token_url: Optional[str] = getattr(server, "token_url", None)
     server_id: str = getattr(server, "server_id", "")
-    client_id: Optional[str] = getattr(server, "client_id", None)
-    client_secret: Optional[str] = getattr(server, "client_secret", None)
+    # Prefer the per-user client_id stored at connect time (dynamic client
+    # registration mints one that has no static home on the server), falling
+    # back to the server config for statically-configured OAuth clients.
+    client_id: Optional[str] = cred.get("client_id") or getattr(
+        server, "client_id", None
+    )
+    client_secret: Optional[str] = cred.get("client_secret") or getattr(
+        server, "client_secret", None
+    )
 
     if not refresh_token:
         verbose_proxy_logger.debug(
@@ -1166,6 +1180,7 @@ async def refresh_user_oauth_token(
         refresh_token=new_refresh_token,
         expires_in=expires_in,
         scopes=scopes,
+        client_id=cred.get("client_id"),
         skip_byok_guard=True,  # Row is already OAuth2; skip the extra find_unique check
     )
 

@@ -1424,6 +1424,7 @@ class MCPOAuthUserCredentialRequest(LiteLLMPydanticObjectBase):
     refresh_token: Optional[str] = None
     expires_in: Optional[int] = None  # seconds until expiry
     scopes: Optional[List[str]] = None
+    client_id: Optional[str] = None  # per-user id from dynamic client registration
 
 
 class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
@@ -1434,6 +1435,7 @@ class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
     expires_at: Optional[str] = None  # ISO-8601
     is_expired: bool = False
     connected_at: Optional[str] = None  # ISO-8601
+    has_refresh_token: bool = False
 
 
 class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
