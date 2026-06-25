@@ -2,10 +2,12 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
+import io
 from itertools import groupby
 from typing import List, Optional, Union
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -92,33 +94,27 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             AudioTranscriptionRequestData: Structured data with form data and files
         """
 
-        # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
+        supported = self.get_supported_openai_params(model)
 
-        # Prepare form data
-        form_data = {"model_id": model}
-
-        #########################################################
-        # Add OpenAI Compatible Parameters
-        #########################################################
-        for key, value in optional_params.items():
-            if key in self.get_supported_openai_params(model) and value is not None:
-                # Convert values to strings for form data, but skip None values
-                form_data[key] = str(value)
-
-        #########################################################
-        # Add Provider Specific Parameters
-        #########################################################
-        provider_specific_params = self.get_provider_specific_params(
-            model=model,
-            optional_params=optional_params,
-            openai_params=self.get_supported_openai_params(model),
+        provider_specific_params = _resolve_diarization_params(
+            self.get_provider_specific_params(
+                model=model,
+                optional_params=optional_params,
+                openai_params=supported,
+            ),
+            processed_audio.file_content,
         )
 
-        for key, value in provider_specific_params.items():
-            form_data[key] = str(value)
-        #########################################################
-        #########################################################
+        form_data = {
+            "model_id": model,
+            **{
+                key: str(value)
+                for key, value in optional_params.items()
+                if key in supported and value is not None
+            },
+            **{key: str(value) for key, value in provider_specific_params.items()},
+        }
 
         # Prepare files
         files = {
@@ -227,6 +223,55 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         headers.update(auth_header)
         return headers
+
+
+_DIARIZATION_KEYS = ("diarize", "use_multi_channel", "multichannel_output_style")
+
+
+def _truthy(value: object) -> bool:
+    return str(value).strip().lower() == "true"
+
+
+def _channel_count(audio_content: bytes) -> int:
+    """Best-effort channel count from the audio header; 1 if it can't be read."""
+    import soundfile
+
+    try:
+        info = soundfile.info(io.BytesIO(audio_content))
+        return TypeAdapter(int).validate_python(info.channels)
+    except Exception:
+        return 1
+
+
+def _resolve_diarization_params(
+    provider_params: dict[str, object], audio_content: bytes
+) -> dict[str, object]:
+    """
+    ElevenLabs rejects diarize and use_multi_channel together. Diarization
+    requested on multi-channel audio uses the channel as the speaker; on mono it
+    falls back to acoustic diarization. An explicit use_multi_channel from the
+    caller wins over auto-detection, and an unreadable header falls back to mono.
+    """
+    diarize_requested = _truthy(provider_params.get("diarize"))
+    multichannel_explicit = "use_multi_channel" in provider_params
+    multichannel = _truthy(provider_params.get("use_multi_channel"))
+
+    if diarize_requested and not multichannel_explicit:
+        multichannel = _channel_count(audio_content) > 1
+
+    others = {k: v for k, v in provider_params.items() if k not in _DIARIZATION_KEYS}
+
+    if multichannel:
+        return {
+            **others,
+            "use_multi_channel": True,
+            "multichannel_output_style": provider_params.get(
+                "multichannel_output_style", "combined"
+            ),
+        }
+    if diarize_requested:
+        return {**others, "diarize": True}
+    return others
 
 
 def _words_from_channels(

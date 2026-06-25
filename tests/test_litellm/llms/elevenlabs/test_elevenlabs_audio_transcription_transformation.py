@@ -1,5 +1,9 @@
+import io
+
 import httpx
+import numpy as np
 import pytest
+import soundfile
 
 from litellm.llms.elevenlabs.audio_transcription.transformation import (
     ElevenLabsAudioTranscriptionConfig,
@@ -9,6 +13,13 @@ from litellm.types.utils import TranscriptionUsageDurationObject
 
 def _response(payload: dict) -> httpx.Response:
     return httpx.Response(status_code=200, json=payload)
+
+
+def _wav_bytes(channels: int) -> bytes:
+    buf = io.BytesIO()
+    samples = np.zeros((1600, channels) if channels > 1 else 1600, dtype="float32")
+    soundfile.write(buf, samples, 16000, format="WAV")
+    return buf.getvalue()
 
 
 class TestElevenLabsRequestParams:
@@ -44,6 +55,56 @@ class TestElevenLabsRequestParams:
             drop_params=False,
         )
         assert out["language_code"] == "pt"
+
+
+class TestDiarizationMechanismSelection:
+    """diarized_json picks acoustic diarize (mono) or channel split (stereo)."""
+
+    def setup_method(self):
+        self.config = ElevenLabsAudioTranscriptionConfig()
+
+    def _form_data(self, audio: bytes, optional_params: dict) -> dict:
+        return self.config.transform_audio_transcription_request(
+            model="scribe_v2",
+            audio_file=audio,
+            optional_params=optional_params,
+            litellm_params={},
+        ).data
+
+    def test_mono_uses_acoustic_diarize(self):
+        data = self._form_data(_wav_bytes(1), {"diarize": True})
+        assert data["diarize"] == "True"
+        assert "use_multi_channel" not in data
+
+    def test_stereo_switches_to_multichannel_and_drops_diarize(self):
+        data = self._form_data(_wav_bytes(2), {"diarize": True})
+        assert data["use_multi_channel"] == "True"
+        assert data["multichannel_output_style"] == "combined"
+        assert "diarize" not in data
+
+    def test_explicit_multichannel_wins_over_detection_on_mono(self):
+        data = self._form_data(
+            _wav_bytes(1), {"diarize": True, "use_multi_channel": True}
+        )
+        assert data["use_multi_channel"] == "True"
+        assert "diarize" not in data
+
+    def test_explicit_multichannel_false_keeps_diarize_on_stereo(self):
+        data = self._form_data(
+            _wav_bytes(2), {"diarize": True, "use_multi_channel": False}
+        )
+        assert data["diarize"] == "True"
+        assert "use_multi_channel" not in data
+
+    def test_unreadable_audio_falls_back_to_diarize(self):
+        data = self._form_data(b"not audio at all", {"diarize": True})
+        assert data["diarize"] == "True"
+        assert "use_multi_channel" not in data
+
+    def test_no_diarization_requested_sends_neither(self):
+        data = self._form_data(_wav_bytes(2), {})
+        assert "diarize" not in data
+        assert "use_multi_channel" not in data
 
 
 class TestElevenLabsDiarizedResponse:
