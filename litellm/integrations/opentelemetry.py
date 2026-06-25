@@ -189,13 +189,20 @@ def _normalize_team_metadata_keys(value: Any) -> List[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _freeze_for_dedupe(value: object) -> object:
+_FREEZE_MAX_DEPTH = 16
+
+
+def _freeze_for_dedupe(value: object, _depth: int = 0) -> object:
+    if _depth >= _FREEZE_MAX_DEPTH:
+        return repr(value)
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze_for_dedupe(item) for item in value)
+        return tuple(_freeze_for_dedupe(item, _depth + 1) for item in value)
     if isinstance(value, set):
-        return frozenset(_freeze_for_dedupe(item) for item in value)
+        return frozenset(_freeze_for_dedupe(item, _depth + 1) for item in value)
     if isinstance(value, dict):
-        return frozenset((key, _freeze_for_dedupe(item)) for key, item in value.items())
+        return frozenset(
+            (key, _freeze_for_dedupe(item, _depth + 1)) for key, item in value.items()
+        )
     try:
         hash(value)
     except TypeError:

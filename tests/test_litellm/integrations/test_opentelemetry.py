@@ -4735,6 +4735,19 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         )
         self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"a", "b"}))
 
+    def test_emit_once_handles_self_referential_scope_without_recursion_error(self):
+        """``_freeze_for_dedupe`` caps recursion at ``_FREEZE_MAX_DEPTH`` and
+        falls back to ``repr`` past the cap, so a self-referential container
+        in scope must not crash ``_emit_once``. ``guardrail_mode`` cannot
+        construct such input today, but the cap is the bound that justifies
+        recursion on the logging hot path."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        cyclic: list = []
+        cyclic.append(cyclic)
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+
     def test_create_guardrail_span_does_not_raise_on_list_mode(self):
         """End-to-end regression for LIT-3428: ``_create_guardrail_span``
         must produce exactly one span (not raise ``TypeError``) when the
