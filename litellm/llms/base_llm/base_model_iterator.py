@@ -1,8 +1,11 @@
 import json
 from abc import abstractmethod
-from typing import List, Optional, Union, cast
+from typing import TYPE_CHECKING, List, Optional, Union, cast
 
 import litellm
+
+if TYPE_CHECKING:
+    import httpx
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -50,6 +53,11 @@ def convert_model_response_to_streaming(
             model=model_response.model,
             choices=streaming_choices,
         )
+        # Carry usage onto the streaming chunk so fake-streamed responses
+        # (e.g. Vertex AI Gemma :predict) still report token counts.
+        usage = getattr(model_response, "usage", None)
+        if usage is not None:
+            setattr(processed_chunk, "usage", usage)
         return processed_chunk
     except Exception as e:
         raise ValueError(
@@ -64,6 +72,18 @@ class BaseModelResponseIterator:
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
+        self.http_response: Optional["httpx.Response"] = None
+
+    async def aclose(self) -> None:
+        """Close the upstream HTTP response so the provider connection is
+        released (and a backend like vLLM aborts generation) when the stream
+        is abandoned before its natural end.
+
+        ``streaming_response`` is usually a bare ``aiter_lines()`` generator
+        that holds no reference to the response, so the handler that owns the
+        response attaches it here after construction."""
+        if self.http_response is not None:
+            await self.http_response.aclose()
 
     def chunk_parser(
         self, chunk: dict

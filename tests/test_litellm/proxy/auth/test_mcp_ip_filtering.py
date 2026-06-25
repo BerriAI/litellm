@@ -5,10 +5,13 @@ Tests that internal callers see all MCP servers while
 external callers only see servers with available_on_public_internet=True.
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 from fastapi import Request
 
+import litellm.proxy.auth.ip_address_utils as ip_mod
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -77,6 +80,44 @@ class TestMCPClientIPExtraction:
         assert result == ""
         assert IPAddressUtils.is_internal_ip(result) is False
 
+    def test_no_trusted_ranges_warning_matches_fail_closed_behavior(self, caplog):
+        ip_mod._warned_xff_without_trusted_ranges = False
+
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "203.0.113.5"
+        request.headers = {"x-forwarded-for": "1.2.3.4, 10.0.0.1"}
+        general_settings = {"use_x_forwarded_for": True}
+
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            assert (
+                IPAddressUtils.is_request_from_trusted_proxy(
+                    request, general_settings=general_settings
+                )
+                is False
+            )
+
+        warning = next(
+            (
+                record.getMessage()
+                for record in caplog.records
+                if "mcp_trusted_proxy_ranges" in record.getMessage()
+            ),
+            None,
+        )
+        assert (
+            warning is not None
+        ), "Expected a warning containing 'mcp_trusted_proxy_ranges' but none was logged"
+
+        assert "fails closed" in warning
+        assert "treated as external" in warning
+        assert "client IPs will use the proxy's literal request values" not in warning
+
+        assert (
+            IPAddressUtils.get_mcp_client_ip(request, general_settings=general_settings)
+            == ""
+        )
+
     def test_private_proxy_peer_does_not_grant_internal_access(self):
         # Regression: behind an internal reverse proxy with use_x_forwarded_for
         # enabled but mcp_trusted_proxy_ranges unset, the direct peer is the
@@ -126,6 +167,116 @@ class TestMCPClientIPExtraction:
         )
 
         assert result == "203.0.113.5"
+
+
+class TestXffPresentButDisabledWarning:
+    """When an XFF header arrives but use_x_forwarded_for is off, the proxy must
+    loudly warn (the internal-only check is silently trusting the load balancer's
+    IP) yet still serve the request, so a crafted header can't DoS a no-LB deploy."""
+
+    def _reset_warning_flag(self):
+        from litellm.proxy.auth import ip_address_utils
+
+        ip_address_utils._warned_xff_present_but_disabled = False
+
+    def _request_with_xff(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.7"
+        request.headers = {"x-forwarded-for": "8.8.8.8"}
+        return request
+
+    def test_warns_and_does_not_fail_when_xff_present_but_disabled(self):
+        self._reset_warning_flag()
+        request = self._request_with_xff()
+
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
+        ) as mock_error:
+            result = IPAddressUtils.get_mcp_client_ip(
+                request, general_settings={"use_x_forwarded_for": False}
+            )
+
+        # Does not hard-fail: falls back to the direct peer (the load balancer).
+        assert result == "10.0.0.7"
+        mock_error.assert_called_once()
+        assert "use_x_forwarded_for" in str(mock_error.call_args)
+
+    def test_warning_is_one_shot(self):
+        self._reset_warning_flag()
+
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
+        ) as mock_error:
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
+            )
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
+            )
+
+        # One-shot so a flood of crafted XFF headers cannot spam the logs.
+        mock_error.assert_called_once()
+
+    def test_re_arms_after_xff_is_enabled_then_disabled_again(self):
+        self._reset_warning_flag()
+
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
+        ) as mock_error:
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
+            )
+            # Operator fixes the config; observing it enabled re-arms the warning.
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={
+                    "use_x_forwarded_for": True,
+                    "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                },
+            )
+            # Config rolls back to disabled: the misconfiguration must warn again.
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
+            )
+
+        assert mock_error.call_count == 2
+
+    def test_no_warning_without_xff_header(self):
+        self._reset_warning_flag()
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.7"
+        request.headers = {}
+
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
+        ) as mock_error:
+            IPAddressUtils.get_mcp_client_ip(
+                request, general_settings={"use_x_forwarded_for": False}
+            )
+
+        mock_error.assert_not_called()
+
+    def test_no_warning_when_xff_enabled(self):
+        self._reset_warning_flag()
+
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
+        ) as mock_error:
+            IPAddressUtils.get_mcp_client_ip(
+                self._request_with_xff(),
+                general_settings={
+                    "use_x_forwarded_for": True,
+                    "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                },
+            )
+
+        mock_error.assert_not_called()
 
 
 class TestMCPServerIPFiltering:

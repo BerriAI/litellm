@@ -28,7 +28,7 @@ from typing import (
 
 import aiohttp
 
-import litellm  # noqa: E401
+import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -741,6 +741,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
+        # Respect the configured event hook. In `logging_only` mode (and any config that
+        # excludes pre_call) the live request must not be masked - masking is applied to a
+        # copy at logging time via `async_logging_hook`. Without this gate the request sent
+        # to the model would carry anonymization tokens and the response would echo them.
+        if (
+            self.should_run_guardrail(
+                data=data,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is not True
+        ):
+            return data
 
         try:
             content_safety = data.get("content_safety", None)
@@ -1194,9 +1206,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
             if not all_chunks:
                 verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: streaming response contained only "
-                    "bytes chunks (Anthropic native SSE). Output PII masking was "
-                    "skipped for this response."
+                    "Presidio apply_to_output: streaming response contained no "
+                    "ModelResponseStream chunks (e.g. raw SSE bytes or an empty "
+                    "upstream stream). Output PII masking was skipped for this "
+                    "response."
                 )
                 return
 
@@ -1225,6 +1238,70 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
+    @staticmethod
+    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: Dict[str, str]) -> bytes:
+        try:
+            text = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return chunk
+
+        result_lines: List[str] = []
+        for line in text.split("\n"):
+            line = line.rstrip("\r")
+            if line.startswith("data: ") and line != "data: [DONE]":
+                raw_json = line[6:]
+                try:
+                    event = json.loads(raw_json)
+                    delta = event.get("delta") if isinstance(event, dict) else None
+                    if (
+                        isinstance(delta, dict)
+                        and event.get("type") == "content_block_delta"
+                        and delta.get("type") == "text_delta"
+                        and isinstance(delta.get("text"), str)
+                    ):
+                        unmasked = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(
+                            delta["text"], pii_tokens
+                        )
+                        if unmasked != delta["text"]:
+                            event["delta"]["text"] = unmasked
+                            line = "data: " + json.dumps(event, ensure_ascii=False)
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+            result_lines.append(line)
+
+        return "\n".join(result_lines).encode("utf-8")
+
+    def _unmask_responses_api_completed_chunk(
+        self, chunk: Any, pii_tokens: Dict[str, str]
+    ) -> None:
+        """
+        Unmask PII tokens in-place for a ``response.completed`` Responses API event.
+
+        The chunk carries a ``response`` attribute (ResponsesAPIResponse) whose
+        ``output`` list holds message items.  Each item has a ``content`` list of
+        blocks; text blocks expose a ``.text`` string attribute.  We walk the tree
+        and replace every PII token with its original value.
+        """
+        response_obj = getattr(chunk, "response", None)
+        if response_obj is None:
+            return
+
+        output = getattr(response_obj, "output", None) or []
+        for output_item in output:
+            content = getattr(output_item, "content", None) or []
+            for content_block in content:
+                if isinstance(content_block, dict):
+                    if isinstance(content_block.get("text"), str):
+                        content_block["text"] = self._unmask_pii_text(
+                            content_block["text"], pii_tokens
+                        )
+                elif hasattr(content_block, "text") and isinstance(
+                    content_block.text, str
+                ):
+                    content_block.text = self._unmask_pii_text(
+                        content_block.text, pii_tokens
+                    )
+
     async def _stream_pii_unmasking(
         self,
         response: Any,
@@ -1237,14 +1314,40 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
+        metadata = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Dict[str, str] = metadata.get("pii_tokens", {})
+
         remaining_chunks: List[ModelResponseStream] = []
+        saw_non_chat_chunk = False
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
-                    remaining_chunks.append(chunk)
+                    if saw_non_chat_chunk:
+                        yield chunk
+                    else:
+                        remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    yield chunk  # type: ignore[misc]
+                    if pii_tokens:
+                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)  # type: ignore[misc]
+                    else:
+                        yield chunk  # type: ignore[misc]
                     continue
+                else:
+                    # /v1/responses events: unmask response.completed text in-place.
+                    # A mixed stream can't be reassembled, so flush buffered chat
+                    # chunks in order before passthrough instead of dropping them.
+                    if remaining_chunks and not saw_non_chat_chunk:
+                        for buffered_chunk in remaining_chunks:
+                            yield buffered_chunk
+                        remaining_chunks = []
+                    chunk_type = getattr(chunk, "type", None)
+                    if chunk_type == "response.completed" and pii_tokens:
+                        self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
+                    saw_non_chat_chunk = True
+                    yield chunk
+
+            if saw_non_chat_chunk:
+                return
 
             if not remaining_chunks:
                 return
@@ -1341,7 +1444,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(print_statement)  # noqa: T201
         except Exception:
             pass
 

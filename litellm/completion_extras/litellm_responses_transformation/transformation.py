@@ -402,6 +402,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             instructions,
         ) = self.convert_chat_completion_messages_to_responses_api(messages)
 
+        # OpenAI's Responses API rejects an empty input. For a system-only
+        # request, carry the system message as a system-role input item instead
+        # of instructions, mirroring how non-string system content is already
+        # handled in convert_chat_completion_messages_to_responses_api.
+        if not input_items and instructions is not None:
+            input_items = [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": instructions}],
+                }
+            ]
+            instructions = None
+
         optional_params = self._extract_extra_body_params(optional_params)
 
         # Build responses API request using the reverse transformation logic
@@ -679,7 +693,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         original_response = model_call_details.get("original_response")
         return cls._recover_output_items_from_raw_sse(original_response)
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: "BaseModel",
@@ -1197,7 +1211,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return self.chunk_parser(json.loads(str_line))
 
     @staticmethod
-    def translate_responses_chunk_to_openai_stream(  # noqa: PLR0915
+    def translate_responses_chunk_to_openai_stream(
         parsed_chunk: Union[dict, BaseModel],
     ) -> "ModelResponseStream":
         """
@@ -1279,9 +1293,15 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         provider_specific_fields
                     )
 
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
-                    id=output_item.get("call_id"),
+                    id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(
+                        output_item.get("id"), output_item.get("call_id")
+                    ),
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,

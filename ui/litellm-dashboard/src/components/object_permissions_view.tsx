@@ -48,11 +48,7 @@ export function ObjectPermissionsView({
         mcpToolsets={mcpToolsets}
         accessToken={accessToken}
       />
-      <AgentPermissions
-        agents={agents}
-        agentAccessGroups={agentAccessGroups}
-        accessToken={accessToken}
-      />
+      <AgentPermissions agents={agents} agentAccessGroups={agentAccessGroups} accessToken={accessToken} />
       <div className="rounded-md border border-gray-100 p-4">
         <Text className="text-sm font-medium text-gray-800">Search tools</Text>
         {searchTools.length === 0 ? (

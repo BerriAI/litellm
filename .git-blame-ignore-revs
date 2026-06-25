@@ -8,3 +8,6 @@
 
 # Update pydantic code to fix warnings (GH-3600)
 876840e9957bc7e9f7d6a2b58c4d7c53dad16481
+
+# style(ui): run prettier --write across the dashboard (#29622)
+7edf3a9cb55548b143df1692f4ed7c4681d7fcf7

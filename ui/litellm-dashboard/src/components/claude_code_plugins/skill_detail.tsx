@@ -11,10 +11,7 @@ interface SkillDetailProps {
   onPublishClick?: () => void;
 }
 
-const SkillDetail: React.FC<SkillDetailProps> = ({
-  skill,
-  onBack,
-}) => {
+const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -27,8 +24,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
   const sourceUrl = (() => {
     const src = skill.source;
     if (src.source === "github" && src.repo) return `https://github.com/${src.repo}`;
-    if (src.source === "git-subdir" && src.url)
-      return src.path ? `${src.url}/tree/main/${src.path}` : src.url;
+    if (src.source === "git-subdir" && src.url) return src.path ? `${src.url}/tree/main/${src.path}` : src.url;
     if (src.source === "url" && src.url) return src.url;
     return null;
   })();
@@ -41,9 +37,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
     ...(skill.namespace ? [{ property: "Namespace", value: skill.namespace }] : []),
     ...(skill.version ? [{ property: "Version", value: skill.version }] : []),
     ...(skill.author?.name ? [{ property: "Author", value: skill.author.name }] : []),
-    ...(skill.created_at
-      ? [{ property: "Added", value: new Date(skill.created_at).toLocaleDateString() }]
-      : []),
+    ...(skill.created_at ? [{ property: "Added", value: new Date(skill.created_at).toLocaleDateString() }] : []),
   ];
 
   const tabs = [
@@ -72,13 +66,9 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
 
       {/* Header */}
       <div style={{ marginBottom: 8 }}>
-        <h1 style={{ fontSize: 28, fontWeight: 400, color: "#202124", margin: 0, lineHeight: 1.2 }}>
-          {skill.name}
-        </h1>
+        <h1 style={{ fontSize: 28, fontWeight: 400, color: "#202124", margin: 0, lineHeight: 1.2 }}>{skill.name}</h1>
         {skill.description && (
-          <p style={{ fontSize: 14, color: "#5f6368", margin: "8px 0 0 0", lineHeight: 1.6 }}>
-            {skill.description}
-          </p>
+          <p style={{ fontSize: 14, color: "#5f6368", margin: "8px 0 0 0", lineHeight: 1.6 }}>{skill.description}</p>
         )}
       </div>
 
@@ -110,12 +100,8 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
         <div style={{ display: "flex", gap: 64 }}>
           {/* Left column */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 4px 0" }}>
-              Skill Details
-            </h2>
-            <p style={{ fontSize: 13, color: "#5f6368", margin: "0 0 16px 0" }}>
-              Metadata registered with this skill
-            </p>
+            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 4px 0" }}>Skill Details</h2>
+            <p style={{ fontSize: 13, color: "#5f6368", margin: "0 0 16px 0" }}>Metadata registered with this skill</p>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #dadce0" }}>
@@ -163,7 +149,14 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
                   href={sourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ fontSize: 13, color: "#1a73e8", wordBreak: "break-all", display: "flex", alignItems: "center", gap: 4 }}
+                  style={{
+                    fontSize: 13,
+                    color: "#1a73e8",
+                    wordBreak: "break-all",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
                 >
                   {sourceUrl.replace("https://", "")}
                   <LinkOutlined style={{ fontSize: 11, flexShrink: 0 }} />
@@ -207,9 +200,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
       {/* How to Use tab */}
       {activeTab === "usage" && (
         <div style={{ maxWidth: 640 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 8px 0" }}>
-            Using this skill
-          </h2>
+          <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 8px 0" }}>Using this skill</h2>
           <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 24px 0", lineHeight: 1.6 }}>
             Once your proxy is set as a marketplace, enable this skill in Claude Code with one command:
           </p>
@@ -233,9 +224,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
                 borderBottom: "1px solid #dadce0",
               }}
             >
-              <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>
-                Run in Claude Code
-              </span>
+              <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>Run in Claude Code</span>
               <button
                 onClick={() => copyToClipboard(installCommand, "install")}
                 style={{
@@ -270,10 +259,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
 
           <p style={{ fontSize: 13, color: "#5f6368", lineHeight: 1.6, margin: 0 }}>
             Don&apos;t have the marketplace configured yet?{" "}
-            <span
-              onClick={() => setActiveTab("setup")}
-              style={{ color: "#1a73e8", cursor: "pointer" }}
-            >
+            <span onClick={() => setActiveTab("setup")} style={{ color: "#1a73e8", cursor: "pointer" }}>
               See one-time setup →
             </span>
           </p>
@@ -287,7 +273,11 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
             One-time marketplace setup
           </h2>
           <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 24px 0", lineHeight: 1.6 }}>
-            Add this to <code style={{ fontSize: 13, backgroundColor: "#f1f3f4", padding: "1px 6px", borderRadius: 4 }}>~/.claude/settings.json</code> to point Claude Code at your proxy:
+            Add this to{" "}
+            <code style={{ fontSize: 13, backgroundColor: "#f1f3f4", padding: "1px 6px", borderRadius: 4 }}>
+              ~/.claude/settings.json
+            </code>{" "}
+            to point Claude Code at your proxy:
           </p>
           <div
             style={{
@@ -306,14 +296,20 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
                 borderBottom: "1px solid #dadce0",
               }}
             >
-              <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>
-                ~/.claude/settings.json
-              </span>
+              <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>~/.claude/settings.json</span>
               <button
                 onClick={() => {
                   const snippet = JSON.stringify(
-                    { extraKnownMarketplaces: { "my-org": { source: "url", url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json` } } },
-                    null, 2
+                    {
+                      extraKnownMarketplaces: {
+                        "my-org": {
+                          source: "url",
+                          url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json`,
+                        },
+                      },
+                    },
+                    null,
+                    2,
                   );
                   copyToClipboard(snippet, "settings");
                 }}
@@ -353,7 +349,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
                   },
                 },
                 null,
-                2
+                2,
               )}
             </pre>
           </div>

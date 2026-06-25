@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
@@ -332,7 +333,14 @@ class LiteLLMAnthropicMessagesAdapter:
             if isinstance(source, dict)
             else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.is_anthropic_claude_model(model):
+        if (
+            cache_control
+            and model
+            and (
+                self.is_anthropic_claude_model(model)
+                or self.is_bedrock_arn_model(model)
+            )
+        ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -376,7 +384,7 @@ class LiteLLMAnthropicMessagesAdapter:
             isinstance(tool_type, str) and tool_type.startswith("web_search")
         ) or tool_name == "web_search"
 
-    def translate_anthropic_messages_to_openai(  # noqa: PLR0915
+    def translate_anthropic_messages_to_openai(
         self,
         messages: List[
             Union[
@@ -753,6 +761,20 @@ class LiteLLMAnthropicMessagesAdapter:
         return "anthropic" in model_lower or "claude" in model_lower
 
     @staticmethod
+    def is_bedrock_arn_model(model: str) -> bool:
+        """
+        Check if the model string is a Bedrock ARN, such as an Application
+        Inference Profile (e.g. arn:aws:bedrock:us-east-1:123:application-inference-profile/id).
+
+        These ARNs contain neither "anthropic" nor "claude", so is_anthropic_claude_model
+        cannot identify them even though, on the /v1/messages endpoint, they point at Claude.
+        Match ":bedrock:" in the ARN service field so another service's ARN that merely names
+        bedrock in a resource (arn:aws:sagemaker:.../my-bedrock-endpoint) is not matched.
+        """
+        model_lower = model.lower()
+        return "arn:" in model_lower and ":bedrock:" in model_lower
+
+    @staticmethod
     def translate_thinking_for_model(
         thinking: Dict[str, Any],
         model: str,
@@ -838,7 +860,17 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         new_tools: List[ChatCompletionToolParam] = []
         tool_name_mapping: Dict[str, str] = {}
-        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+        # "type" is the Anthropic tool type (e.g. "custom"); it must not be
+        # merged into the OpenAI function `parameters` schema below, or it
+        # overwrites the real parameters.type ("object") and the provider
+        # rejects the request. See #30557.
+        mapped_tool_params = [
+            "name",
+            "input_schema",
+            "description",
+            "cache_control",
+            "type",
+        ]
 
         for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
@@ -1332,18 +1364,12 @@ class LiteLLMAnthropicMessagesAdapter:
                         else truncated_name
                     )
 
-                    # Strip Gemini thought-signature suffix from id (mirrors streaming
-                    # path below); base64 chars (+ / =) violate Anthropic's
-                    # `^[a-zA-Z0-9_-]+$` tool_use.id pattern when replayed.
+                    # Strip Gemini thought-signature suffix and normalize id chars
+                    # (e.g. ``functions.Bash:0`` from cross-provider clients).
                     raw_id = tool_call.id or ""
-                    base_id = (
-                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
-                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
-                        else raw_id
-                    )
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=base_id,
+                        id=normalize_anthropic_tool_use_id(raw_id),
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
@@ -1470,15 +1496,13 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
                 tool_name = choice.delta.tool_calls[0].function.name or ""
-                base_id = raw_id
                 thought_sig: Optional[str] = None
                 if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
                     parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-                    base_id = parts[0]
                     thought_sig = parts[1] if len(parts) > 1 else None
                 tool_block: Dict[str, Any] = {
                     "type": "tool_use",
-                    "id": base_id,
+                    "id": normalize_anthropic_tool_use_id(raw_id),
                     "name": tool_name,
                     "input": {},
                 }

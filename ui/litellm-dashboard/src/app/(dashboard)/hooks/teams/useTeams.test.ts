@@ -423,7 +423,7 @@ describe("useTeam", () => {
     // This tests the defensive error path in queryFn (lines 111-112)
     // The enabled check prevents queryFn from running, but we can test the defensive code
     // by manually constructing and calling the queryFn logic
-    
+
     // Set up mocks
     mockUseAuthorized.mockReturnValue({
       accessToken: null, // Missing accessToken
@@ -438,24 +438,24 @@ describe("useTeam", () => {
 
     // Import useQueryClient to get access to query client
     const { useQueryClient } = await import("@tanstack/react-query");
-    
+
     // Manually test the queryFn logic by calling it directly
     // This simulates what would happen if enabled check was bypassed
     const testQueryFn = async () => {
       const { accessToken } = mockUseAuthorized();
       const teamId = "team-1";
-      
+
       // This is the defensive check from lines 111-112
       if (!accessToken || !teamId) {
         throw new Error("Missing auth or teamId");
       }
-      
+
       return teamInfoCall(accessToken, teamId);
     };
 
     // Test that the error is thrown
     await expect(testQueryFn()).rejects.toThrow("Missing auth or teamId");
-    
+
     // Also test with missing teamId
     mockUseAuthorized.mockReturnValue({
       accessToken: "test-access-token",
@@ -471,11 +471,11 @@ describe("useTeam", () => {
     const testQueryFnMissingTeamId = async () => {
       const { accessToken } = mockUseAuthorized();
       const teamId = undefined; // Missing teamId
-      
+
       if (!accessToken || !teamId) {
         throw new Error("Missing auth or teamId");
       }
-      
+
       return teamInfoCall(accessToken, teamId);
     };
 
@@ -736,13 +736,10 @@ describe("useDeletedTeams", () => {
       json: async () => ({ teams: mockDeletedTeams }),
     });
 
-    const { result, rerender } = renderHook(
-      ({ page }) => useDeletedTeams(page, 10, {}),
-      {
-        wrapper,
-        initialProps: { page: 1 },
-      },
-    );
+    const { result, rerender } = renderHook(({ page }) => useDeletedTeams(page, 10, {}), {
+      wrapper,
+      initialProps: { page: 1 },
+    });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);

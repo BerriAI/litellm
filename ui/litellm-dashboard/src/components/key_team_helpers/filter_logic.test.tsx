@@ -53,9 +53,12 @@ describe("useFilterLogic – filteredTotalCount", () => {
       result.current.handleFilterChange({ "Key Alias": "aaaaa" });
     });
 
-    await waitFor(() => {
-      expect(result.current.filteredTotalCount).toBe(1);
-    }, { timeout: 500 });
+    await waitFor(
+      () => {
+        expect(result.current.filteredTotalCount).toBe(1);
+      },
+      { timeout: 500 },
+    );
   });
 
   it("should reflect the filtered total_count even when it differs from the full key count", async () => {
@@ -67,9 +70,12 @@ describe("useFilterLogic – filteredTotalCount", () => {
       result.current.handleFilterChange({ "Team ID": "team-x" });
     });
 
-    await waitFor(() => {
-      expect(result.current.filteredTotalCount).toBe(7);
-    }, { timeout: 500 });
+    await waitFor(
+      () => {
+        expect(result.current.filteredTotalCount).toBe(7);
+      },
+      { timeout: 500 },
+    );
   });
 
   it("should reset filteredTotalCount to null when handleFilterReset is called", async () => {
@@ -81,9 +87,12 @@ describe("useFilterLogic – filteredTotalCount", () => {
       result.current.handleFilterChange({ "Key Alias": "aaaaa" });
     });
 
-    await waitFor(() => {
-      expect(result.current.filteredTotalCount).toBe(1);
-    }, { timeout: 500 });
+    await waitFor(
+      () => {
+        expect(result.current.filteredTotalCount).toBe(1);
+      },
+      { timeout: 500 },
+    );
 
     act(() => {
       result.current.handleFilterReset();
@@ -102,20 +111,23 @@ describe("useFilterLogic – filteredTotalCount", () => {
       result.current.handleFilterChange({ "Key Alias": "my-alias" });
     });
 
-    await waitFor(() => {
-      expect(keyListCall).toHaveBeenCalledWith(
-        expect.any(String), // accessToken
-        null,              // organizationID (empty → null)
-        null,              // teamID (empty → null)
-        "my-alias",        // selectedKeyAlias ← the filter value
-        null,              // userID
-        null,              // keyHash
-        1,                 // page (resets to 1 on filter change)
-        expect.any(Number),// pageSize (defaultPageSize)
-        expect.anything(), // sortBy
-        expect.anything(), // sortOrder
-      );
-    }, { timeout: 500 });
+    await waitFor(
+      () => {
+        expect(keyListCall).toHaveBeenCalledWith(
+          expect.any(String), // accessToken
+          null, // organizationID (empty → null)
+          null, // teamID (empty → null)
+          "my-alias", // selectedKeyAlias ← the filter value
+          null, // userID
+          null, // keyHash
+          1, // page (resets to 1 on filter change)
+          expect.any(Number), // pageSize (defaultPageSize)
+          expect.anything(), // sortBy
+          expect.anything(), // sortOrder
+        );
+      },
+      { timeout: 500 },
+    );
   });
 
   it("should not update filteredTotalCount when keyListCall throws", async () => {
@@ -127,11 +139,31 @@ describe("useFilterLogic – filteredTotalCount", () => {
       result.current.handleFilterChange({ "Key Alias": "bad-alias" });
     });
 
-    await waitFor(() => {
-      expect(keyListCall).toHaveBeenCalled();
-    }, { timeout: 500 });
+    await waitFor(
+      () => {
+        expect(keyListCall).toHaveBeenCalled();
+      },
+      { timeout: 500 },
+    );
 
     expect(result.current.filteredTotalCount).toBeNull();
+  });
+
+  it("should not enter an infinite update loop when keys is a fresh array reference on every render", () => {
+    const sourceKeys = [mockKey];
+    let renderCount = 0;
+
+    const { result } = renderHook(() => {
+      renderCount += 1;
+      const value = useFilterLogic({ keys: [...sourceKeys], teams: [], organizations: [] });
+      if (renderCount > 25) {
+        throw new Error(`useFilterLogic re-rendered ${renderCount} times; setFilteredKeys is looping`);
+      }
+      return value;
+    });
+
+    expect(result.current.filteredKeys).toEqual([mockKey]);
+    expect(renderCount).toBeLessThanOrEqual(25);
   });
 
   it("should not trigger a debounced search when skipDebounce is true", async () => {
