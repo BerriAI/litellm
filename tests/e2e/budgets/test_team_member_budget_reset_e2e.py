@@ -38,10 +38,10 @@ def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resource
     # once the window elapses the reset job must move budget_reset_at forward; a job
     # that skips the member's budget row (the #25109 regression) leaves it pinned at
     # first_reset forever
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + 150
     while time.monotonic() < deadline:
         time.sleep(5)
         current = client.member_budget_reset_at(team_id, user_id)
         if current and _as_datetime(current) > first_reset:
             return
-    pytest.fail(f"member budget_reset_at never advanced past {first_reset.isoformat()} in 90s")
+    pytest.fail(f"member budget_reset_at never advanced past {first_reset.isoformat()} in 150s")

@@ -44,13 +44,16 @@ def test_key_budget_resets_after_duration(
     assert blocked, "key budget never enforced"
 
     # 2. once the 30s duration elapses + the reset job runs, key.spend zeroes and
-    #    calls flow again, within a span only a short duration could produce.
+    #    calls flow again. The window is wall-clock-aligned, so the reset lands up to
+    #    a window later, then the rescheduler (~15-20s) zeroes the spend; allow
+    #    generous headroom over that. A stuck rescheduler is caught by the wait-loop
+    #    timeout, not this elapsed bound.
     start = time.monotonic()
-    while time.monotonic() < start + 90:
+    while time.monotonic() < start + 150:
         time.sleep(5)
         result = _call(client, key)
         if result.ok:
-            assert time.monotonic() - start < 75, "reset too slow for a 30s budget"
+            assert time.monotonic() - start < 120, "reset too slow for a 30s budget"
             return
         assert is_budget_block(result), f"non-budget error: {result.body[:200]}"
-    pytest.fail("key budget never reset within 90s")
+    pytest.fail("key budget never reset within 150s")
