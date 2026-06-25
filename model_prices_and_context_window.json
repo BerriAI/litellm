@@ -43828,5 +43828,741 @@
         "supports_native_streaming": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
+    },
+        "muapi/flux-dev": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-schnell": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-krea": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-kontext-dev": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-kontext-pro": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.045,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-kontext-max": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-2-dev": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-2-pro": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/hidream-fast": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/hidream-dev": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/hidream-full": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/wan2.1": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.08,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.5": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.6": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/gpt4o": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/gpt-image": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/gpt-image-2": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/imagen4": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/imagen4-fast": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/imagen4-ultra": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/midjourney": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/midjourney-v7": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/midjourney-v8": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/seedream": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.012,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/seedream-v3": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/seedream-v4": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.012,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/seedream-5": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.015,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/qwen": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/qwen-2": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.012,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/qwen-2-pro": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/hunyuan": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/ideogram": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/reve": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/sdxl": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/grok": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/kling-o1": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/kling-o3": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-kontext-dev-i2i": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-kontext-pro-i2i": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.045,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/flux-kontext-max-i2i": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/gpt4o-i2i": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/gpt4o-edit": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/seededit": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.012,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/seedream-edit": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.015,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/midjourney-i2i": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/midjourney-style": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/qwen-edit": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.015,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/reve-edit": {
+        "litellm_provider": "muapi",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+        "muapi/veo3": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/veo3-fast": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/veo3.1": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/veo4": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.75,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-master": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.28,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-v2.5-pro": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.25,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-v2.6-pro": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.25,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-v3-pro": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.3,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.2": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.09,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.7": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.12,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/seedance-pro": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/seedance-pro-fast": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/runway": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.3,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/pixverse": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/pixverse-v5": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/pixverse-v6": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.12,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/vidu": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/vidu-q2-pro": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/vidu-q3-pro": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.25,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/sora": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/sora-2": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-std-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.14,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-pro-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-master-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.28,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/kling-v2.5-pro-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.25,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/veo3-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/veo3.1-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/veo4-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.75,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.1-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.08,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.5-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.6-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/wan2.7-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.12,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/seedance-pro-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/seedance-v2-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/seedance-2-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/runway-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.3,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/pixverse-v4.5-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/pixverse-v5-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/pixverse-v6-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.12,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/vidu-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/vidu-q2-pro-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/midjourney-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.08,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/sora-2-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
+    },
+        "muapi/hunyuan-i2v": {
+        "litellm_provider": "muapi",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "supported_endpoints": [
+            "/v1/videos/generations"
+        ]
     }
 }
