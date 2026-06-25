@@ -2243,7 +2243,11 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_team_object, get_user_object
+    from litellm.proxy.auth.auth_checks import (
+        ExperimentalUIJWTToken,
+        get_team_object,
+        get_user_object,
+    )
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
