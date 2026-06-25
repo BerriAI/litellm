@@ -981,7 +981,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     verbose_logger.debug(
                         f"Incrementing callback failure metric for {callback_name}"
                     )
-                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
+                    callback_obj.increment_callback_logging_failure(
+                        callback_name=callback_name
+                    )  # type: ignore
                     return
 
             verbose_logger.debug(

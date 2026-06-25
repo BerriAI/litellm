@@ -536,9 +536,7 @@ async def get_global_activity_model(
         if db_response is None:
             return []
 
-        model_ui_data: dict = (
-            {}
-        )  # {"gpt-4": {"daily_data": [], "sum_api_requests": 0, "sum_total_tokens": 0}}
+        model_ui_data: dict = {}  # {"gpt-4": {"daily_data": [], "sum_api_requests": 0, "sum_total_tokens": 0}}
 
         for row in db_response:
             _model = row["model_group"]
@@ -690,9 +688,7 @@ async def get_global_activity_exceptions_per_deployment(
         if db_response is None:
             return []
 
-        model_ui_data: dict = (
-            {}
-        )  # {"gpt-4": {"daily_data": [], "sum_api_requests": 0, "sum_total_tokens": 0}}
+        model_ui_data: dict = {}  # {"gpt-4": {"daily_data": [], "sum_api_requests": 0, "sum_total_tokens": 0}}
 
         for row in db_response:
             _model = row["api_base"]
@@ -2218,9 +2214,7 @@ async def ui_view_request_response_for_request_id(
             request_id=request_id,
         )
 
-    custom_loggers = (
-        litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
-    )
+    custom_loggers = litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     start_date_obj: Optional[datetime] = None
     end_date_obj: Optional[datetime] = None
     if start_date is not None:
@@ -2418,7 +2412,9 @@ async def view_spend_logs(
             ):
                 result: dict = {}
                 for record in response:
-                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")  # type: ignore
+                    dt_object = datetime.strptime(
+                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"
+                    )  # type: ignore
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {"users": {}, "models": {}}

@@ -548,9 +548,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         deployment = random_valid_deployment[0]
         metadata_field = self._select_metadata_field(request_kwargs)
         if request_kwargs is not None and metadata_field in request_kwargs:
-            request_kwargs[metadata_field][
-                "_latency_per_deployment"
-            ] = _latency_per_deployment
+            request_kwargs[metadata_field]["_latency_per_deployment"] = (
+                _latency_per_deployment
+            )
         return deployment
 
     async def async_get_available_deployments(

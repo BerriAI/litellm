@@ -184,7 +184,9 @@ class BaseRAGIngestion(ABC):
         # Extract text from pages
         if hasattr(ocr_response, "pages") and ocr_response.pages:  # type: ignore
             return "\n\n".join(
-                page.markdown for page in ocr_response.pages if hasattr(page, "markdown")  # type: ignore
+                page.markdown
+                for page in ocr_response.pages
+                if hasattr(page, "markdown")  # type: ignore
             )
 
         return None

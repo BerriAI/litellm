@@ -157,7 +157,7 @@ class FocusVantageDestination(FocusDestination):
     async def _upload_csv(
         self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
     ) -> None:
-        url = f"{self.base_url}/v2/integrations/" f"{self.integration_token}/costs.csv"
+        url = f"{self.base_url}/v2/integrations/{self.integration_token}/costs.csv"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
         }
