@@ -1101,3 +1101,102 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
     # Verify total number of fields (9 user fields + 4 model fields = 13)
     assert len(result) == 13
+
+
+# --- cache token tests ---
+
+
+def _make_usage(
+    cache_read: int = 0, cache_creation: int = 0, ptd_cached: int = 0
+) -> Usage:
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    u = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    u._cache_read_input_tokens = cache_read
+    u._cache_creation_input_tokens = cache_creation
+    if ptd_cached:
+        u.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=ptd_cached)
+    return u
+
+
+def test_get_usage_as_dict_cache_tokens_from_private_attrs():
+    usage = _make_usage(cache_read=1000, cache_creation=500)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None, combined_usage_object=usage
+    )
+    assert d["cache_read_input_tokens"] == 1000
+    assert d["cache_creation_input_tokens"] == 500
+
+
+def test_get_usage_as_dict_cache_read_falls_back_to_prompt_tokens_details():
+    # OpenAI / Gemini / DeepSeek set ptd.cached_tokens but not the private attr
+    usage = _make_usage(cache_read=0, cache_creation=0, ptd_cached=800)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None, combined_usage_object=usage
+    )
+    assert d["cache_read_input_tokens"] == 800
+    assert d["cache_creation_input_tokens"] == 0
+
+
+def test_get_usage_as_dict_private_attr_wins_over_ptd():
+    # When both are set, private attr takes priority
+    usage = _make_usage(cache_read=600, cache_creation=200, ptd_cached=800)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None, combined_usage_object=usage
+    )
+    assert d["cache_read_input_tokens"] == 600
+
+
+def test_get_usage_as_dict_empty_when_no_usage():
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
+    assert d["cache_read_input_tokens"] == 0
+    assert d["cache_creation_input_tokens"] == 0
+
+
+def test_get_usage_as_dict_from_response_obj():
+    usage = _make_usage(cache_read=300, cache_creation=100)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"usage": usage})
+    assert d["cache_read_input_tokens"] == 300
+    assert d["cache_creation_input_tokens"] == 100
+
+
+def test_inject_cache_tokens_prefers_private_attr_then_prompt_tokens_details():
+    """Direct coverage for the _inject_cache_tokens helper: the private
+    Anthropic/Bedrock attrs win, with a prompt_tokens_details.cached_tokens
+    fallback for OpenAI/Gemini/DeepSeek."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Private attrs present → used directly.
+    anthropic = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    anthropic._cache_read_input_tokens = 200
+    anthropic._cache_creation_input_tokens = 500
+    d = StandardLoggingPayloadSetup._inject_cache_tokens({}, anthropic)
+    assert d["cache_read_input_tokens"] == 200
+    assert d["cache_creation_input_tokens"] == 500
+
+    # No private attr → fall back to prompt_tokens_details.cached_tokens.
+    openai = Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+    )
+    d = StandardLoggingPayloadSetup._inject_cache_tokens({}, openai)
+    assert d["cache_read_input_tokens"] == 80
+    assert d["cache_creation_input_tokens"] == 0
+
+
+def test_inject_cache_tokens_prompt_tokens_details_as_dict():
+    """_inject_cache_tokens must handle prompt_tokens_details as a plain dict
+    (the branch distinct from the PromptTokensDetailsWrapper object path)."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import Usage
+
+    # Construct a Usage where prompt_tokens_details is stored as a dict.
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    # Directly set a dict to exercise the isinstance(ptd, dict) branch.
+    object.__setattr__(usage, "prompt_tokens_details", {"cached_tokens": 42})
+
+    d = StandardLoggingPayloadSetup._inject_cache_tokens({}, usage)
+    assert d["cache_read_input_tokens"] == 42
+    assert d["cache_creation_input_tokens"] == 0
