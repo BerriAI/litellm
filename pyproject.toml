@@ -184,6 +184,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "vulture==2.16",
 ]
 proxy-dev = [
     "prisma==0.11.0",
@@ -268,6 +269,12 @@ source-exclude = [
 
 [tool.isort]
 profile = "black"
+
+[tool.vulture]
+paths = ["litellm", ".vulture_allowlist.py"]
+exclude = ["litellm/types/", "litellm/proxy/_experimental/", "litellm/proxy/example_config_yaml/"]
+min_confidence = 100
+sort_by_size = true
 
 [tool.commitizen]
 version = "1.91.0"

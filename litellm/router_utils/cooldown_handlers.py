@@ -254,8 +254,6 @@ def _should_cooldown_deployment(
             original_exception=original_exception,
         )
 
-    return False
-
 
 def _set_cooldown_deployments(
     litellm_router_instance: LitellmRouter,

@@ -720,7 +720,6 @@ class CustomStreamWrapper:
                 "prompt_tokens": parsed_response.get("input_token_count", 0),
                 "completion_tokens": parsed_response.get("generated_token_count", 0),
             }
-            return {"text": "", "is_finished": False}
         except Exception as e:
             raise e
 

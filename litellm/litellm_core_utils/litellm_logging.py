@@ -4527,7 +4527,6 @@ def _init_custom_logger_compatible_class(
             f"[Non-Blocking Error] Error initializing custom logger: {e}"
         )
         return None
-    return None
 
 
 def _maybe_construct_otel_v2(

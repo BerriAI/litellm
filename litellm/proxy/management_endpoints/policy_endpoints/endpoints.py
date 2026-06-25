@@ -381,7 +381,6 @@ async def test_policies_and_guardrails(
                     )
             results.append(item)
         return ApplyPoliciesListResult(results=results)
-        raise ValueError("Either inputs or inputs_list must be provided")
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
