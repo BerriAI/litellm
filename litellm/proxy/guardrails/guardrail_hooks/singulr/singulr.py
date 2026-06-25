@@ -6,8 +6,8 @@ Calls the Singulr Guard API to scan messages.
 
 import json
 import os
-from urllib.parse import urlparse
 from typing import Any, Literal, Optional, cast
+from urllib.parse import urlparse
 
 import httpx
 
@@ -122,7 +122,8 @@ class SingulrGuardrail(CustomGuardrail):
             indirect_texts = [
                 m["content"]
                 for m in messages
-                if str(m.get("role") or "").lower() == "system" and m.get("content")
+                if str(m.get("role") or "").lower() in ("system", "tool")
+                and m.get("content")
             ] + [
                 json.dumps(request_data[k])
                 for k in ("tools", "functions", "response_format")
