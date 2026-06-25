@@ -2399,6 +2399,69 @@ def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     assert "budget_tokens" not in result["thinking"]
 
 
+def test_legacy_thinking_enabled_translates_to_max_adaptive_for_opus_48_chat():
+    """Opus 4.8 rejects legacy thinking.type=enabled; chat completions must adapt it."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "What is 12*13?"}]
+    mapped_optional_params = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 1024,
+            "thinking": {"type": "enabled", "budget_tokens": 8000},
+        },
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    result = config.transform_request(
+        model="claude-opus-4-8",
+        messages=messages,
+        optional_params=mapped_optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_legacy_thinking_enabled_preserves_explicit_effort_for_adaptive_chat():
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 1024,
+            "thinking": {"type": "enabled", "budget_tokens": 8000},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"]["effort"] == "high"
+
+
+def test_legacy_thinking_enabled_uses_messages_budget_buckets_for_adaptive_chat():
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 32000,
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"]["effort"] == "medium"
+
+
 def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
     """
     Test that reasoning_effort maps to budget-based thinking config for non-Opus 4.6 models.

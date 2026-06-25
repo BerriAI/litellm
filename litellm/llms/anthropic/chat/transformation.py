@@ -1239,6 +1239,72 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 llm_provider=llm_provider,
             )
 
+    @staticmethod
+    def _get_int_param(params: Dict[str, Any], key: str) -> Optional[int]:
+        value = params.get(key)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _legacy_thinking_budget_to_effort(
+        model: str, budget_tokens: int, max_tokens: Optional[int]
+    ) -> str:
+        if (
+            max_tokens is not None
+            and max_tokens > 0
+            and budget_tokens >= max_tokens
+            and AnthropicConfig._validate_effort_for_model(model, "max") is None
+        ):
+            return "max"
+        if (
+            budget_tokens >= 24000
+            and AnthropicConfig._validate_effort_for_model(model, "xhigh") is None
+        ):
+            return "xhigh"
+        if budget_tokens >= 10000:
+            return "high"
+        if budget_tokens >= 5000:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _translate_legacy_thinking_for_adaptive_model(
+        model: str, optional_params: Dict[str, Any]
+    ) -> None:
+        """Translate legacy ``thinking.type=enabled`` to adaptive thinking.
+
+        Claude 4.6+ adaptive-thinking models reject the older budget_tokens
+        shape. Preserve an explicit output_config.effort if the caller provided
+        one; otherwise infer the closest effort from the legacy budget.
+        """
+        if not AnthropicConfig._is_adaptive_thinking_model(model):
+            return
+
+        thinking = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        budget_tokens = AnthropicConfig._get_int_param(thinking, "budget_tokens") or 0
+        max_tokens = AnthropicConfig._get_int_param(optional_params, "max_tokens")
+        inferred_effort = AnthropicConfig._legacy_thinking_budget_to_effort(
+            model=model,
+            budget_tokens=budget_tokens,
+            max_tokens=max_tokens,
+        )
+
+        optional_params["thinking"] = {"type": "adaptive"}
+        output_config = optional_params.get("output_config")
+        if not isinstance(output_config, dict):
+            output_config = {}
+        else:
+            output_config = dict(output_config)
+        output_config.setdefault("effort", inferred_effort)
+        optional_params["output_config"] = output_config
+
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
     ) -> Optional[dict]:
@@ -1874,6 +1940,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        self._translate_legacy_thinking_for_adaptive_model(
+            model=model,
+            optional_params=optional_params,
+        )
 
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params

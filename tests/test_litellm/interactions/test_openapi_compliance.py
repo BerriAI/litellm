@@ -7,10 +7,7 @@ https://ai.google.dev/static/api/interactions.openapi.json
 Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
 """
 
-import json
-import os
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -165,7 +162,6 @@ class TestResponseCompliance:
             "status",
             "created",
             "updated",
-            "role",
             "steps",
             "usage",
         ]
@@ -218,7 +214,7 @@ class TestToolsCompliance:
 
         # Tool should be oneOf multiple tool types
         assert "oneOf" in tool_schema or "properties" in tool_schema
-        print(f"✓ Tool schema found")
+        print("✓ Tool schema found")
 
     def test_function_declaration_schema(self, spec_dict):
         """Verify FunctionDeclaration schema for function tools."""
@@ -286,7 +282,7 @@ if __name__ == "__main__":
 
     print(f"\nSpec version: {spec.get('openapi')}")
     print(f"API title: {spec.get('info', {}).get('title')}")
-    print(f"\nEndpoints:")
+    print("\nEndpoints:")
     for path, methods in spec.get("paths", {}).items():
         for method in methods:
             if method in ["get", "post", "delete", "put", "patch"]:
