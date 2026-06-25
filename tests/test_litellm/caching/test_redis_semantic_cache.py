@@ -971,7 +971,7 @@ def test_cache_get_cache_passes_responses_input_to_backend_cache():
     )
 
 
-def test_cache_get_cache_filters_sensitive_kwargs_from_backend_cache():
+def test_cache_get_cache_filters_non_lookup_kwargs_from_backend_cache():
     from litellm.caching.caching import Cache
 
     cache = Cache.__new__(Cache)
@@ -1005,7 +1005,11 @@ def test_cache_get_cache_filters_sensitive_kwargs_from_backend_cache():
     forwarded_kwargs = cache.cache.get_cache.call_args.kwargs
     assert forwarded_kwargs == {
         "input": "What is the capital of France?",
-        "metadata": {"semantic-similarity": 0.7},
+        "metadata": {
+            "user_api_key": "sk-secret",
+            "trace_id": "trace-id",
+            "semantic-similarity": 0.7,
+        },
     }
     assert forwarded_kwargs["metadata"] is not metadata
     cache._get_cache_logic.assert_called_once_with(

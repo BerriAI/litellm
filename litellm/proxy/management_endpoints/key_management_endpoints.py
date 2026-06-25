@@ -2613,15 +2613,24 @@ async def update_key_fn(
         )
 
         if data.spend is not None:
-            try:
-                from litellm.proxy.proxy_server import _invalidate_spend_counter
+            from litellm.proxy.proxy_server import spend_counter_cache
 
-                token_to_invalidate = _hash_token_if_needed(key)
-                await _invalidate_spend_counter(
-                    counter_key=f"spend:key:{token_to_invalidate}"
-                )
-            except Exception:
-                pass
+            counter_key = f"spend:key:{_hash_token_if_needed(key)}"
+            spend_counter_cache.in_memory_cache.set_cache(
+                key=counter_key, value=data.spend, ttl=60
+            )
+            if spend_counter_cache.redis_cache is not None:
+                try:
+                    await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key, value=data.spend, ttl=60
+                    )
+                except Exception as redis_err:
+                    verbose_proxy_logger.warning(
+                        "Failed to update spend counter %s in Redis after key spend update: %s. "
+                        "Budget checks may use stale value until counter expires.",
+                        counter_key,
+                        redis_err,
+                    )
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_updated_hook(
