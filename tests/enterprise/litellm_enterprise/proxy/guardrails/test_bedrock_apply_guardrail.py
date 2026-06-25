@@ -484,6 +484,54 @@ async def test_bedrock_apply_guardrail_masking_written_back_to_correct_position(
 
 
 @pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_skips_writeback_when_slice_unresolved_and_lengths_match():
+    """Regression: a role-subset scan that can't be mapped back to flat-text
+    positions (scanned_slice is None) must NOT write masked content back, even
+    when the masked output happens to match len(texts) (e.g. both length 1).
+
+    Here structured_messages carries two user texts but the flat `texts` list
+    holds only one entry, so _locate_message_texts_slice returns None. The
+    guardrail still scans the latest user message and returns a single masked
+    text; a length-only guard would let that mask clobber the unrelated single
+    `texts` entry. The slice-based guard keeps the original text instead.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    structured_messages = [
+        {"role": "user", "content": "first user text"},
+        {"role": "user", "content": "second user text"},
+    ]
+    # Flat texts is out of sync with structured_messages (one entry vs two
+    # user texts) -> slice cannot be resolved.
+    texts = ["unrelated flat text"]
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "output": [{"text": "[MASKED]"}],
+        }
+
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": texts, "structured_messages": structured_messages},
+            request_data={"messages": structured_messages},
+            input_type="request",
+        )
+
+    # The scan ran on the latest user message...
+    assert mock_api.called
+    # ...but because the slice was unresolved, the original flat text is kept
+    # rather than clobbered by the single masked output.
+    assert guardrailed_inputs.get("texts") == ["unrelated flat text"]
+
+
+@pytest.mark.asyncio
 async def test_bedrock_masking_writes_back_to_user_message_through_handler():
     """End-to-end through the unified translation handler (issue #23476).
 

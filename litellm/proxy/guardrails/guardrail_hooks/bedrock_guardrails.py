@@ -452,6 +452,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 scanned_role_subset=False,
             )
 
+        # Prefer inputs["structured_messages"]: it is built alongside `texts` by
+        # the translation handler and stays aligned with it even when
+        # skip_system_message_in_guardrail / skip_tool_message_in_guardrail drop
+        # messages. The fallback to request_data["messages"] is the *unfiltered*
+        # list, so it only lines up with `texts` when no skip flags are active.
+        # When a skip flag is set and we land on this fallback (direct
+        # apply_guardrail callers with no structured_messages),
+        # _locate_message_texts_slice will detect the length mismatch and return
+        # None, and the write-back guard below safely skips masking rather than
+        # corrupting positions.
         structured_messages = cast(
             Optional[List[AllMessageValues]],
             inputs.get("structured_messages") or request_data.get("messages"),
@@ -1855,10 +1865,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 for masked_index, masked_text in enumerate(masked_texts[:length]):
                     merged_texts[offset + masked_index] = masked_text
                 masked_texts = merged_texts
-            elif scanned_role_subset and len(masked_texts) != len(texts):
+            elif scanned_role_subset and scanned_slice is None:
                 # Scanned a role-selected subset but could not map it back to
-                # flat-text positions — keep the original texts rather than
-                # misapply masked content to the wrong message.
+                # flat-text positions (scanned_slice is None) — keep the
+                # original texts rather than misapply masked content to the
+                # wrong message. Guarding on scanned_slice rather than a length
+                # comparison also covers the case where the masked subset
+                # happens to match len(texts) (e.g. both lists have length 1).
                 verbose_proxy_logger.warning(
                     "Bedrock Guardrail: could not align masked texts with request texts, skipping masking write-back"
                 )
