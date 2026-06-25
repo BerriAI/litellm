@@ -8,6 +8,10 @@ from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.proxy._experimental.mcp_server.permission_grant import (
+    NoServers,
+    parse_mcp_server_grant,
+)
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     ProxyException,
@@ -646,9 +650,8 @@ class MCPRequestHandler:
 
             # The key explicitly opted out of every MCP server. This overrides
             # team inheritance and additive grants (mirrors no-default-models).
-            if (
-                SpecialMCPServerNames.no_mcp_servers.value
-                in allowed_mcp_servers_for_key
+            if isinstance(
+                parse_mcp_server_grant(allowed_mcp_servers_for_key), NoServers
             ):
                 return []
 
@@ -1070,8 +1073,9 @@ class MCPRequestHandler:
 
             # Sentinel opt-out: surface it unexpanded so the caller can short-circuit
             # to zero servers instead of inheriting the team.
-            if SpecialMCPServerNames.no_mcp_servers.value in (
-                key_object_permission.mcp_servers or []
+            if isinstance(
+                parse_mcp_server_grant(key_object_permission.mcp_servers or []),
+                NoServers,
             ):
                 return [SpecialMCPServerNames.no_mcp_servers.value]
 

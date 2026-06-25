@@ -160,6 +160,55 @@ class TestMCPServerManager:
         # blanket "return everything".
         assert manager.expand_permission_list(["srv-a"]) == ["srv-a"]
 
+    async def test_expand_permission_list_resolution_branches(self):
+        """Pin every non-all-proxy branch of expand_permission_list: empty,
+        concrete id passthrough, alias/server_name expansion, and unknown
+        passthrough. Guards the ExplicitServers resolution loop."""
+        manager = MCPServerManager()
+        await manager.add_server(
+            LiteLLM_MCPServerTable(
+                server_id="srv-x",
+                alias="my-alias",
+                server_name="my-server-name",
+                description="",
+                url=None,
+                transport=MCPTransport.stdio,
+                command="python",
+                args=["-m", "server"],
+                env={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+
+        assert manager.expand_permission_list([]) == []
+        assert manager.expand_permission_list(["srv-x"]) == ["srv-x"]
+        assert manager.expand_permission_list(["my-alias"]) == ["srv-x"]
+        assert manager.expand_permission_list(["my-server-name"]) == ["srv-x"]
+        assert manager.expand_permission_list(["ghost"]) == ["ghost"]
+
+    async def test_expand_permission_list_no_mcp_servers_passthrough(self):
+        """The no-mcp-servers sentinel is not a registered server, so today it
+        passes through unchanged. Callers (key opt-out, team expansion) rely on
+        this literal surviving expand_permission_list, so pin it."""
+        manager = MCPServerManager()
+        await manager.add_server(
+            LiteLLM_MCPServerTable(
+                server_id="srv-x",
+                alias="srv-x",
+                description="",
+                url=None,
+                transport=MCPTransport.stdio,
+                command="python",
+                args=["-m", "server"],
+                env={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+        sentinel = SpecialMCPServerNames.no_mcp_servers.value
+        assert manager.expand_permission_list([sentinel]) == [sentinel]
+
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
         manager = MCPServerManager()
