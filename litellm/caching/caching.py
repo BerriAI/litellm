@@ -575,7 +575,11 @@ class Cache:
                 cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
 
         if isinstance(kwargs.get("metadata"), dict):
-            cache_lookup_kwargs["metadata"] = {}
+            cache_lookup_kwargs["metadata"] = {
+                field: kwargs["metadata"][field]
+                for field in Cache._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
+                if field in kwargs["metadata"]
+            }
 
         return cache_lookup_kwargs
 
