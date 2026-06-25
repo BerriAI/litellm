@@ -74,8 +74,8 @@ pub(crate) fn parse_realtime_event(raw_json: &str) -> CoreResult<RealtimeEvent> 
     let wire: RealtimeWireEvent = serde_json::from_str(raw_json)
         .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
     Ok(RealtimeEvent {
-        event_type: wire.event_type,
-        raw_json: raw_json.to_string(),
+        event_type: wire.event_type.into(),
+        raw_json: raw_json.to_string().into(),
         session: wire.session,
         response: wire.response,
         delta: wire.delta,
@@ -350,9 +350,10 @@ mod tests {
             .expect("timed out waiting for session.created")
             .expect("backend stream closed before session.created");
         assert_eq!(
-            first.event_type, "session.created",
+            first.event_type.as_str(),
+            "session.created",
             "expected session.created, got: {}",
-            first.event_type
+            first.event_type.as_str()
         );
 
         // 2. Ask for a short audio response.
