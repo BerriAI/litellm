@@ -61,7 +61,7 @@ async def test_refetches_once_token_has_expired():
     assert len(inner.calls) == 2  # re-read after the cached token expired
 
 
-async def test_caches_not_authorized_none_for_default_ttl():
+async def test_does_not_cache_the_not_authorized_miss():
     inner = _FakeStore({})  # user has not authorized
     clock = _Clock(1000.0)
     store = CachedOAuthTokenStore(inner, default_ttl_seconds=60, clock=clock)
@@ -69,7 +69,22 @@ async def test_caches_not_authorized_none_for_default_ttl():
     assert await store.fetch("u", "s") is None
     clock.t = 1059.0
     assert await store.fetch("u", "s") is None
-    assert inner.calls == [("u", "s")]  # None cached for the TTL window
+    assert inner.calls == [
+        ("u", "s"),
+        ("u", "s"),
+    ]  # misses re-read the store, never cached
+
+
+async def test_token_stored_after_a_miss_is_visible_immediately():
+    # No invalidation needed: a miss is never cached, so a token written after the OAuth flow is
+    # served on the very next call (matching v1, where misses always re-read the source).
+    inner = _FakeStore({})
+    store = CachedOAuthTokenStore(inner, default_ttl_seconds=60, clock=_Clock())
+
+    assert await store.fetch("u", "s") is None
+    inner._values[("u", "s")] = OAuthToken(access_token="fresh")
+    result = await store.fetch("u", "s")
+    assert result is not None and result.access_token == "fresh"
 
 
 async def test_default_ttl_applies_to_tokens_without_expiry():
@@ -84,15 +99,19 @@ async def test_default_ttl_applies_to_tokens_without_expiry():
     assert len(inner.calls) == 2  # no-expiry token re-read after the default TTL
 
 
-async def test_invalidate_forces_refetch():
-    inner = _FakeStore({})
+async def test_invalidate_drops_a_cached_token():
+    # invalidate covers rotation/revocation of a *cached* token (the miss path needs no invalidate).
+    inner = _FakeStore({("u", "s"): OAuthToken(access_token="t1")})
     store = CachedOAuthTokenStore(inner, default_ttl_seconds=60, clock=_Clock())
 
-    assert await store.fetch("u", "s") is None
-    inner._values[("u", "s")] = OAuthToken(access_token="fresh")
+    first = await store.fetch("u", "s")
+    assert first is not None and first.access_token == "t1"  # cached
+    inner._values[("u", "s")] = OAuthToken(access_token="t2")  # rotated
     store.invalidate("u", "s")
-    result = await store.fetch("u", "s")
-    assert result is not None and result.access_token == "fresh"
+    second = await store.fetch("u", "s")
+    assert (
+        second is not None and second.access_token == "t2"
+    )  # re-read after invalidate
 
 
 async def test_store_unavailable_is_not_cached():

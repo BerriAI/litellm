@@ -77,13 +77,15 @@ class TokenRefresher(Protocol):
 
 
 class CachedOAuthTokenStore:
-    """Expiry-aware cache over an ``OAuthTokenStore``.
+    """Expiry-aware cache over an ``OAuthTokenStore``. Caches positive tokens only.
 
-    A cached token is served only while it is unexpired (minus ``expiry_skew_seconds``); past that
-    the inner store is read again. Tokens with no known expiry, and the ``None`` "not authorized"
-    result, are held for ``default_ttl_seconds`` so the store is not hit on every call. The clock is
-    injected (wall-clock, since ``expires_at`` is epoch) so expiry is deterministic in tests, and a
-    store outage (``TokenStoreUnavailable``) propagates without being cached.
+    A cached token is served only while it is unexpired (minus ``expiry_skew_seconds``), or for
+    ``default_ttl_seconds`` if it carries no expiry; past that the inner store is read again. A
+    "not authorized" (``None``) result is never cached: every miss re-reads the inner store, so a
+    token written after the OAuth flow is visible immediately on every replica, matching v1 (which
+    never caches misses). The clock is injected (wall-clock, since ``expires_at`` is epoch) so
+    expiry is deterministic in tests, and a store outage (``TokenStoreUnavailable``) propagates
+    without being cached.
     """
 
     def __init__(
@@ -100,10 +102,10 @@ class CachedOAuthTokenStore:
         self._expiry_skew_seconds = expiry_skew_seconds
         self._max_size = max_size
         self._clock = clock
-        self._cache: dict[tuple[str, str], tuple[OAuthToken | None, float]] = {}
+        self._cache: dict[tuple[str, str], tuple[OAuthToken, float]] = {}
 
-    def _valid_until(self, token: OAuthToken | None) -> float:
-        if token is not None and token.expires_at is not None:
+    def _valid_until(self, token: OAuthToken) -> float:
+        if token.expires_at is not None:
             return token.expires_at - self._expiry_skew_seconds
         return self._clock() + self._default_ttl_seconds
 
@@ -116,6 +118,11 @@ class CachedOAuthTokenStore:
                 return token
 
         token = await self._inner.fetch(user_id, server_id)
+        if token is None:
+            # Never cache "not authorized": drop any stale entry and re-read on the next call, so
+            # a token stored after the OAuth flow is seen immediately rather than after a TTL.
+            self._cache.pop(key, None)
+            return token
         if key not in self._cache and len(self._cache) >= self._max_size:
             # Evict the oldest entry (insertion order) to make room, rather than clearing the
             # whole cache and forcing every key to re-read the store at once.
