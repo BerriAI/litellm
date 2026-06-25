@@ -2,23 +2,25 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import os
+from functools import cached_property
 from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    FrozenSet,
+    Iterator,
     List,
     Optional,
-    Union,
-    Dict,
     Tuple,
-    Any,
     TYPE_CHECKING,
-    Iterator,
-    AsyncIterator,
-    FrozenSet,
+    Union,
 )
-from functools import cached_property
-import litellm
+
 import httpx
+import litellm
 
-
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -32,6 +34,11 @@ else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
+from .handler import (
+    AsyncSAPStreamIterator,
+    GenAIHubOrchestrationError,
+    SAPStreamIterator,
+)
 from .models import (
     ChatCompletionTool,
     OrchestrationRequest,
@@ -41,11 +48,6 @@ from .models import (
     SAPMessage,
     SAPToolChatMessage,
     SAPUserMessage,
-)
-from .handler import (
-    GenAIHubOrchestrationError,
-    AsyncSAPStreamIterator,
-    SAPStreamIterator,
 )
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
@@ -177,20 +179,58 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
+        return self._resolve_deployment_url(deployment_name=None)
+
+    def _resolve_deployment_url(self, deployment_name: Optional[str]) -> str:
         client = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
-        valid: List[Tuple[str, str]] = []
+        deployments = client.get(
+            f"{self.base_url}/lm/deployments", headers=self.headers
+        ).json()
+
+        valid: List[Tuple[str, str, str]] = []
         for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
+            if dep.get("scenarioId") != "orchestration":
+                continue
+            cfg = client.get(
+                f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
+                headers=self.headers,
+            ).json()
+            if cfg.get("executableId") == "orchestration":
+                valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
+
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=404,
+                message="No orchestration deployment found in SAP AI Core.",
+            )
+
+        name_filter = deployment_name or os.environ.get("SAP_ORCHESTRATION_DEPLOYMENT_NAME")
+        if name_filter:
+            filtered = [v for v in valid if v[2] == name_filter]
+            if not filtered:
+                available = [v[2] for v in valid]
+                raise GenAIHubOrchestrationError(
+                    status_code=404,
+                    message=(
+                        f"No orchestration deployment named {name_filter!r} found. "
+                        f"Available: {available}"
+                    ),
+                )
+            valid = filtered
+
+        if len(valid) > 1:
+            sorted_valid = sorted(valid, key=lambda x: x[1], reverse=True)
+            chosen = sorted_valid[0]
+            others = [v[2] or v[0] for v in sorted_valid[1:]]
+            verbose_logger.warning(
+                f"SAP: found {len(valid)} orchestration deployments; using the newest one "
+                f"(name={chosen[2]!r}, url={chosen[0]!r}). "
+                f"Others ignored: {others}. "
+                "Set SAP_ORCHESTRATION_DEPLOYMENT_NAME to select a specific one, "
+                "or use the deployment_name per-call parameter."
+            )
+            return chosen[0]
+
         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
 
     @classmethod
@@ -258,8 +298,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ):
-        api_base_ = f"{self.deployment_url}/v2/completion"
-        return api_base_
+        deployment_name = litellm_params.get("deployment_name")
+        if deployment_name:
+            base = self._resolve_deployment_url(deployment_name=deployment_name)
+        else:
+            base = self.deployment_url
+        return f"{base}/v2/completion"
 
     def _build_prompt_module(
         self,

@@ -1,5 +1,6 @@
 import warnings
 import pytest
+from unittest.mock import patch, MagicMock
 from pydantic import ValidationError
 
 
@@ -639,3 +640,115 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+def _make_config():
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    config = GenAIHubOrchestrationConfig()
+    config.token_creator = lambda: "Bearer TEST_TOKEN"
+    config._base_url = "https://api.test-sap.com"
+    config._resource_group = "test-group"
+    return config
+
+
+def _mock_deployments(*names: str):
+    """Return a mock httpx client whose GET responses simulate AI Core deployment/config APIs."""
+    deployments_payload = {
+        "resources": [
+            {"scenarioId": "orchestration", "configurationId": f"cfg-{n}", "deploymentUrl": f"https://deploy-{n}.sap.com", "createdAt": f"2024-01-0{i+1}T00:00:00Z"}
+            for i, n in enumerate(names)
+        ]
+    }
+    configs = {
+        f"cfg-{n}": {"executableId": "orchestration", "name": n}
+        for n in names
+    }
+
+    def fake_get(url, headers=None):
+        resp = MagicMock()
+        if "/lm/deployments" in url:
+            resp.json.return_value = deployments_payload
+        else:
+            cfg_id = url.split("/")[-1]
+            resp.json.return_value = configs.get(cfg_id, {})
+        return resp
+
+    client = MagicMock()
+    client.get.side_effect = fake_get
+    return client
+
+
+class TestDeploymentSelection:
+    def test_single_deployment_returns_its_url(self):
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("my-orch")):
+            url = config._resolve_deployment_url(deployment_name=None)
+        assert url == "https://deploy-my-orch.sap.com"
+
+    def test_multiple_deployments_picks_newest(self):
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("older", "newer")):
+            url = config._resolve_deployment_url(deployment_name=None)
+        assert url == "https://deploy-newer.sap.com"
+
+    def test_multiple_deployments_emits_warning(self):
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("older", "newer")):
+            with patch("litellm.llms.sap.chat.transformation.verbose_logger") as mock_log:
+                config._resolve_deployment_url(deployment_name=None)
+                mock_log.warning.assert_called_once()
+                msg = mock_log.warning.call_args[0][0]
+                assert "2 orchestration deployments" in msg
+                assert "SAP_ORCHESTRATION_DEPLOYMENT_NAME" in msg
+
+    def test_deployment_name_arg_selects_by_name(self):
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("grounding-orch", "plain-orch")):
+            url = config._resolve_deployment_url(deployment_name="grounding-orch")
+        assert url == "https://deploy-grounding-orch.sap.com"
+
+    def test_env_var_selects_by_name(self, monkeypatch):
+        monkeypatch.setenv("SAP_ORCHESTRATION_DEPLOYMENT_NAME", "plain-orch")
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("grounding-orch", "plain-orch")):
+            url = config._resolve_deployment_url(deployment_name=None)
+        assert url == "https://deploy-plain-orch.sap.com"
+
+    def test_deployment_name_arg_takes_priority_over_env_var(self, monkeypatch):
+        monkeypatch.setenv("SAP_ORCHESTRATION_DEPLOYMENT_NAME", "plain-orch")
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("grounding-orch", "plain-orch")):
+            url = config._resolve_deployment_url(deployment_name="grounding-orch")
+        assert url == "https://deploy-grounding-orch.sap.com"
+
+    def test_unknown_name_raises_with_available_list(self):
+        from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
+
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("alpha", "beta")):
+            with pytest.raises(GenAIHubOrchestrationError) as exc_info:
+                config._resolve_deployment_url(deployment_name="gamma")
+        assert "gamma" in str(exc_info.value)
+        assert "alpha" in str(exc_info.value) or "beta" in str(exc_info.value)
+
+    def test_no_deployments_raises(self):
+        from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
+
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments()):
+            with pytest.raises(GenAIHubOrchestrationError) as exc_info:
+                config._resolve_deployment_url(deployment_name=None)
+        assert "No orchestration deployment found" in str(exc_info.value)
+
+    def test_get_complete_url_uses_deployment_name_from_litellm_params(self):
+        config = _make_config()
+        with patch("litellm.module_level_client", _mock_deployments("grounding-orch", "plain-orch")):
+            url = config.get_complete_url(
+                api_base=None,
+                api_key=None,
+                model="gpt-4o",
+                optional_params={},
+                litellm_params={"deployment_name": "plain-orch"},
+            )
+        assert url == "https://deploy-plain-orch.sap.com/v2/completion"
