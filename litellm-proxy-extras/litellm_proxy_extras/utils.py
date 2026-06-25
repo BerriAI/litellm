@@ -504,7 +504,7 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _setup_database_v2(use_migrate: bool) -> bool:
         """
-        v2 migration resolver (opt-in via --use_v2_migration_resolver).
+        v2 migration resolver (the CLI default; selected via use_v2_resolver=True).
 
         Runs `prisma migrate deploy` and handles standard recovery paths
         (P3005 baseline, P3009/P3018 idempotent errors). Critically, it does
@@ -569,6 +569,20 @@ class ProxyExtrasDBManager:
 
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
+
+                    # Concurrent `migrate deploy` (multiple proxy instances
+                    # booting against one DB) can deadlock on Prisma's advisory
+                    # lock, and Postgres aborts one side. This is transient, so
+                    # back off and retry instead of failing fast as if it were
+                    # an unrecoverable migration error.
+                    if "deadlock detected" in stderr:
+                        logger.info(
+                            f"prisma migrate deploy attempt {attempt + 1} "
+                            "deadlocked on the migration advisory lock "
+                            "(concurrent migrate deploy), retrying"
+                        )
+                        time.sleep(random.randrange(5, 15))
+                        continue
 
                     if "P3005" in stderr and "database schema is not empty" in stderr:
                         logger.info(
@@ -689,13 +703,14 @@ class ProxyExtrasDBManager:
             use_v2_resolver: Opt into the v2 migration resolver (safer during
                 rolling deploys; does not run the diff-and-force recovery
                 that causes schema thrashing). Defaults to False for
-                backwards compatibility.
+                backwards compatibility; the proxy CLI passes True, so the
+                proxy runtime default is v2.
 
         Returns:
             bool: True if setup was successful, False otherwise
         """
         if use_v2_resolver:
-            logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
+            logger.info("Using v2 migration resolver")
             return ProxyExtrasDBManager._setup_database_v2(use_migrate=use_migrate)
 
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"

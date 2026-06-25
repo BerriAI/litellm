@@ -1620,8 +1620,40 @@ class TestRunServerDbSetup:
             # errors in CI environments (Click 8.3.x stream lifecycle issue).
 
             # Test 1: Without --use_prisma_db_push flag (default behavior)
-            # use_prisma_db_push should be False (default), so use_migrate should be True
+            # use_prisma_db_push should be False (default), so use_migrate should be True.
+            # The v2 migration resolver is now the default, so use_v2_resolver should be True.
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            mock_setup_database.assert_called_with(
+                use_migrate=True, use_v2_resolver=True
+            )
+
+            # Reset mocks
+            mock_setup_database.reset_mock()
+            mock_should_update_schema.reset_mock()
+            mock_should_update_schema.return_value = True
+
+            # Test 2: With --use_prisma_db_push flag set
+            # use_prisma_db_push should be True, so use_migrate should be False.
+            # The resolver default is unchanged by db_push, so use_v2_resolver stays True.
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_prisma_db_push"],
+                standalone_mode=False,
+            )
+            mock_setup_database.assert_called_with(
+                use_migrate=False, use_v2_resolver=True
+            )
+
+            # Reset mocks
+            mock_setup_database.reset_mock()
+            mock_should_update_schema.reset_mock()
+            mock_should_update_schema.return_value = True
+
+            # Test 3: With --use_legacy_migration_resolver flag set
+            # The operator opts back into the legacy resolver, so use_v2_resolver should be False.
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_legacy_migration_resolver"],
+                standalone_mode=False,
+            )
             mock_setup_database.assert_called_with(
                 use_migrate=True, use_v2_resolver=False
             )
@@ -1631,14 +1663,15 @@ class TestRunServerDbSetup:
             mock_should_update_schema.reset_mock()
             mock_should_update_schema.return_value = True
 
-            # Test 2: With --use_prisma_db_push flag set
-            # use_prisma_db_push should be True, so use_migrate should be False
+            # Test 4: With the deprecated --use_v2_migration_resolver flag set
+            # It is still accepted for backwards compatibility (no startup error)
+            # and is a no-op: v2 is the default, so use_v2_resolver stays True.
             run_server.main(
-                ["--local", "--skip_server_startup", "--use_prisma_db_push"],
+                ["--local", "--skip_server_startup", "--use_v2_migration_resolver"],
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -1705,7 +1738,65 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
+            )
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_startup_exits_when_migration_raises(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """An unrecoverable migration error (RuntimeError) must abort startup
+        with code 2, even without --enforce_prisma_migration_check. This is the
+        v2 default's bad-DB path that the test_bad_database_url CI job asserts on."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.side_effect = RuntimeError(
+            "Database migration failed and cannot be auto-recovered. "
+            "Manual intervention required."
+        )
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                run_server.main(
+                    ["--local", "--skip_server_startup"], standalone_mode=False
+                )
+            assert exc_info.value.code == 2
+            mock_setup_database.assert_called_once_with(
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")

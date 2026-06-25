@@ -1431,7 +1431,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
 
   installing_litellm_on_python_3_13:
     docker:
@@ -1453,9 +1453,9 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
 
-  installing_litellm_on_python_v2_migration_resolver:
+  installing_litellm_on_python_legacy_migration_resolver:
     docker:
       - *python312_image
       - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
@@ -1480,10 +1480,10 @@ jobs:
           url: tcp://localhost:5432
           timeout: "60"
       - run:
-          name: Run v2 migration resolver proxy smoke test
+          name: Run legacy migration resolver proxy smoke test
           command: |
             uv run --no-sync python -m pytest -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_v2_resolver
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
 
   helm_chart_testing:
     machine:
@@ -2905,7 +2905,8 @@ jobs:
           command: |
             if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
                (grep -q "Database setup failed after multiple retries" docker_output.log || \
-                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log); then
+                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log || \
+                grep -q "Database migration cannot proceed" docker_output.log); then
               echo "Expected error found. Test passed."
             else
               echo "Expected error not found. Test failed."
@@ -3050,7 +3051,7 @@ workflows:
           filters: *main_branches
       - installing_litellm_on_python_3_13:
           filters: *main_branches
-      - installing_litellm_on_python_v2_migration_resolver:
+      - installing_litellm_on_python_legacy_migration_resolver:
           filters: *main_branches
       - helm_chart_testing:
           requires:
