@@ -2245,8 +2245,10 @@ async def cli_poll_key(
     """
     from litellm.proxy.auth.auth_checks import (
         ExperimentalUIJWTToken,
+        get_team_object,
+        get_user_object,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
@@ -2328,10 +2330,40 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
+            user_db_obj = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+            user_budget = user_db_obj.max_budget if user_db_obj is not None else None
+
+            team_budget: Optional[float] = None
+            team_budget_resolved = False
+            if team_id is not None:
+                try:
+                    team_obj = await get_team_object(
+                        team_id=team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                    team_budget = team_obj.max_budget
+                    team_budget_resolved = True
+                except Exception:
+                    pass
+
+            session_max_budget = (
+                litellm.max_ui_session_budget
+                if user_budget is None
+                and (team_id is None or (team_budget_resolved and team_budget is None))
+                else None
+            )
+
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info,
                 team_id=team_id,
                 team_alias=team_alias,
+                max_budget=session_max_budget,
             )
 
             # Delete cache entry (single-use)

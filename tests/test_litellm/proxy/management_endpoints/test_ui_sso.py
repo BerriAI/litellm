@@ -2904,7 +2904,7 @@ class TestCLIKeyRegenerationFlow:
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
             assert jwt_call_args.kwargs["team_alias"] == "Team B"
-            assert "max_budget" not in jwt_call_args.kwargs
+            assert jwt_call_args.kwargs["max_budget"] is None
 
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
@@ -2968,13 +2968,11 @@ class TestCLIKeyRegenerationFlow:
 
         assert result["status"] == "ready"
         mock_get_jwt.assert_called_once()
-        assert "max_budget" not in mock_get_jwt.call_args.kwargs
+        assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
     @pytest.mark.asyncio
-    async def test_cli_poll_key_does_not_cap_session_when_user_and_team_have_no_budget(
-        self,
-    ):
-        """With no user and no team budget, the session has no per-key budget cap."""
+    async def test_cli_poll_key_caps_session_when_user_and_team_have_no_budget(self):
+        """With no user and no team budget, the session falls back to max_ui_session_budget."""
         from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import (
             _hash_cli_sso_secret,
@@ -3030,7 +3028,9 @@ class TestCLIKeyRegenerationFlow:
 
         assert result["status"] == "ready"
         mock_get_jwt.assert_called_once()
-        assert "max_budget" not in mock_get_jwt.call_args.kwargs
+        assert (
+            mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
+        )
 
 
 class TestGetAppRolesFromIdToken:
