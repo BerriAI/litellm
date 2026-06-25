@@ -3711,6 +3711,9 @@ from litellm.models.credentials import CredentialItem as CredentialItem  # noqa:
 from litellm.models.credentials import (  # noqa: E402
     CreateCredentialItem as CreateCredentialItem,
 )
+from litellm.models.credentials import (  # noqa: E402
+    UpdateCredentialItem as UpdateCredentialItem,
+)
 
 
 class ExtractedFileData(TypedDict):

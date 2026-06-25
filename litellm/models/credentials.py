@@ -29,3 +29,17 @@ class CreateCredentialItem(CredentialBase):
         if not values.get("credential_values") and not values.get("model_id"):
             raise ValueError("Either credential_values or model_id must be set")
         return values
+
+
+class UpdateCredentialItem(BaseModel):
+    """PATCH body for ``/credentials/{name}``.
+
+    Both ``credential_values`` and ``credential_info`` are optional so a caller
+    can patch one without sending the other (team-admins patching access without
+    knowing the upstream secrets; proxy admins rotating values without touching
+    access). ``credential_name`` is optional because most patches don't rename.
+    """
+
+    credential_name: Optional[str] = None
+    credential_values: Optional[dict] = None
+    credential_info: Optional[dict] = None

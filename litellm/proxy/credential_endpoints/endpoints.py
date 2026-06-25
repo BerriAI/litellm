@@ -24,7 +24,11 @@ from litellm.proxy.management_endpoints.logging_exporter_validation import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.types.utils import CreateCredentialItem, CredentialItem
+from litellm.types.utils import (
+    CreateCredentialItem,
+    CredentialItem,
+    UpdateCredentialItem,
+)
 
 router = APIRouter()
 
@@ -61,9 +65,7 @@ async def _caller_team_admin_ids(
         user_row = await prisma_client.db.litellm_usertable.find_unique(  # type: ignore[attr-defined]
             where={"user_id": user_api_key_dict.user_id}
         )
-        user_team_ids = list(
-            getattr(user_row, "teams", None) or []
-        ) if user_row else []
+        user_team_ids = list(getattr(user_row, "teams", None) or []) if user_row else []
         if not user_team_ids:
             return frozenset()
         teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[attr-defined]
@@ -437,7 +439,7 @@ def update_db_credential(
 async def update_credential(
     request: Request,
     fastapi_response: Response,
-    credential: CredentialItem,
+    credential: UpdateCredentialItem,
     credential_name: str = Path(
         ..., description="The credential name, percent-decoded; may contain slashes"
     ),
@@ -445,6 +447,11 @@ async def update_credential(
 ):
     """
     [BETA] endpoint. This might change unexpectedly.
+
+    Both ``credential_values`` and ``credential_info`` are optional; a team-admin
+    typically patches only ``credential_info.access`` to grant or revoke their
+    own team. A proxy admin may patch either or both. See
+    ``decide_credential_patch`` for the exact contract.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -476,6 +483,14 @@ async def update_credential(
         assert isinstance(decision, Allow)
     validate_credential_access(credential.credential_info)
 
+    # Translate the partial patch into a full CredentialItem for the downstream
+    # merge function, which still expects the legacy shape with non-None dicts.
+    credential_as_item = CredentialItem(
+        credential_name=credential.credential_name or credential_name,
+        credential_values=credential.credential_values or {},
+        credential_info=credential.credential_info or {},
+    )
+
     try:
         if prisma_client is None:
             raise HTTPException(
@@ -486,7 +501,7 @@ async def update_credential(
         db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
-        merged_credential = update_db_credential(db_credential, credential)
+        merged_credential = update_db_credential(db_credential, credential_as_item)
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
             credential_name,
