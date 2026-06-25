@@ -2524,6 +2524,15 @@
         "responses": true
       }
     },
+    "modelis": {
+      "display_name": "Modelis (`modelis`)",
+      "url": "https://docs.litellm.ai/docs/providers/modelis",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
+    },
     "llamagate": {
       "display_name": "LlamaGate (`llamagate`)",
       "url": "https://docs.litellm.ai/docs/providers/llamagate",
