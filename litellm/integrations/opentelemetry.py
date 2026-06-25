@@ -215,11 +215,9 @@ def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
             (_freeze_for_dedupe(key, _depth + 1), _freeze_for_dedupe(item, _depth + 1))
             for key, item in value.items()
         )
-    try:
-        hash(value)
-    except TypeError:
-        return repr(value)
-    return cast(HashableScope, value)
+    if isinstance(value, (str, int, float, bytes)) or value is None:
+        return value
+    return repr(value)
 
 
 @dataclass
