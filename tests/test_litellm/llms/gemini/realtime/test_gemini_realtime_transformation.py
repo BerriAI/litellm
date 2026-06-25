@@ -545,7 +545,7 @@ def test_gemini_audio_only_live_models_coerce_text_modality_to_audio(model, patc
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
-def test_gemini_audio_only_live_models_drop_text_from_text_audio_combo():
+def test_gemini_audio_only_live_models_drop_text_from_text_audio_combo(patch_gemini_audio_cost_map_entries):
     config = GeminiRealtimeConfig()
     session_update = {
         "type": "session.update",
