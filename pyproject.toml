@@ -234,8 +234,24 @@ healthcheck = [
 ]
 
 [build-system]
-requires = ["uv_build==0.11.8"]
-build-backend = "uv_build"
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
+module-name = "litellm.rust_bridge._native"
+python-source = "."
+bindings = "pyo3"
+exclude = [
+    "litellm/proxy/enterprise",
+    "litellm/proxy/enterprise/**",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+]
 
 [tool.uv]
 constraint-dependencies = [
@@ -252,18 +268,6 @@ litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
 members = ["enterprise", "litellm-proxy-extras"]
-
-[tool.uv.build-backend]
-module-root = ""
-source-exclude = [
-    "litellm/proxy/enterprise",
-    "**/__pycache__",
-    "**/__pycache__/**",
-    "**/.pytest_cache",
-    "**/.pytest_cache/**",
-    "**/.ruff_cache",
-    "**/.ruff_cache/**",
-]
 
 [tool.isort]
 profile = "black"
@@ -328,4 +332,3 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
-

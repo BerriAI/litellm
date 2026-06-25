@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "litellm_python_bridge"
+name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
