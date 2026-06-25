@@ -2121,7 +2121,7 @@ async def ui_view_spend_logs(
 
         sql_query = f"""
             SELECT
-                request_id, litellm_call_id, call_type, api_key, spend, total_tokens,
+                request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
                 custom_llm_provider, api_base, "user", metadata,
@@ -3406,7 +3406,7 @@ async def ui_view_session_spend_logs(
         # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
         sql_query = """
             SELECT
-                request_id, litellm_call_id, call_type, api_key, spend, total_tokens,
+                request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
                 custom_llm_provider, api_base, "user", metadata,

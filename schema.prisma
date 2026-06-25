@@ -576,7 +576,6 @@ model LiteLLM_Config {
 // View spend, model, api_key per request
 model LiteLLM_SpendLogs {
   request_id          String @id
-  litellm_call_id     String? // x-litellm-call-id; correlates this row with its trace
   call_type           String
   api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
   spend               Float    @default(0.0)

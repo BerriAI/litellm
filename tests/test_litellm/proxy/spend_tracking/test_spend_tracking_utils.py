@@ -2124,7 +2124,7 @@ def test_get_logging_payload_failure_without_recovered_usage_is_zero():
 
 def test_get_logging_payload_sets_litellm_call_id_for_correlation():
     """LIT-3868: a successful spend log must carry the x-litellm-call-id (the
-    trace id) in its own column, distinct from request_id, which stays the
+    trace id) in its metadata, distinct from request_id, which stays the
     provider response id. Without this there is no way to correlate a DB row
     with its trace for a successful call.
     """
@@ -2146,15 +2146,16 @@ def test_get_logging_payload_sets_litellm_call_id_for_correlation():
     payload = get_logging_payload(
         kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
     )
+    metadata = json.loads(payload["metadata"])
 
     assert payload["request_id"] == provider_response_id
-    assert payload["litellm_call_id"] == trace_call_id
-    assert payload["litellm_call_id"] != payload["request_id"]
+    assert metadata["litellm_call_id"] == trace_call_id
+    assert metadata["litellm_call_id"] != payload["request_id"]
 
 
 def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
     """litellm_call_id may only be present in litellm_params; it must still land
-    on the spend log so correlation works on that path too.
+    in the spend log metadata so correlation works on that path too.
     """
     trace_call_id = "fallback-7a1c-42d9-9f0e-2b6c5d4e3f21"
     kwargs = {
@@ -2175,12 +2176,13 @@ def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
         kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
     )
 
-    assert payload["litellm_call_id"] == trace_call_id
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
 
 
 def test_get_logging_payload_litellm_call_id_when_response_has_no_id():
     """When the provider returns no id, request_id falls back to the call id, so
-    both columns hold the same value and correlation still resolves.
+    request_id and the metadata call id hold the same value and correlation
+    still resolves.
     """
     trace_call_id = "noid-5b2e-4c7a-9d10-3f8a1c2b4e6d"
     kwargs = {
@@ -2198,13 +2200,13 @@ def test_get_logging_payload_litellm_call_id_when_response_has_no_id():
         kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
     )
 
-    assert payload["litellm_call_id"] == trace_call_id
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
     assert payload["request_id"] == trace_call_id
 
 
 def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
-    """On a cache hit request_id is suffixed to stay unique, but litellm_call_id
-    stays the raw trace id so the row still points at its trace.
+    """On a cache hit request_id is suffixed to stay unique, but the metadata
+    litellm_call_id stays the raw trace id so the row still points at its trace.
     """
     trace_call_id = "cache-9a1c-42d9-9f0e-2b6c5d4e3f21"
     kwargs = {
@@ -2224,6 +2226,6 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
         kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
     )
 
-    assert payload["litellm_call_id"] == trace_call_id
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
     assert "_cache_hit" in payload["request_id"]
-    assert payload["litellm_call_id"] != payload["request_id"]
+    assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
