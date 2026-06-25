@@ -35,8 +35,16 @@ async def test_openai_moderation_guardrail_init():
 
 @pytest.mark.asyncio
 async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
-    """openai_moderation initializes through the Rust dispatcher and registers a callback."""
+    """openai_moderation initializes through the dispatcher and registers a callback.
+
+    Covers both routing outcomes so the common no-wheel deployment stays tested:
+    the Rust path (GuardrailV2) when the compiled engine handles the config, and
+    the Python fallback (OpenAIModerationGuardrail) otherwise.
+    """
     import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.guardrail_v2.guardrail_v2 import (
+        GuardrailV2,
+    )
     from litellm.proxy.guardrails.guardrail_registry import (
         guardrail_initializer_registry,
     )
@@ -44,15 +52,6 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
         Guardrail,
         LitellmParams,
         SupportedGuardrailIntegrations,
-    )
-
-    try:
-        import litellm_python_bridge  # noqa: F401
-    except ImportError:
-        pytest.skip("litellm_python_bridge engine not built")
-
-    from litellm.proxy.guardrails.guardrail_hooks.guardrail_v2.guardrail_v2 import (
-        GuardrailV2,
     )
 
     initialize = guardrail_initializer_registry[
@@ -79,8 +78,9 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
             )
 
             assert guardrail in litellm.callbacks
-            assert isinstance(guardrail, GuardrailV2)
             assert guardrail.guardrail_name == "test-openai-moderation"
+            # Either path is acceptable; both must register a usable guardrail.
+            assert isinstance(guardrail, (GuardrailV2, OpenAIModerationGuardrail))
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()
         for callback in original_callbacks:
@@ -969,3 +969,45 @@ async def test_openai_moderation_guardrail_stores_streaming_flags():
 
         assert guardrail.streaming_end_of_stream_only is False
         assert guardrail.streaming_sampling_rate == 2
+
+
+@pytest.mark.asyncio
+async def test_streaming_flags_propagate_through_dispatch():
+    """Streaming knobs must survive the registry dispatch to whichever guardrail
+    is built (Rust GuardrailV2 or the Python fallback), so a regression in
+    _make_initializer / GuardrailV2 forwarding is caught without the wheel."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_registry import (
+        guardrail_initializer_registry,
+    )
+    from litellm.types.guardrails import (
+        Guardrail,
+        LitellmParams,
+        SupportedGuardrailIntegrations,
+    )
+
+    initialize = guardrail_initializer_registry[
+        SupportedGuardrailIntegrations.OPENAI_MODERATION.value
+    ]
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.logging_callback_manager._reset_all_callbacks()
+    try:
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            params = LitellmParams(
+                guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+                api_key="test-key",
+                mode="pre_call",
+                streaming_end_of_stream_only=True,
+                streaming_sampling_rate=9,
+            )
+            guardrail = initialize(
+                litellm_params=params,
+                guardrail=Guardrail(guardrail_name="t", litellm_params=params),
+            )
+            assert guardrail.streaming_end_of_stream_only is True
+            assert guardrail.streaming_sampling_rate == 9
+    finally:
+        litellm.logging_callback_manager._reset_all_callbacks()
+        for callback in original_callbacks:
+            litellm.logging_callback_manager.add_litellm_callback(callback)

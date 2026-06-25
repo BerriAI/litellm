@@ -13,7 +13,7 @@ use crate::io::guardrails::provider::Guardrail;
 
 const ALL_THRESHOLD_KEY: &str = "ALL";
 
-fn normalize_base(raw: &str) -> String {
+pub(crate) fn normalize_base(raw: &str) -> String {
     let with_scheme = if raw.starts_with("http://") || raw.starts_with("https://") {
         raw.to_owned()
     } else {
