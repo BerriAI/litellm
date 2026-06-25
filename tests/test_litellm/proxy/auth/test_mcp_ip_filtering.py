@@ -12,7 +12,12 @@ from fastapi import Request
 from pydantic import ValidationError
 
 from litellm.proxy._types import ConfigGeneralSettings
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.ip_address_utils import (
+    IPAddressUtils,
+    _HopCount,
+    _HopCountInvalid,
+    _HopCountUnset,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -142,57 +147,89 @@ def _make_request(client_host, xff):
 class TestExtractClientIpFromXffHops:
     def test_single_hop_picks_rightmost(self):
         assert (
-            IPAddressUtils.extract_client_ip_from_xff_hops("10.0.0.99, 203.0.113.9", num_trusted_hops=1)
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "10.0.0.99, 203.0.113.9", num_trusted_hops=1
+            )
             == "203.0.113.9"
         )
 
     def test_two_hops_picks_second_from_right(self):
         assert (
-            IPAddressUtils.extract_client_ip_from_xff_hops("10.0.0.99, 203.0.113.9, 172.16.0.1", num_trusted_hops=2)
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "10.0.0.99, 203.0.113.9, 172.16.0.1", num_trusted_hops=2
+            )
             == "203.0.113.9"
         )
 
     def test_whitespace_and_empty_entries_are_ignored(self):
         assert (
-            IPAddressUtils.extract_client_ip_from_xff_hops(" 1.1.1.1 ,  , 203.0.113.9 ", num_trusted_hops=1)
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                " 1.1.1.1 ,  , 203.0.113.9 ", num_trusted_hops=1
+            )
             == "203.0.113.9"
         )
 
     def test_chain_shorter_than_hops_returns_none(self):
-        assert IPAddressUtils.extract_client_ip_from_xff_hops("203.0.113.9", num_trusted_hops=2) is None
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "203.0.113.9", num_trusted_hops=2
+            )
+            is None
+        )
 
     def test_zero_or_negative_hops_returns_none(self):
-        assert IPAddressUtils.extract_client_ip_from_xff_hops("203.0.113.9", num_trusted_hops=0) is None
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "203.0.113.9", num_trusted_hops=0
+            )
+            is None
+        )
 
     def test_invalid_selected_entry_returns_none(self):
-        assert IPAddressUtils.extract_client_ip_from_xff_hops("not-an-ip, 10.0.0.1", num_trusted_hops=2) is None
+        assert (
+            IPAddressUtils.extract_client_ip_from_xff_hops(
+                "not-an-ip, 10.0.0.1", num_trusted_hops=2
+            )
+            is None
+        )
 
 
 class TestResolveNumTrustedHops:
-    def test_unset_returns_none(self):
-        assert IPAddressUtils._resolve_num_trusted_hops(None) is None
+    def test_unset_is_unset(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(None) == _HopCountUnset()
 
     def test_int_value(self):
-        assert IPAddressUtils._resolve_num_trusted_hops(2) == 2
+        assert IPAddressUtils._resolve_num_trusted_hops(2) == _HopCount(2)
 
     def test_numeric_string_is_coerced(self):
-        assert IPAddressUtils._resolve_num_trusted_hops("3") == 3
+        assert IPAddressUtils._resolve_num_trusted_hops("3") == _HopCount(3)
 
-    def test_zero_is_treated_as_disabled(self):
-        assert IPAddressUtils._resolve_num_trusted_hops(0) is None
+    def test_zero_is_invalid_not_disabled(self):
+        assert IPAddressUtils._resolve_num_trusted_hops(0) == _HopCountInvalid()
 
-    def test_invalid_value_is_ignored(self):
-        assert IPAddressUtils._resolve_num_trusted_hops("abc") is None
+    def test_non_numeric_value_is_invalid(self):
+        assert IPAddressUtils._resolve_num_trusted_hops("abc") == _HopCountInvalid()
 
     def test_below_minimum_warns_so_misconfig_is_visible(self):
-        with patch("litellm.proxy.auth.ip_address_utils.verbose_proxy_logger") as mock_logger:
-            assert IPAddressUtils._resolve_num_trusted_hops(0) is None
-            assert IPAddressUtils._resolve_num_trusted_hops(-3) is None
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+        ) as mock_logger:
+            assert IPAddressUtils._resolve_num_trusted_hops(0) == _HopCountInvalid()
+            assert IPAddressUtils._resolve_num_trusted_hops(-3) == _HopCountInvalid()
         assert mock_logger.warning.call_count == 2
 
+    def test_unset_does_not_warn(self):
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+        ) as mock_logger:
+            assert IPAddressUtils._resolve_num_trusted_hops(None) == _HopCountUnset()
+        mock_logger.warning.assert_not_called()
+
     def test_valid_value_does_not_warn(self):
-        with patch("litellm.proxy.auth.ip_address_utils.verbose_proxy_logger") as mock_logger:
-            assert IPAddressUtils._resolve_num_trusted_hops(2) == 2
+        with patch(
+            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger"
+        ) as mock_logger:
+            assert IPAddressUtils._resolve_num_trusted_hops(2) == _HopCount(2)
         mock_logger.warning.assert_not_called()
 
 
@@ -205,7 +242,10 @@ class TestConfigGeneralSettingsHopsValidation:
             ConfigGeneralSettings(mcp_xff_num_trusted_hops=bad_value)
 
     def test_valid_value_and_unset_are_accepted(self):
-        assert ConfigGeneralSettings(mcp_xff_num_trusted_hops=1).mcp_xff_num_trusted_hops == 1
+        assert (
+            ConfigGeneralSettings(mcp_xff_num_trusted_hops=1).mcp_xff_num_trusted_hops
+            == 1
+        )
         assert ConfigGeneralSettings().mcp_xff_num_trusted_hops is None
 
 
@@ -295,6 +335,22 @@ class TestXffTrustedHopsAccessControl:
 
         assert result == "10.0.0.99, 203.0.113.9"
 
+    @pytest.mark.parametrize("bad_value", [0, -1, "abc", 1.5])
+    def test_invalid_hops_config_fails_closed_not_legacy(self, bad_value):
+        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+                "mcp_xff_num_trusted_hops": bad_value,
+            },
+        )
+
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
+
 
 class TestMCPServerIPFiltering:
     """Tests that external callers only see public MCP servers."""
@@ -316,7 +372,9 @@ class TestMCPServerIPFiltering:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        result = manager.filter_server_ids_by_ip(["pub", "priv"], client_ip="192.168.1.1")
+        result = manager.filter_server_ids_by_ip(
+            ["pub", "priv"], client_ip="192.168.1.1"
+        )
         assert result == ["pub", "priv"]
 
     @patch("litellm.public_mcp_servers", [])
@@ -339,7 +397,9 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["pub", "priv"], client_ip="8.8.8.8")
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip="8.8.8.8"
+        )
         assert allowed == ["pub"]
         assert blocked == 1
 
@@ -350,7 +410,9 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([pub, priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["pub", "priv"], client_ip="192.168.1.1")
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip="192.168.1.1"
+        )
         assert allowed == ["pub", "priv"]
         assert blocked == 0
 
@@ -360,7 +422,9 @@ class TestFilterServerIdsByIpWithInfo:
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([priv])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["priv"], client_ip=None)
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv"], client_ip=None
+        )
         assert allowed == ["priv"]
         assert blocked == 0
 
@@ -371,6 +435,8 @@ class TestFilterServerIdsByIpWithInfo:
         priv2 = _make_server("priv2", available_on_public_internet=False)
         manager = _make_manager([priv1, priv2])
 
-        allowed, blocked = manager.filter_server_ids_by_ip_with_info(["priv1", "priv2"], client_ip="1.2.3.4")
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv1", "priv2"], client_ip="1.2.3.4"
+        )
         assert allowed == []
         assert blocked == 2

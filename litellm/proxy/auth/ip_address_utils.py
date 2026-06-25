@@ -6,6 +6,7 @@ External callers (public IPs) only see servers with available_on_public_internet
 """
 
 import ipaddress
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Request
@@ -19,6 +20,24 @@ from litellm.proxy.auth.auth_utils import _get_request_ip_address
 _warned_xff_without_trusted_ranges = False
 
 _NUM_TRUSTED_HOPS_ADAPTER = TypeAdapter(int)
+
+
+@dataclass(frozen=True, slots=True)
+class _HopCountUnset:
+    """mcp_xff_num_trusted_hops is absent: keep the legacy leftmost-XFF path."""
+
+
+@dataclass(frozen=True, slots=True)
+class _HopCountInvalid:
+    """mcp_xff_num_trusted_hops is present but unusable: fail closed, never legacy."""
+
+
+@dataclass(frozen=True, slots=True)
+class _HopCount:
+    value: int
+
+
+_HopCountSetting = Union[_HopCountUnset, _HopCountInvalid, _HopCount]
 
 
 class IPAddressUtils:
@@ -199,26 +218,29 @@ class IPAddressUtils:
         return candidate
 
     @staticmethod
-    def _resolve_num_trusted_hops(raw_num_trusted_hops: object) -> Optional[int]:
+    def _resolve_num_trusted_hops(raw_num_trusted_hops: object) -> _HopCountSetting:
         if raw_num_trusted_hops is None:
-            return None
+            return _HopCountUnset()
         try:
             num_hops = _NUM_TRUSTED_HOPS_ADAPTER.validate_python(raw_num_trusted_hops)
         except ValidationError:
             verbose_proxy_logger.warning(
-                "Invalid mcp_xff_num_trusted_hops value %r; ignoring",
+                "Invalid mcp_xff_num_trusted_hops value %r; failing closed for "
+                "MCP client IP resolution. Set it to a positive integer, or "
+                "remove the setting to restore the legacy X-Forwarded-For path",
                 raw_num_trusted_hops,
             )
-            return None
+            return _HopCountInvalid()
         if num_hops < 1:
             verbose_proxy_logger.warning(
-                "mcp_xff_num_trusted_hops=%s is below the minimum of 1; "
-                "hop-counting stays disabled and MCP client IP resolution "
-                "falls back to the legacy leftmost X-Forwarded-For value",
+                "mcp_xff_num_trusted_hops=%s is below the minimum of 1; failing "
+                "closed for MCP client IP resolution. Set it to a positive "
+                "integer, or remove the setting to restore the legacy "
+                "X-Forwarded-For path",
                 num_hops,
             )
-            return None
-        return num_hops
+            return _HopCountInvalid()
+        return _HopCount(num_hops)
 
     @staticmethod
     def get_mcp_client_ip(
@@ -234,7 +256,9 @@ class IPAddressUtils:
 
         When ``mcp_xff_num_trusted_hops`` is set, the client IP is read that many
         entries from the right of the chain instead of the spoofable leftmost
-        value, defeating append-style X-Forwarded-For forgery.
+        value, defeating append-style X-Forwarded-For forgery. A present-but-invalid
+        value (non-integer or below 1) fails closed rather than silently reverting
+        to the legacy path, so a config typo cannot quietly weaken access control.
 
         Args:
             request: FastAPI request object
@@ -273,23 +297,24 @@ class IPAddressUtils:
                 # returning it would mis-classify external callers as internal.
                 # Fail closed for access control.
                 return ""
-            raw_num_trusted_hops: object = general_settings.get(
-                "mcp_xff_num_trusted_hops"
-            )
-            num_trusted_hops = IPAddressUtils._resolve_num_trusted_hops(
-                raw_num_trusted_hops
-            )
-            if num_trusted_hops is not None:
-                client_ip = IPAddressUtils.extract_client_ip_from_xff_hops(
-                    request.headers["x-forwarded-for"], num_trusted_hops
-                )
-                if client_ip is None:
-                    verbose_proxy_logger.warning(
-                        "X-Forwarded-For chain has fewer than "
-                        "mcp_xff_num_trusted_hops=%s entries or an invalid "
-                        "address; failing closed",
-                        num_trusted_hops,
-                    )
+            match IPAddressUtils._resolve_num_trusted_hops(
+                general_settings.get("mcp_xff_num_trusted_hops")
+            ):
+                case _HopCountInvalid():
                     return ""
-                return client_ip
+                case _HopCount(value=num_trusted_hops):
+                    client_ip = IPAddressUtils.extract_client_ip_from_xff_hops(
+                        request.headers["x-forwarded-for"], num_trusted_hops
+                    )
+                    if client_ip is None:
+                        verbose_proxy_logger.warning(
+                            "X-Forwarded-For chain has fewer than "
+                            "mcp_xff_num_trusted_hops=%s entries or an invalid "
+                            "address; failing closed",
+                            num_trusted_hops,
+                        )
+                        return ""
+                    return client_ip
+                case _HopCountUnset():
+                    pass
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
