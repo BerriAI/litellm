@@ -76,6 +76,12 @@ fn string_headers(extra_headers: Option<Map<String, Value>>) -> CoreResult<Vec<(
         .collect()
 }
 
+fn has_authorization_header(headers: &[(String, String)]) -> bool {
+    headers
+        .iter()
+        .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+}
+
 pub struct OcrRequest<'a> {
     pub model: &'a str,
     pub document: Value,
@@ -107,8 +113,12 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         .transform_ocr_request(model, request.document, filtered_params)?
         .data;
 
-    let mut request_builder = http_client().post(&url).bearer_auth(&api_key).json(&body);
-    for (key, value) in string_headers(request.extra_headers)? {
+    let headers = string_headers(request.extra_headers)?;
+    let mut request_builder = http_client().post(&url).json(&body);
+    if !has_authorization_header(&headers) {
+        request_builder = request_builder.bearer_auth(&api_key);
+    }
+    for (key, value) in headers {
         request_builder = request_builder.header(&key, value);
     }
     if let Some(duration) = request.timeout {
@@ -145,6 +155,8 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn truncate_error_body_passes_short_strings_through() {
@@ -191,6 +203,98 @@ mod tests {
         assert_eq!(
             string_headers(Some(headers)).expect("string headers accepted"),
             vec![("x-trace-id".to_string(), "trace-1".to_string())]
+        );
+    }
+
+    #[test]
+    fn has_authorization_header_is_case_insensitive() {
+        let headers = vec![
+            ("x-trace-id".to_string(), "trace-1".to_string()),
+            ("authorization".to_string(), "Bearer sk-test".to_string()),
+        ];
+
+        assert!(has_authorization_header(&headers));
+
+        let headers = vec![("Authorization".to_string(), "Bearer sk-test".to_string())];
+        assert!(has_authorization_header(&headers));
+
+        let headers = vec![("x-trace-id".to_string(), "trace-1".to_string())];
+        assert!(!has_authorization_header(&headers));
+    }
+
+    #[tokio::test]
+    async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let n = socket.read(&mut buffer).await.expect("reads request");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..n]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+            String::from_utf8(request).expect("request is utf8")
+        });
+
+        let mut headers = Map::new();
+        headers.insert(
+            "Authorization".to_string(),
+            Value::String("Bearer sk-from-python".to_string()),
+        );
+        headers.insert(
+            "x-trace-id".to_string(),
+            Value::String("trace-1".to_string()),
+        );
+
+        let response = ocr(OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-for-rust-fallback"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: "mistral",
+            extra_headers: Some(headers),
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect("ocr request succeeds");
+
+        assert_eq!(response["pages"][0]["markdown"], "ok");
+
+        let request = server.await.expect("server task completes");
+        let authorization_count = request
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+            .count();
+        assert_eq!(authorization_count, 1, "{request}");
+        assert!(
+            request.contains("authorization: Bearer sk-from-python")
+                || request.contains("Authorization: Bearer sk-from-python"),
+            "{request}"
         );
     }
 
