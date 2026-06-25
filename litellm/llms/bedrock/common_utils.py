@@ -727,6 +727,10 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
         "opus_4.7",
         "opus-4-7",
         "opus_4_7",
+        "opus-4.8",
+        "opus_4.8",
+        "opus-4-8",
+        "opus_4_8",
     ]
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
