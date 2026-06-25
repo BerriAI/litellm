@@ -150,6 +150,44 @@ class AzureOpenAIConfig(BaseConfig):
         else:
             return api_month >= supported_month
 
+    def _should_map_max_tokens_to_max_completion_tokens(self, model: str) -> bool:
+        """Whether `max_tokens` should be sent as `max_completion_tokens`.
+
+        Some Azure models (e.g. azure/gpt-chat-latest) reject `max_tokens` and
+        require `max_completion_tokens`, but are not part of the GPT-5/o-series
+        routing that already performs this translation. The model cost map flags
+        these deployments with `map_max_tokens_to_max_completion_tokens` so the
+        behavior lives in metadata rather than hardcoded model-name branches.
+
+        The raw model cost map is read directly (rather than via
+        ``get_model_info``) because ``get_model_info`` returns a typed
+        ``ModelInfo`` that drops unknown metadata flags.
+        """
+        candidates = [model]
+        if not model.startswith("azure/"):
+            candidates.append(f"azure/{model}")
+        else:
+            candidates.append(model.split("/", 1)[1])
+
+        for candidate in candidates:
+            metadata = litellm.model_cost.get(candidate)
+            if metadata is None:
+                try:
+                    from litellm.litellm_core_utils.get_model_cost_map import (
+                        GetModelCostMap,
+                    )
+
+                    metadata = GetModelCostMap.load_local_model_cost_map().get(
+                        candidate
+                    )
+                except Exception:
+                    metadata = None
+            if isinstance(metadata, dict) and metadata.get(
+                "map_max_tokens_to_max_completion_tokens"
+            ):
+                return True
+        return False
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -159,6 +197,9 @@ class AzureOpenAIConfig(BaseConfig):
         api_version: str = "",
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model)
+        map_max_completion_tokens = (
+            self._should_map_max_tokens_to_max_completion_tokens(model)
+        )
         api_version_times = api_version.split("-")
 
         if len(api_version_times) >= 3:
@@ -171,7 +212,13 @@ class AzureOpenAIConfig(BaseConfig):
             api_version_day = None
 
         for param, value in non_default_params.items():
-            if param == "tool_choice":
+            if param == "max_tokens" and map_max_completion_tokens:
+                # Some Azure models (e.g. azure/gpt-chat-latest) reject `max_tokens`
+                # and require `max_completion_tokens`. The model map flags these via
+                # `map_max_tokens_to_max_completion_tokens` so we translate the param
+                # instead of letting the upstream call 400.
+                optional_params["max_completion_tokens"] = value
+            elif param == "tool_choice":
                 """
                 This parameter requires API version 2023-12-01-preview or later
 
