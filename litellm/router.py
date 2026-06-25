@@ -2437,6 +2437,8 @@ class Router:
                 self.finished = False
                 self.responses_api_provider_config = getattr(source_iterator, "responses_api_provider_config", None)
                 self.completed_response = None
+                self._streamed_output_items: dict = {}
+                self._streamed_text_only_items: dict = {}
                 self.start_time = getattr(source_iterator, "start_time", datetime.now())
                 self._failure_handled = False
                 self._yielded_first_chunk = False

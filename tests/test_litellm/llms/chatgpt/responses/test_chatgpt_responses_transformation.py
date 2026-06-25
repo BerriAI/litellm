@@ -54,14 +54,10 @@ class TestChatGPTResponsesAPITransformation:
         url = config.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://chatgpt.example.com/responses"
 
-        custom_url = config.get_complete_url(
-            api_base="https://custom.chatgpt.com", litellm_params={}
-        )
+        custom_url = config.get_complete_url(api_base="https://custom.chatgpt.com", litellm_params={})
         assert custom_url == "https://custom.chatgpt.com/responses"
 
-        url_with_slash = config.get_complete_url(
-            api_base="https://chatgpt.example.com/", litellm_params={}
-        )
+        url_with_slash = config.get_complete_url(api_base="https://chatgpt.example.com/", litellm_params={})
         assert url_with_slash == "https://chatgpt.example.com/responses"
 
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
@@ -124,9 +120,7 @@ class TestChatGPTResponsesAPITransformation:
                 "user": "user_123",
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "metadata": {"foo": "bar"},
                 "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
@@ -165,9 +159,7 @@ class TestChatGPTResponsesAPITransformation:
             ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
         ],
     )
-    def test_chatgpt_non_stream_sse_response_parsing(
-        self, model_name: str, response_model: str
-    ):
+    def test_chatgpt_non_stream_sse_response_parsing(self, model_name: str, response_model: str):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
@@ -190,9 +182,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -210,9 +200,7 @@ class TestChatGPTResponsesAPITransformation:
             ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
         ],
     )
-    def test_chatgpt_non_stream_sse_response_recovers_output_items(
-        self, model_name: str, response_model: str
-    ):
+    def test_chatgpt_non_stream_sse_response_recovers_output_items(self, model_name: str, response_model: str):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
@@ -235,9 +223,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -277,9 +263,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -312,9 +296,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            502, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(502, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         with pytest.raises(OpenAIError) as exc_info:
