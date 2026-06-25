@@ -206,7 +206,14 @@ jobs:
             UV_HTTP_TIMEOUT: "300"
           command: |
             $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
-            Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile $rustupInit
+            $rustupVersion = "1.28.2"
+            $rustupUrl = "https://static.rust-lang.org/rustup/archive/$rustupVersion/x86_64-pc-windows-msvc/rustup-init.exe"
+            Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupInit
+            $rustupExpected = "88d8258dcf6ae4f7a80c7d1088e1f36fa7025a1cfd1343731b4ee6f385121fc0"
+            $rustupActual = (Get-FileHash -Path $rustupInit -Algorithm SHA256).Hash.ToLower()
+            if ($rustupActual -ne $rustupExpected) {
+              throw "rustup installer hash mismatch: expected $rustupExpected got $rustupActual"
+            }
             & $rustupInit -y --profile minimal --default-toolchain stable
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
