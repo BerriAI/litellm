@@ -8,7 +8,6 @@ It imports v1, so it is kept out of the package ``__init__`` like the rest of th
 
 from __future__ import annotations
 
-from typing import Optional
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -24,7 +23,7 @@ class V1PerUserTokenStore:
     this never raises ``TokenStoreUnavailable``.
     """
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         if not user_id:
             return None
 

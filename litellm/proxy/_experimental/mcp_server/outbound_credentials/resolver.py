@@ -14,7 +14,6 @@ that each land in a follow-up PR with their seam. Pure v2: no imports from v1.
 
 from __future__ import annotations
 
-from typing import Optional
 
 import httpx
 from typing_extensions import assert_never
@@ -53,7 +52,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 class _NullOAuthTokenStore:
     """Fail-closed default: with no token store wired, every user reads as not authorized."""
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         return None
 
 
@@ -65,7 +64,7 @@ class UpstreamCredentialProvider:
     `authorization_code` reads the user's token from the injected `OAuthTokenStore`.
     """
 
-    def __init__(self, oauth_token_store: Optional[OAuthTokenStore] = None) -> None:
+    def __init__(self, oauth_token_store: OAuthTokenStore | None = None) -> None:
         self._oauth_token_store: OAuthTokenStore = (
             oauth_token_store or _NullOAuthTokenStore()
         )
@@ -115,7 +114,7 @@ class UpstreamCredentialProvider:
 
     async def _authz_token(
         self, subject: Subject, server: ServerSpec
-    ) -> Optional[OAuthToken]:
+    ) -> OAuthToken | None:
         """The user's authorization_code token, or None when absent or the store is unreachable.
 
         A store outage is mapped to None (the OAuth challenge), not raised, so a transient outage
