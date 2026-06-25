@@ -4312,6 +4312,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "authorization."
         ),
     )
+    fallback_to_db_teams: bool = Field(
+        default=False,
+        description=(
+            "When True, users whose JWT contains no team claims are authenticated "
+            "using their database team memberships instead of receiving HTTP 403. "
+            "Usage is attributed to the user's first resolvable DB team, or to the "
+            "team specified via the x-litellm-team-id request header (validated "
+            "against DB membership). Requires user_id_upsert=True so that user "
+            "records exist before the fallback runs."
+        ),
+    )
     issuers: Optional[List[JWTIssuerConfig]] = Field(
         default=None,
         description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
