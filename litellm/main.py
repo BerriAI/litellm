@@ -3302,6 +3302,14 @@ def completion(  # type: ignore # noqa: PLR0915
             try:
                 # Optimistic AI Gateway routing with reactive serving-endpoints
                 # fallback (self-contained in the Databricks connector).
+                #
+                # Why this is wired at the main.py call site rather than inside the
+                # handler: the reactive retry must re-enter the *full* handler so the
+                # surface (gateway vs. serving-endpoints) is re-resolved from the
+                # updated per-host cache after a gateway-absent error is observed.
+                # The wrapper is a thin, Databricks-only shim around
+                # base_llm_http_handler.completion — it adds no provider-agnostic
+                # surface area, keeping all gateway logic self-contained.
                 response = databricks_chat_completion_with_surface_fallback(
                     base_llm_http_handler,
                     model=model,

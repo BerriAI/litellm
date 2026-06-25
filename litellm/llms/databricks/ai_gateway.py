@@ -373,10 +373,14 @@ def is_gateway_absent_error(exc: Exception) -> bool:
       - absent gateway path  -> ``404 ENDPOINT_NOT_FOUND`` ("Invalid path")
       - missing model        -> ``404 NOT_FOUND`` / ``RESOURCE_DOES_NOT_EXIST``
     so the marker reliably catches a missing gateway while excluding a model-level
-    404 (which must not demote the whole host). If a deployment ever returned a bare
-    404 for an absent gateway, the per-request reactive fallback would still route
-    the call to serving-endpoints (it just wouldn't cache the host) — graceful, not
-    breaking.
+    404 (which must not demote the whole host).
+
+    Note: a *markerless* bare ``404`` returns ``False`` here, so it is surfaced
+    directly to the caller (treated as a model/other error) rather than triggering a
+    serving-endpoints retry. This is intentional given the verified behavior above;
+    if a future/edge deployment returned a markerless ``404`` for an absent gateway,
+    route around it with the explicit escape hatch
+    (``databricks_use_ai_gateway=False`` / ``DATABRICKS_USE_AI_GATEWAY=false``).
     """
     status = getattr(exc, "status_code", None)
     try:
