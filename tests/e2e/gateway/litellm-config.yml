@@ -27,6 +27,10 @@ general_settings:
   alerts: ["email"]
   proxy_budget_rescheduler_min_time: 15
   proxy_budget_rescheduler_max_time: 20
+  # Run the managed-object batch-cost poll every ~15-45s (default 1h) so the poll's
+  # per-cycle row cap (MAX_OBJECTS_PER_POLL_CYCLE) is observable within a test -
+  # exercised by tests/e2e/batches/test_managed_poll_cap_e2e.py.
+  proxy_batch_polling_interval: 15
 
 # fallbacks: [{"gpt-4": ["anthropic.claude-3-5-sonnet-20240620-v1:0"]}] #Configure fallbacks for context window exeeded errors (In this example, we will fall back to Claude Sonnet if over 8000 tokens, which is gpt-4's limit)
   # default_fallbacks: ["anthropic.claude-3-haiku-20240307-v1:0"] #Configure fallbacks for any error for every model (the above fallback configurations override this one)
@@ -127,9 +131,9 @@ model_list:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
 
-  - model_name: gemini-2-embedding
+  - model_name: gemini-embedding-2
     litellm_params:
-      model: gemini/gemini-2-embedding
+      model: gemini/gemini-embedding-2
       api_key: os.environ/GEMINI_API_KEY
 
   # realtime models

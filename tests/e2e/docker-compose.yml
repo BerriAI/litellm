@@ -1,0 +1,64 @@
+# Local e2e proxy, built from the litellm_internal_staging branch.
+#
+# The image `litellm-staging:local` is built from a clean checkout of
+# litellm_internal_staging (the working tree's uv.lock has merge markers, so
+# build from a worktree, not the dirty tree):
+#
+#   git worktree add /tmp/litellm-staging litellm_internal_staging
+#   docker build -t litellm-staging:local /tmp/litellm-staging
+#
+# Then provide provider keys (copy .env.example -> .env, fill in keys) and run:
+#
+#   docker compose -f tests/e2e/docker-compose.yml up -d
+#
+# The proxy comes up on http://localhost:4000 with master key sk-1234, which is
+# what the e2e suites default to. Point the suites at it:
+#
+#   LITELLM_MASTER_KEY=sk-1234 LITELLM_PROXY_URL=http://localhost:4000 \
+#     .venv/bin/python -m pytest tests/e2e/ -v
+
+services:
+  litellm:
+    image: litellm-staging:local
+    ports:
+      - "4000:4000"
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./gateway/litellm-config.yml:/app/config.yaml
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      LITELLM_MASTER_KEY: "sk-1234"
+      STORE_MODEL_IN_DB: "True"
+      # Run the budget-reset job every ~15-20s (default ~10min) so short budget
+      # windows actually reset within an e2e test (multi-window + reset suites).
+      PROXY_BUDGET_RESCHEDULER_MIN_TIME: "15"
+      PROXY_BUDGET_RESCHEDULER_MAX_TIME: "20"
+      # LITELLM_LICENSE is injected from .env (gitignored), never hardcoded here.
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    # Exposed on host 6380 (not 6379, to avoid clashing with a host-local redis) so
+    # test_spend_counter_reseed_e2e can read the shared spend counter back and assert
+    # it equals the DB spend. The litellm container still reaches it as redis:6379.
+    ports:
+      - "6380:6379"
+
+volumes:
+  postgres_data:
+    driver: local
