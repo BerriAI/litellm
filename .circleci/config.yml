@@ -2854,6 +2854,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - attach_workspace:
+          at: ~/project
 
       - run:
           name: Build Docker image
@@ -2949,6 +2951,8 @@ workflows:
       - schema_migration_check:
           filters: *main_branches
       - build_docker_database_image:
+          requires:
+            - ui_build
           filters: *main_branches
       - e2e_ui_testing:
           filters: *main_branches
