@@ -242,8 +242,30 @@ class ExaAISearchConfig(BaseSearchConfig):
             for key, value in response_json.items()
             if key not in self._RESPONSE_RESERVED_FIELDS
         }
-        return SearchResponse(
+        search_response = SearchResponse(
             results=results,
             object="search",
             **response_extras,
         )
+
+        # Exa reports the authoritative per-query cost under ``costDollars.total``.
+        # Surface it for cost tracking so spend reflects what Exa actually charges
+        # (e.g. ``type: "deep"`` searches), which the static price list cannot
+        # distinguish. Cost tracking falls back to the price list when absent.
+        provider_reported_cost = self._extract_provider_reported_cost(response_json)
+        if provider_reported_cost is not None:
+            search_response._hidden_params["provider_reported_cost"] = (
+                provider_reported_cost
+            )
+
+        return search_response
+
+    @staticmethod
+    def _extract_provider_reported_cost(response_json: dict) -> Optional[float]:
+        """Pull Exa's reported total cost (USD) from the raw response, if present."""
+        cost_dollars = response_json.get("costDollars")
+        if isinstance(cost_dollars, dict):
+            total = cost_dollars.get("total")
+            if isinstance(total, (int, float)):
+                return float(total)
+        return None
