@@ -633,6 +633,7 @@ async def acompletion(
 
     try:
         # Use a partial function to pass your keyword arguments
+        kwargs.pop("acompletion", None)
         func = partial(completion, **completion_kwargs, **kwargs)
 
         # Add the context to the function
@@ -5063,6 +5064,12 @@ def completion(  # type: ignore
     ######### unpacking kwargs #####################
     args = locals()
 
+    # Set by the responses->completion fallback so completion() does not bridge
+    # back to the Responses API: that round-trip mutually recurses forever for a
+    # model whose model_cost mode is "responses" but whose provider has no
+    # Responses API config (get_provider_responses_api_config -> None).
+    skip_responses_api_bridge = kwargs.pop("_skip_responses_api_bridge", False)
+
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -5358,7 +5365,7 @@ def completion(  # type: ignore
 
         messages = update_messages_with_model_file_ids(
             messages=messages,
-            model_id=kwargs.get("model_info", {}).get("id", None),
+            model_id=(kwargs.get("model_info") or {}).get("id", None),
             model_file_id_mapping=cast(
                 Dict[str, Dict[str, str]],
                 kwargs.get("model_file_id_mapping") or {},
@@ -5559,7 +5566,10 @@ def completion(  # type: ignore
         # detection when the deployment name differs from the model name.
         _azure_detection_model = base_model or model
 
-        if responses_api_model_info.get("mode") == "responses":
+        if (
+            responses_api_model_info.get("mode") == "responses"
+            and not skip_responses_api_bridge
+        ):
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = (

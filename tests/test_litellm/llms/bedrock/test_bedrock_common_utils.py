@@ -263,3 +263,123 @@ def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
 
     assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling
+
+
+def test_route_prefix_matched_as_path_segment_not_substring():
+    """Route tokens like ``mantle/`` must match only at a path-segment boundary.
+
+    The ``bedrock_mantle/`` provider prefix contains the substring ``mantle/``;
+    a substring match misroutes ``bedrock_mantle/openai.gpt-5.5`` to the Claude
+    Mythos mantle config, whose request transform strips ``mantle/`` and mangles
+    the body model into ``bedrock_openai.gpt-5.5``. These assertions fail under
+    the old substring matching and pass once matching is anchored to ``startswith``
+    or a ``/`` boundary.
+    """
+    # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    )
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
+    )
+    assert (
+        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
+        is False
+    )
+
+    # A genuine mantle route still resolves, via the startswith branch...
+    assert (
+        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
+        == "mantle"
+    )
+    # ...and via the mid-path "/mantle/" branch (after the bedrock/ provider prefix).
+    assert (
+        BedrockModelInfo.get_bedrock_route(
+            "bedrock/mantle/anthropic.claude-mythos-preview"
+        )
+        == "mantle"
+    )
+
+
+def test_model_has_route_prefix_exercises_both_branches():
+    """``_model_has_route_prefix`` matches on ``startswith`` or a ``/`` boundary only."""
+    # startswith branch
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "mantle/anthropic.claude-mythos-preview", "mantle/"
+        )
+        is True
+    )
+    # f"/{prefix}" boundary branch
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "bedrock/mantle/anthropic.claude-mythos-preview", "mantle/"
+        )
+        is True
+    )
+    # neither branch: the token only appears glued to another segment
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "bedrock_mantle/openai.gpt-5.5", "mantle/"
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "route_method, token",
+    [
+        (BedrockModelInfo._explicit_converse_route, "converse"),
+        (BedrockModelInfo._explicit_converse_like_route, "converse_like"),
+        (BedrockModelInfo._explicit_invoke_route, "invoke"),
+        (BedrockModelInfo._explicit_async_invoke_route, "async_invoke"),
+        (BedrockModelInfo._explicit_agent_route, "agent"),
+        (BedrockModelInfo._explicit_agentcore_route, "agentcore"),
+        (BedrockModelInfo._explicit_claude_platform_route, "claude_platform"),
+        (BedrockModelInfo._explicit_openai_route, "openai"),
+    ],
+    ids=[
+        "converse",
+        "converse_like",
+        "invoke",
+        "async_invoke",
+        "agent",
+        "agentcore",
+        "claude_platform",
+        "openai",
+    ],
+)
+def test_explicit_route_helpers_match_token_only_as_path_segment(route_method, token):
+    """Each migrated ``_explicit_*_route`` matches its token only as a path segment.
+
+    A leading segment (start of the id or right after a ``/``) matches; the token
+    glued onto a preceding segment does not. Reverting any method to the old
+    ``"<token>/" in model`` substring check makes the non-segment case return True
+    and fails this test.
+    """
+    # leading-segment forms match
+    assert route_method(f"{token}/some-model") is True
+    assert route_method(f"bedrock/{token}/some-model") is True
+    # the token only as a non-segment substring must not match
+    assert route_method(f"x{token}/y") is False
+
+
+def test_explicit_invoke_route_does_not_match_async_invoke():
+    """``invoke/`` must not substring-match ``async_invoke/`` models.
+
+    This is the concrete improvement of the segment-boundary migration: the old
+    ``"invoke/" in model`` check wrongly classified async-invoke models as the
+    invoke route.
+    """
+    async_invoke_model = "async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
+    assert BedrockModelInfo._explicit_invoke_route(async_invoke_model) is False
+    assert (
+        BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}")
+        is False
+    )
+    # ...while async_invoke/ is still detected as its own route.
+    assert BedrockModelInfo._explicit_async_invoke_route(async_invoke_model) is True
+    assert (
+        BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}")
+        is True
+    )
