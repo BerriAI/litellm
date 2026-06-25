@@ -130,6 +130,11 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || is_unique_local
                 || is_link_local
+                || ip
+                    .to_ipv4_mapped()
+                    .or_else(|| ip.to_ipv4())
+                    .map(|v4| is_blocked_ip(IpAddr::V4(v4)))
+                    .unwrap_or(false)
         }
     }
 }
@@ -405,7 +410,10 @@ mod tests {
         assert!(is_blocked_ip("::1".parse().unwrap()));
         assert!(is_blocked_ip("fd00::1".parse().unwrap()));
         assert!(is_blocked_ip("fe80::1".parse().unwrap()));
+        assert!(is_blocked_ip("::ffff:169.254.169.254".parse().unwrap()));
+        assert!(is_blocked_ip("::ffff:10.0.0.1".parse().unwrap()));
         assert!(!is_blocked_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_blocked_ip("::ffff:8.8.8.8".parse().unwrap()));
     }
 
     #[tokio::test]
