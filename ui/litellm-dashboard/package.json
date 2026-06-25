@@ -81,7 +81,7 @@
     "tailwindcss": "3.4.19",
     "typescript": "5.9.3",
     "typescript-eslint": "8.60.1",
-    "vite": "7.3.2",
+    "vite": "7.3.5",
     "vitest": "3.2.6"
   },
   "overrides": {
@@ -94,7 +94,9 @@
     "braces": "3.0.3",
     "brace-expansion": "5.0.6",
     "axios": "1.13.6",
-    "postcss": "8.5.13"
+    "postcss": "8.5.13",
+    "esbuild": "0.28.1",
+    "form-data": "4.0.6"
   },
   "engines": {
     "node": ">=20.9.0",
