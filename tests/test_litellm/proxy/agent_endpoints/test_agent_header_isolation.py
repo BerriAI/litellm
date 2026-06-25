@@ -265,6 +265,7 @@ async def test_create_a2a_client_uses_fresh_httpx_client():
     3. The cache-key param differs between calls (so the real LRU cache cannot
        return the same httpx client even under load).
     """
+    pytest.importorskip("a2a.client")
     from litellm.a2a_protocol.main import create_a2a_client
 
     captured_calls: list = []
@@ -318,6 +319,7 @@ async def test_create_a2a_client_uses_fresh_httpx_client():
 @pytest.mark.asyncio
 async def test_create_a2a_client_default_timeout_matches_constant():
     """When timeout is omitted, httpx client params must use DEFAULT_A2A_AGENT_TIMEOUT."""
+    pytest.importorskip("a2a.client")
     from litellm.a2a_protocol.main import create_a2a_client
 
     captured: dict = {}
@@ -348,6 +350,7 @@ async def test_create_a2a_client_default_timeout_matches_constant():
 @pytest.mark.asyncio
 async def test_create_a2a_client_explicit_timeout_overrides_default():
     """Explicit timeout= must be passed through to the httpx client params."""
+    pytest.importorskip("a2a.client")
     from litellm.a2a_protocol.main import create_a2a_client
 
     captured: dict = {}
