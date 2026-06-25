@@ -306,6 +306,10 @@ class Cache:
         "user_api_key_team_id",
         "user_api_key_org_id",
     )
+    _SAFE_CACHE_LOOKUP_METADATA_FIELDS: tuple[str, ...] = (
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+    )
 
     def _is_semantic_cache(self) -> bool:
         return self.type in (
@@ -577,7 +581,7 @@ class Cache:
         if isinstance(kwargs.get("metadata"), dict):
             cache_lookup_kwargs["metadata"] = {
                 field: kwargs["metadata"][field]
-                for field in Cache._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
+                for field in Cache._SAFE_CACHE_LOOKUP_METADATA_FIELDS
                 if field in kwargs["metadata"]
             }
 

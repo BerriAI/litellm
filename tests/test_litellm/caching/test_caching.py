@@ -70,7 +70,6 @@ def test_safe_cache_lookup_kwargs_preserves_tenant_scope_metadata_only():
     assert lookup_kwargs == {
         "messages": [{"role": "user", "content": "hello"}],
         "metadata": {
-            "user_api_key": "hashed-key",
             "user_api_key_team_id": "team-1",
             "user_api_key_org_id": "org-1",
         },
