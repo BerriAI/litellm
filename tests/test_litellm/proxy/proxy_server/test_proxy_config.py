@@ -889,6 +889,7 @@ def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
 
 def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypatch):
     monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value: value,
@@ -904,6 +905,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
         litellm_params={
             "model": "openai/gpt-4o-mini",
             "api_key": "os.environ/LITELLM_DB_MODEL_API_KEY",
+            "api_base": "os.environ/LITELLM_MASTER_KEY",
         },
         blocked=False,
     )
@@ -913,6 +915,20 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
 
     assert added == 1
     assert deployment.litellm_params.api_key == "resolved-secret"
+    assert deployment.litellm_params.api_base == "os.environ/LITELLM_MASTER_KEY"
+
+
+def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
+    def fail_on_call(value, key, return_original_value):
+        raise AssertionError("decrypt_value_helper should only receive strings")
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        fail_on_call,
+    )
+    pc = ProxyConfig()
+
+    assert pc._resolve_db_litellm_param(key="tpm", value=100) == 100
 
 
 # ---------------------------------------------------------------------------
@@ -951,10 +967,13 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
     monkeypatch,
 ):
     monkeypatch.setenv("LITELLM_DB_MODEL_API_KEY", "resolved-secret")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value: (
-            "os.environ/LITELLM_DB_MODEL_API_KEY" if key == "api_key" else value
+            "os.environ/LITELLM_DB_MODEL_API_KEY"
+            if key == "api_key"
+            else "os.environ/LITELLM_MASTER_KEY" if key == "api_base" else value
         ),
     )
     pc = ProxyConfig()
@@ -964,6 +983,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
         model_info={"id": "model-1"},
         litellm_params={
             "api_key": "encrypted-env-ref",
+            "api_base": "encrypted-api-base-env-ref",
             "model": "openai/gpt-4o-mini",
         },
         blocked=False,
@@ -972,6 +992,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
     out = pc.decrypt_model_list_from_db(new_models=[m])
 
     assert out[0]["litellm_params"]["api_key"] == "resolved-secret"
+    assert out[0]["litellm_params"]["api_base"] == "os.environ/LITELLM_MASTER_KEY"
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():

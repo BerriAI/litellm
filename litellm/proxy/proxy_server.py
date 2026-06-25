@@ -1080,6 +1080,16 @@ _OPENAPI_HTTP_METHODS = {
 # `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
 # and cache endpoint files.
 _ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+_DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
+    {
+        "api_key",
+        "client_secret",
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+    }
+)
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -5194,11 +5204,16 @@ class ProxyConfig:
         return deleted_deployments
 
     def _resolve_db_litellm_param(self, key: str, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+
         decrypted_value = decrypt_value_helper(
             value=value, key=key, return_original_value=True
         )
-        if isinstance(decrypted_value, str) and decrypted_value.startswith(
-            "os.environ/"
+        if (
+            key in _DB_LITELLM_PARAM_ENV_REF_KEYS
+            and isinstance(decrypted_value, str)
+            and decrypted_value.startswith("os.environ/")
         ):
             return get_secret(decrypted_value)
         return decrypted_value
@@ -5223,10 +5238,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    if isinstance(v, str):
-                        _litellm_params[k] = self._resolve_db_litellm_param(
-                            key=k, value=v
-                        )
+                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
