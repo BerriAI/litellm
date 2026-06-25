@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -108,6 +109,59 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     body = captured_data["proxy_server_request"]["body"]
     assert body["name"] == tool_name
     assert body["arguments"] == tool_arguments
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_tool_call_handles_integer_progress_token():
+    """An integer progressToken must not break host progress capture.
+
+    Per the MCP spec ``ProgressToken = str | int``. A client sending an integer
+    token previously tripped ``f"...{host_token[:8]}..."`` with
+    ``TypeError: 'int' object is not subscriptable``, which got swallowed into a
+    misleading "Could not capture host progress context" warning on every such
+    tool call. Regression test: that warning must not be emitted.
+    """
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(UserAPIKeyAuth(api_key="test_key", user_id="test_user"))
+
+    # Drive the real request context the proxy reads, with an int progressToken
+    # (e.g. a client SDK that uses an incrementing counter).
+    host_ctx = SimpleNamespace(
+        meta=SimpleNamespace(progressToken=12345),
+        session=MagicMock(send_progress_notification=AsyncMock()),
+    )
+    ctx_token = request_ctx.set(host_ctx)
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.verbose_logger"
+        ) as mock_logger:
+            try:
+                await mcp_server_tool_call("test_tool", {"param": "value"})
+            except Exception:
+                # Downstream tool dispatch is out of scope; we only assert that
+                # capturing the host progress context did not warn.
+                pass
+    finally:
+        request_ctx.reset(ctx_token)
+
+    progress_warnings = [
+        call
+        for call in mock_logger.warning.call_args_list
+        if "Could not capture host progress context" in str(call)
+    ]
+    assert not progress_warnings, (
+        "integer progressToken should be handled gracefully, "
+        f"got warning(s): {progress_warnings}"
+    )
 
 
 def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
