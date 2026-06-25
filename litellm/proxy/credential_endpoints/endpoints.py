@@ -2,9 +2,12 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -46,7 +49,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 
 async def _caller_team_admin_ids(
-    user_api_key_dict: UserAPIKeyAuth, prisma_client: object
+    user_api_key_dict: UserAPIKeyAuth, prisma_client: "Optional[PrismaClient]"
 ) -> frozenset[str]:
     """Set of team_ids the caller is team-admin of.
 
@@ -64,7 +67,7 @@ async def _caller_team_admin_ids(
     try:
         user_obj = await get_user_object(
             user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,  # type: ignore[arg-type]
+            prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
             parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -77,7 +80,7 @@ async def _caller_team_admin_ids(
         for team_id in team_ids:
             team_obj = await get_team_object(
                 team_id=team_id,
-                prisma_client=prisma_client,  # type: ignore[arg-type]
+                prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
