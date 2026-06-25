@@ -29,7 +29,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import (
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-_DEFAULT_API_BASE = "http://localhost:8000"
+_DEFAULT_API_BASE = "https://localhost:8000"
 _GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
 
 
