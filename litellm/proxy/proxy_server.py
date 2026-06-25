@@ -5220,9 +5220,11 @@ class ProxyConfig:
                 _model_info_raw = (
                     m.model_info
                     if isinstance(m.model_info, dict)
-                    else m.model_info.model_dump()
-                    if hasattr(m.model_info, "model_dump")
-                    else None
+                    else (
+                        m.model_info.model_dump()
+                        if hasattr(m.model_info, "model_dump")
+                        else None
+                    )
                 )
                 _litellm_params = strip_env_refs_for_team_model(
                     litellm_params=_litellm_params,
@@ -5267,9 +5269,11 @@ class ProxyConfig:
                 _model_info_raw = (
                     m.model_info
                     if isinstance(m.model_info, dict)
-                    else m.model_info.model_dump()
-                    if hasattr(m.model_info, "model_dump")
-                    else None
+                    else (
+                        m.model_info.model_dump()
+                        if hasattr(m.model_info, "model_dump")
+                        else None
+                    )
                 )
                 _litellm_params = strip_env_refs_for_team_model(
                     litellm_params=_litellm_params,
