@@ -1,0 +1,187 @@
+"""Exhaustive tests for the pure access-decision function.
+
+Each test names one specific reason a team-admin patch should be denied (or
+allowed). Together they pin the security contract: changing this code with
+the tests in place should fail a case named after what you broke.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from litellm.proxy.credential_endpoints.access_decision import (
+    Allow,
+    Deny,
+    decide_credential_patch,
+)
+
+_EXISTING_INFO = {
+    "credential_type": "logging",
+    "description": "tenant Langfuse",
+    "host": "https://cloud.langfuse.com",
+    "access": {"teams": ["team-A", "team-B"], "orgs": ["org-1"], "global": False},
+}
+
+
+def _decision(
+    *,
+    is_proxy_admin: bool = False,
+    caller_team_admin_ids: frozenset[str] = frozenset({"team-T"}),
+    existing_info=_EXISTING_INFO,
+    patch_info=None,
+    patch_values=None,
+    patch_name_changed: bool = False,
+):
+    return decide_credential_patch(
+        is_proxy_admin=is_proxy_admin,
+        caller_team_admin_ids=caller_team_admin_ids,
+        existing_info=existing_info,
+        patch_info=patch_info,
+        patch_values=patch_values,
+        patch_name_changed=patch_name_changed,
+    )
+
+
+class TestProxyAdminAllow:
+    def test_proxy_admin_allowed_on_value_change(self):
+        d = _decision(
+            is_proxy_admin=True,
+            patch_values={"api_key": "rotated"},
+            patch_info={"credential_type": "logging"},
+        )
+        assert isinstance(d, Allow)
+
+    def test_proxy_admin_allowed_on_global_flip(self):
+        d = _decision(
+            is_proxy_admin=True,
+            patch_info={"access": {"global": True}},
+        )
+        assert isinstance(d, Allow)
+
+    def test_proxy_admin_allowed_on_rename(self):
+        d = _decision(is_proxy_admin=True, patch_name_changed=True)
+        assert isinstance(d, Allow)
+
+
+class TestTeamAdminAllow:
+    def test_appending_own_team_id(self):
+        d = _decision(
+            patch_info={
+                "access": {"teams": ["team-A", "team-B", "team-T"]},
+            },
+        )
+        assert isinstance(d, Allow)
+
+    def test_appending_only_own_team_id_when_no_prior_teams(self):
+        existing = {**_EXISTING_INFO, "access": {"global": False}}
+        d = _decision(
+            existing_info=existing,
+            patch_info={"access": {"teams": ["team-T"]}},
+        )
+        assert isinstance(d, Allow)
+
+    def test_idempotent_when_already_granted(self):
+        existing = {**_EXISTING_INFO, "access": {"teams": ["team-T"]}}
+        d = _decision(
+            existing_info=existing,
+            patch_info={"access": {"teams": ["team-T"]}},
+        )
+        assert isinstance(d, Allow)
+
+
+class TestTeamAdminDeny:
+    def test_not_team_admin_anywhere(self):
+        d = _decision(
+            caller_team_admin_ids=frozenset(),
+            patch_info={"access": {"teams": ["team-T"]}},
+        )
+        assert isinstance(d, Deny)
+        assert "proxy admin" in d.reason
+
+    def test_rename(self):
+        d = _decision(
+            patch_name_changed=True,
+            patch_info={"access": {"teams": ["team-T"]}},
+        )
+        assert isinstance(d, Deny)
+        assert "credential_name" in d.reason
+
+    def test_changing_credential_values(self):
+        d = _decision(
+            patch_values={"api_key": "stolen"},
+            patch_info={"access": {"teams": ["team-T"]}},
+        )
+        assert isinstance(d, Deny)
+        assert "credential_values" in d.reason
+
+    def test_empty_patch(self):
+        d = _decision(patch_info=None)
+        assert isinstance(d, Deny)
+
+    @pytest.mark.parametrize(
+        "field", ["credential_type", "description", "host", "endpoint"]
+    )
+    def test_changing_immutable_info_field(self, field):
+        d = _decision(patch_info={field: "x", "access": {"teams": ["team-T"]}})
+        assert isinstance(d, Deny)
+        assert field in d.reason
+
+    def test_patch_info_with_unknown_keys(self):
+        d = _decision(patch_info={"weird_field": 1})
+        assert isinstance(d, Deny)
+        assert "weird_field" in d.reason
+
+    def test_flipping_global(self):
+        d = _decision(patch_info={"access": {"global": True}})
+        assert isinstance(d, Deny)
+        assert "global" in d.reason
+
+    def test_editing_orgs(self):
+        d = _decision(patch_info={"access": {"orgs": ["org-new"]}})
+        assert isinstance(d, Deny)
+        assert "orgs" in d.reason
+
+    def test_adding_foreign_team_id(self):
+        d = _decision(
+            patch_info={
+                "access": {"teams": ["team-A", "team-B", "team-foreign"]},
+            },
+        )
+        assert isinstance(d, Deny)
+        assert "team-foreign" in d.reason
+
+    def test_removing_existing_grant(self):
+        d = _decision(
+            patch_info={
+                "access": {"teams": ["team-A", "team-T"]},
+            },
+        )
+        assert isinstance(d, Deny)
+        assert "team-B" in d.reason
+
+    def test_replacing_teams_wholesale(self):
+        d = _decision(patch_info={"access": {"teams": ["team-T"]}})
+        assert isinstance(d, Deny)
+        # Removed team-A and team-B; either should appear in the reason.
+        assert "team-A" in d.reason or "team-B" in d.reason
+
+
+class TestTeamAdminMultipleTeams:
+    def test_can_add_multiple_own_team_ids(self):
+        d = _decision(
+            caller_team_admin_ids=frozenset({"team-T1", "team-T2"}),
+            patch_info={
+                "access": {"teams": ["team-A", "team-B", "team-T1", "team-T2"]},
+            },
+        )
+        assert isinstance(d, Allow)
+
+    def test_one_own_one_foreign_is_deny(self):
+        d = _decision(
+            caller_team_admin_ids=frozenset({"team-T1"}),
+            patch_info={
+                "access": {"teams": ["team-A", "team-B", "team-T1", "team-T2"]},
+            },
+        )
+        assert isinstance(d, Deny)
+        assert "team-T2" in d.reason
