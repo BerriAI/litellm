@@ -99,7 +99,6 @@ class GuardrailV2(CustomGuardrail):
         extra_headers: Optional[list] = None,
         streaming_end_of_stream_only: Optional[bool] = None,
         streaming_sampling_rate: Optional[int] = None,
-        apply_guardrail_fn: Optional[Callable[[str], str]] = None,
         **kwargs: object,
     ):
         self.guardrail_type = guardrail_type
@@ -107,7 +106,9 @@ class GuardrailV2(CustomGuardrail):
         # these per request (resolving secrets and files), so Python never builds
         # or round-trips a provider config.
         self.params = params
-        self._apply_guardrail_fn = apply_guardrail_fn
+        # Injection point for tests; set the attribute directly to bypass the
+        # compiled bridge. None means call the real litellm_python_bridge.
+        self._apply_guardrail_fn: Optional[Callable[[str], str]] = None
         self.extra_header_allowlist = [
             h for h in (extra_headers or []) if isinstance(h, str)
         ]
@@ -151,7 +152,7 @@ class GuardrailV2(CustomGuardrail):
             if input_type == "response"
             else [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call]
         )
-        batch: "list[GuardrailV2]" = []
+        batch: list[GuardrailV2] = []
         for cb in litellm.callbacks:
             if not isinstance(cb, GuardrailV2) or cb.event_hook != self.event_hook:
                 continue

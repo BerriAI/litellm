@@ -1,5 +1,5 @@
 import importlib
-from typing import TYPE_CHECKING, Callable, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -16,7 +16,7 @@ _INITIALIZERS = "litellm.proxy.guardrails.guardrail_initializers"
 # config uses a feature Rust does not support yet (module_path, function_name).
 # This module is the single source of truth for routing these types; adding a
 # provider is one entry here plus a branch in the Rust config_builder.
-_PYTHON_FALLBACKS: Dict[str, Tuple[str, str]] = {
+_PYTHON_FALLBACKS: dict[str, tuple[str, str]] = {
     SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: (
         f"{_HOOKS}.generic_guardrail_api",
         "initialize_python_guardrail",
@@ -122,7 +122,7 @@ def _make_initializer(guardrail_type: str) -> Callable:
     return initialize_guardrail
 
 
-guardrail_initializer_registry: Dict[str, Callable] = {
+guardrail_initializer_registry: dict[str, Callable] = {
     guardrail_type: _make_initializer(guardrail_type)
     for guardrail_type in RUST_PROVIDERS
 }

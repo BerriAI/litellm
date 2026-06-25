@@ -18,12 +18,13 @@ def _guardrail(verdict, capture=None):
             capture["request"] = json.loads(request_json)
         return json.dumps({"verdict": verdict})
 
-    return GuardrailV2(
+    guardrail = GuardrailV2(
         guardrail_type="openai_moderation",
         params={"api_key": "sk-test"},
-        apply_guardrail_fn=fake_apply,
         guardrail_name="t",
     )
+    guardrail._apply_guardrail_fn = fake_apply
+    return guardrail
 
 
 def _apply(guardrail, inputs):

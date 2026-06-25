@@ -9,7 +9,7 @@ matches back to the keyword/pattern keys the guardrail already uses.
 
 import json
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Optional
 
 
 def _load_scanner_factory() -> Callable[[str], object]:
@@ -25,11 +25,11 @@ def _load_scanner_factory() -> Callable[[str], object]:
 class ScanResult:
     """Which terms the scanner found in one text."""
 
-    category_keywords_present: Set[str] = field(default_factory=set)
-    always_block_present: Set[str] = field(default_factory=set)
-    blocked_words_present: Set[str] = field(default_factory=set)
+    category_keywords_present: set[str] = field(default_factory=set)
+    always_block_present: set[str] = field(default_factory=set)
+    blocked_words_present: set[str] = field(default_factory=set)
     # compiled_patterns index -> match spans (byte offsets)
-    pattern_spans: Dict[int, List[Tuple[int, int]]] = field(default_factory=dict)
+    pattern_spans: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 
 
 # Namespace tags so a single integer id space maps back to the right table.
@@ -43,8 +43,8 @@ class ContentFilterScanner:
     def __init__(
         self,
         scanner: object,
-        id_lookup: Dict[int, Tuple[str, object]],
-        fallback_pattern_indexes: Set[int],
+        id_lookup: dict[int, tuple[str, object]],
+        fallback_pattern_indexes: set[int],
     ):
         self._scanner = scanner
         self._id_lookup = id_lookup
@@ -57,10 +57,10 @@ class ContentFilterScanner:
     @classmethod
     def build(
         cls,
-        category_keywords: Dict[str, object],
-        always_block_keywords: Dict[str, object],
-        blocked_words: Dict[str, object],
-        compiled_patterns: List[Dict[str, object]],
+        category_keywords: dict[str, object],
+        always_block_keywords: dict[str, object],
+        blocked_words: dict[str, object],
+        compiled_patterns: list[dict[str, object]],
         keyword_to_regex: Callable[[str], str],
         scanner_factory: Optional[Callable[[str], object]] = None,
     ) -> "ContentFilterScanner":
@@ -71,9 +71,9 @@ class ContentFilterScanner:
         """
         if scanner_factory is None:
             scanner_factory = _load_scanner_factory()
-        literals: List[dict] = []
-        regexes: List[dict] = []
-        id_lookup: Dict[int, Tuple[str, object]] = {}
+        literals: list[dict] = []
+        regexes: list[dict] = []
+        id_lookup: dict[int, tuple[str, object]] = {}
         next_id = 0
 
         def add_keyword(keyword: str, kind: str, key: object) -> None:
@@ -105,7 +105,7 @@ class ContentFilterScanner:
             # word boundary, i.e. substring matching.
             add_keyword(keyword, _KIND_BLOCKED, keyword)
 
-        fallback_pattern_indexes: Set[int] = set()
+        fallback_pattern_indexes: set[int] = set()
         for index, entry in enumerate(compiled_patterns):
             if entry.get("keyword_regex") is not None or entry.get(
                 "allow_word_numbers"
