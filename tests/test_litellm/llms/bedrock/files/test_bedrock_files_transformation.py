@@ -1308,6 +1308,100 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
+    def _trusted(self, **creds) -> dict:
+        from types import MappingProxyType
+
+        params = self._litellm_params()
+        params["_litellm_internal_model_credentials"] = MappingProxyType(dict(creds))
+        return params
+
+    def test_retrieves_from_distinct_output_bucket(self, monkeypatch):
+        """Batch outputs can land in a separate s3_output_bucket_name. Retrieval
+        must validate the file id against the output bucket too, not just the
+        input bucket, or the very outputs the feature serves are unreachable."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+            },
+            optional_params={},
+            litellm_params=self._trusted(
+                s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+            ),
+        )
+
+        assert (
+            url
+            == "https://s3.us-west-2.amazonaws.com/out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_output_bucket_falls_back_to_env(self, monkeypatch):
+        """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when not in
+        the trusted snapshot, mirroring the input-bucket env fallback."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "in-bucket")
+        monkeypatch.setenv("AWS_S3_OUTPUT_BUCKET_NAME", "env-out-bucket")
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+            },
+            optional_params={},
+            litellm_params=self._litellm_params(),
+        )
+
+        assert (
+            url
+            == "https://s3.us-west-2.amazonaws.com/env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_input_bucket_still_validates_when_output_bucket_set(self, monkeypatch):
+        """Adding output-bucket support must not break retrieval of input-bucket
+        objects when both buckets are configured."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+            },
+            optional_params={},
+            litellm_params=self._trusted(
+                s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+            ),
+        )
+
+        assert (
+            url
+            == "https://s3.us-west-2.amazonaws.com/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_rejects_bucket_outside_input_and_output(self, monkeypatch):
+        """A file id whose bucket is neither the input nor the output bucket is
+        still rejected (SSRF / bucket-confusion guard)."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with pytest.raises(ValueError, match="configured storage bucket"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={
+                    "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
+                },
+                optional_params={},
+                litellm_params=self._trusted(
+                    s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+                ),
+            )
+
     def test_sign_request_without_botocore_raises_helpful_error(self, monkeypatch):
         """A missing botocore must surface an actionable 'install boto3' error
         rather than a raw import failure."""
