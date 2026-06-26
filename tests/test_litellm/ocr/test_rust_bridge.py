@@ -246,7 +246,7 @@ def test_use_litellm_rust_toggles_flag():
 
 
 def test_env_var_enables_rust_ocr(monkeypatch):
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
+    monkeypatch.setenv("LITELLM_USE_RUST", "1")
     assert rust_bridge._env_enables_rust_ocr() is True
 
 

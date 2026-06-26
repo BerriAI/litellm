@@ -46,7 +46,7 @@ _UNSET: Final[_Unset] = _Unset()
 
 
 def _env_enables_rust_ocr() -> bool:
-    return os.getenv("LITELLM_USE_RUST_OCR", "").strip().lower() in {
+    return os.getenv("LITELLM_USE_RUST", "").strip().lower() in {
         "1",
         "true",
         "yes",

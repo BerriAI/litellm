@@ -3,7 +3,7 @@ Gateway E2E smoke for Rust-backed OCR.
 
 Start the proxy with:
 
-LITELLM_USE_RUST_OCR=1 litellm --config tests/e2e/gateway/litellm-config.yml --port 4000
+LITELLM_USE_RUST=1 litellm --config tests/e2e/gateway/litellm-config.yml --port 4000
 """
 
 from __future__ import annotations
