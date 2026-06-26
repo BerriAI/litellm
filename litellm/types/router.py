@@ -188,6 +188,12 @@ class CredentialLiteLLMParams(BaseModel):
     aws_bedrock_runtime_endpoint: Optional[str] = None
     aws_bedrock_project_id: Optional[str] = None
     s3_bucket_name: Optional[str] = None
+    # Like the fields above, must be declared here or the strict dump in
+    # ``get_deployment_credentials_with_provider`` drops it from the trusted
+    # snapshot, so per-model output-bucket config never reaches Bedrock
+    # file-content retrieval and output-bucket file ids are wrongly rejected
+    # (#26335).
+    s3_output_bucket_name: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
