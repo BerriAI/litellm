@@ -167,20 +167,33 @@ class AnthropicMessagesHandler(BaseTranslation):
                 slg_info = (data.get("metadata") or {}).get(
                     "standard_logging_guardrail_information"
                 )
-                if slg_info is not None and litellm_logging_obj.metadata is not None:
-                    existing = litellm_logging_obj.metadata.get(
-                        "standard_logging_guardrail_information"
-                    )
-                    if existing is None:
-                        litellm_logging_obj.metadata[
+                if slg_info is not None:
+                    try:
+                        log_meta = litellm_logging_obj.model_call_details[
+                            "litellm_params"
+                        ].setdefault("metadata", {})
+                        if log_meta is None:
+                            litellm_logging_obj.model_call_details["litellm_params"][
+                                "metadata"
+                            ] = {}
+                            log_meta = litellm_logging_obj.model_call_details[
+                                "litellm_params"
+                            ]["metadata"]
+                        existing = log_meta.get(
                             "standard_logging_guardrail_information"
-                        ] = slg_info
-                    elif isinstance(existing, list):
-                        for entry in (
-                            slg_info if isinstance(slg_info, list) else [slg_info]
-                        ):
-                            if entry not in existing:
-                                existing.append(entry)
+                        )
+                        if existing is None:
+                            log_meta["standard_logging_guardrail_information"] = (
+                                slg_info
+                            )
+                        elif isinstance(existing, list):
+                            for entry in (
+                                slg_info if isinstance(slg_info, list) else [slg_info]
+                            ):
+                                if entry not in existing:
+                                    existing.append(entry)
+                    except (KeyError, AttributeError):
+                        pass
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
