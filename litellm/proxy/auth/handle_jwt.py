@@ -2213,13 +2213,20 @@ class JWTAuthManager:
         )
         if header_team_id:
             team_id = header_team_id
+            # A provisional header team (accepted only because the JWT carries no
+            # team claims) is validated against DB membership further down; never
+            # upsert it here or an attacker-supplied x-litellm-team-id would create
+            # an orphaned team row before that check runs. A genuine membership team
+            # already exists, so suppressing the upsert in that case costs nothing.
             team_object = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                team_id_upsert=(
+                    jwt_handler.litellm_jwtauth.team_id_upsert and not db_team_fallback
+                ),
             )
         elif not team_id and not db_team_fallback:
             ## SPECIFIC TEAM ID
