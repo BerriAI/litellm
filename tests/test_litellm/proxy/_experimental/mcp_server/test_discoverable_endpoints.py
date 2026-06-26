@@ -435,10 +435,239 @@ async def test_register_client_returns_existing_server_credentials():
         global_mcp_server_manager.registry.clear()
 
     assert result == {
-        "client_id": "stored_server",
+        "client_id": "existing-client",
         "client_secret": "dummy",
         "redirect_uris": ["https://proxy.litellm.example/callback"],
     }
+
+
+def test_resolve_config_secret_handles_plain_and_encrypted(monkeypatch):
+    """A managed-app secret may be operator-typed plaintext or stored encrypted
+    by provisioning; both must resolve to the same usable value."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _resolve_config_secret,
+        )
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-1234567890")
+
+    assert _resolve_config_secret("1601185624273.8899143856786") == (
+        "1601185624273.8899143856786"
+    )
+    assert _resolve_config_secret(None) is None
+    assert _resolve_config_secret("   ") is None
+
+    encrypted = encrypt_value_helper("real-secret")
+    assert encrypted != "real-secret"
+    assert _resolve_config_secret(encrypted) == "real-secret"
+
+
+def test_managed_oauth_app_matches_host_ignoring_port():
+    """authorization_url with an explicit port must still match a bare-host key."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _managed_oauth_app,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {"mcp_managed_oauth_apps": {"slack.com": {"client_id": "123.456"}}},
+        clear=False,
+    ):
+        app = _managed_oauth_app("https://slack.com:443/oauth/v2_user/authorize")
+
+    assert app is not None
+    assert app.client_id == "123.456"
+
+
+@pytest.mark.asyncio
+async def test_register_client_without_dcr_and_no_client_id_does_not_leak_server_id():
+    """Regression: a Slack-style OAuth2 server (no DCR registration_url and no
+    stored client_id) must not have its internal server_id returned as the OAuth
+    client_id. Slack rejects such a value with "Invalid client_id parameter"."""
+    try:
+        from fastapi import HTTPException, Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            register_client_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    server_id = "eb8070ac-efe6-4470-9b1b-9646fe1b39f8"
+    slack_server = MCPServer(
+        server_id=server_id,
+        name="slack",
+        server_name="slack",
+        alias="slack",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://slack.com/oauth/v2_user/authorize",
+        token_url="https://slack.com/api/oauth.v2.user.access",
+        registration_url=None,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://gateway.example/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_client_with_server(
+            request=mock_request,
+            mcp_server=slack_server,
+            client_name="",
+            grant_types=[],
+            response_types=[],
+            token_endpoint_auth_method="",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert server_id not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_register_client_uses_managed_oauth_app():
+    """A server with no stored client_id inherits the gateway-managed OAuth app
+    registered for its authorization host, instead of failing or leaking an id."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            register_client_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    slack_server = MCPServer(
+        server_id="eb8070ac-efe6-4470-9b1b-9646fe1b39f8",
+        name="slack",
+        server_name="slack",
+        alias="slack",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://slack.com/oauth/v2_user/authorize",
+        token_url="https://slack.com/api/oauth.v2.user.access",
+        registration_url=None,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://gateway.example/"
+    mock_request.headers = {}
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "mcp_managed_oauth_apps": {
+                "slack.com": {
+                    "client_id": "1601185624273.8899143856786",
+                    "client_secret": "managed-secret",
+                }
+            }
+        },
+        clear=False,
+    ):
+        result = await register_client_with_server(
+            request=mock_request,
+            mcp_server=slack_server,
+            client_name="",
+            grant_types=[],
+            response_types=[],
+            token_endpoint_auth_method="",
+        )
+
+    assert result == {
+        "client_id": "1601185624273.8899143856786",
+        "client_secret": "dummy",
+        "redirect_uris": ["https://gateway.example/callback"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_authorize_uses_managed_oauth_app_client_id_not_server_id():
+    """End-to-end regression: the authorize redirect must carry the managed
+    Slack client_id, never the internal server_id that Slack rejects."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server_id = "eb8070ac-efe6-4470-9b1b-9646fe1b39f8"
+    slack_server = MCPServer(
+        server_id=server_id,
+        name="slack",
+        server_name="slack",
+        alias="slack",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://slack.com/oauth/v2_user/authorize",
+        token_url="https://slack.com/api/oauth.v2.user.access",
+        scopes=["search:read.public", "chat:write"],
+    )
+    global_mcp_server_manager.registry[slack_server.server_id] = slack_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://gateway.example/"
+    mock_request.headers = {}
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+                return_value="mocked_encrypted_state",
+            ),
+            patch.dict(
+                "litellm.proxy.proxy_server.general_settings",
+                {
+                    "mcp_managed_oauth_apps": {
+                        "slack.com": {"client_id": "1601185624273.8899143856786"}
+                    }
+                },
+                clear=False,
+            ),
+        ):
+            response = await authorize(
+                request=mock_request,
+                client_id=server_id,
+                mcp_server_name="slack",
+                redirect_uri="http://127.0.0.1:60108/callback",
+                state="test_state",
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    location = response.headers["location"]
+    assert "client_id=1601185624273.8899143856786" in location
+    assert server_id not in location
 
 
 @pytest.mark.asyncio
@@ -1885,8 +2114,8 @@ async def test_register_root_resolves_single_oauth2_server():
         ):
             result = await register_client(request=mock_request, mcp_server_name=None)
 
-        # Should resolve to the single server and return its name as client_id
-        assert result["client_id"] == "test_oauth"
+        # Should resolve to the single server and return its real client_id
+        assert result["client_id"] == "test_client_id"
         assert "redirect_uris" in result
     finally:
         global_mcp_server_manager.registry.clear()

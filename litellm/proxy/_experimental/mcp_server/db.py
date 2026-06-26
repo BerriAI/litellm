@@ -1013,8 +1013,6 @@ async def refresh_user_oauth_token(
     refresh_token: Optional[str] = cred.get("refresh_token")
     token_url: Optional[str] = getattr(server, "token_url", None)
     server_id: str = getattr(server, "server_id", "")
-    client_id: Optional[str] = getattr(server, "client_id", None)
-    client_secret: Optional[str] = getattr(server, "client_secret", None)
 
     if not refresh_token:
         verbose_proxy_logger.debug(
@@ -1030,6 +1028,19 @@ async def refresh_user_oauth_token(
         )
         return None
 
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415
+        _effective_oauth_credentials,
+    )
+    from litellm.proxy._experimental.mcp_server.slack_app_provisioning import (  # noqa: PLC0415
+        slack_token_refresh_url,
+    )
+
+    # Resolve client_id/secret the same way the authorize/token handshake does so
+    # gateway-managed apps (which carry no per-server client_id) refresh with the
+    # managed app's credentials instead of omitting them and being rejected.
+    client_id, client_secret = _effective_oauth_credentials(server)
+    refresh_url = slack_token_refresh_url(token_url) or token_url
+
     token_data: Dict[str, str] = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -1042,7 +1053,7 @@ async def refresh_user_oauth_token(
     try:
         async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
         response = await async_client.post(
-            token_url,
+            refresh_url,
             headers={"Accept": "application/json"},
             data=token_data,
         )

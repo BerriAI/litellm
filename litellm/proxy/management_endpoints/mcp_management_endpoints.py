@@ -132,6 +132,7 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _effective_client_id,
         authorize_with_server,
         exchange_token_with_server,
         get_request_base_url,
@@ -1623,8 +1624,9 @@ if MCP_AVAILABLE:
         scope: Optional[str] = None,
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        # Use the server's stored client_id when the caller doesn't supply one
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        # Use the server's stored or gateway-managed client_id when the caller
+        # doesn't supply one
+        resolved_client_id = _effective_client_id(mcp_server) or client_id or ""
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1667,7 +1669,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = Form(None),
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        resolved_client_id = _effective_client_id(mcp_server) or client_id or ""
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1713,8 +1715,109 @@ if MCP_AVAILABLE:
             grant_types=data.get("grant_types", []),
             response_types=data.get("response_types", []),
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-            fallback_client_id=server_id,
         )
+
+    @router.post(
+        "/server/oauth/slack/provision",
+        include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def mcp_provision_slack_app(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Create a Slack app for the hosted Slack MCP server from a manifest and
+        store its credentials as the gateway-managed OAuth app for slack.com.
+
+        The operator supplies a one-time Slack app-configuration token; the
+        gateway builds the manifest (this deployment's callback + MCP user
+        scopes), creates the app, and persists client_id plus an encrypted
+        client_secret. Enabling MCP and publishing/approving the app remain
+        manual Slack steps.
+        """
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            get_request_base_url,
+        )
+        from litellm.proxy._experimental.mcp_server.slack_app_provisioning import (
+            build_slack_mcp_manifest,
+            provision_slack_app,
+        )
+        from litellm.proxy.proxy_server import general_settings, proxy_config
+
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can provision a Slack MCP app"},
+            )
+
+        body = await _read_request_body(request=request)
+        app_config_token = body.get("app_config_token")
+        if not isinstance(app_config_token, str) or not app_config_token.strip():
+            raise HTTPException(status_code=400, detail={"error": "app_config_token is required"})
+        requested_name = body.get("app_name")
+        app_name = (
+            requested_name if isinstance(requested_name, str) and requested_name.strip() else "LiteLLM MCP Connector"
+        )
+        requested_scopes = body.get("user_scopes")
+        user_scopes = (
+            [scope for scope in requested_scopes if isinstance(scope, str)]
+            if isinstance(requested_scopes, list)
+            else None
+        )
+        force = body.get("force") is True
+
+        config = await proxy_config.get_config()
+        config_general = config.get("general_settings")
+        if not isinstance(config_general, dict):
+            config_general = {}
+            config["general_settings"] = config_general
+        managed_apps = config_general.get("mcp_managed_oauth_apps")
+        if not isinstance(managed_apps, dict):
+            managed_apps = {}
+            config_general["mcp_managed_oauth_apps"] = managed_apps
+
+        # Refuse to replace a working app (which would mint a new Slack app and
+        # invalidate every active user session) unless the caller opts in
+        if "slack.com" in managed_apps and not force:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "A managed Slack OAuth app is already configured. "
+                    "Re-provisioning creates a new Slack app and invalidates "
+                    "existing user sessions; pass force=true to replace it."
+                },
+            )
+
+        callback_url = f"{get_request_base_url(request)}/callback"
+        provisioned = await provision_slack_app(
+            app_config_token=app_config_token.strip(),
+            manifest=build_slack_mcp_manifest(callback_url=callback_url, app_name=app_name, user_scopes=user_scopes),
+        )
+
+        stored_app = {
+            "client_id": provisioned.client_id,
+            "client_secret": encrypt_value_helper(provisioned.client_secret),
+        }
+        managed_apps["slack.com"] = stored_app
+        await proxy_config.save_config(new_config=config)
+
+        # Reflect into the running process so the app works without a restart
+        runtime_apps = general_settings.get("mcp_managed_oauth_apps")
+        if not isinstance(runtime_apps, dict):
+            runtime_apps = {}
+            general_settings["mcp_managed_oauth_apps"] = runtime_apps
+        runtime_apps["slack.com"] = stored_app
+
+        return {
+            "app_id": provisioned.app_id,
+            "client_id": provisioned.client_id,
+            "redirect_url": callback_url,
+            "next_steps": [
+                "In Slack app settings, enable the Slack MCP Server toggle",
+                "Publish the app to the directory, or make it internal and have a workspace admin approve it",
+                "Users can then click Authorize and Allow to connect",
+            ],
+        }
 
     @router.delete(
         "/server/{server_id}",

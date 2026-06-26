@@ -643,3 +643,66 @@ async def test_rotate_user_env_vars_skips_undecryptable_rows():
     assert prisma.db.litellm_mcpuserenvvars.update.call_count == 1
     where = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["where"]
     assert where["user_id_server_id"]["server_id"] == "srv-ok"
+
+
+@pytest.mark.asyncio
+async def test_refresh_resolves_managed_client_id_and_slack_rotation_endpoint(
+    monkeypatch,
+):
+    # A token minted via a gateway-managed Slack app carries no per-server
+    # client_id. The refresh must resolve the managed app's client_id/secret (not
+    # omit them, which the provider rejects) and POST to Slack's rotation endpoint
+    # oauth.v2.access, not the oauth.v2.user.access used for the initial exchange.
+    import types
+
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    server = types.SimpleNamespace(
+        token_url="https://slack.com/api/oauth.v2.user.access",
+        server_id="srv-1",
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://slack.com/oauth/v2_user/authorize",
+    )
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "xoxp-new",
+        "refresh_token": "xoxe-1-new",
+        "expires_in": 43200,
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **_: mock_client)
+    monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
+    monkeypatch.setattr(
+        db_mod,
+        "get_user_oauth_credential",
+        AsyncMock(return_value={"access_token": "xoxp-new"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "mcp_managed_oauth_apps": {
+                "slack.com": {"client_id": "111.222", "client_secret": "shh"}
+            }
+        },
+        raising=False,
+    )
+
+    result = await db_mod.refresh_user_oauth_token(
+        prisma_client=MagicMock(),
+        user_id="alice",
+        server=server,
+        cred={"refresh_token": "xoxe-1-old"},
+    )
+
+    assert result == {"access_token": "xoxp-new"}
+    call = mock_client.post.call_args
+    assert call.args[0] == "https://slack.com/api/oauth.v2.access"
+    assert call.kwargs["data"]["client_id"] == "111.222"
+    assert call.kwargs["data"]["client_secret"] == "shh"
+    assert call.kwargs["data"]["grant_type"] == "refresh_token"
+    assert call.kwargs["data"]["refresh_token"] == "xoxe-1-old"
