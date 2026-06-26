@@ -3310,6 +3310,106 @@ async def test_discovery_falls_back_to_authorization_server_path_candidate():
 
 
 @pytest.mark.asyncio
+async def test_authorization_server_and_protected_resource_caches_do_not_collide():
+    """The authorization-server metadata fetch and the protected-resource fetch
+    share ``_OAUTH_METADATA_CACHE``. They must key their entries distinctly, or a
+    server that exercises both paths would have one fetch return the other's
+    payload, silently dropping discovery back to the relay. Keying the
+    authorization-server entry on the well-known URL (not the bare server URL)
+    keeps the two namespaces apart."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+
+    de._OAUTH_METADATA_CACHE.clear()
+    de._OAUTH_METADATA_FETCH_LOCKS.clear()
+    server = _make_oauth2_server(server_id="shared_mcp", url="https://up.example.com/mcp")
+
+    pr_payload = {
+        "resource": "https://up.example.com/mcp",
+        "authorization_servers": ["https://idp.example/"],
+    }
+    as_payload = {"authorization_endpoint": "https://idp.example/authorize"}
+
+    async def fake_get(url, headers=None):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = (
+            pr_payload if "oauth-protected-resource" in url else as_payload
+        )
+        return resp
+
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=fake_get)
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            pr = await de.fetch_upstream_oauth_protected_resource(server)
+            auth_server = await de._fetch_upstream_authorization_server_metadata(server)
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        de._OAUTH_METADATA_FETCH_LOCKS.clear()
+
+    assert pr == pr_payload
+    # If the two caches collided on (server_id, url), this would be pr_payload.
+    assert auth_server == as_payload
+
+
+@pytest.mark.asyncio
+async def test_discovery_ignores_delegation_for_non_oauth2_server():
+    """``delegate_auth_to_upstream`` is honored only for oauth2 servers. A
+    non-oauth2 server that sets the flag must not take the upstream passthrough
+    path: discovery keeps the relay endpoints and performs no upstream fetch."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    server = MCPServer(
+        server_id="passthrough_mcp",
+        name="passthrough_mcp",
+        server_name="passthrough_mcp",
+        alias="passthrough_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        url="https://upstream.example.com/mcp",
+        authorization_url="https://login.example/tenant/authorize",
+        registration_url="https://login.example/tenant/register",
+        extra_headers=["Authorization"],
+        oauth_passthrough=True,
+        delegate_auth_to_upstream=True,
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            side_effect=AssertionError("must not fetch upstream for non-oauth2 server"),
+        ):
+            response = await _build_oauth_authorization_server_response(
+                request=mock_request, mcp_server_name="passthrough_mcp"
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["authorization_endpoint"] == "https://litellm.example.com/passthrough_mcp/authorize"
+    assert response["registration_endpoint"] == "https://litellm.example.com/passthrough_mcp/register"
+
+
+@pytest.mark.asyncio
 async def test_fetch_upstream_authorization_server_metadata_url_guards():
     """A missing or schemeless upstream URL short-circuits to ``None`` without
     attempting any network fetch."""

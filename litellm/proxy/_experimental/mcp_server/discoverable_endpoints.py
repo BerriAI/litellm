@@ -1191,7 +1191,10 @@ async def _fetch_upstream_authorization_server_metadata(
             f"{host_base}/.well-known/oauth-authorization-server{upstream.path.rstrip('/')}"
         )
 
-    cache_key = (mcp_server.server_id, mcp_server.url)
+    # Key on the well-known authorization-server URL, not the bare server URL,
+    # so this never collides with fetch_upstream_oauth_protected_resource's
+    # (server_id, url) entry in the shared metadata cache.
+    cache_key = (mcp_server.server_id, candidates[0])
     now = time.time()
     _prune_oauth_metadata_cache(now)
     cached = _OAUTH_METADATA_CACHE.get(cache_key)
@@ -1256,12 +1259,16 @@ async def _build_oauth_authorization_server_response(
             mcp_server_name, client_ip=client_ip
         )
 
-    # Upstream endpoints are advertised only for servers that explicitly
+    # Upstream endpoints are advertised only for oauth2 servers that explicitly
     # delegate auth to the upstream provider; otherwise discovery keeps
     # advertising the relay so relay-mode deployments stay on the old flow.
+    # delegate_auth_to_upstream is honored only for auth_type oauth2, so a
+    # non-oauth2 (e.g. pass-through) server never takes this path.
     delegated_server = (
         mcp_server
-        if mcp_server is not None and mcp_server.delegate_auth_to_upstream
+        if mcp_server is not None
+        and mcp_server.auth_type == MCPAuth.oauth2
+        and mcp_server.delegate_auth_to_upstream
         else None
     )
 
