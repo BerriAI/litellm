@@ -37,12 +37,14 @@ __all__ = [
     "LLMCost",
     "LLMRequestParams",
     "LLMUsage",
+    "MCPListToolsSpanData",
     "MCPToolCallSpanData",
     "ProxyRequestSpanData",
     "ServerInfo",
     "ServiceSpanData",
     "SpanError",
     "ToolDefinition",
+    "is_mcp_list_tools",
     "is_mcp_tool_call",
 ]
 
@@ -187,14 +189,10 @@ class GuardrailSpanData:
     error: SpanError | None = None
 
     # Guardrail statuses that mean the guardrail did not pass the request through.
-    _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset(
-        {"guardrail_intervened", "guardrail_failed_to_respond"}
-    )
+    _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset({"guardrail_intervened", "guardrail_failed_to_respond"})
 
     @classmethod
-    def from_logging_entry(
-        cls, entry: "StandardLoggingGuardrailInformation"
-    ) -> "GuardrailSpanData":
+    def from_logging_entry(cls, entry: "StandardLoggingGuardrailInformation") -> "GuardrailSpanData":
         """Build from one ``standard_logging_guardrail_information`` entry.
 
         Reads the canonical, provider-agnostic ``StandardLoggingGuardrailInformation``
@@ -279,9 +277,7 @@ class ToolDefinition:
 
     name: str
     description: str | None = None
-    parameters_json: str | None = (
-        None  # JSON-serialized schema (str so it's an AttrValue)
-    )
+    parameters_json: str | None = None  # JSON-serialized schema (str so it's an AttrValue)
 
 
 @dataclass(frozen=True)
@@ -322,9 +318,7 @@ class LLMCallSpanData:
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response = payload.get("response")
-        response = cast(
-            Mapping[str, object], raw_response if isinstance(raw_response, dict) else {}
-        )
+        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
         choices_out = _dicts(response.get("choices"))
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
@@ -347,9 +341,7 @@ class LLMCallSpanData:
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
-            cost=LLMCost.from_breakdown(
-                cast("Mapping[str, object] | None", payload.get("cost_breakdown"))
-            ),
+            cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             is_streaming=as_bool(payload.get("stream")),
@@ -396,14 +388,10 @@ class MCPToolCallSpanData:
             server_name=as_str(meta.get("mcp_server_name")),
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
-                _json_or_none(meta.get("arguments"))
-                if capture_content and meta.get("arguments") is not None
-                else None
+                _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None
             ),
             result_json=(
-                _json_or_none(meta.get("result"))
-                if capture_content and meta.get("result") is not None
-                else None
+                _json_or_none(meta.get("result")) if capture_content and meta.get("result") is not None else None
             ),
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
@@ -426,9 +414,43 @@ def is_mcp_tool_call(payload: Mapping[str, object]) -> bool:
     """Whether a closed request's payload is an MCP tool call rather than an LLM
     call — true when the MCP gateway stamped its tool-call metadata, or the call
     type says so on a path that hasn't populated the metadata yet."""
-    return bool(_mcp_tool_call_metadata(payload)) or (
-        payload.get("call_type") == "call_mcp_tool"
-    )
+    return bool(_mcp_tool_call_metadata(payload)) or (payload.get("call_type") == "call_mcp_tool")
+
+
+@dataclass(frozen=True)
+class MCPListToolsSpanData:
+    """One MCP ``tools/list`` discovery call, parsed from a closed request's payload.
+
+    The proxy is an MCP *client* enumerating an upstream server's tools, so this is
+    a CLIENT span. It carries neither ``gen_ai.operation.name`` nor ``gen_ai.tool.name``:
+    the GenAI semconv sets ``execute_tool`` (and the tool name) only for tool *calls*,
+    and listing executes no tool.
+    """
+
+    method: str
+    session_id: str | None
+    error: SpanError | None
+    identity: RequestIdentity
+
+    @classmethod
+    def from_standard_logging_payload(
+        cls, payload: StandardLoggingPayload, capture_content: bool = False
+    ) -> MCPListToolsSpanData:
+        # The list-tools logging path does not thread an MCP session id into the
+        # payload (only the tool-call path stamps ``mcp_tool_call_metadata``), so
+        # there is none to read here; ``mcp.session.id`` is simply omitted.
+        return cls(
+            method=MCPMethod.TOOLS_LIST.value,
+            session_id=None,
+            error=_parse_error(payload),
+            identity=RequestContext.from_standard_logging_payload(payload).identity,
+        )
+
+
+def is_mcp_list_tools(payload: Mapping[str, object]) -> bool:
+    """Whether a closed request's payload is an MCP ``tools/list`` discovery call
+    rather than a tool call or an LLM call — true when the call type says so."""
+    return payload.get("call_type") == "list_mcp_tools"
 
 
 # --- service event_metadata sanitization ------------------------------------ #
@@ -448,9 +470,7 @@ _SENSITIVE_METADATA_SUBSTRINGS: tuple[str, ...] = (
 # Keys that carry raw call-site internals — live objects, full kwargs/args. The
 # operation name is already the span's ``call_type``, so ``function_name`` is
 # redundant.
-_DROP_METADATA_KEYS: frozenset = frozenset(
-    {"function_kwargs", "function_args", "function_name"}
-)
+_DROP_METADATA_KEYS: frozenset = frozenset({"function_kwargs", "function_args", "function_name"})
 _MAX_METADATA_VALUE_LEN = 1024
 _MAX_METADATA_ITEMS = 32
 

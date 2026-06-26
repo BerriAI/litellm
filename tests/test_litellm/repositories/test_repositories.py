@@ -2182,3 +2182,82 @@ class TestPrismaTableRepository:
             assert name not in seen, f"duplicate table_name {name}"
             seen.add(name)
             assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)
+
+
+def _json_path_equals(
+    metadata: Optional[Dict[str, Any]], path: List[str], expected: Any
+) -> bool:
+    """Reproduce Postgres jsonb path-equals semantics: a missing path yields
+    SQL NULL, which never matches `equals`."""
+    value: Any = metadata
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return False
+        value = value[key]
+    return value == expected
+
+
+class _ScimAwareUserTable:
+    """Fake LiteLLM_UserTable whose count() applies the JSON `where` filter the
+    way Postgres would, so count_billable_users is checked against an
+    independent model of the filter rather than echoing its own where dict."""
+
+    def __init__(self, metadatas: List[Optional[Dict[str, Any]]]):
+        self._metadatas = metadatas
+
+    async def count(self, where: Optional[Dict[str, Any]] = None) -> int:
+        if where is None:
+            return len(self._metadatas)
+        json_filter = where["metadata"]
+        path = json_filter["path"]
+        expected = getattr(json_filter["equals"], "data", json_filter["equals"])
+        return sum(
+            1
+            for metadata in self._metadatas
+            if _json_path_equals(metadata, path, expected)
+        )
+
+
+class TestCountBillableUsers:
+    def _repo(self, metadatas: List[Optional[Dict[str, Any]]]) -> UserRepository:
+        client = MockPrismaClient()
+        client.db.litellm_usertable = _ScimAwareUserTable(metadatas)
+        return UserRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_excludes_only_scim_deactivated_users(self):
+        repo = self._repo(
+            [
+                {},
+                {"scim_active": True},
+                {"scim_active": True},
+                {"scim_active": None},
+                {"other": "x"},
+                {"scim_active": False},
+            ]
+        )
+        assert await repo.count_billable_users() == 5
+
+    @pytest.mark.asyncio
+    async def test_absent_null_and_true_all_count_as_billable(self):
+        repo = self._repo([{}, {"scim_active": None}, {"scim_active": True}])
+        assert await repo.count_billable_users() == 3
+
+    @pytest.mark.asyncio
+    async def test_all_deactivated_returns_zero(self):
+        repo = self._repo([{"scim_active": False}, {"scim_active": False}])
+        assert await repo.count_billable_users() == 0
+
+    @pytest.mark.asyncio
+    async def test_floors_at_zero_when_deactivated_exceeds_total(self):
+        """The total and deactivated counts are separate queries; a burst of
+        deactivations between them must never yield a negative seat count."""
+
+        class _RacyTable:
+            async def count(self, where=None):
+                return 5 if where is not None else 2
+
+        client = MockPrismaClient()
+        client.db.litellm_usertable = _RacyTable()
+        repo = UserRepository(client)
+        assert await repo.count_billable_users() == 0

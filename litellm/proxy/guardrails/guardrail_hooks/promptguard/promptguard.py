@@ -65,9 +65,7 @@ class PromptGuardGuardrail(CustomGuardrail):
                 "the guardrail config."
             )
 
-        self.api_base = (
-            api_base or os.environ.get("PROMPTGUARD_API_BASE") or _DEFAULT_API_BASE
-        ).rstrip("/")
+        self.api_base = (api_base or os.environ.get("PROMPTGUARD_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
 
         if block_on_error is None:
             env = os.environ.get("PROMPTGUARD_BLOCK_ON_ERROR", "true")
@@ -175,12 +173,7 @@ class PromptGuardGuardrail(CustomGuardrail):
             confidence = result.get("confidence", 0.0)
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=(
-                    f"Blocked by PromptGuard: "
-                    f"{threat_type} "
-                    f"(confidence={confidence}, "
-                    f"event_id={event_id})"
-                ),
+                message=(f"Blocked by PromptGuard: {threat_type} (confidence={confidence}, event_id={event_id})"),
             )
 
         if decision == "redact":

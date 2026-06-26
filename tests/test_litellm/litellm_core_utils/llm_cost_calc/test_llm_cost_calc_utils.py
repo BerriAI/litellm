@@ -34,10 +34,12 @@ sys.path.insert(
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
+    TokenTypeCostBreakdown,
     _calculate_input_cost,
     _get_token_base_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
+    get_token_type_cost_breakdown,
 )
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
@@ -1768,3 +1770,271 @@ def test_threshold_keys_exclude_service_tier_variants():
     usage = Usage(prompt_tokens=350_000, completion_tokens=1_000, total_tokens=351_000)
     prompt_base, *_ = _get_token_base_cost(model_info=model_info, usage=usage)
     assert prompt_base == 3e-6
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,reasoning_tokens,cached_tokens",
+    [
+        ("gemini-2.5-flash", "vertex_ai", 3114, 100),
+        ("o3", "openai", 500, 200),
+        ("azure/gpt-5", "azure", 300, 150),
+        ("us.amazon.nova-2-lite-v1:0", "bedrock", 120, 80),
+        ("perplexity/sonar-reasoning", "perplexity", 400, 0),
+        ("cerebras/qwen-3-32b", "cerebras", 250, 0),
+    ],
+)
+def test_token_type_cost_breakdown_is_provider_agnostic(
+    model, custom_llm_provider, reasoning_tokens, cached_tokens
+):
+    """
+    Reasoning and cache-read costs must be surfaced for every provider that reports
+    those tokens, regardless of which cost calculator the provider routes through
+    (Perplexity, Cerebras, Dashscope bypass generic_cost_per_token entirely).
+
+    Cache tokens always land in prompt_tokens_details.cached_tokens, so reading from
+    there - not the top-level cache_read_input_tokens attribute the old breakdown code
+    relied on - is what makes Vertex/OpenAI/Azure cache costs show up at all.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=2000,
+        total_tokens=3000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=reasoning_tokens, text_tokens=2000 - reasoning_tokens
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, text_tokens=1000 - cached_tokens
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider=custom_llm_provider, usage=usage
+    )
+
+    model_info = litellm.get_model_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    reasoning_rate = (
+        model_info.get("output_cost_per_reasoning_token")
+        or model_info["output_cost_per_token"]
+    )
+    cache_read_rate = model_info.get("cache_read_input_token_cost") or 0.0
+
+    assert breakdown.reasoning_cost == pytest.approx(reasoning_tokens * reasoning_rate)
+    assert breakdown.cache_read_cost == pytest.approx(cached_tokens * cache_read_rate)
+
+
+def test_token_type_cost_breakdown_matches_real_gemini_numbers():
+    """Hard-coded against the exact gemini-2.5-flash response that exposed the gap."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=209,
+        completion_tokens=3996,
+        total_tokens=4205,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=3114, text_tokens=882
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=100, text_tokens=109
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model="gemini-2.5-flash", custom_llm_provider="vertex_ai", usage=usage
+    )
+
+    assert breakdown.reasoning_cost == pytest.approx(3114 * 2.5e-06)
+    assert breakdown.cache_read_cost == pytest.approx(100 * 3e-08)
+    assert breakdown.cache_creation_cost == 0.0
+
+
+def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage():
+    """
+    Bedrock/Anthropic report cache tokens as top-level usage fields; the Usage
+    constructor maps them onto prompt_tokens_details, so the breakdown must still
+    pick up both cache-read and cache-creation costs.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "anthropic.claude-3-5-haiku-20241022-v1:0"
+    usage = Usage(
+        prompt_tokens=500,
+        completion_tokens=50,
+        total_tokens=550,
+        cache_creation_input_tokens=300,
+        cache_read_input_tokens=120,
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="bedrock", usage=usage
+    )
+
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
+    assert breakdown.cache_creation_cost == pytest.approx(
+        300 * model_info["cache_creation_input_token_cost"]
+    )
+    assert breakdown.cache_read_cost == pytest.approx(
+        120 * model_info["cache_read_input_token_cost"]
+    )
+
+
+def test_token_type_cost_breakdown_reads_cache_write_tokens():
+    """
+    Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens under
+    `cache_write_tokens` rather than `cache_creation_tokens`. The breakdown must read
+    it the same way the total-cost normalization does, so the two agree.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "anthropic.claude-3-5-haiku-20241022-v1:0"
+    usage = Usage(
+        prompt_tokens=500,
+        completion_tokens=50,
+        total_tokens=550,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0, cache_write_tokens=300
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="bedrock", usage=usage
+    )
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
+    assert breakdown.cache_creation_cost == pytest.approx(
+        300 * model_info["cache_creation_input_token_cost"]
+    )
+
+
+def test_token_type_cost_breakdown_reconciles_with_generic_total():
+    """
+    Both-ways check: the reasoning subset must sum with the remaining (text) output
+    cost to exactly the completion total, and the cache-read subset with the remaining
+    input cost to exactly the prompt total, as computed by generic_cost_per_token.
+    A mismatch here would mean the breakdown misrepresents what was actually billed.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini-2.5-flash"
+    custom_llm_provider = "vertex_ai"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=2000,
+        total_tokens=3000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=1200, text_tokens=800
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=300, text_tokens=700
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider=custom_llm_provider
+    )
+    breakdown = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider=custom_llm_provider, usage=usage
+    )
+
+    model_info = litellm.get_model_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    text_output_cost = 800 * model_info["output_cost_per_token"]
+    text_input_cost = 700 * model_info["input_cost_per_token"]
+
+    assert text_output_cost + breakdown.reasoning_cost == pytest.approx(completion_cost)
+    assert text_input_cost + breakdown.cache_read_cost == pytest.approx(prompt_cost)
+
+
+def test_token_type_cost_breakdown_zero_without_special_tokens():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    breakdown = get_token_type_cost_breakdown(
+        model="gpt-4o", custom_llm_provider="openai", usage=usage
+    )
+
+    assert breakdown == TokenTypeCostBreakdown(
+        reasoning_cost=0.0, cache_read_cost=0.0, cache_creation_cost=0.0
+    )
+
+
+def test_token_type_cost_breakdown_handles_unknown_model_gracefully():
+    """A model with no pricing must yield zeros, never raise."""
+    breakdown = get_token_type_cost_breakdown(
+        model="this-model-does-not-exist-anywhere",
+        custom_llm_provider="openai",
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=10,
+            total_tokens=20,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=5),
+        ),
+    )
+    assert breakdown == TokenTypeCostBreakdown(
+        reasoning_cost=0.0, cache_read_cost=0.0, cache_creation_cost=0.0
+    )
+
+
+def test_token_type_cost_breakdown_applies_regional_uplift():
+    """
+    Regional OpenAI hosts (eu./us.) apply a flat uplift to every token cost. The
+    per-type breakdown must apply the same uplift via data_residency so it stays
+    reconciled with the uplifted input_cost/output_cost totals, instead of being
+    logged at the base rate.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5.4"
+    custom_llm_provider = "openai"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=200, text_tokens=300
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=400, text_tokens=600
+        ),
+    )
+
+    model_info = litellm.get_model_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    uplift = model_info["regional_processing_uplift_multiplier_eu"]
+    assert uplift > 1.0
+
+    base = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider=custom_llm_provider, usage=usage
+    )
+    eu = get_token_type_cost_breakdown(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage,
+        data_residency="eu",
+    )
+
+    assert eu.reasoning_cost == pytest.approx(base.reasoning_cost * uplift)
+    assert eu.cache_read_cost == pytest.approx(base.cache_read_cost * uplift)
+
+    # The uplifted breakdown must still reconcile with the uplifted totals.
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        data_residency="eu",
+    )
+    text_output_cost = 300 * model_info["output_cost_per_token"] * uplift
+    text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
+    assert text_output_cost + eu.reasoning_cost == pytest.approx(completion_cost)
+    assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)

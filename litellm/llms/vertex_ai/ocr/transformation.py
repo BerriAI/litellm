@@ -62,12 +62,8 @@ class VertexAIOCRConfig(MistralOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params
-        )
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-            litellm_params=litellm_params
-        )
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
 
         # Get access token from Vertex credentials
         access_token, project_id = self.vertex_base.get_access_token(
@@ -109,12 +105,8 @@ class VertexAIOCRConfig(MistralOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params
-        )
-        vertex_location = VertexBase.safe_get_vertex_ai_location(
-            litellm_params=litellm_params
-        )
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params=litellm_params)
 
         if vertex_project is None:
             raise ValueError(
@@ -148,17 +140,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug(
-            f"Vertex AI OCR: Converting URL to base64 data URI (sync): {url}"
-        )
+        verbose_logger.debug(f"Vertex AI OCR: Converting URL to base64 data URI (sync): {url}")
 
         # Fetch and convert to base64 data URI
         # convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
         data_uri = convert_url_to_base64(url=url)
 
-        verbose_logger.debug(
-            f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})"
-        )
+        verbose_logger.debug(f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})")
 
         return data_uri
 
@@ -175,17 +163,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug(
-            f"Vertex AI OCR: Converting URL to base64 data URI (async): {url}"
-        )
+        verbose_logger.debug(f"Vertex AI OCR: Converting URL to base64 data URI (async): {url}")
 
         # Fetch and convert to base64 data URI asynchronously
         # async_convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
         data_uri = await async_convert_url_to_base64(url=url)
 
-        verbose_logger.debug(
-            f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})"
-        )
+        verbose_logger.debug(f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})")
 
         return data_uri
 
@@ -226,18 +210,14 @@ class VertexAIOCRConfig(MistralOCRConfig):
             document_url = document.get("document_url", "")
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
-                verbose_logger.debug(
-                    "Vertex AI OCR: Converting document URL to base64 data URI (sync)"
-                )
+                verbose_logger.debug("Vertex AI OCR: Converting document URL to base64 data URI (sync)")
                 data_uri = self._convert_url_to_data_uri_sync(url=document_url)
                 transformed_document["document_url"] = data_uri
         elif doc_type == "image_url":
             image_url = document.get("image_url", "")
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
-                verbose_logger.debug(
-                    "Vertex AI OCR: Converting image URL to base64 data URI (sync)"
-                )
+                verbose_logger.debug("Vertex AI OCR: Converting image URL to base64 data URI (sync)")
                 data_uri = self._convert_url_to_data_uri_sync(url=image_url)
                 transformed_document["image_url"] = data_uri
 
@@ -274,9 +254,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(
-            f"Vertex AI OCR async_transform_ocr_request - model: {model}"
-        )
+        verbose_logger.debug(f"Vertex AI OCR async_transform_ocr_request - model: {model}")
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -289,18 +267,14 @@ class VertexAIOCRConfig(MistralOCRConfig):
             document_url = document.get("document_url", "")
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
-                verbose_logger.debug(
-                    "Vertex AI OCR: Converting document URL to base64 data URI (async)"
-                )
+                verbose_logger.debug("Vertex AI OCR: Converting document URL to base64 data URI (async)")
                 data_uri = await self._convert_url_to_data_uri_async(url=document_url)
                 transformed_document["document_url"] = data_uri
         elif doc_type == "image_url":
             image_url = document.get("image_url", "")
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
-                verbose_logger.debug(
-                    "Vertex AI OCR: Converting image URL to base64 data URI (async)"
-                )
+                verbose_logger.debug("Vertex AI OCR: Converting image URL to base64 data URI (async)")
                 data_uri = await self._convert_url_to_data_uri_async(url=image_url)
                 transformed_document["image_url"] = data_uri
 

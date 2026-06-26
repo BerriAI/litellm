@@ -111,9 +111,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # Store configuration with env var fallbacks
         self.api_key = api_key or os.getenv("PANW_PRISMA_AIRS_API_KEY")
         self.api_base = (
-            api_base
-            or os.getenv("PANW_PRISMA_AIRS_API_BASE")
-            or "https://service.api.aisecurity.paloaltonetworks.com"
+            api_base or os.getenv("PANW_PRISMA_AIRS_API_BASE") or "https://service.api.aisecurity.paloaltonetworks.com"
         )
         self.profile_name = profile_name
 
@@ -204,16 +202,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return ""
 
-    def _extract_text_from_content_list(
-        self, content_list: List[Dict[str, Any]]
-    ) -> str:
+    def _extract_text_from_content_list(self, content_list: List[Dict[str, Any]]) -> str:
         """Extract text from content list format."""
         text_parts = [
             part.get("text", "")
             for part in content_list
-            if isinstance(part, dict)
-            and part.get("type") == "text"
-            and part.get("text")
+            if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
         ]
         return " ".join(text_parts) if text_parts else ""
 
@@ -234,31 +228,19 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                             text_parts.append(str(choice.message.content))
 
                         # Extract tool call arguments
-                        if (
-                            hasattr(choice.message, "tool_calls")
-                            and choice.message.tool_calls
-                        ):
+                        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                             for tool_call in choice.message.tool_calls:
-                                if hasattr(tool_call, "function") and hasattr(
-                                    tool_call.function, "arguments"
-                                ):
+                                if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
                                     text_parts.append(str(tool_call.function.arguments))
 
                         # Extract function call arguments (legacy)
-                        if (
-                            hasattr(choice.message, "function_call")
-                            and choice.message.function_call
-                        ):
+                        if hasattr(choice.message, "function_call") and choice.message.function_call:
                             if hasattr(choice.message.function_call, "arguments"):
-                                text_parts.append(
-                                    str(choice.message.function_call.arguments)
-                                )
+                                text_parts.append(str(choice.message.function_call.arguments))
 
             return " ".join(text_parts) if text_parts else ""
         except (AttributeError, IndexError) as e:
-            verbose_proxy_logger.error(
-                f"PANW Prisma AIRS: Error extracting response text: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"PANW Prisma AIRS: Error extracting response text: {str(e)}")
         return ""
 
     async def _call_panw_api(
@@ -300,9 +282,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         panw_metadata = {
             "app_user": (
-                (metadata.get("app_user") or metadata.get("user") or "litellm_user")
-                if metadata
-                else "litellm_user"
+                (metadata.get("app_user") or metadata.get("user") or "litellm_user") if metadata else "litellm_user"
             ),
             "ai_model": metadata.get("model", "unknown") if metadata else "unknown",
             "app_name": app_name_value,
@@ -363,15 +343,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "x-pan-token": self.api_key
-            or "",  # api_key validated in __init__, never None
+            "x-pan-token": self.api_key or "",  # api_key validated in __init__, never None
         }
 
         try:
             # Use LiteLLM's async HTTP client
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.GuardrailCallback
-            )
+            async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
             # Bypass wrapper to access follow_redirects parameter
             response = await async_client.client.post(  # type: ignore[attr-defined]
@@ -387,18 +364,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             # Validate response format
             if "action" not in result:
-                verbose_proxy_logger.error(
-                    f"PANW Prisma AIRS: Invalid API response format: {result}"
-                )
+                verbose_proxy_logger.error(f"PANW Prisma AIRS: Invalid API response format: {result}")
                 return {"action": "block", "category": "api_error"}
 
             # Check for profile-related errors from PANW API
             if result.get("action") == "block" and "error" in result:
                 error_msg = str(result.get("error", "")).lower()
                 if "profile" in error_msg and (
-                    "not found" in error_msg
-                    or "required" in error_msg
-                    or "invalid" in error_msg
+                    "not found" in error_msg or "required" in error_msg or "invalid" in error_msg
                 ):
                     verbose_proxy_logger.error(
                         f"PANW Prisma AIRS: Profile configuration error. "
@@ -424,9 +397,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if status == 400:
                 diag_parts = ["PANW Prisma AIRS: HTTP 400 from AIRS API."]
                 if tool_event is not None:
-                    diag_parts.append(
-                        f"tool_event.metadata={tool_event.get('metadata')}"
-                    )
+                    diag_parts.append(f"tool_event.metadata={tool_event.get('metadata')}")
                     has_input = "input" in tool_event
                     input_len = len(tool_event["input"]) if has_input else 0
                     diag_parts.append(f"input present={has_input}, len={input_len}")
@@ -454,9 +425,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 }
             elif status == 429 or status >= 500:
                 # Transient: rate-limit and server errors — safe to fail-open
-                verbose_proxy_logger.error(
-                    f"PANW Prisma AIRS: API error (HTTP {status}): {error_body[:500]}"
-                )
+                verbose_proxy_logger.error(f"PANW Prisma AIRS: API error (HTTP {status}): {error_body[:500]}")
                 return {
                     "action": "block",
                     "category": f"http_{status}_error",
@@ -465,9 +434,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             else:
                 # Permanent 4xx client errors (400, 404, etc.) — must not bypass scanning
                 if status != 400:  # 400 already logged with diagnostics above
-                    verbose_proxy_logger.error(
-                        f"PANW Prisma AIRS: API error (HTTP {status}): {error_body[:500]}"
-                    )
+                    verbose_proxy_logger.error(f"PANW Prisma AIRS: API error (HTTP {status}): {error_body[:500]}")
                 return {
                     "action": "block",
                     "category": f"http_{status}_error",
@@ -483,9 +450,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
 
         except httpx.RequestError as e:
-            verbose_proxy_logger.error(
-                f"PANW Prisma AIRS: Network/request error: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"PANW Prisma AIRS: Network/request error: {str(e)}")
             return {
                 "action": "block",
                 "category": "network_error",
@@ -519,9 +484,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         or getattr(server, "server_id", None)
                         or "unknown"
                     )
-            return global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.get(
-                mcp_tool_name, "unknown"
-            )
+            return global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.get(mcp_tool_name, "unknown")
         except ImportError:
             return "unknown"
         except Exception:
@@ -531,9 +494,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
             return "unknown"
 
-    def _get_masked_text(
-        self, scan_result: Dict[str, Any], is_response: bool = False
-    ) -> Optional[str]:
+    def _get_masked_text(self, scan_result: Dict[str, Any], is_response: bool = False) -> Optional[str]:
         """Extract masked text from PANW scan result."""
         masked_key = "response_masked_data" if is_response else "prompt_masked_data"
         masked_data = scan_result.get(masked_key)
@@ -614,13 +575,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 "PANW Prisma AIRS: MCP request blocked but masked instead (mask_request_content=True)"
             )
         else:
-            verbose_proxy_logger.info(
-                "PANW Prisma AIRS: MCP request allowed with PII masking applied"
-            )
+            verbose_proxy_logger.info("PANW Prisma AIRS: MCP request allowed with PII masking applied")
 
-    def _apply_masking_to_messages(
-        self, messages: List[Dict[str, Any]], masked_text: str
-    ) -> List[Dict[str, Any]]:
+    def _apply_masking_to_messages(self, messages: List[Dict[str, Any]], masked_text: str) -> List[Dict[str, Any]]:
         """Apply masked text to the last user message."""
         if not messages:
             return messages
@@ -633,18 +590,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 if isinstance(content, str):
                     new_message["content"] = masked_text
                 elif isinstance(content, list):
-                    new_message["content"] = self._mask_content_list(
-                        content, masked_text
-                    )
+                    new_message["content"] = self._mask_content_list(content, masked_text)
 
                 idx = len(messages) - i - 1
                 return messages[:idx] + [new_message] + messages[idx + 1 :]
 
         return messages
 
-    def _apply_masking_to_response(
-        self, response: ModelResponse, masked_text: str
-    ) -> None:
+    def _apply_masking_to_response(self, response: ModelResponse, masked_text: str) -> None:
         """
         Apply masked text to all content in response in-place.
         Handles message content, tool calls, and function calls across all choices.
@@ -668,22 +621,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
-                        if hasattr(tool_call, "function") and hasattr(
-                            tool_call.function, "arguments"
-                        ):
+                        if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
                             tool_call.function.arguments = masked_text
 
                 # Mask function call arguments (legacy)
-                if (
-                    hasattr(choice.message, "function_call")
-                    and choice.message.function_call
-                ):
+                if hasattr(choice.message, "function_call") and choice.message.function_call:
                     if hasattr(choice.message.function_call, "arguments"):
                         choice.message.function_call.arguments = masked_text
 
-    def _build_error_detail(
-        self, scan_result: Dict[str, Any], is_response: bool = False
-    ) -> Dict[str, Any]:
+    def _build_error_detail(self, scan_result: Dict[str, Any], is_response: bool = False) -> Dict[str, Any]:
         """Build enhanced error detail with scan information."""
         action_type = "Response" if is_response else "Prompt"
         code_suffix = "_response_blocked" if is_response else "_blocked"
@@ -766,16 +712,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                             if is_config
                             else "Security scan failed - request blocked for safety"
                         ),
-                        "type": (
-                            "guardrail_config_error"
-                            if is_config
-                            else "guardrail_scan_error"
-                        ),
-                        "code": (
-                            "panw_prisma_airs_config_error"
-                            if is_config
-                            else "panw_prisma_airs_scan_failed"
-                        ),
+                        "type": ("guardrail_config_error" if is_config else "guardrail_scan_error"),
+                        "code": ("panw_prisma_airs_config_error" if is_config else "panw_prisma_airs_scan_failed"),
                         "guardrail": self.guardrail_name,
                         "category": category,
                     }
@@ -888,10 +826,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 if isinstance(delta, str):
                     parts.append(delta)
             # Defense-in-depth: handle dict chat.completion.chunk format
-            elif (
-                isinstance(chunk, dict)
-                and chunk.get("object") == "chat.completion.chunk"
-            ):
+            elif isinstance(chunk, dict) and chunk.get("object") == "chat.completion.chunk":
                 for choice in chunk.get("choices") or []:
                     if isinstance(choice, dict):
                         delta = choice.get("delta") or {}
@@ -907,9 +842,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         parts.append(text)
         return "".join(parts)
 
-    async def _scan_raw_streaming_text(
-        self, text: str, request_data: dict, start_time: datetime
-    ) -> None:
+    async def _scan_raw_streaming_text(self, text: str, request_data: dict, start_time: datetime) -> None:
         """Scan text from non-ModelResponse streaming chunks. Raises HTTPException(400) on block.
 
         Note: response masking is not supported on raw streaming paths
@@ -964,9 +897,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             duration=(end_time - start_time).total_seconds(),
             event_type=GuardrailEventHooks.post_call,
         )
-        add_guardrail_to_applied_guardrails_header(
-            request_data=request_data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -984,8 +915,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             call_id = str(uuid.uuid4())
             data["litellm_call_id"] = call_id
             verbose_proxy_logger.warning(
-                "PANW Prisma AIRS: litellm_call_id missing from request data, "
-                "synthesized %s for %s scan deduplication",
+                "PANW Prisma AIRS: litellm_call_id missing from request data, synthesized %s for %s scan deduplication",
                 call_id,
                 scan_type,
             )
@@ -994,9 +924,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         litellm_metadata = data.setdefault("litellm_metadata", {})
 
         if litellm_metadata.get(scan_key):
-            verbose_proxy_logger.debug(
-                f"PANW Prisma AIRS: Skipping duplicate {scan_type}-call scan"
-            )
+            verbose_proxy_logger.debug(f"PANW Prisma AIRS: Skipping duplicate {scan_type}-call scan")
             return True  # Already scanned
 
         litellm_metadata[scan_key] = True
@@ -1093,11 +1021,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response=scan_result,
                 request_data=data,
-                guardrail_status=(
-                    "success"
-                    if scan_result.get("action") == "allow"
-                    else "guardrail_intervened"
-                ),
+                guardrail_status=("success" if scan_result.get("action") == "allow" else "guardrail_intervened"),
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
@@ -1112,44 +1036,30 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if action == "allow":
                 if masked_text:
                     if messages:
-                        data["messages"] = self._apply_masking_to_messages(
-                            messages, masked_text
-                        )
+                        data["messages"] = self._apply_masking_to_messages(messages, masked_text)
                     elif "prompt" in data:
                         data["prompt"] = masked_text
-                    verbose_proxy_logger.info(
-                        f"PANW Prisma AIRS: Prompt allowed with masking (Category: {category})"
-                    )
+                    verbose_proxy_logger.info(f"PANW Prisma AIRS: Prompt allowed with masking (Category: {category})")
                 else:
-                    verbose_proxy_logger.info(
-                        f"PANW Prisma AIRS: Prompt allowed (Category: {category})"
-                    )
-                add_guardrail_to_applied_guardrails_header(
-                    request_data=data, guardrail_name=self.guardrail_name
-                )
+                    verbose_proxy_logger.info(f"PANW Prisma AIRS: Prompt allowed (Category: {category})")
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
                 return None
 
             # Action is "block" - check if we should mask instead of blocking
             if masked_text and self.mask_request_content:
                 if messages:
-                    data["messages"] = self._apply_masking_to_messages(
-                        messages, masked_text
-                    )
+                    data["messages"] = self._apply_masking_to_messages(messages, masked_text)
                 elif "prompt" in data:
                     data["prompt"] = masked_text
                 verbose_proxy_logger.warning(
                     "PANW Prisma AIRS: Prompt blocked but masked instead (mask_request_content=True)"
                 )
-                add_guardrail_to_applied_guardrails_header(
-                    request_data=data, guardrail_name=self.guardrail_name
-                )
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
                 return None
 
             # Block the request
             error_detail = self._build_error_detail(scan_result, is_response=False)
-            verbose_proxy_logger.warning(
-                f"PANW Prisma AIRS: {error_detail['error']['message']}"
-            )
+            verbose_proxy_logger.warning(f"PANW Prisma AIRS: {error_detail['error']['message']}")
             raise HTTPException(status_code=400, detail=error_detail)
 
         except HTTPException:
@@ -1202,9 +1112,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             response_text = self._extract_response_text(response)
 
             if not response_text:
-                verbose_proxy_logger.warning(
-                    "PANW Prisma AIRS: No response content found to scan"
-                )
+                verbose_proxy_logger.warning("PANW Prisma AIRS: No response content found to scan")
                 return response
 
             # Prepare metadata - include user's metadata for profile override
@@ -1233,11 +1141,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response=scan_result,
                 request_data=data,
-                guardrail_status=(
-                    "success"
-                    if scan_result.get("action") == "allow"
-                    else "guardrail_intervened"
-                ),
+                guardrail_status=("success" if scan_result.get("action") == "allow" else "guardrail_intervened"),
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
@@ -1252,16 +1156,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if action == "allow":
                 if masked_text:
                     self._apply_masking_to_response(response, masked_text)
-                    verbose_proxy_logger.info(
-                        f"PANW Prisma AIRS: Response allowed with masking (Category: {category})"
-                    )
+                    verbose_proxy_logger.info(f"PANW Prisma AIRS: Response allowed with masking (Category: {category})")
                 else:
-                    verbose_proxy_logger.info(
-                        f"PANW Prisma AIRS: Response allowed (Category: {category})"
-                    )
-                add_guardrail_to_applied_guardrails_header(
-                    request_data=data, guardrail_name=self.guardrail_name
-                )
+                    verbose_proxy_logger.info(f"PANW Prisma AIRS: Response allowed (Category: {category})")
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
                 return response
 
             # Action is "block" - check if we should mask instead of blocking
@@ -1270,16 +1168,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 verbose_proxy_logger.warning(
                     "PANW Prisma AIRS: Response blocked but masked instead (mask_response_content=True)"
                 )
-                add_guardrail_to_applied_guardrails_header(
-                    request_data=data, guardrail_name=self.guardrail_name
-                )
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
                 return response
 
             # Block the response
             error_detail = self._build_error_detail(scan_result, is_response=True)
-            verbose_proxy_logger.warning(
-                f"PANW Prisma AIRS: {error_detail['error']['message']}"
-            )
+            verbose_proxy_logger.warning(f"PANW Prisma AIRS: {error_detail['error']['message']}")
             raise HTTPException(status_code=400, detail=error_detail)
 
         except HTTPException:
@@ -1312,9 +1206,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         response_text = self._extract_response_text(assembled_model_response)
 
         if not response_text or not response_text.strip():
-            verbose_proxy_logger.info(
-                "PANW Prisma AIRS: No content to scan in streaming response"
-            )
+            verbose_proxy_logger.info("PANW Prisma AIRS: No content to scan in streaming response")
             return (
                 content_was_modified,
                 assembled_model_response,
@@ -1349,9 +1241,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     f"PANW Prisma AIRS: Streaming response allowed with masking (Category: {category})"
                 )
             else:
-                verbose_proxy_logger.info(
-                    f"PANW Prisma AIRS: Streaming response allowed (Category: {category})"
-                )
+                verbose_proxy_logger.info(f"PANW Prisma AIRS: Streaming response allowed (Category: {category})")
         elif masked_text and self.mask_response_content:
             self._apply_masking_to_response(assembled_model_response, masked_text)
             content_was_modified = True
@@ -1360,9 +1250,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
         else:
             error_detail = self._build_error_detail(scan_result, is_response=True)
-            verbose_proxy_logger.warning(
-                f"PANW Prisma AIRS: {error_detail['error']['message']}"
-            )
+            verbose_proxy_logger.warning(f"PANW Prisma AIRS: {error_detail['error']['message']}")
             raise HTTPException(status_code=400, detail=error_detail)
 
         return content_was_modified, assembled_model_response, scan_result
@@ -1382,9 +1270,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         # Check if guardrail should run for this request
 
-        if not self.should_run_guardrail(
-            data=request_data, event_type=GuardrailEventHooks.post_call
-        ):
+        if not self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call):
             async for chunk in response:
                 yield chunk
             return
@@ -1416,9 +1302,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 return
 
             # Handle /v1/responses streaming: chunks are Pydantic events (not ModelResponse/ModelResponseStream)
-            if all_chunks and not isinstance(
-                all_chunks[0], (ModelResponse, ModelResponseStream)
-            ):
+            if all_chunks and not isinstance(all_chunks[0], (ModelResponse, ModelResponseStream)):
                 text = self._extract_text_from_streaming_events(all_chunks)
                 await self._scan_raw_streaming_text(text, request_data, start_time)
                 for chunk in all_chunks:
@@ -1434,9 +1318,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     content_was_modified,
                     assembled_model_response,
                     scan_result,
-                ) = await self._scan_and_process_streaming_response(
-                    assembled_model_response, request_data, start_time
-                )
+                ) = await self._scan_and_process_streaming_response(assembled_model_response, request_data, start_time)
 
                 if scan_result.get("_is_transient") or scan_result.get("_always_block"):
                     self._handle_api_error_with_logging(
@@ -1458,11 +1340,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     guardrail_provider=self._PROVIDER_NAME,
                     guardrail_json_response=scan_result,
                     request_data=request_data,
-                    guardrail_status=(
-                        "success"
-                        if scan_result.get("action") == "allow"
-                        else "guardrail_intervened"
-                    ),
+                    guardrail_status=("success" if scan_result.get("action") == "allow" else "guardrail_intervened"),
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=(end_time - start_time).total_seconds(),
@@ -1477,9 +1355,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # Only use MockResponseIterator if content was modified
                 # Otherwise, yield original chunks to preserve streaming behavior
                 if content_was_modified:
-                    mock_response = MockResponseIterator(
-                        model_response=assembled_model_response
-                    )
+                    mock_response = MockResponseIterator(model_response=assembled_model_response)
                     async for chunk in mock_response:
                         yield chunk
                 else:
@@ -1494,9 +1370,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             # Yield error as SSE event so create_response() detects it and
             # returns a proper JSON error response with the correct status code.
             # (Raising from a generator hits create_response's generic except → 500.)
-            detail = (
-                e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
-            )
+            detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
             error_obj: Dict[str, Any] = dict(detail.get("error", detail))  # type: ignore[arg-type]
             error_obj["code"] = e.status_code
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
@@ -1536,9 +1410,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             tool_name: Optional[str] = None
             args_text: Optional[str] = None
 
-            if hasattr(tool_call, "function") and hasattr(
-                tool_call.function, "arguments"
-            ):
+            if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
                 args_text = tool_call.function.arguments
                 tool_name = getattr(tool_call.function, "name", None)
             elif isinstance(tool_call, dict):
@@ -1567,11 +1439,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
 
             if scan_result.get("_is_transient") or scan_result.get("_always_block"):
-                event_type = (
-                    GuardrailEventHooks.post_call
-                    if is_response
-                    else GuardrailEventHooks.pre_call
-                )
+                event_type = GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call
                 self._handle_api_error_with_logging(
                     scan_result=scan_result,
                     data=request_data,
@@ -1591,14 +1459,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 if masked_text:
                     self._set_tool_call_arguments(tool_call, masked_text)
             elif masked_text and (
-                (is_response and self.mask_response_content)
-                or (not is_response and self.mask_request_content)
+                (is_response and self.mask_response_content) or (not is_response and self.mask_request_content)
             ):
                 self._set_tool_call_arguments(tool_call, masked_text)
             else:
-                error_detail = self._build_error_detail(
-                    scan_result, is_response=is_response
-                )
+                error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod
@@ -1606,9 +1471,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """Set masked text on a tool call's function arguments, handling both object and dict forms."""
         if hasattr(tool_call, "function"):
             tool_call.function.arguments = masked_text
-        elif isinstance(tool_call, dict) and isinstance(
-            tool_call.get("function"), dict
-        ):
+        elif isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
             tool_call["function"]["arguments"] = masked_text
 
     @staticmethod
@@ -1786,11 +1649,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             call_id = getattr(logging_obj, "litellm_call_id", None)
         if not call_id:
             # Use MCP name fallback: mcp_tool_name (canonical) or name (/mcp-rest path)
-            _mcp_tool = str(
-                request_data.get("mcp_tool_name")
-                or self._mcp_name_fallback(request_data)
-                or ""
-            ).strip()
+            _mcp_tool = str(request_data.get("mcp_tool_name") or self._mcp_name_fallback(request_data) or "").strip()
             if input_type == "request" and logging_obj is None and _mcp_tool:
                 # Synthesize a tool-prefixed call_id for AIRS grouping.
                 # Slug: lowercase, non-alphanum → "-", truncate to 40 chars.
@@ -1818,8 +1677,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 call_id = str(uuid.uuid4())
                 request_data["litellm_call_id"] = call_id
                 verbose_proxy_logger.warning(
-                    "PANW Prisma AIRS: litellm_call_id missing, synthesized %s "
-                    "(input_type=%s)",
+                    "PANW Prisma AIRS: litellm_call_id missing, synthesized %s (input_type=%s)",
                     call_id,
                     input_type,
                 )
@@ -1834,9 +1692,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # Enrich request_data with metadata from logging_obj (post-call metadata loss).
         # Merge: logging_obj provides the base, request_data keys win on conflict.
         if logging_obj:
-            _lp = (getattr(logging_obj, "model_call_details", {}) or {}).get(
-                "litellm_params", {}
-            ) or {}
+            _lp = (getattr(logging_obj, "model_call_details", {}) or {}).get("litellm_params", {}) or {}
             _orig_meta = _lp.get("metadata") or {}
             if _orig_meta:
                 existing_meta = request_data.get("metadata")
@@ -1860,17 +1716,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 if self._use_latest_user_only(request_data, logging_obj):
                     original_messages = request_data.get("messages")
                     if original_messages:
-                        scannable_indices = self._get_latest_user_text_indices(
-                            texts, original_messages
-                        )
+                        scannable_indices = self._get_latest_user_text_indices(texts, original_messages)
                 # Fall through to existing role filtering if:
                 # - not Anthropic, OR flag explicitly False, OR
                 # - no original messages, OR
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
-                    scannable_indices = self._get_scannable_text_indices(
-                        texts, structured_messages
-                    )
+                    scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
 
         for i, text in enumerate(texts):
             if not text or not text.strip():
@@ -1891,11 +1743,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             # Handle API errors (transient/config)
             if scan_result.get("_is_transient") or scan_result.get("_always_block"):
-                event_type = (
-                    GuardrailEventHooks.post_call
-                    if is_response
-                    else GuardrailEventHooks.pre_call
-                )
+                event_type = GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call
                 self._handle_api_error_with_logging(
                     scan_result=scan_result,
                     data=request_data,
@@ -1913,14 +1761,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if action == "allow":
                 new_texts.append(masked_text if masked_text else text)
             elif masked_text and (
-                (is_response and self.mask_response_content)
-                or (not is_response and self.mask_request_content)
+                (is_response and self.mask_response_content) or (not is_response and self.mask_request_content)
             ):
                 new_texts.append(masked_text)
             else:
-                error_detail = self._build_error_detail(
-                    scan_result, is_response=is_response
-                )
+                error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 
         # Scan tool call arguments — same masking policy as texts.
@@ -1943,17 +1788,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # We send a tool_event so AIRS can apply tool-aware policies.
         # REST MCP path sets "name"/"arguments"; canonical keys are
         # "mcp_tool_name"/"mcp_arguments". Check canonical first, then fallback.
-        mcp_tool_name = request_data.get("mcp_tool_name") or self._mcp_name_fallback(
-            request_data
-        )
+        mcp_tool_name = request_data.get("mcp_tool_name") or self._mcp_name_fallback(request_data)
         if mcp_tool_name and input_type == "request":
             mcp_tool_event: Dict[str, Any] = {
                 "metadata": {
                     "ecosystem": "mcp",
                     "method": "tools/call",
-                    "server_name": self._get_mcp_server_name(
-                        request_data, mcp_tool_name
-                    ),
+                    "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
                     "tool_invoked": mcp_tool_name,
                 },
             }
@@ -1974,9 +1815,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 call_id=call_id,
             )
 
-            if mcp_scan_result.get("_is_transient") or mcp_scan_result.get(
-                "_always_block"
-            ):
+            if mcp_scan_result.get("_is_transient") or mcp_scan_result.get("_always_block"):
                 self._handle_api_error_with_logging(
                     scan_result=mcp_scan_result,
                     data=request_data,
@@ -2001,15 +1840,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 elif masked_text and self.mask_request_content:
                     self._apply_mcp_masking(request_data, mcp_arguments, masked_text)
                 else:
-                    error_detail = self._build_error_detail(
-                        mcp_scan_result, is_response=False
-                    )
+                    error_detail = self._build_error_detail(mcp_scan_result, is_response=False)
                     raise HTTPException(status_code=400, detail=error_detail)
 
         inputs["texts"] = new_texts
-        add_guardrail_to_applied_guardrails_header(
-            request_data=request_data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         return inputs
 
     @staticmethod

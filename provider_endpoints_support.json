@@ -1059,6 +1059,16 @@
         "interactions": true
       }
     },
+    "gdc": {
+      "display_name": "Google Distributed Cloud (GDC)",
+      "url": "https://docs.litellm.ai/docs/providers/gdc",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false
+      }
+    },
     "github_copilot": {
       "display_name": "GitHub Copilot (`github_copilot`)",
       "url": "https://docs.litellm.ai/docs/providers/github_copilot",

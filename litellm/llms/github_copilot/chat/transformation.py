@@ -189,9 +189,7 @@ class GithubCopilotConfig(OpenAIConfig):
             _web_search_results,
             _tool_results,
             _compaction_blocks,
-        ) = AnthropicConfig().extract_response_content(
-            completion_response={"content": content_blocks}
-        )
+        ) = AnthropicConfig().extract_response_content(completion_response={"content": content_blocks})
         return text_content, tool_calls, thinking_blocks
 
     @staticmethod
@@ -202,9 +200,7 @@ class GithubCopilotConfig(OpenAIConfig):
         if "output_tokens" in usage and "completion_tokens" not in usage:
             normalized["completion_tokens"] = usage["output_tokens"]
         if "total_tokens" not in normalized:
-            normalized["total_tokens"] = normalized.get(
-                "prompt_tokens", 0
-            ) + normalized.get("completion_tokens", 0)
+            normalized["total_tokens"] = normalized.get("prompt_tokens", 0) + normalized.get("completion_tokens", 0)
         return normalized
 
     @classmethod
@@ -227,9 +223,7 @@ class GithubCopilotConfig(OpenAIConfig):
         thinking_blocks: List[Any] | None = None
         raw_content = response_json.get("content")
         if isinstance(raw_content, list):
-            content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(
-                raw_content
-            )
+            content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)
         elif isinstance(raw_content, str):
             content = raw_content
 
@@ -260,9 +254,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         synthesized = {
             **response_json,
-            "choices": [
-                {"index": 0, "message": message, "finish_reason": finish_reason}
-            ],
+            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         }
         usage = response_json.get("usage")
         if isinstance(usage, dict):

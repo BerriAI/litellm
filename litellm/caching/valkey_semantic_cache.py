@@ -84,31 +84,21 @@ class ValkeySemanticCache(RedisSemanticCache):
 
         resolved_url = None
         if sync_client is None or async_client is None:
-            resolved_url = redis_url or self._build_valkey_url(
-                host, port, password, ssl
-            )
+            resolved_url = redis_url or self._build_valkey_url(host, port, password, ssl)
         self.sync_client = (
             sync_client if sync_client is not None else Redis.from_url(resolved_url)  # type: ignore[arg-type]
         )
         self.async_client = (
-            async_client
-            if async_client is not None
-            else AsyncRedis.from_url(resolved_url)  # type: ignore[arg-type]
+            async_client if async_client is not None else AsyncRedis.from_url(resolved_url)  # type: ignore[arg-type]
         )
 
         print_verbose(f"Valkey semantic-cache initializing index - {self.index_name}")
 
     @staticmethod
-    def _build_valkey_url(
-        host: str | None, port: str | None, password: str | None, ssl: bool = False
-    ) -> str:
+    def _build_valkey_url(host: str | None, port: str | None, password: str | None, ssl: bool = False) -> str:
         host = host or os.environ.get("VALKEY_HOST") or os.environ.get("REDIS_HOST")
         port = port or os.environ.get("VALKEY_PORT") or os.environ.get("REDIS_PORT")
-        password = (
-            password
-            or os.environ.get("VALKEY_PASSWORD")
-            or os.environ.get("REDIS_PASSWORD")
-        )
+        password = password or os.environ.get("VALKEY_PASSWORD") or os.environ.get("REDIS_PASSWORD")
 
         if not host or not port:
             raise ValueError(
@@ -157,11 +147,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         for field in info.get("attributes") or []:
             if not isinstance(field, (list, tuple)):
                 continue
-            flat = [
-                sub
-                for item in field
-                for sub in (item if isinstance(item, (list, tuple)) else [item])
-            ]
+            flat = [sub for item in field for sub in (item if isinstance(item, (list, tuple)) else [item])]
             for i, marker in enumerate(flat):
                 if marker in (b"dimensions", "dimensions") and i + 1 < len(flat):
                     return int(flat[i + 1])
@@ -207,9 +193,7 @@ class ValkeySemanticCache(RedisSemanticCache):
     def _doc_key(self, key: str) -> str:
         return f"{self.key_prefix}{self._scope_tag(key)}:{uuid.uuid4()}"
 
-    def _doc_mapping(
-        self, key: str, prompt: str, value_str: str, embedding: list[float]
-    ) -> dict:
+    def _doc_mapping(self, key: str, prompt: str, value_str: str, embedding: list[float]) -> dict:
         return {
             self.CACHE_KEY_FIELD_NAME: self._scope_tag(key),
             self.PROMPT_FIELD_NAME: prompt,
@@ -223,11 +207,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             f"(@{self.CACHE_KEY_FIELD_NAME}:{{{scope}}})"
             f"=>[KNN 1 @{self.EMBEDDING_FIELD_NAME} $vec AS {self.DISTANCE_FIELD_NAME}]"
         )
-        return (
-            Query(query_string)
-            .return_fields(self.RESPONSE_FIELD_NAME, self.DISTANCE_FIELD_NAME)
-            .dialect(2)
-        )
+        return Query(query_string).return_fields(self.RESPONSE_FIELD_NAME, self.DISTANCE_FIELD_NAME).dialect(2)
 
     @classmethod
     def _first_hit(cls, search_result: Any) -> _ValkeyCacheHit | None:
@@ -264,9 +244,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             self._ensure_index_sync(len(embedding))
 
             doc_key = self._doc_key(key)
-            self.sync_client.hset(
-                doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding)
-            )
+            self.sync_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
                 self.sync_client.expire(doc_key, ttl)
@@ -305,9 +283,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             await self._ensure_index_async(len(embedding))
 
             doc_key = self._doc_key(key)
-            await self.async_client.hset(
-                doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding)
-            )
+            await self.async_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
                 await self.async_client.expire(doc_key, ttl)
@@ -334,20 +310,11 @@ class ValkeySemanticCache(RedisSemanticCache):
             print_verbose(f"Error in async Valkey semantic-cache get_cache: {str(e)}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
-    async def async_set_cache_pipeline(
-        self, cache_list: list[tuple[str, Any]], **kwargs: Any
-    ) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs: Any) -> None:
         try:
-            await asyncio.gather(
-                *[
-                    self.async_set_cache(key, value, **kwargs)
-                    for key, value in cache_list
-                ]
-            )
+            await asyncio.gather(*[self.async_set_cache(key, value, **kwargs) for key, value in cache_list])
         except Exception as e:
-            print_verbose(
-                f"Error in Valkey semantic-cache async_set_cache_pipeline: {str(e)}"
-            )
+            print_verbose(f"Error in Valkey semantic-cache async_set_cache_pipeline: {str(e)}")
 
     async def _index_info(self) -> dict:
         return await self.async_client.ft(self.index_name).info()

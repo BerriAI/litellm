@@ -49,9 +49,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params_obj
-        )
+        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present
@@ -118,9 +116,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         return api_base
 
-    def _remove_scope_from_cache_control(
-        self, anthropic_messages_request: Dict
-    ) -> None:
+    def _remove_scope_from_cache_control(self, anthropic_messages_request: Dict) -> None:
         """
         Remove `scope` field from cache_control for Azure AI Foundry.
 

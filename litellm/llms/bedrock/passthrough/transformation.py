@@ -16,9 +16,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import CostResponseTypes
 
 
-class BedrockPassthroughConfig(
-    BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig
-):
+class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
 
@@ -43,9 +41,7 @@ class BedrockPassthroughConfig(
 
         # Create a temporary endpoint with the model_id to check if encoding is needed
         temp_endpoint = f"/model/{model_id}/converse"
-        encoded_temp_endpoint = CommonUtils.encode_bedrock_runtime_modelid_arn(
-            temp_endpoint
-        )
+        encoded_temp_endpoint = CommonUtils.encode_bedrock_runtime_modelid_arn(temp_endpoint)
 
         # Extract the encoded model_id from the temporary endpoint
         encoded_model_id_match = re.search(r"/model/([^/]+)/", encoded_temp_endpoint)
@@ -73,9 +69,7 @@ class BedrockPassthroughConfig(
             model_id=model_id,
         )
 
-        aws_bedrock_runtime_endpoint = optional_params.get(
-            "aws_bedrock_runtime_endpoint"
-        )
+        aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint")
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
@@ -202,9 +196,7 @@ class BedrockPassthroughConfig(
         if "invoke" in endpoint:
             invoke_provider = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
             if invoke_provider is None:
-                raise ValueError(
-                    f"Invalid invoke provider: {invoke_provider}, for model: {model}"
-                )
+                raise ValueError(f"Invalid invoke provider: {invoke_provider}, for model: {model}")
             obj = get_bedrock_event_stream_decoder(
                 invoke_provider=invoke_provider,
                 model=model,
@@ -225,9 +217,9 @@ class BedrockPassthroughConfig(
             message = json.loads(chunk)
             translated_chunk = obj._chunk_parser(chunk_data=message)
 
-            if isinstance(
-                translated_chunk, dict
-            ) and generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(
+                cast(dict, translated_chunk)
+            ):
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
                     cast(GenericStreamingChunk, translated_chunk)
                 )

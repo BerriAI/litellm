@@ -99,9 +99,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             return self.arerank(
                 prepared_request,
                 timeout=timeout,
-                client=client
-                if client is not None and isinstance(client, AsyncHTTPHandler)
-                else None,
+                client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None,
             )  # type: ignore
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -142,9 +140,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params, model
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         ### SET RUNTIME ENDPOINT ###
         _, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -152,9 +148,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
-        proxy_endpoint_url = proxy_endpoint_url.replace(
-            "bedrock-runtime", "bedrock-agent-runtime"
-        )
+        proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
         proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
         sigv4 = SigV4Auth(
             boto3_credentials_info.credentials,
@@ -167,9 +161,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST", url=proxy_endpoint_url, data=body, headers=headers
-        )
+        request = AWSRequest(method="POST", url=proxy_endpoint_url, data=body, headers=headers)
         sigv4.add_auth(request)
         if (
             extra_headers is not None and "Authorization" in extra_headers

@@ -17,7 +17,9 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
+    _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
+    _ClientDisconnectedBeforeFirstChunk,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
@@ -2676,6 +2678,176 @@ class TestStreamCloseOnDisconnect:
 
         assert upstream.aclosed
 
+    @staticmethod
+    def _request_that_disconnects() -> Request:
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        return Request({"type": "http", "method": "POST", "headers": []}, receive)
+
+    @staticmethod
+    def _request_that_stays_connected() -> Request:
+        async def receive():
+            await asyncio.Event().wait()
+
+        return Request({"type": "http", "method": "POST", "headers": []}, receive)
+
+    async def test_create_response_returns_499_on_disconnect_before_first_chunk(self):
+        """LIT-3568: client disconnects during the time-to-first-token wait.
+
+        create_response buffers the first chunk before Starlette starts serving
+        the StreamingResponse, so this window has no disconnect listener. The
+        request must be cancelled (upstream generator closed) and a 499 returned
+        instead of blocking until the request timeout.
+        """
+        upstream_closed = asyncio.Event()
+
+        async def never_yields_first_chunk():
+            try:
+                await asyncio.Event().wait()
+                yield "data: never\n\n"
+            finally:
+                upstream_closed.set()
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=never_yields_first_chunk(),
+                media_type="text/event-stream",
+                headers={},
+                request=self._request_that_disconnects(),
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 499
+        assert upstream_closed.is_set()
+
+    async def test_create_response_streams_normally_when_connected(self):
+        """The disconnect race must not steal a first chunk that does arrive:
+        a connected client still gets a StreamingResponse, not a 499."""
+
+        async def yields_immediately():
+            yield "data: hello\n\n"
+            yield "data: world\n\n"
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=yields_immediately(),
+                media_type="text/event-stream",
+                headers={},
+                request=self._request_that_stays_connected(),
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+
+    async def test_buffer_first_chunk_without_request_is_passthrough(self):
+        """No request -> preserve the original eager __anext__ behavior."""
+
+        async def gen():
+            yield "data: first\n\n"
+
+        first = await _buffer_first_chunk_honoring_disconnect(gen(), request=None)
+        assert first == "data: first\n\n"
+
+    async def test_create_response_prioritizes_disconnect_in_same_scheduler_turn(self):
+        """Same-turn race: the first chunk and the disconnect both resolve before
+        the branch runs. Because the disconnect watcher has already consumed
+        http.disconnect, returning the chunk would leave Starlette's later
+        listener blind to it and the upstream running. The observed disconnect
+        must win -> 499 and the generator closed."""
+        closed = asyncio.Event()
+
+        async def yields_immediately():
+            try:
+                yield "data: hello\n\n"
+            finally:
+                closed.set()
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=yields_immediately(),
+                media_type="text/event-stream",
+                headers={},
+                request=self._request_that_disconnects(),
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 499
+        assert closed.is_set()
+
+    async def test_receive_error_does_not_trigger_false_disconnect(self):
+        """A request.receive() that raises must not masquerade as a disconnect;
+        a first chunk that arrives is still served as a normal stream."""
+
+        async def receive():
+            raise RuntimeError("receive boom")
+
+        request = Request({"type": "http", "method": "POST", "headers": []}, receive)
+
+        async def yields_immediately():
+            yield "data: hello\n\n"
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=yields_immediately(),
+                media_type="text/event-stream",
+                headers={},
+                request=request,
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+
+    async def test_disconnect_cancellation_survives_generator_aclose_error(self):
+        """A failing upstream aclose() during disconnect cleanup must not swallow
+        the disconnect signal: the sentinel is still raised."""
+
+        class AcloseRaises:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                await asyncio.Event().wait()
+                raise StopAsyncIteration
+
+            async def aclose(self):
+                raise RuntimeError("aclose boom")
+
+        with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+            await asyncio.wait_for(
+                _buffer_first_chunk_honoring_disconnect(
+                    AcloseRaises(), request=self._request_that_disconnects()
+                ),
+                timeout=5,
+            )
+
+    async def test_buffer_first_chunk_raises_sentinel_and_closes_on_disconnect(self):
+        closed = asyncio.Event()
+
+        async def blocking_gen():
+            try:
+                await asyncio.Event().wait()
+                yield "data: never\n\n"
+            finally:
+                closed.set()
+
+        with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+            await asyncio.wait_for(
+                _buffer_first_chunk_honoring_disconnect(
+                    blocking_gen(), request=self._request_that_disconnects()
+                ),
+                timeout=5,
+            )
+        assert closed.is_set()
+
 
 class TestHandleLLMApiExceptionRetryAfter:
     """RouterRateLimitError cooldown_time must surface as a retry-after header."""
@@ -3894,3 +4066,289 @@ class TestAllmPassthroughStreamingProviderGate:
         streamed = [chunk async for chunk in result.body_iterator]
         assert streamed == chunks
         mock_handler.assert_not_awaited()
+
+
+class TestResponseCostHeaderForTypedDictResponses:
+    """
+    Regression for LIT-4076. x-litellm-response-cost went missing on Anthropic
+    /v1/messages and Google :generateContent even though it appeared on
+    /chat/completions and /responses. /v1/messages returns a TypedDict that cannot
+    hold _hidden_params at all, and :generateContent carries _hidden_params but no
+    synchronously-populated response_cost. In both cases the raw response_cost is
+    empty at header-build time. The non-streaming header build now recovers the cost
+    from the logging object whenever the response itself never recorded one, while
+    leaving object responses (ModelResponse etc.) untouched.
+    """
+
+    def _build_logging_obj(self, *, model_call_details, response_cost_calculator):
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit4076"
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = model_call_details
+        logging_obj._response_cost_calculator = response_cost_calculator
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        return logging_obj
+
+    async def _drive_non_streaming(self, *, monkeypatch, response, logging_obj, route_type):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return response
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        async def fake_post_call_success_hook(data, user_api_key_dict, response):
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        fastapi_response = Response()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ):
+            await processing_obj.base_process_llm_request(
+                request=MagicMock(spec=Request, headers={}),
+                fastapi_response=fastapi_response,
+                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                select_data_generator=None,
+                llm_router=None,
+                skip_pre_call_logic=True,
+            )
+        return fastapi_response
+
+    @pytest.mark.asyncio
+    async def test_messages_typeddict_emits_cost_header_from_stored_cost(self, monkeypatch):
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        response = AnthropicMessagesResponse(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": "hi"}],
+            model="claude-haiku-4-5",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00123},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="anthropic_messages",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_typeddict_emits_cost_header_via_recompute(self, monkeypatch):
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}}],
+            usageMetadata={
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            },
+        )
+        recompute = MagicMock(return_value=0.00456)
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00456"
+        recompute.assert_called_once()
+        assert recompute.call_args.kwargs["result"] is response
+
+    @pytest.mark.asyncio
+    async def test_generate_content_emits_real_nonzero_cost_header_from_usage_metadata(self, monkeypatch):
+        """
+        End-to-end regression for LIT-4076 using the real cost calculator (not a
+        mock). A native :generateContent body reports tokens under usageMetadata,
+        which the cost calculator did not read, so the synchronously-recovered
+        cost was 0.0 and the header was dropped even though the async logging path
+        billed a real non-zero amount. The header must now carry the true cost.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+        from litellm.types.utils import ModelResponse, Usage
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+            usageMetadata={
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 500,
+                "totalTokenCount": 1500,
+            },
+        )
+
+        real_logging = LiteLLMLoggingObj(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="agenerate_content",
+            start_time=None,
+            litellm_call_id="call-lit4076-real",
+            function_id="fn",
+        )
+        real_logging.model_call_details["custom_llm_provider"] = "gemini"
+        real_logging.optional_params = {}
+
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=real_logging._response_cost_calculator,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        expected_cost = litellm.completion_cost(
+            completion_response=ModelResponse(
+                model="gemini-2.5-flash",
+                usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+        )
+        assert expected_cost > 0
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_emits_cost_header(self, monkeypatch):
+        """
+        Models the real :generateContent response: it DOES carry a _hidden_params
+        attribute (which is why x-litellm-model-group / x-litellm-model-api-base
+        appear), but no response_cost is populated synchronously at header-build
+        time. The cost is only available on the logging object. The previous
+        ``not hasattr(response, "_hidden_params")`` guard skipped recovery here, so
+        x-litellm-response-cost went missing even though the cost was computed.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0004521},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0004521"
+        assert fastapi_response.headers["x-litellm-model-group"] == "gemini-2.5-flash"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_zero_cost_drops_header(self, monkeypatch):
+        """
+        A recovered cost of 0 must normalize to a dropped header, exactly like
+        /chat/completions, so :generateContent does not start emitting
+        x-litellm-response-cost: 0.0 where nothing was emitted before.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_object_response_with_hidden_params_is_unaffected(self, monkeypatch):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(_hidden_params={"response_cost": 0.009})
+        recompute = MagicMock(side_effect=AssertionError("must not recompute for object responses"))
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 123.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="acompletion",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.009"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_object_response_zero_cost_drops_header_like_chat_completions(self, monkeypatch):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(_hidden_params={"response_cost": 0.0})
+        recompute = MagicMock(side_effect=AssertionError("must not recompute for object responses"))
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00789},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="acompletion",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()

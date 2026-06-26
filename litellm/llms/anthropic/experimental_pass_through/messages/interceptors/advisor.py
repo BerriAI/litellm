@@ -70,18 +70,12 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             None,
         )
         if advisor_tool is None:
-            raise ValueError(
-                f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list"
-            )
+            raise ValueError(f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list")
         advisor_model: str = advisor_tool.get("model") or ""
         if not advisor_model:
-            raise ValueError(
-                "advisor tool definition must include a 'model' field specifying the advisor model"
-            )
+            raise ValueError("advisor tool definition must include a 'model' field specifying the advisor model")
         _raw_max_uses = advisor_tool.get("max_uses")
-        max_uses: int = (
-            ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
-        )
+        max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
         # If not set in the tool definition, litellm resolves from env vars.
         # The advisor tool is caller-controlled; only honor a client-supplied
@@ -98,12 +92,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
         # Executor tools = all original tools with advisor replaced by the synthetic one.
         executor_tools: List[Dict] = [
-            (
-                synthetic_advisor_tool
-                if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
-                else t
-            )
-            for t in (tools or [])
+            (synthetic_advisor_tool if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE else t) for t in (tools or [])
         ]
 
         # Strip prior advisor blocks from history, preserving advice text as context.
@@ -111,9 +100,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             [dict(m) for m in messages], replace_with_text=True
         )
 
-        parent_request_id: str = str(
-            kwargs.pop("litellm_call_id", None) or uuid.uuid4()
-        )
+        parent_request_id: str = str(kwargs.pop("litellm_call_id", None) or uuid.uuid4())
         metadata_base: Dict = dict(kwargs.pop("metadata", None) or {})
         iteration = 0
 
@@ -150,9 +137,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 )
 
             # --- Build advisor context ---
-            advisor_messages = _build_advisor_context(
-                current_messages, executor_response, advisor_use_block
-            )
+            advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
             advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
@@ -225,11 +210,7 @@ def _find_advisor_tool_use(response: Any) -> Optional[Dict]:
     if not isinstance(content, list):
         return None
     for block in content:
-        if (
-            isinstance(block, dict)
-            and block.get("type") == "tool_use"
-            and block.get("name") == "advisor"
-        ):
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "advisor":
             return block
     return None
 
@@ -239,11 +220,7 @@ def _extract_response_text(response: Any) -> str:
     content = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
         return ""
-    parts = [
-        b.get("text", "")
-        for b in content
-        if isinstance(b, dict) and b.get("type") == "text"
-    ]
+    parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
     return "\n".join(parts).strip()
 
 
@@ -267,9 +244,7 @@ def _build_advisor_context(
     question = (advisor_use_block.get("input") or {}).get("question") or (
         "Please provide guidance on the current task."
     )
-    raw_content = (
-        executor_response.get("content") if isinstance(executor_response, dict) else []
-    ) or []
+    raw_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     # Keep only text blocks — strip tool_use and provider-specific fields.
     executor_text_blocks = [
         {k: v for k, v in block.items() if k not in _PROVIDER_SPECIFIC_KEYS}
@@ -293,9 +268,7 @@ def _inject_advisor_turn(
     Append the executor's response (as an assistant turn) and the advisor
     result (as a user tool_result turn) so the executor can continue.
     """
-    executor_content = (
-        executor_response.get("content") if isinstance(executor_response, dict) else []
-    ) or []
+    executor_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     tool_use_id = advisor_use_block.get("id", "")
     return [
         *messages,
@@ -322,9 +295,7 @@ def _inject_max_uses_error(
     Inject a max_uses_exceeded error tool_result so the executor continues
     without further advisor calls (mirrors Anthropic's server-side behaviour).
     """
-    executor_content = (
-        executor_response.get("content") if isinstance(executor_response, dict) else []
-    ) or []
+    executor_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     tool_use_id = advisor_use_block.get("id", "")
     return [
         *messages,

@@ -6,13 +6,15 @@
 export interface FieldConfig {
   name: string;
   label: string;
-  type: "text" | "textarea" | "url" | "switch" | "list";
+  type: "text" | "textarea" | "url" | "switch" | "list" | "select";
   required?: boolean;
   tooltip?: string;
   placeholder?: string;
   defaultValue?: any;
   rows?: number;
   validation?: any[];
+  options?: string[];
+  helpText?: string;
 }
 
 export interface SectionConfig {
@@ -69,9 +71,13 @@ export const AGENT_FORM_CONFIG: {
       {
         name: "protocolVersion",
         label: "Protocol Version",
-        type: "text",
-        placeholder: "1.0",
+        type: "select",
+        options: ["1.0", "0.3"],
         defaultValue: "1.0",
+        tooltip:
+          "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version.",
+        helpText:
+          "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version.",
       },
     ],
   },

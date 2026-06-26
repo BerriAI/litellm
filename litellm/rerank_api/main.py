@@ -31,10 +31,7 @@ async def arerank(
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: (
-        Literal[
-            "cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"
-        ]
-        | None
+        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
     ) = None,
     top_n: int | None = None,
     rank_fields: List[str] | None = None,
@@ -125,9 +122,7 @@ def rerank(
             "max_chunks_per_doc": max_chunks_per_doc,
             "max_tokens_per_doc": max_tokens_per_doc,
         }
-        present_version_params = [
-            k for k, v in unique_version_params.items() if v is not None
-        ]
+        present_version_params = [k for k, v in unique_version_params.items() if v is not None]
 
         (
             model,
@@ -141,13 +136,11 @@ def rerank(
             api_key=optional_params.api_key,
         )
 
-        rerank_provider_config: BaseRerankConfig = (
-            ProviderConfigManager.get_provider_rerank_config(
-                model=model,
-                provider=litellm.LlmProviders(_custom_llm_provider),
-                api_base=optional_params.api_base,
-                present_version_params=present_version_params,
-            )
+        rerank_provider_config: BaseRerankConfig = ProviderConfigManager.get_provider_rerank_config(
+            model=model,
+            provider=litellm.LlmProviders(_custom_llm_provider),
+            api_base=optional_params.api_base,
+            present_version_params=present_version_params,
         )
 
         optional_rerank_params: Dict = get_optional_rerank_params(
@@ -195,9 +188,7 @@ def rerank(
             or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY
         ):
             # Implement Cohere rerank logic
-            api_key: str | None = (
-                dynamic_api_key or optional_params.api_key or litellm.api_key
-            )
+            api_key: str | None = dynamic_api_key or optional_params.api_key or litellm.api_key
 
             api_base: str | None = (
                 dynamic_api_base
@@ -208,9 +199,7 @@ def rerank(
             )
 
             if api_base is None:
-                raise Exception(
-                    "Invalid api base. api_base=None. Set in call or via `COHERE_API_BASE` env var."
-                )
+                raise Exception("Invalid api base. api_base=None. Set in call or via `COHERE_API_BASE` env var.")
             response = base_llm_http_handler.rerank(
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
@@ -253,16 +242,11 @@ def rerank(
             api_key = dynamic_api_key or optional_params.api_key or litellm.api_key
 
             api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("INFINITY_API_BASE")
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret_str("INFINITY_API_BASE")
             )
 
             if api_base is None:
-                raise Exception(
-                    "Invalid api base. api_base=None. Set in call or via `INFINITY_API_BASE` env var."
-                )
+                raise Exception("Invalid api base. api_base=None. Set in call or via `INFINITY_API_BASE` env var.")
 
             response = base_llm_http_handler.rerank(
                 model=model,
@@ -290,9 +274,7 @@ def rerank(
             )
 
             if api_key is None:
-                raise ValueError(
-                    "TogetherAI API key is required, please set 'TOGETHERAI_API_KEY' in your environment"
-                )
+                raise ValueError("TogetherAI API key is required, please set 'TOGETHERAI_API_KEY' in your environment")
 
             response = together_rerank.rerank(
                 model=model,
@@ -307,15 +289,10 @@ def rerank(
             )
         elif _custom_llm_provider == litellm.LlmProviders.JINA_AI:
             if dynamic_api_key is None:
-                raise ValueError(
-                    "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"
-                )
+                raise ValueError("Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment")
 
             api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or litellm.api_base
-                or get_secret("BEDROCK_API_BASE")  # type: ignore
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")  # type: ignore
             )
 
             response = base_llm_http_handler.rerank(
@@ -335,9 +312,7 @@ def rerank(
             )
         elif _custom_llm_provider == litellm.LlmProviders.NVIDIA_NIM:
             if dynamic_api_key is None:
-                raise ValueError(
-                    "Nvidia NIM API key is required, please set 'NVIDIA_NIM_API_KEY' in your environment"
-                )
+                raise ValueError("Nvidia NIM API key is required, please set 'NVIDIA_NIM_API_KEY' in your environment")
 
             # Note: For rerank, the base URL is different from chat/embeddings
             # Rerank uses ai.api.nvidia.com instead of integrate.api.nvidia.com
@@ -364,10 +339,7 @@ def rerank(
             )
         elif _custom_llm_provider == litellm.LlmProviders.BEDROCK:
             api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or litellm.api_base
-                or get_secret("BEDROCK_API_BASE")  # type: ignore
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")  # type: ignore
             )
 
             # Merge headers and extra_headers if both are provided
@@ -394,17 +366,9 @@ def rerank(
             )
         elif _custom_llm_provider == litellm.LlmProviders.HOSTED_VLLM:
             # Implement Hosted VLLM rerank logic
-            api_key = (
-                dynamic_api_key
-                or optional_params.api_key
-                or get_secret_str("HOSTED_VLLM_API_KEY")
-            )
+            api_key = dynamic_api_key or optional_params.api_key or get_secret_str("HOSTED_VLLM_API_KEY")
 
-            api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or get_secret_str("HOSTED_VLLM_API_BASE")
-            )
+            api_base = dynamic_api_base or optional_params.api_base or get_secret_str("HOSTED_VLLM_API_BASE")
 
             if api_base is None:
                 raise ValueError(
@@ -428,17 +392,9 @@ def rerank(
             )
 
         elif _custom_llm_provider == litellm.LlmProviders.DEEPINFRA:
-            api_key = (
-                dynamic_api_key
-                or optional_params.api_key
-                or get_secret_str("DEEPINFRA_API_KEY")
-            )
+            api_key = dynamic_api_key or optional_params.api_key or get_secret_str("DEEPINFRA_API_KEY")
 
-            api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or get_secret_str("DEEPINFRA_API_BASE")
-            )
+            api_base = dynamic_api_base or optional_params.api_base or get_secret_str("DEEPINFRA_API_BASE")
 
             if api_base is None:
                 raise ValueError(
@@ -470,11 +426,7 @@ def rerank(
                 or get_secret_str("FIREWORKS_AI_TOKEN")
             )
 
-            api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or get_secret_str("FIREWORKS_AI_API_BASE")
-            )
+            api_base = dynamic_api_base or optional_params.api_base or get_secret_str("FIREWORKS_AI_API_BASE")
 
             response = base_llm_http_handler.rerank(
                 model=model,
@@ -499,11 +451,7 @@ def rerank(
                 or get_secret_str("VOYAGE_AI_API_KEY")
             )
 
-            api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or get_secret_str("VOYAGE_API_BASE")
-            )
+            api_base = dynamic_api_base or optional_params.api_base or get_secret_str("VOYAGE_API_BASE")
 
             response = base_llm_http_handler.rerank(
                 model=model,
@@ -586,6 +534,4 @@ def rerank(
         return response
     except Exception as e:
         verbose_logger.error(f"Error in rerank: {str(e)}")
-        raise exception_type(
-            model=model, custom_llm_provider=custom_llm_provider, original_exception=e
-        )
+        raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)

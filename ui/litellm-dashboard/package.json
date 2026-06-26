@@ -34,6 +34,7 @@
     "@types/papaparse": "5.5.2",
     "antd": "5.29.3",
     "cva": "1.0.0-beta.4",
+    "date-fns": "3.6.0",
     "dayjs": "1.11.19",
     "jwt-decode": "4.0.0",
     "lucide-react": "0.513.0",
@@ -47,7 +48,6 @@
     "react-json-view-lite": "2.5.0",
     "react-markdown": "9.1.0",
     "react-syntax-highlighter": "15.6.6",
-    "remark-gfm": "4.0.1",
     "tailwind-merge": "3.4.0",
     "uuid": "14.0.0"
   },

@@ -628,6 +628,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
 
     with (
         patch(
@@ -648,10 +649,10 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
-            return_value=None,
-        ) as mock_get_stored_token,
+            return_value=False,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
@@ -666,7 +667,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify a 401 was raised
-    assert mock_get_stored_token.await_count == 1
+    assert mock_has_token.await_count == 1
     assert mock_handle_request.await_count == 0
     assert exc_info.value.status_code == 401
     assert "www-authenticate" in exc_info.value.headers
@@ -817,6 +818,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
 
     with (
         patch(
@@ -837,10 +839,10 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
-            return_value={"Authorization": "Bearer cached-token"},
-        ) as mock_get_stored_token,
+            return_value=True,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
@@ -858,7 +860,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert mock_get_stored_token.await_count == 1
+    assert mock_has_token.await_count == 1
     assert mock_handle_request.await_count == 1
 
 
@@ -941,10 +943,9 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
-            return_value=None,
-        ) as mock_get_stored_token,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
@@ -958,7 +959,9 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
         with pytest.raises(HTTPException) as exc_info:
             await handle_streamable_http_mcp(scope, receive, send)
 
-    assert mock_get_stored_token.await_count == 1
+    # Delegate-auth servers raise the resource_metadata challenge before any
+    # per-user existence check, so the v2 token store is never consulted.
+    assert mock_has_token.await_count == 0
     assert mock_handle_request.await_count == 0
     assert exc_info.value.status_code == 401
     challenge = exc_info.value.headers["www-authenticate"]

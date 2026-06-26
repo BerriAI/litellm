@@ -3223,8 +3223,10 @@ class TestMCPApprovalWorkflow:
         pending_server.approval_status = MCPApprovalStatus.pending_review
         approved_server = generate_mock_mcp_server_db_record()
         approved_server.approval_status = MCPApprovalStatus.active
+        approved_server.submitted_by = "submitter-user"
 
         mock_manager = MagicMock()
+        mock_manager.invalidate_byom_submitted_servers_cache = AsyncMock()
         mock_manager.reload_servers_from_database = AsyncMock()
 
         with (
@@ -3250,6 +3252,9 @@ class TestMCPApprovalWorkflow:
             )
 
         mock_manager.reload_servers_from_database.assert_awaited_once()
+        mock_manager.invalidate_byom_submitted_servers_cache.assert_awaited_once_with(
+            "submitter-user"
+        )
         assert result is not None
 
     @pytest.mark.asyncio

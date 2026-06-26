@@ -57,16 +57,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model, internal_model_max_budget=internal_model_max_budget
         )
         if _current_model_budget_info is None:
-            verbose_proxy_logger.debug(
-                f"Model {model} not found in internal_model_max_budget"
-            )
+            verbose_proxy_logger.debug(f"Model {model} not found in internal_model_max_budget")
             return True
 
         # check if current model is within budget
-        if (
-            _current_model_budget_info.max_budget
-            and _current_model_budget_info.max_budget > 0
-        ):
+        if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
             _current_spend = await self._get_virtual_key_spend_for_model(
                 user_api_key_hash=user_api_key_dict.token,
                 model=model,
@@ -112,16 +107,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model, internal_model_max_budget=internal_model_max_budget
         )
         if _current_model_budget_info is None:
-            verbose_proxy_logger.debug(
-                f"Model {model} not found in end_user_model_max_budget"
-            )
+            verbose_proxy_logger.debug(f"Model {model} not found in end_user_model_max_budget")
             return True
 
         # check if current model is within budget
-        if (
-            _current_model_budget_info.max_budget
-            and _current_model_budget_info.max_budget > 0
-        ):
+        if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
             _current_spend = await self._get_end_user_spend_for_model(
                 end_user_id=end_user_id,
                 model=model,
@@ -147,7 +137,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
         # 1. model: directly look up `model`
-        end_user_model_spend_cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+        end_user_model_spend_cache_key = (
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+        )
         _current_spend = await self.dual_cache.async_get_cache(
             key=end_user_model_spend_cache_key,
         )
@@ -175,7 +167,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """
 
         # 1. model: directly look up `model`
-        virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
+        virtual_key_model_spend_cache_key = (
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
+        )
         _current_spend = await self.dual_cache.async_get_cache(
             key=virtual_key_model_spend_cache_key,
         )
@@ -198,9 +192,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         1. Check if `model` is in `internal_model_max_budget`
         2. If not, check if `model` without custom llm provider is in `internal_model_max_budget`
         """
-        return internal_model_max_budget.get(
-            model, None
-        ) or internal_model_max_budget.get(
+        return internal_model_max_budget.get(model, None) or internal_model_max_budget.get(
             self._get_model_without_custom_llm_provider(model), None
         )
 
@@ -226,9 +218,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object", None
-        )
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             verbose_proxy_logger.debug(
                 "Skipping _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: standard_logging_payload is None"
@@ -237,18 +227,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         _litellm_params: dict = kwargs.get("litellm_params", {}) or {}
         _metadata: dict = _litellm_params.get("metadata", {}) or {}
-        user_api_key_model_max_budget: Optional[dict] = _metadata.get(
-            "user_api_key_model_max_budget", None
-        )
+        user_api_key_model_max_budget: Optional[dict] = _metadata.get("user_api_key_model_max_budget", None)
         user_api_key_end_user_model_max_budget: Optional[dict] = _metadata.get(
             "user_api_key_end_user_model_max_budget", None
         )
-        if (
-            user_api_key_model_max_budget is None
-            or len(user_api_key_model_max_budget) == 0
-        ) and (
-            user_api_key_end_user_model_max_budget is None
-            or len(user_api_key_end_user_model_max_budget) == 0
+        if (user_api_key_model_max_budget is None or len(user_api_key_model_max_budget) == 0) and (
+            user_api_key_end_user_model_max_budget is None or len(user_api_key_end_user_model_max_budget) == 0
         ):
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget and user_api_key_end_user_model_max_budget are None or empty."
@@ -263,15 +247,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         # Falling back to the deployment-level "model" field preserves
         # behaviour for non-proxy or non-router deployments where model_group
         # is None.
-        model = standard_logging_payload.get(
-            "model_group"
-        ) or standard_logging_payload.get("model")
-        virtual_key = standard_logging_payload.get("metadata", {}).get(
-            "user_api_key_hash"
-        )
-        end_user_id = standard_logging_payload.get(
-            "end_user"
-        ) or standard_logging_payload.get("metadata", {}).get(
+        model = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+        virtual_key = standard_logging_payload.get("metadata", {}).get("user_api_key_hash")
+        end_user_id = standard_logging_payload.get("end_user") or standard_logging_payload.get("metadata", {}).get(
             "user_api_key_end_user_id"
         )
 
@@ -290,7 +268,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 model=model, internal_model_max_budget=internal_model_max_budget
             )
             if key_budget_config is not None and key_budget_config.budget_duration:
-                virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{key_budget_config.budget_duration}"
+                virtual_spend_key = (
+                    f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{key_budget_config.budget_duration}"
+                )
                 virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
                 await self._increment_spend_for_key(
                     budget_config=key_budget_config,
@@ -311,7 +291,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 model=model, internal_model_max_budget=internal_model_max_budget
             )
             if key_budget_config is not None and key_budget_config.budget_duration:
-                end_user_spend_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+                end_user_spend_key = (
+                    f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+                )
                 end_user_start_time_key = f"end_user_budget_start_time:{end_user_id}"
                 await self._increment_spend_for_key(
                     budget_config=key_budget_config,
@@ -325,7 +307,5 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",
-            json.dumps(
-                self.dual_cache.in_memory_cache.cache_dict, indent=4, default=str
-            ),
+            json.dumps(self.dual_cache.in_memory_cache.cache_dict, indent=4, default=str),
         )

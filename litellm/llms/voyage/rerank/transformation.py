@@ -88,9 +88,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         litellm_params: Dict = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
-            raise VoyageError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
 
         logging_obj.post_call(original_response=raw_response.text)
 
@@ -141,13 +139,9 @@ class VoyageRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> Dict:
         if api_key is None:
-            api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str(
-                "VOYAGE_AI_API_KEY"
-            )
+            api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
         if api_key is None:
-            raise ValueError(
-                "Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var."
-            )
+            raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")
         return {
             "Authorization": f"Bearer {api_key}",
             "content-type": "application/json",
@@ -172,9 +166,5 @@ class VoyageRerankConfig(BaseRerankConfig):
             return 0.0, 0.0
         return model_info["input_cost_per_token"] * total_tokens, 0.0
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ):
-        return VoyageError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]):
+        return VoyageError(message=error_message, status_code=status_code, headers=headers)

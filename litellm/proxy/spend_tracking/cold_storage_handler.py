@@ -35,9 +35,7 @@ class ColdStorageHandler:
         Returns:
             Optional[dict]: The proxy server request dict or None if not found
         """
-        custom_logger = (
-            self._injected_cold_storage_logger or self._resolve_cold_storage_logger()
-        )
+        custom_logger = self._injected_cold_storage_logger or self._resolve_cold_storage_logger()
         if custom_logger is None:
             return None
 
@@ -49,17 +47,13 @@ class ColdStorageHandler:
         custom_logger_name = self._select_custom_logger_for_cold_storage()
         if custom_logger_name is None:
             return None
-        return (
-            litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
-                custom_logger_name
-            )
-        )
+        return litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(custom_logger_name)
 
     def _select_custom_logger_for_cold_storage(
         self,
     ) -> _custom_logger_compatible_callbacks_literal | None:
-        cold_storage_custom_logger: (
-            _custom_logger_compatible_callbacks_literal | None
-        ) = litellm.cold_storage_custom_logger
+        cold_storage_custom_logger: _custom_logger_compatible_callbacks_literal | None = (
+            litellm.cold_storage_custom_logger
+        )
 
         return cold_storage_custom_logger

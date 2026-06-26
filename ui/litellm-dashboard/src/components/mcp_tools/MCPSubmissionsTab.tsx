@@ -97,7 +97,9 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
         </h3>
         <p className="text-sm text-gray-500 mb-4">
           Are you sure you want to {action} <span className="font-medium text-gray-700">&quot;{serverName}&quot;</span>?{" "}
-          {isApprove ? "This will make it active and available for use." : rejectBody}
+          {isApprove
+            ? "This will activate the server. The submitting user will see it in their MCP Servers list once approved."
+            : rejectBody}
         </p>
         {!isApprove && (
           <textarea

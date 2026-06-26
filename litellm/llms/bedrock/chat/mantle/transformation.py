@@ -45,9 +45,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
         return build_mantle_messages_url(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=optional_params.get(
-                "aws_bedrock_runtime_endpoint"
-            ),
+            aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
             region=region,
         )
 

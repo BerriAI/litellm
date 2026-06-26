@@ -2,8 +2,8 @@
 
 Generic proxy operations (keys, customers, chat/embed, route probing, SpendLogs
 polling) come from the shared Gateway, DI'd in (composition, not inheritance).
-This client adds only the spend surface: /spend/calculate, key-spend
-polling, and the route probes the breadth test uses.
+This client adds only the spend surface: /spend/calculate, /spend/tags,
+key-spend polling, and the route probes the breadth test uses.
 
 Re-exports unwrap / is_ok / unique_marker / SpendLogRow so the tests import their
 helpers from one place.
@@ -22,6 +22,7 @@ from e2e_http import (
     ProbeResult,
     Result,
     StreamingResponse,
+    Success,
     is_ok,
     unwrap,
 )
@@ -38,6 +39,8 @@ from models import (
     SpendCalculateBody,
     SpendCalculateResponse,
     SpendLogRow,
+    SpendTagsResponse,
+    TagSpend,
 )
 
 __all__ = [
@@ -138,6 +141,34 @@ class SpendClient:
                 response_type=SpendCalculateResponse,
             )
         ).cost
+
+    def spend_by_tags(self) -> list[TagSpend]:
+        result = self.gateway.transport.get(
+            "/spend/tags",
+            headers=self.gateway.transport.master,
+            params=NoBody(),
+            response_type=SpendTagsResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.spend_per_tag or []
+            case _:
+                return []
+
+    def poll_tag_spend(self, tag: str, *, minimum: float = 0.0) -> TagSpend | None:
+        """Poll /spend/tags until the tag's aggregate reaches `minimum`; last seen."""
+        deadline = time.monotonic() + self.gateway.poll_timeout
+        entry: TagSpend | None = None
+        while time.monotonic() < deadline:
+            matches = [
+                t for t in self.spend_by_tags() if t.individual_request_tag == tag
+            ]
+            if matches:
+                entry = matches[0]
+                if (entry.total_spend or 0.0) >= minimum:
+                    return entry
+            time.sleep(self.gateway.poll_interval)
+        return entry
 
     def poll_key_spend(self, key: str, *, minimum: float = 0.0) -> float:
         deadline = time.monotonic() + self.gateway.poll_timeout

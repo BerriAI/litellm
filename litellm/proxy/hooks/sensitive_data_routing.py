@@ -77,24 +77,16 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         ]
         return "|".join(principal) if principal else "default"
 
-    async def _get_routed_model(
-        self, session_id: str, user_api_key_dict: Optional[UserAPIKeyAuth]
-    ) -> Optional[str]:
+    async def _get_routed_model(self, session_id: str, user_api_key_dict: Optional[UserAPIKeyAuth]) -> Optional[str]:
         """Get the model this session should be routed to, if any."""
-        cache_key = self._make_cache_key(
-            session_id, self._resolve_tenant(user_api_key_dict)
-        )
+        cache_key = self._make_cache_key(session_id, self._resolve_tenant(user_api_key_dict))
 
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             try:
-                result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
-                    key=cache_key
-                )
+                result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(key=cache_key)
                 if result is not None:
                     routed_model = str(result)
-                    remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(
-                        key=cache_key
-                    )
+                    remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(key=cache_key)
                     await self.internal_usage_cache.async_set_cache(
                         key=cache_key,
                         value=routed_model,
@@ -132,9 +124,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         route the session to a specific model. The override is scoped to the
         requesting principal so sessions from different tenants cannot collide.
         """
-        cache_key = self._make_cache_key(
-            session_id, self._resolve_tenant(user_api_key_dict)
-        )
+        cache_key = self._make_cache_key(session_id, self._resolve_tenant(user_api_key_dict))
 
         verbose_proxy_logger.info(
             "SensitiveDataRoutingHandler: Setting session routing session_id=%s model=%s guardrail=%s ttl=%s",

@@ -3989,3 +3989,98 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
     assert call_kwargs["valid_token_dict"]["is_session_token"] is True
     assert call_kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
     assert result.is_session_token is True
+
+
+@pytest.mark.asyncio
+async def test_auth_path_caches_team_object_under_canonical_team_id_key():
+    """Regression for LIT-4000: the auth builder must cache the team object under
+    the canonical ``team_id:{id}`` key that ``get_team_object`` and
+    ``_update_team_cache`` read, never under the raw ``team_id`` (and never under
+    a ``None`` key, which Redis rejects with a NoneType key error). A raw or None
+    key is silently dropped by Redis / never served back, so every request
+    re-hits Postgres for the team object instead of the L2 cache.
+
+    Drives the real builder for a team-scoped key against a real in-memory
+    ``UserApiKeyCache`` and reads the team object back. Mutating the cache key at
+    the write site to the raw ``valid_token.team_id`` (or ``None``) makes the
+    canonical-key read miss and fails this test.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import hash_token
+
+    team_id = "team-lit-4000"
+    api_key = "sk-lit-4000-team-key"
+    cache = UserApiKeyCache()
+
+    team_token = UserAPIKeyAuth(token=hash_token(api_key), team_id=team_id)
+    team_obj = LiteLLM_TeamTableCachedObj(team_id=team_id)
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "master_key": "sk-test-master",
+        "general_settings": {"allow_requests_on_db_unavailable": False},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                AsyncMock(return_value=team_token),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                AsyncMock(return_value=team_obj),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._return_user_api_key_auth_obj",
+                new_callable=AsyncMock,
+                return_value=team_token,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+            ),
+        ):
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    served = cache.get_cache(
+        key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj
+    )
+    assert served is not None and served.team_id == team_id
+    assert cache.get_cache(key=team_id) is None
+    assert cache.get_cache(key=None) is None

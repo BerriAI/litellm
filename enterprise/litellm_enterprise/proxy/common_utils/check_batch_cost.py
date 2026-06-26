@@ -13,6 +13,8 @@ from litellm.constants import (
 )
 
 if TYPE_CHECKING:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
 
@@ -26,6 +28,7 @@ class CheckBatchCost:
         proxy_logging_obj: "ProxyLogging",
         prisma_client: "PrismaClient",
         llm_router: "Router",
+        track_unmanaged_vertex_batch_cost: bool = False,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -33,6 +36,7 @@ class CheckBatchCost:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
+        self._track_unmanaged_vertex_batch_cost = track_unmanaged_vertex_batch_cost
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
@@ -97,6 +101,182 @@ class CheckBatchCost:
             order={"created_at": "asc"},
         )
 
+    @staticmethod
+    def _record_error(
+        prom_logger: Optional["PrometheusLogger"], error_type: str
+    ) -> None:
+        if prom_logger is not None:
+            prom_logger.record_check_batch_cost_error(error_type)
+
+    def _resolve_job_routing(
+        self,
+        job: "LiteLLM_ManagedObjectTable",
+        prom_logger: Optional["PrometheusLogger"],
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Resolve (model_id, batch_id) for a managed-object row, where model_id is a router
+        deployment id and batch_id is the raw provider batch id.
+
+        Managed batches encode both in a base64 unified id. Unmanaged Vertex batches, created with
+        a raw gs:// input_file_id, store the raw provider job id as unified_object_id; when
+        track_unmanaged_vertex_batch_cost is enabled the model is derived from the gs:// path and
+        mapped to a configured vertex_ai deployment. Returns None (recording a metric) when the row
+        can't be routed.
+        """
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            get_batch_id_from_unified_batch_id,
+            get_model_id_from_unified_batch_id,
+        )
+
+        unified_object_id = job.unified_object_id
+        decoded = _is_base64_encoded_unified_file_id(unified_object_id)
+        if decoded:
+            model_id = get_model_id_from_unified_batch_id(decoded)
+            if model_id is None:
+                verbose_proxy_logger.info(
+                    f"Skipping job {unified_object_id} because it is not a valid model id"
+                )
+                self._record_error(prom_logger, "invalid_model_id")
+                return None
+            return model_id, get_batch_id_from_unified_batch_id(decoded)
+
+        if self._track_unmanaged_vertex_batch_cost:
+            return self._resolve_unmanaged_vertex_routing(job, prom_logger)
+
+        verbose_proxy_logger.info(
+            f"Skipping job {unified_object_id} because it is not a valid unified object id"
+        )
+        self._record_error(prom_logger, "invalid_unified_id")
+        return None
+
+    def _resolve_unmanaged_vertex_routing(
+        self,
+        job: "LiteLLM_ManagedObjectTable",
+        prom_logger: Optional["PrometheusLogger"],
+    ) -> Optional[Tuple[str, str]]:
+        from litellm.llms.vertex_ai.batches.transformation import (
+            VertexAIBatchTransformation,
+        )
+
+        input_file_id = self._get_input_file_id(job)
+        if not VertexAIBatchTransformation.is_unmanaged_gcs_batch_input_file_id(
+            input_file_id
+        ):
+            verbose_proxy_logger.info(
+                f"Skipping job {job.unified_object_id}: not an unmanaged vertex batch "
+                "(no gs:// input_file_id with a publishers/ model path)"
+            )
+            self._record_error(prom_logger, "invalid_unified_id")
+            return None
+        assert input_file_id is not None  # narrowed by is_unmanaged_gcs_batch_input_file_id
+
+        bare_model_name = VertexAIBatchTransformation.get_bare_model_name_from_gcs_file(
+            input_file_id
+        )
+        deployment_id = self._get_vertex_ai_deployment_id_for_bare_model(
+            bare_model_name
+        )
+        if deployment_id is None:
+            verbose_proxy_logger.info(
+                f"Skipping unmanaged vertex batch {job.unified_object_id}: no vertex_ai "
+                f"deployment configured for model {bare_model_name}"
+            )
+            self._record_error(prom_logger, "unmanaged_no_matching_deployment")
+            return None
+
+        return deployment_id, job.unified_object_id
+
+    def _get_vertex_ai_deployment_id_for_bare_model(
+        self, bare_model_name: str
+    ) -> Optional[str]:
+        model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
+        deployment_id = (
+            self._get_vertex_ai_deployment_id(model_group) if model_group else None
+        )
+        if deployment_id is not None:
+            return deployment_id
+
+        return self._get_vertex_ai_deployment_id_from_matching_deployments(
+            bare_model_name
+        )
+
+    def _get_vertex_ai_deployment_id_from_matching_deployments(
+        self, bare_model_name: str
+    ) -> Optional[str]:
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        for deployment in self.llm_router.get_model_list(model_name=None) or []:
+            litellm_params = deployment.get("litellm_params") or {}
+            actual_model = litellm_params.get("model")
+            if not isinstance(actual_model, str):
+                continue
+            if not self._is_bare_model_match(actual_model, bare_model_name):
+                continue
+            try:
+                _, llm_provider, _, _ = get_llm_provider(
+                    model=actual_model,
+                    custom_llm_provider=litellm_params.get("custom_llm_provider"),
+                )
+            except Exception:
+                continue
+            if llm_provider != "vertex_ai":
+                continue
+            model_info = deployment.get("model_info") or {}
+            deployment_id = model_info.get("id")
+            if isinstance(deployment_id, str):
+                return deployment_id
+        return None
+
+    @staticmethod
+    def _is_bare_model_match(actual_model: str, bare_model_name: str) -> bool:
+        return (
+            actual_model == bare_model_name
+            or actual_model.endswith(f"/{bare_model_name}")
+            or actual_model.endswith(f":{bare_model_name}")
+        )
+
+    def _get_vertex_ai_deployment_id(self, model_group: str) -> Optional[str]:
+        """
+        Returns the first deployment id for `model_group` whose provider is vertex_ai,
+        skipping deployments from other providers that happen to share the model group name.
+        """
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        for deployment_id in self.llm_router.get_model_ids(model_name=model_group):
+            deployment_info = self.llm_router.get_deployment(model_id=deployment_id)
+            if deployment_info is None:
+                continue
+            try:
+                _, llm_provider, _, _ = get_llm_provider(
+                    model=deployment_info.litellm_params.model,
+                    custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
+                )
+            except Exception:
+                continue
+            if llm_provider == "vertex_ai":
+                return deployment_id
+        return None
+
+    @staticmethod
+    def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:
+        import json
+
+        from litellm.types.utils import LiteLLMBatch
+
+        file_object = job.file_object
+        if isinstance(file_object, str):
+            try:
+                file_object = json.loads(file_object)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        if not isinstance(file_object, dict):
+            return None
+        try:
+            return LiteLLMBatch.model_validate(file_object).input_file_id
+        except Exception:
+            return None
+
     async def check_batch_cost(self):
         """
         Check if the batch JOB has been tracked.
@@ -114,8 +294,6 @@ class CheckBatchCost:
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
-            get_batch_id_from_unified_batch_id,
-            get_model_id_from_unified_batch_id,
         )
 
         try:
@@ -172,31 +350,10 @@ class CheckBatchCost:
         else:
             jobs = await self._fallback_find_jobs()
         for job in jobs:
-            # get the model from the job
-            unified_object_id = job.unified_object_id
-            decoded_unified_object_id = _is_base64_encoded_unified_file_id(
-                unified_object_id
-            )
-            if not decoded_unified_object_id:
-                verbose_proxy_logger.info(
-                    f"Skipping job {unified_object_id} because it is not a valid unified object id"
-                )
-                if prom_logger:
-                    prom_logger.record_check_batch_cost_error("invalid_unified_id")
+            routing = self._resolve_job_routing(job, prom_logger)
+            if routing is None:
                 continue
-            else:
-                unified_object_id = decoded_unified_object_id
-
-            model_id = get_model_id_from_unified_batch_id(unified_object_id)
-            batch_id = get_batch_id_from_unified_batch_id(unified_object_id)
-
-            if model_id is None:
-                verbose_proxy_logger.info(
-                    f"Skipping job {unified_object_id} because it is not a valid model id"
-                )
-                if prom_logger:
-                    prom_logger.record_check_batch_cost_error("invalid_model_id")
-                continue
+            model_id, batch_id = routing
 
             verbose_proxy_logger.info(
                 f"Querying model ID: {model_id} for cost and usage of batch ID: {batch_id}"
@@ -213,7 +370,7 @@ class CheckBatchCost:
                 )
             except Exception as e:
                 verbose_proxy_logger.info(
-                    f"Skipping job {unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
+                    f"Skipping job {job.unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
                 )
                 if prom_logger:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
@@ -287,7 +444,7 @@ class CheckBatchCost:
                 deployment_info = self.llm_router.get_deployment(model_id=model_id)
                 if deployment_info is None:
                     verbose_proxy_logger.info(
-                        f"Skipping job {unified_object_id} because it is not a valid deployment info"
+                        f"Skipping job {job.unified_object_id} because it is not a valid deployment info"
                     )
                     if prom_logger:
                         prom_logger.record_check_batch_cost_error("deployment_not_found")
@@ -411,6 +568,26 @@ class CheckBatchCost:
                 except Exception as db_err:
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
+                    )
+
+            elif response.status in ("failed", "expired", "cancelled"):
+                try:
+                    update_data = {
+                        "status": response.status,
+                        "file_object": response.model_dump_json(),
+                    }
+                    if self._has_batch_processed_column:
+                        update_data["batch_processed"] = True
+                    await self.prisma_client.db.litellm_managedobjecttable.update(
+                        where={"id": job.id},
+                        data=update_data,
+                    )
+                    verbose_proxy_logger.info(
+                        f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
+                    )
+                except Exception as db_err:
+                    verbose_proxy_logger.error(
+                        f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
                     )
 
         # Record polling run metrics (always, even if nothing was processed)

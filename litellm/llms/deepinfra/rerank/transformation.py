@@ -53,9 +53,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             )
 
         # Remove 'openai' from the base if present
-        api_base_clean = (
-            api_base.replace("openai", "") if "openai" in api_base else api_base
-        )
+        api_base_clean = api_base.replace("openai", "") if "openai" in api_base else api_base
 
         # Remove any trailing slashes for consistency, then add one
         api_base_clean = api_base_clean.rstrip("/") + "/"
@@ -74,9 +72,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             api_key = get_secret_str("DEEPINFRA_API_KEY")
 
         if api_key is None:
-            raise ValueError(
-                "Deepinfra API key is required. Please set 'DEEPINFRA_API_KEY' environment variable"
-            )
+            raise ValueError("Deepinfra API key is required. Please set 'DEEPINFRA_API_KEY' environment variable")
 
         default_headers = {
             "Authorization": f"Bearer {api_key}",
@@ -171,9 +167,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             # Create RerankResponse
             results = []
             for i, score in enumerate(scores):
-                results.append(
-                    RerankResponseResult(index=i, relevance_score=float(score))
-                )
+                results.append(RerankResponseResult(index=i, relevance_score=float(score)))
 
             # Create metadata for the response
             tokens = RerankTokens(
@@ -183,9 +177,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             billed_units = RerankBilledUnits(total_tokens=input_tokens)
             meta = RerankResponseMeta(tokens=tokens, billed_units=billed_units)
 
-            rerank_response = RerankResponse(
-                id=request_id or str(uuid.uuid4()), results=results, meta=meta
-            )
+            rerank_response = RerankResponse(id=request_id or str(uuid.uuid4()), results=results, meta=meta)
 
             # Store additional information in hidden params
             rerank_response._hidden_params = {

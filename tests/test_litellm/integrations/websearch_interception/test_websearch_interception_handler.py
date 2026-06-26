@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
@@ -409,3 +410,102 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+def test_sync_forced_tool_choice_repoints_converted_web_search():
+    """Regression (tool_choice 400): a forced tool_choice naming the original
+    web_search tool must be repointed to litellm_web_search after conversion.
+
+    Native clients (e.g. Claude Code) send
+    tool_choice={"type": "tool", "name": "web_search"}. The tool definition is
+    renamed to litellm_web_search, so an unrewritten tool_choice points at a
+    tool that no longer exists and Anthropic rejects with
+    "Tool 'web_search' not found in provided tools".
+    """
+    converted_tools = [
+        {
+            "type": "function",
+            "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {}},
+        }
+    ]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        {"type": "tool", "name": "web_search"}, converted_tools
+    )
+
+    assert result == {"type": "tool", "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+
+
+def test_sync_forced_tool_choice_leaves_existing_tool_untouched():
+    """A native Anthropic tool_choice already naming a tool on the converted
+    list (top-level name, no function wrapper) must not be rewritten."""
+    converted_tools = [{"name": LITELLM_WEB_SEARCH_TOOL_NAME}]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        {"type": "tool", "name": LITELLM_WEB_SEARCH_TOOL_NAME}, converted_tools
+    )
+
+    assert result == {"type": "tool", "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+
+
+def test_sync_forced_tool_choice_preserves_extra_tool_choice_fields():
+    """Repointing must keep other tool_choice keys intact."""
+    converted_tools = [
+        {
+            "type": "function",
+            "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {}},
+        }
+    ]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        {"type": "tool", "name": "web_search", "disable_parallel_tool_use": True},
+        converted_tools,
+    )
+
+    assert result == {
+        "type": "tool",
+        "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+        "disable_parallel_tool_use": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["auto", {"type": "auto"}, {"type": "any"}, None],
+)
+def test_sync_forced_tool_choice_leaves_non_forced_untouched(tool_choice):
+    """Only a forced {"type": "tool", ...} choice is rewritten; auto/any/string
+    and None pass through unchanged."""
+    converted_tools = [{"name": LITELLM_WEB_SEARCH_TOOL_NAME}]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        tool_choice, converted_tools
+    )
+
+    assert result == tool_choice
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hook_syncs_forced_tool_choice():
+    """End-to-end: async_pre_request_hook converts web_search and repoints the
+    forced tool_choice in the same pass, so the outgoing request is consistent.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+
+    kwargs = {
+        "litellm_params": {"custom_llm_provider": "anthropic"},
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "tool_choice": {"type": "tool", "name": "web_search"},
+    }
+
+    result = await logger.async_pre_request_hook(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "search the web"}],
+        kwargs=kwargs,
+    )
+
+    assert result is not None
+    assert result["tool_choice"] == {
+        "type": "tool",
+        "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+    }

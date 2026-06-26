@@ -58,15 +58,9 @@ class CohereRerankHandler(BaseTranslation):
         """
         # Collect every scannable text field in a stable order so the
         # guardrailed results can be written back to the right key by index.
-        fields_to_scan = [
-            (key, data[key])
-            for key in self._SCANNED_FIELDS
-            if isinstance(data.get(key), str)
-        ]
+        fields_to_scan = [(key, data[key]) for key in self._SCANNED_FIELDS if isinstance(data.get(key), str)]
         if not fields_to_scan:
-            verbose_proxy_logger.debug(
-                "Rerank: No query/instruction to process or not strings"
-            )
+            verbose_proxy_logger.debug("Rerank: No query/instruction to process or not strings")
             return data
 
         inputs = GenericGuardrailAPIInputs(texts=[value for _, value in fields_to_scan])
@@ -88,8 +82,7 @@ class CohereRerankHandler(BaseTranslation):
             if idx < len(guardrailed_texts):
                 data[key] = guardrailed_texts[idx]
                 verbose_proxy_logger.debug(
-                    "Rerank: Applied guardrail to %s. "
-                    "Original length: %d, New length: %d",
+                    "Rerank: Applied guardrail to %s. Original length: %d, New length: %d",
                     key,
                     len(original),
                     len(data[key]),
@@ -122,7 +115,6 @@ class CohereRerankHandler(BaseTranslation):
             Unmodified response (rankings don't need text guardrails)
         """
         verbose_proxy_logger.debug(
-            "Rerank: Output processing not applicable "
-            "(output contains relevance scores, not text)"
+            "Rerank: Output processing not applicable (output contains relevance scores, not text)"
         )
         return response

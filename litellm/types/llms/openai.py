@@ -533,7 +533,7 @@ class ChatCompletionCachedContent(TypedDict):
 class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
-    signature: str
+    signature: Optional[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -686,9 +686,7 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     filename: str
     format: str
     detail: str  # For video/image resolution control (low, medium, high, ultra_high)
-    video_metadata: Dict[
-        str, Any
-    ]  # For video-specific metadata (fps, start_offset, end_offset)
+    video_metadata: Dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -751,9 +749,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
-    thinking_blocks: Optional[
-        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ]
+    thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
     reasoning_items: Optional[List[ChatCompletionReasoningItem]]
 
 
@@ -901,9 +897,7 @@ class ChatCompletionToolChoiceObjectParam(TypedDict):
 
 ChatCompletionToolChoiceStringValues = Literal["none", "auto", "required"]
 
-ChatCompletionToolChoiceValues = Union[
-    ChatCompletionToolChoiceStringValues, ChatCompletionToolChoiceObjectParam
-]
+ChatCompletionToolChoiceValues = Union[ChatCompletionToolChoiceStringValues, ChatCompletionToolChoiceObjectParam]
 
 
 class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
@@ -968,9 +962,7 @@ class ChatCompletionDeltaChunk(TypedDict, total=False):
     role: str
 
 
-ChatCompletionAssistantContentValue = (
-    str  # keep as var, used in stream_chunk_builder as well
-)
+ChatCompletionAssistantContentValue = str  # keep as var, used in stream_chunk_builder as well
 
 
 class ChatCompletionResponseMessage(TypedDict, total=False):
@@ -981,9 +973,7 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     provider_specific_fields: Optional[dict]
     reasoning_content: Optional[str]
-    thinking_blocks: Optional[
-        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ]
+    thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
 
 
 class ChatCompletionUsageBlock(TypedDict, total=False):
@@ -1003,12 +993,8 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[Union[str, float]] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[Union[str, int]] = None  # "The number of epochs to train the model for"
 
     model_config = {"extra": "allow"}
 
@@ -1037,27 +1023,17 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[Hyperparameters] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[str] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[str] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[List[str]] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None
 
-    model_config = {
-        "extra": "allow"
-    }  # This allows the model to accept additional fields
+    model_config = {"extra": "allow"}  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
@@ -1194,9 +1170,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_retention: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
-    partial_images: Optional[
-        int
-    ]  # Number of partial images to generate (1-3) for streaming image generation
+    partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
     context_management: Optional[List[ContextManagementEntry]]
     """Context management configuration. E.g. [{\"type\": \"compaction\", \"compact_threshold\": 200000}] for server-side compaction (minimum 1000)."""
 
@@ -1254,9 +1228,7 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
-ResponsesAPIStatus = Literal[
-    "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
-]
+ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
 """
 The status of the response generation.
 One of: completed, failed, in_progress, cancelled, queued, or incomplete.
@@ -1287,9 +1259,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
     tool_choice: Optional[ToolChoice] = None
-    tools: Optional[
-        Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
-    ] = None
+    tools: Optional[Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]] = None
     top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
@@ -1345,12 +1315,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             return serialized
         return [
             (
-                {
-                    k: v
-                    for k, v in item.items()
-                    if v is not None
-                    or k not in ("status", "content", "encrypted_content")
-                }
+                {k: v for k, v in item.items() if v is not None or k not in ("status", "content", "encrypted_content")}
                 if isinstance(item, dict) and item.get("type") == "reasoning"
                 else item
             )

@@ -164,25 +164,19 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise ValueError(
-                f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}"
-            )
+            raise ValueError(f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}")
 
         return self._transform_response(raw_response_json)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return HostedVLLMRerankError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+        return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
 
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
         usage_data = response.get("usage", {})
-        _billed_units = RerankBilledUnits(
-            total_tokens=usage_data.get("total_tokens", 0)
-        )
+        _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
         _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
@@ -201,11 +195,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
             # Get document data if it exists
             document_data = result.get("document", {})
-            document = (
-                RerankResponseDocument(text=str(document_data.get("text", "")))
-                if document_data
-                else None
-            )
+            document = RerankResponseDocument(text=str(document_data.get("text", ""))) if document_data else None
 
             # Create typed result
             rerank_result = RerankResponseResult(

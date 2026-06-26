@@ -1112,3 +1112,133 @@ async def test_no_map_preserves_old_single_threshold(
         # Old path cache key has no threshold percentage
         cache_key = mock_cache.async_set_cache.call_args[1]["key"]
         assert cache_key == "email_budget_alerts:max_budget_alert:test_user"
+
+
+CUSTOM_SIGNATURE = "<div>Best,<br/>The Acme Platform Team</div>"
+
+
+@pytest.mark.asyncio
+async def test_send_soft_budget_alert_email_uses_custom_signature(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Soft budget alert honors EMAIL_SIGNATURE for premium users."""
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        event_group=Litellm_EntityType.USER,
+        event="soft_budget_crossed",
+        event_message="Soft Budget Crossed",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+    )
+    with mock.patch.dict(
+        os.environ,
+        {"PROXY_BASE_URL": "http://test.com", "EMAIL_SIGNATURE": CUSTOM_SIGNATURE},
+    ), patch("litellm.proxy.proxy_server.premium_user", True):
+        await base_email_logger.send_soft_budget_alert_email(event)
+
+        html_body = mock_send_email.call_args[1]["html_body"]
+        assert CUSTOM_SIGNATURE in html_body
+        assert "The LiteLLM team" not in html_body
+
+
+@pytest.mark.asyncio
+async def test_send_team_soft_budget_alert_email_uses_custom_signature(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Team soft budget alert honors EMAIL_SIGNATURE for premium users."""
+    event = WebhookEvent(
+        user_id="test_user",
+        event_group=Litellm_EntityType.TEAM,
+        event="soft_budget_crossed",
+        event_message="Team Soft Budget Crossed",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+        team_alias="Acme",
+        alert_emails=["teamlead@example.com"],
+    )
+    with mock.patch.dict(
+        os.environ,
+        {"PROXY_BASE_URL": "http://test.com", "EMAIL_SIGNATURE": CUSTOM_SIGNATURE},
+    ), patch("litellm.proxy.proxy_server.premium_user", True):
+        await base_email_logger.send_team_soft_budget_alert_email(event)
+
+        html_body = mock_send_email.call_args[1]["html_body"]
+        assert CUSTOM_SIGNATURE in html_body
+        assert "The LiteLLM team" not in html_body
+
+
+@pytest.mark.asyncio
+async def test_send_max_budget_alert_email_single_recipient_uses_custom_signature(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Max budget alert (single-recipient path) honors EMAIL_SIGNATURE."""
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        event_group=Litellm_EntityType.USER,
+        event="max_budget_alert",
+        event_message="Max Budget Alert",
+        spend=165.0,
+        max_budget=200.0,
+    )
+    with mock.patch.dict(
+        os.environ,
+        {"PROXY_BASE_URL": "http://test.com", "EMAIL_SIGNATURE": CUSTOM_SIGNATURE},
+    ), patch("litellm.proxy.proxy_server.premium_user", True):
+        await base_email_logger.send_max_budget_alert_email(event)
+
+        html_body = mock_send_email.call_args[1]["html_body"]
+        assert CUSTOM_SIGNATURE in html_body
+        assert "The LiteLLM team" not in html_body
+
+
+@pytest.mark.asyncio
+async def test_send_max_budget_alert_email_multi_recipient_uses_custom_signature(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Max budget alert (multi-threshold/recipient path) honors EMAIL_SIGNATURE."""
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="owner@example.com",
+        event_group=Litellm_EntityType.USER,
+        event="max_budget_alert",
+        event_message="Max Budget Alert",
+        spend=165.0,
+        max_budget=200.0,
+    )
+    with mock.patch.dict(
+        os.environ,
+        {"PROXY_BASE_URL": "http://test.com", "EMAIL_SIGNATURE": CUSTOM_SIGNATURE},
+    ), patch("litellm.proxy.proxy_server.premium_user", True):
+        await base_email_logger.send_max_budget_alert_email(
+            event, threshold_pct=75, recipient_emails=["a@example.com", "b@example.com"]
+        )
+
+        html_body = mock_send_email.call_args[1]["html_body"]
+        assert CUSTOM_SIGNATURE in html_body
+        assert "The LiteLLM team" not in html_body
+
+
+@pytest.mark.asyncio
+async def test_send_soft_budget_alert_email_default_footer_when_no_signature(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Without EMAIL_SIGNATURE, budget alert falls back to the default EMAIL_FOOTER."""
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        event_group=Litellm_EntityType.USER,
+        event="soft_budget_crossed",
+        event_message="Soft Budget Crossed",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+    )
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.send_soft_budget_alert_email(event)
+
+        html_body = mock_send_email.call_args[1]["html_body"]
+        assert EMAIL_FOOTER in html_body

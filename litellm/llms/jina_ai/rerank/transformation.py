@@ -141,9 +141,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> Dict:
         if api_key is None:
-            raise ValueError(
-                "api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable."
-            )
+            raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
         return {
             "accept": "application/json",
             "content-type": "application/json",

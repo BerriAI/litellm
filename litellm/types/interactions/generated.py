@@ -15,9 +15,7 @@ class Annotation(BaseModel):
         None,
         description="Start of segment of the response that is attributed to this source.\n\nIndex indicates the start of the segment, measured in bytes.",
     )
-    end_index: Optional[int] = Field(
-        None, description="End of the attributed segment, exclusive."
-    )
+    end_index: Optional[int] = Field(None, description="End of the attributed segment, exclusive.")
     source: Optional[str] = Field(
         None,
         description="Source attributed for a portion of the text. Could be a URL, title, or\nother identifier.",
@@ -28,16 +26,12 @@ class DocumentContent(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[str] = None
-    type: Literal["document"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    type: Literal["document"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class FunctionCallContent(BaseModel):
     name: str = Field(..., description="The name of the tool to call.")
-    arguments: Dict[str, Any] = Field(
-        ..., description="The arguments to pass to the function."
-    )
+    arguments: Dict[str, Any] = Field(..., description="The arguments to pass to the function.")
     type: Literal["function_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
@@ -49,9 +43,7 @@ class Language(Enum):
 
 
 class CodeExecutionCallArguments(BaseModel):
-    language: Optional[Language] = Field(
-        None, description="Programming language of the `code`."
-    )
+    language: Optional[Language] = Field(None, description="Programming language of the `code`.")
     code: Optional[str] = Field(None, description="The code to be executed.")
 
 
@@ -62,9 +54,7 @@ class UrlContextCallArguments(BaseModel):
 class McpServerToolCallContent(BaseModel):
     name: str = Field(..., description="The name of the tool which was called.")
     server_name: str = Field(..., description="The name of the used MCP server.")
-    arguments: Dict[str, Any] = Field(
-        ..., description="The JSON object of arguments for the function."
-    )
+    arguments: Dict[str, Any] = Field(..., description="The JSON object of arguments for the function.")
     type: Literal["mcp_server_tool_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
@@ -72,25 +62,17 @@ class McpServerToolCallContent(BaseModel):
 
 
 class GoogleSearchCallArguments(BaseModel):
-    queries: Optional[List[str]] = Field(
-        None, description="Web search queries for the following-up web search."
-    )
+    queries: Optional[List[str]] = Field(None, description="Web search queries for the following-up web search.")
 
 
 class CodeExecutionResultContent(BaseModel):
     result: Optional[str] = Field(None, description="The output of the code execution.")
-    is_error: Optional[bool] = Field(
-        None, description="Whether the code execution resulted in an error."
-    )
-    signature: Optional[str] = Field(
-        None, description="A signature hash for backend validation."
-    )
+    is_error: Optional[bool] = Field(None, description="Whether the code execution resulted in an error.")
+    signature: Optional[str] = Field(None, description="A signature hash for backend validation.")
     type: Literal["code_execution_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the code execution call block."
-    )
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the code execution call block.")
 
 
 class Status(Enum):
@@ -102,9 +84,7 @@ class Status(Enum):
 
 class UrlContextResult(BaseModel):
     url: Optional[str] = Field(None, description="The URL that was fetched.")
-    status: Optional[Status] = Field(
-        None, description="The status of the URL retrieval."
-    )
+    status: Optional[Status] = Field(None, description="The status of the URL retrieval.")
 
 
 class GoogleSearchResult(BaseModel):
@@ -119,9 +99,7 @@ class GoogleSearchResult(BaseModel):
 class FileSearchResult(BaseModel):
     title: Optional[str] = Field(None, description="The title of the search result.")
     text: Optional[str] = Field(None, description="The text of the search result.")
-    file_search_store: Optional[str] = Field(
-        None, description="The name of the file search store."
-    )
+    file_search_store: Optional[str] = Field(None, description="The name of the file search store.")
 
 
 class SpeechConfig(BaseModel):
@@ -142,12 +120,8 @@ class DynamicAgentConfig(BaseModel):
 
 class Function(BaseModel):
     name: Optional[str] = Field(None, description="The name of the function.")
-    description: Optional[str] = Field(
-        None, description="A description of the function."
-    )
-    parameters: Optional[Any] = Field(
-        None, description="The JSON Schema for the function's parameters."
-    )
+    description: Optional[str] = Field(None, description="A description of the function.")
+    parameters: Optional[Any] = Field(None, description="The JSON Schema for the function's parameters.")
     type: Literal["function"]
 
 
@@ -165,9 +139,7 @@ class Environment(Enum):
 
 class ComputerUse(BaseModel):
     type: Literal["computer_use"]
-    environment: Optional[Environment] = Field(
-        None, description="The environment being operated."
-    )
+    environment: Optional[Environment] = Field(None, description="The environment being operated.")
     excludedPredefinedFunctions: Optional[List[str]] = Field(
         None,
         description="The list of predefined functions that are excluded from the model call.",
@@ -179,12 +151,8 @@ class GoogleSearch(BaseModel):
 
 
 class FileSearch(BaseModel):
-    file_search_store_names: Optional[List[str]] = Field(
-        None, description="The file search store names to search."
-    )
-    top_k: Optional[int] = Field(
-        None, description="The number of semantic retrieval chunks to retrieve."
-    )
+    file_search_store_names: Optional[List[str]] = Field(None, description="The file search store names to search.")
+    top_k: Optional[int] = Field(None, description="The number of semantic retrieval chunks to retrieve.")
     metadata_filter: Optional[str] = Field(
         None,
         description="Metadata filter to apply to the semantic retrieval documents and chunks.",
@@ -219,9 +187,7 @@ class InteractionStatusUpdate(BaseModel):
 
 class TextDelta(BaseModel):
     text: Optional[str] = None
-    type: Literal["text"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    type: Literal["text"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
     annotations: Optional[List[Annotation]] = Field(
         None, description="Citation information for model-generated content."
     )
@@ -231,9 +197,7 @@ class DocumentDelta(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[str] = None
-    type: Literal["document"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    type: Literal["document"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class ThoughtSignatureDelta(BaseModel):
@@ -252,9 +216,7 @@ class FunctionCallDelta(BaseModel):
     type: Literal["function_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class CodeExecutionCallDelta(BaseModel):
@@ -262,9 +224,7 @@ class CodeExecutionCallDelta(BaseModel):
     type: Literal["code_execution_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class UrlContextCallDelta(BaseModel):
@@ -272,9 +232,7 @@ class UrlContextCallDelta(BaseModel):
     type: Literal["url_context_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class GoogleSearchCallDelta(BaseModel):
@@ -282,9 +240,7 @@ class GoogleSearchCallDelta(BaseModel):
     type: Literal["google_search_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class McpServerToolCallDelta(BaseModel):
@@ -294,9 +250,7 @@ class McpServerToolCallDelta(BaseModel):
     type: Literal["mcp_server_tool_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class CodeExecutionResultDelta(BaseModel):
@@ -306,9 +260,7 @@ class CodeExecutionResultDelta(BaseModel):
     type: Literal["code_execution_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the function call block.")
 
 
 class UrlContextResultDelta(BaseModel):
@@ -318,9 +270,7 @@ class UrlContextResultDelta(BaseModel):
     type: Literal["url_context_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the function call block.")
 
 
 class GoogleSearchResultDelta(BaseModel):
@@ -330,9 +280,7 @@ class GoogleSearchResultDelta(BaseModel):
     type: Literal["google_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the function call block.")
 
 
 class FileSearchResultDelta(BaseModel):
@@ -352,9 +300,7 @@ class ContentStop(BaseModel):
 
 
 class Error(BaseModel):
-    code: Optional[str] = Field(
-        None, description="A URI that identifies the error type."
-    )
+    code: Optional[str] = Field(None, description="A URI that identifies the error type.")
     message: Optional[str] = Field(None, description="A human-readable error message.")
 
 
@@ -410,28 +356,20 @@ class AgentOption(RootModel[str]):
 
 
 class ImageMimeTypeOption(RootModel[str]):
-    root: str = Field(
-        ..., description="The mime type of the image.", title="ImageMimeType"
-    )
+    root: str = Field(..., description="The mime type of the image.", title="ImageMimeType")
 
 
 class AudioMimeTypeOption(RootModel[str]):
-    root: str = Field(
-        ..., description="The mime type of the audio.", title="AudioMimeType"
-    )
+    root: str = Field(..., description="The mime type of the audio.", title="AudioMimeType")
 
 
 class VideoMimeTypeOption(RootModel[str]):
-    root: str = Field(
-        ..., description="The mime type of the video.", title="VideoMimeType"
-    )
+    root: str = Field(..., description="The mime type of the video.", title="VideoMimeType")
 
 
 class TextContent(BaseModel):
     text: Optional[str] = Field(None, description="The text content.")
-    type: Literal["text"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    type: Literal["text"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
     annotations: Optional[List[Annotation]] = Field(
         None, description="Citation information for model-generated content."
     )
@@ -441,33 +379,23 @@ class ImageContent(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[ImageMimeTypeOption] = None
-    type: Literal["image"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    type: Literal["image"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: Optional[MediaResolution] = Field(None, description="The resolution of the media.")
 
 
 class AudioContent(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[AudioMimeTypeOption] = None
-    type: Literal["audio"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    type: Literal["audio"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class VideoContent(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[VideoMimeTypeOption] = None
-    type: Literal["video"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    type: Literal["video"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: Optional[MediaResolution] = Field(None, description="The resolution of the media.")
 
 
 class ThoughtSummary1(RootModel[Union[TextContent, ImageContent]]):
@@ -485,33 +413,23 @@ class CodeExecutionCallContent(BaseModel):
     type: Literal["code_execution_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class UrlContextCallContent(BaseModel):
-    arguments: Optional[UrlContextCallArguments] = Field(
-        None, description="The arguments to pass to the URL context."
-    )
+    arguments: Optional[UrlContextCallArguments] = Field(None, description="The arguments to pass to the URL context.")
     type: Literal["url_context_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class GoogleSearchCallContent(BaseModel):
-    arguments: Optional[GoogleSearchCallArguments] = Field(
-        None, description="The arguments to pass to Google Search."
-    )
+    arguments: Optional[GoogleSearchCallArguments] = Field(None, description="The arguments to pass to Google Search.")
     type: Literal["google_search_call"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    id: Optional[str] = Field(
-        None, description="A unique ID for this specific tool call."
-    )
+    id: Optional[str] = Field(None, description="A unique ID for this specific tool call.")
 
 
 class Result(BaseModel):
@@ -519,57 +437,33 @@ class Result(BaseModel):
 
 
 class FunctionResultContent(BaseModel):
-    name: Optional[str] = Field(
-        None, description="The name of the tool that was called."
-    )
-    is_error: Optional[bool] = Field(
-        None, description="Whether the tool call resulted in an error."
-    )
+    name: Optional[str] = Field(None, description="The name of the tool that was called.")
+    is_error: Optional[bool] = Field(None, description="Whether the tool call resulted in an error.")
     type: Literal["function_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Union[Result, Dict[str, Any], str] = Field(
-        ..., description="The result of the tool call."
-    )
-    call_id: str = Field(
-        ..., description="ID to match the ID from the function call block."
-    )
+    result: Union[Result, Dict[str, Any], str] = Field(..., description="The result of the tool call.")
+    call_id: str = Field(..., description="ID to match the ID from the function call block.")
 
 
 class UrlContextResultContent(BaseModel):
-    signature: Optional[str] = Field(
-        None, description="The signature of the URL context result."
-    )
-    result: Optional[List[UrlContextResult]] = Field(
-        None, description="The results of the URL context."
-    )
-    is_error: Optional[bool] = Field(
-        None, description="Whether the URL context resulted in an error."
-    )
+    signature: Optional[str] = Field(None, description="The signature of the URL context result.")
+    result: Optional[List[UrlContextResult]] = Field(None, description="The results of the URL context.")
+    is_error: Optional[bool] = Field(None, description="Whether the URL context resulted in an error.")
     type: Literal["url_context_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the url context call block."
-    )
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the url context call block.")
 
 
 class GoogleSearchResultContent(BaseModel):
-    signature: Optional[str] = Field(
-        None, description="The signature of the Google Search result."
-    )
-    result: Optional[List[GoogleSearchResult]] = Field(
-        None, description="The results of the Google Search."
-    )
-    is_error: Optional[bool] = Field(
-        None, description="Whether the Google Search resulted in an error."
-    )
+    signature: Optional[str] = Field(None, description="The signature of the Google Search result.")
+    result: Optional[List[GoogleSearchResult]] = Field(None, description="The results of the Google Search.")
+    is_error: Optional[bool] = Field(None, description="Whether the Google Search resulted in an error.")
     type: Literal["google_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the google search call block."
-    )
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the google search call block.")
 
 
 class McpServerToolResultContent(BaseModel):
@@ -577,36 +471,24 @@ class McpServerToolResultContent(BaseModel):
         None,
         description="Name of the tool which is called for this specific tool call.",
     )
-    server_name: Optional[str] = Field(
-        None, description="The name of the used MCP server."
-    )
+    server_name: Optional[str] = Field(None, description="The name of the used MCP server.")
     type: Literal["mcp_server_tool_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Union[Result, Dict[str, Any], str] = Field(
-        ..., description="The result of the tool call."
-    )
-    call_id: str = Field(
-        ..., description="ID to match the ID from the MCP server tool call block."
-    )
+    result: Union[Result, Dict[str, Any], str] = Field(..., description="The result of the tool call.")
+    call_id: str = Field(..., description="ID to match the ID from the MCP server tool call block.")
 
 
 class FileSearchResultContent(BaseModel):
-    result: Optional[List[FileSearchResult]] = Field(
-        None, description="The results of the File Search."
-    )
+    result: Optional[List[FileSearchResult]] = Field(None, description="The results of the File Search.")
     type: Literal["file_search_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
 
 
 class AllowedTools(BaseModel):
-    mode: Optional[ToolChoiceType] = Field(
-        None, description="The mode of the tool choice."
-    )
-    tools: Optional[List[str]] = Field(
-        None, description="The names of the allowed tools."
-    )
+    mode: Optional[ToolChoiceType] = Field(None, description="The mode of the tool choice.")
+    tools: Optional[List[str]] = Field(None, description="The names of the allowed tools.")
 
 
 class DeepResearchAgentConfig(BaseModel):
@@ -630,60 +512,42 @@ class McpServer(BaseModel):
         None,
         description="Optional: Fields for authentication headers, timeouts, etc., if needed.",
     )
-    allowed_tools: Optional[List[AllowedTools]] = Field(
-        None, description="The allowed tools."
-    )
+    allowed_tools: Optional[List[AllowedTools]] = Field(None, description="The allowed tools.")
 
 
 class ModalityTokens(BaseModel):
-    modality: Optional[ResponseModality] = Field(
-        None, description="The modality associated with the token count."
-    )
-    tokens: Optional[int] = Field(
-        None, description="Number of tokens for the modality."
-    )
+    modality: Optional[ResponseModality] = Field(None, description="The modality associated with the token count.")
+    tokens: Optional[int] = Field(None, description="Number of tokens for the modality.")
 
 
 class ImageDelta(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[ImageMimeTypeOption] = None
-    type: Literal["image"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    type: Literal["image"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: Optional[MediaResolution] = Field(None, description="The resolution of the media.")
 
 
 class AudioDelta(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[AudioMimeTypeOption] = None
-    type: Literal["audio"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
+    type: Literal["audio"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
 
 
 class VideoDelta(BaseModel):
     data: Optional[Base64Str] = None
     uri: Optional[str] = None
     mime_type: Optional[VideoMimeTypeOption] = None
-    type: Literal["video"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    resolution: Optional[MediaResolution] = Field(
-        None, description="The resolution of the media."
-    )
+    type: Literal["video"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    resolution: Optional[MediaResolution] = Field(None, description="The resolution of the media.")
 
 
 class ThoughtSummaryDelta(BaseModel):
     type: Literal["thought_summary"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    content: Optional[Union[TextContent, ImageContent]] = Field(
-        None, discriminator="type"
-    )
+    content: Optional[Union[TextContent, ImageContent]] = Field(None, discriminator="type")
 
 
 class FunctionResultDelta(BaseModel):
@@ -692,12 +556,8 @@ class FunctionResultDelta(BaseModel):
     type: Literal["function_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Optional[Union[Result, str]] = Field(
-        None, description="Tool call result delta."
-    )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    result: Optional[Union[Result, str]] = Field(None, description="Tool call result delta.")
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the function call block.")
 
 
 class McpServerToolResultDelta(BaseModel):
@@ -706,12 +566,8 @@ class McpServerToolResultDelta(BaseModel):
     type: Literal["mcp_server_tool_result"] = Field(
         ..., description="Used as the OpenAPI type discriminator for the content oneof."
     )
-    result: Optional[Union[Result, str]] = Field(
-        None, description="Tool call result delta."
-    )
-    call_id: Optional[str] = Field(
-        None, description="ID to match the ID from the function call block."
-    )
+    result: Optional[Union[Result, str]] = Field(None, description="Tool call result delta.")
+    call_id: Optional[str] = Field(None, description="ID to match the ID from the function call block.")
 
 
 class ErrorEvent(BaseModel):
@@ -756,24 +612,16 @@ class ThoughtContent(BaseModel):
         None,
         description="Signature to match the backend source to be part of the generation.",
     )
-    type: Literal["thought"] = Field(
-        ..., description="Used as the OpenAPI type discriminator for the content oneof."
-    )
-    summary: Optional[ThoughtSummary] = Field(
-        None, description="A summary of the thought."
-    )
+    type: Literal["thought"] = Field(..., description="Used as the OpenAPI type discriminator for the content oneof.")
+    summary: Optional[ThoughtSummary] = Field(None, description="A summary of the thought.")
 
 
 class ToolChoice(RootModel[Union[ToolChoiceType, ToolChoiceConfig]]):
-    root: Union[ToolChoiceType, ToolChoiceConfig] = Field(
-        ..., description="The configuration for tool choice."
-    )
+    root: Union[ToolChoiceType, ToolChoiceConfig] = Field(..., description="The configuration for tool choice.")
 
 
 class Usage(BaseModel):
-    total_input_tokens: Optional[int] = Field(
-        None, description="Number of tokens in the prompt (context)."
-    )
+    total_input_tokens: Optional[int] = Field(None, description="Number of tokens in the prompt (context).")
     input_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
         None, description="A breakdown of input token usage by modality."
     )
@@ -790,15 +638,11 @@ class Usage(BaseModel):
     output_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
         None, description="A breakdown of output token usage by modality."
     )
-    total_tool_use_tokens: Optional[int] = Field(
-        None, description="Number of tokens present in tool-use prompt(s)."
-    )
+    total_tool_use_tokens: Optional[int] = Field(None, description="Number of tokens present in tool-use prompt(s).")
     tool_use_tokens_by_modality: Optional[List[ModalityTokens]] = Field(
         None, description="A breakdown of tool-use token usage by modality."
     )
-    total_reasoning_tokens: Optional[int] = Field(
-        None, description="Number of tokens of thoughts for thinking models."
-    )
+    total_reasoning_tokens: Optional[int] = Field(None, description="Number of tokens of thoughts for thinking models.")
     total_tokens: Optional[int] = Field(
         None,
         description="Total token count for the interaction request (prompt + responses + other\ninternal tokens).",
@@ -885,29 +729,21 @@ class Turn(BaseModel):
         None,
         description="The originator of this turn. Must be user for input or model for\nmodel output.",
     )
-    content: Optional[Union[str, List[Content]]] = Field(
-        None, description="The content of the turn."
-    )
+    content: Optional[Union[str, List[Content]]] = Field(None, description="The content of the turn.")
 
 
 class GenerationConfig(BaseModel):
-    temperature: Optional[float] = Field(
-        None, description="Controls the randomness of the output."
-    )
+    temperature: Optional[float] = Field(None, description="Controls the randomness of the output.")
     top_p: Optional[float] = Field(
         None,
         description="The maximum cumulative probability of tokens to consider when sampling.",
     )
-    seed: Optional[int] = Field(
-        None, description="Seed used in decoding for reproducibility."
-    )
+    seed: Optional[int] = Field(None, description="Seed used in decoding for reproducibility.")
     stop_sequences: Optional[List[str]] = Field(
         None,
         description="A list of character sequences that will stop output interaction.",
     )
-    tool_choice: Optional[ToolChoice] = Field(
-        None, description="The tool choice for the interaction."
-    )
+    tool_choice: Optional[ToolChoice] = Field(None, description="The tool choice for the interaction.")
     thinking_level: Optional[ThinkingLevel] = Field(
         None, description="The level of thought tokens that the model should generate."
     )
@@ -917,9 +753,7 @@ class GenerationConfig(BaseModel):
     max_output_tokens: Optional[int] = Field(
         None, description="The maximum number of tokens to include in the response."
     )
-    speech_config: Optional[List[SpeechConfig]] = Field(
-        None, description="Configuration for speech interaction."
-    )
+    speech_config: Optional[List[SpeechConfig]] = Field(None, description="Configuration for speech interaction.")
 
 
 class ContentStart(BaseModel):
@@ -943,9 +777,7 @@ class Interaction(BaseModel):
         ...,
         description="Output only. A unique identifier for the interaction completion.",
     )
-    status: Status1 = Field(
-        ..., description="Output only. The status of the interaction."
-    )
+    status: Status1 = Field(..., description="Output only. The status of the interaction.")
     created: Optional[AwareDatetime] = Field(
         None,
         description="Output only. The time at which the response was created in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
@@ -954,19 +786,13 @@ class Interaction(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    outputs: Optional[List[Content]] = Field(
-        None, description="Output only. Responses from the model."
-    )
-    system_instruction: Optional[str] = Field(
-        None, description="System instruction for the interaction."
-    )
+    outputs: Optional[List[Content]] = Field(None, description="Output only. Responses from the model.")
+    system_instruction: Optional[str] = Field(None, description="System instruction for the interaction.")
     tools: Optional[List[Tool]] = Field(
         None,
         description="A list of tool declarations the model may call during interaction.",
     )
-    background: Optional[bool] = Field(
-        None, description="Whether to run the model interaction in the background."
-    )
+    background: Optional[bool] = Field(None, description="Whether to run the model interaction in the background.")
     object: Literal["interaction"] = Field(
         "interaction",
         description="Output only. The object type of the interaction. Always set to `interaction`.",
@@ -987,9 +813,7 @@ class Interaction(BaseModel):
         None,
         description="The mime type of the response. This is required if response_format is set.",
     )
-    previous_interaction_id: Optional[str] = Field(
-        None, description="The ID of the previous interaction, if any."
-    )
+    previous_interaction_id: Optional[str] = Field(None, description="The ID of the previous interaction, if any.")
     input: Optional[Union[str, List[Content], List[Turn], Content]] = Field(
         None, description="The inputs for the interaction."
     )
@@ -1003,12 +827,8 @@ class Interaction(BaseModel):
 
 
 class CreateModelInteractionParams(BaseModel):
-    model: ModelOption = Field(
-        ..., description="The name of the `Model` used for generating the interaction."
-    )
-    stream: Optional[bool] = Field(
-        None, description="Input only. Whether the interaction will be streamed."
-    )
+    model: ModelOption = Field(..., description="The name of the `Model` used for generating the interaction.")
+    stream: Optional[bool] = Field(None, description="Input only. Whether the interaction will be streamed.")
     store: Optional[bool] = Field(
         None,
         description="Input only. Whether to store the response and request for later retrieval.",
@@ -1017,9 +837,7 @@ class CreateModelInteractionParams(BaseModel):
         None,
         description="Output only. A unique identifier for the interaction completion.",
     )
-    status: Optional[Status3] = Field(
-        None, description="Output only. The status of the interaction."
-    )
+    status: Optional[Status3] = Field(None, description="Output only. The status of the interaction.")
     created: Optional[AwareDatetime] = Field(
         None,
         description="Output only. The time at which the response was created in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
@@ -1028,19 +846,13 @@ class CreateModelInteractionParams(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    outputs: Optional[List[Content]] = Field(
-        None, description="Output only. Responses from the model."
-    )
-    system_instruction: Optional[str] = Field(
-        None, description="System instruction for the interaction."
-    )
+    outputs: Optional[List[Content]] = Field(None, description="Output only. Responses from the model.")
+    system_instruction: Optional[str] = Field(None, description="System instruction for the interaction.")
     tools: Optional[List[Tool]] = Field(
         None,
         description="A list of tool declarations the model may call during interaction.",
     )
-    background: Optional[bool] = Field(
-        None, description="Whether to run the model interaction in the background."
-    )
+    background: Optional[bool] = Field(None, description="Whether to run the model interaction in the background.")
     usage: Optional[Usage] = Field(
         None,
         description="Output only. Statistics on the interaction request's token usage.",
@@ -1057,12 +869,8 @@ class CreateModelInteractionParams(BaseModel):
         None,
         description="The mime type of the response. This is required if response_format is set.",
     )
-    previous_interaction_id: Optional[str] = Field(
-        None, description="The ID of the previous interaction, if any."
-    )
-    input: Union[str, List[Content], List[Turn], Content] = Field(
-        ..., description="The inputs for the interaction."
-    )
+    previous_interaction_id: Optional[str] = Field(None, description="The ID of the previous interaction, if any.")
+    input: Union[str, List[Content], List[Turn], Content] = Field(..., description="The inputs for the interaction.")
     generation_config: Optional[GenerationConfig] = Field(
         None,
         description="Input only. Configuration parameters for the model interaction.",
@@ -1070,12 +878,8 @@ class CreateModelInteractionParams(BaseModel):
 
 
 class CreateAgentInteractionParams(BaseModel):
-    agent: AgentOption = Field(
-        ..., description="The name of the `Agent` used for generating the interaction."
-    )
-    stream: Optional[bool] = Field(
-        None, description="Input only. Whether the interaction will be streamed."
-    )
+    agent: AgentOption = Field(..., description="The name of the `Agent` used for generating the interaction.")
+    stream: Optional[bool] = Field(None, description="Input only. Whether the interaction will be streamed.")
     store: Optional[bool] = Field(
         None,
         description="Input only. Whether to store the response and request for later retrieval.",
@@ -1084,9 +888,7 @@ class CreateAgentInteractionParams(BaseModel):
         None,
         description="Output only. A unique identifier for the interaction completion.",
     )
-    status: Optional[Status3] = Field(
-        None, description="Output only. The status of the interaction."
-    )
+    status: Optional[Status3] = Field(None, description="Output only. The status of the interaction.")
     created: Optional[AwareDatetime] = Field(
         None,
         description="Output only. The time at which the response was created in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
@@ -1095,19 +897,13 @@ class CreateAgentInteractionParams(BaseModel):
         None,
         description="Output only. The time at which the response was last updated in ISO 8601 format\n(YYYY-MM-DDThh:mm:ssZ).",
     )
-    outputs: Optional[List[Content]] = Field(
-        None, description="Output only. Responses from the model."
-    )
-    system_instruction: Optional[str] = Field(
-        None, description="System instruction for the interaction."
-    )
+    outputs: Optional[List[Content]] = Field(None, description="Output only. Responses from the model.")
+    system_instruction: Optional[str] = Field(None, description="System instruction for the interaction.")
     tools: Optional[List[Tool]] = Field(
         None,
         description="A list of tool declarations the model may call during interaction.",
     )
-    background: Optional[bool] = Field(
-        None, description="Whether to run the model interaction in the background."
-    )
+    background: Optional[bool] = Field(None, description="Whether to run the model interaction in the background.")
     usage: Optional[Usage] = Field(
         None,
         description="Output only. Statistics on the interaction request's token usage.",
@@ -1124,12 +920,8 @@ class CreateAgentInteractionParams(BaseModel):
         None,
         description="The mime type of the response. This is required if response_format is set.",
     )
-    previous_interaction_id: Optional[str] = Field(
-        None, description="The ID of the previous interaction, if any."
-    )
-    input: Union[str, List[Content], List[Turn], Content] = Field(
-        ..., description="The inputs for the interaction."
-    )
+    previous_interaction_id: Optional[str] = Field(None, description="The ID of the previous interaction, if any.")
+    input: Union[str, List[Content], List[Turn], Content] = Field(..., description="The inputs for the interaction.")
     agent_config: Optional[Union[DynamicAgentConfig, DeepResearchAgentConfig]] = Field(
         None, description="Configuration for the agent.", discriminator="type"
     )

@@ -33,6 +33,7 @@ interface UseTestMCPConnectionReturn {
   tools: any[];
   isLoadingTools: boolean;
   toolsError: string | null;
+  toolsErrorStatus: number | null;
   toolsErrorStackTrace: string | null;
   hasShownSuccessMessage: boolean;
   canFetchTools: boolean;
@@ -49,6 +50,7 @@ export const useTestMCPConnection = ({
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
+  const [toolsErrorStatus, setToolsErrorStatus] = useState<number | null>(null);
   const [toolsErrorStackTrace, setToolsErrorStackTrace] = useState<string | null>(null);
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
@@ -85,6 +87,7 @@ export const useTestMCPConnection = ({
 
     setIsLoadingTools(true);
     setToolsError(null);
+    setToolsErrorStatus(null);
 
     try {
       // Prepare the MCP server config from form values
@@ -155,6 +158,7 @@ export const useTestMCPConnection = ({
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
         setToolsError(null);
+        setToolsErrorStatus(null);
         setToolsErrorStackTrace(null);
         if (toolsResponse.tools.length > 0 && !hasShownSuccessMessage) {
           setHasShownSuccessMessage(true);
@@ -162,13 +166,15 @@ export const useTestMCPConnection = ({
       } else {
         const errorMessage = toolsResponse.message || "Failed to retrieve tools list";
         setToolsError(errorMessage);
-        setToolsErrorStackTrace(toolsResponse.stack_trace || null);
+        setToolsErrorStatus(typeof toolsResponse.status === "number" ? toolsResponse.status : null);
+        setToolsErrorStackTrace(toolsResponse.status === 403 ? null : toolsResponse.stack_trace || null);
         setTools([]);
         setHasShownSuccessMessage(false);
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
       setToolsError(error instanceof Error ? error.message : String(error));
+      setToolsErrorStatus(null);
       setToolsErrorStackTrace(null);
       setTools([]);
       setHasShownSuccessMessage(false);
@@ -180,6 +186,7 @@ export const useTestMCPConnection = ({
   const clearTools = useCallback(() => {
     setTools([]);
     setToolsError(null);
+    setToolsErrorStatus(null);
     setToolsErrorStackTrace(null);
     setHasShownSuccessMessage(false);
   }, []);
@@ -213,6 +220,7 @@ export const useTestMCPConnection = ({
     tools,
     isLoadingTools,
     toolsError,
+    toolsErrorStatus,
     toolsErrorStackTrace,
     hasShownSuccessMessage,
     canFetchTools,

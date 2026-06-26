@@ -278,7 +278,12 @@ async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process
 
     async def mock_process(**kwargs):
         captured_process_kwargs.update(kwargs)
-        return ([], {})
+        from mcp.types import Tool as MCPTool
+
+        dummy_tool = MCPTool(
+            name="dummy_tool", description="dummy", inputSchema={"type": "object"}
+        )
+        return ([dummy_tool], {"dummy_tool": "dummy_server"})
 
     mock_response = ResponsesAPIResponse(
         **{

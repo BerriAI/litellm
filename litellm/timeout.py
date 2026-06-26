@@ -70,9 +70,7 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
             elif "request_timeout" in kwargs and kwargs["request_timeout"] is not None:
                 local_timeout_duration = kwargs["request_timeout"]
             try:
-                value = await asyncio.wait_for(
-                    func(*args, **kwargs), timeout=timeout_duration
-                )
+                value = await asyncio.wait_for(func(*args, **kwargs), timeout=timeout_duration)
                 return value
             except asyncio.TimeoutError:
                 model = args[0] if len(args) > 0 else kwargs["model"]

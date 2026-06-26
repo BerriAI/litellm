@@ -83,29 +83,20 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 parsed_rate = float(rbrk_sampling_rate.strip())
                 self.sampling_rate = max(0.0, min(1.0, parsed_rate))
                 if parsed_rate != self.sampling_rate:
-                    verbose_logger.warning(
-                        f"RUBRIK_SAMPLING_RATE={parsed_rate} clamped to "
-                        f"{self.sampling_rate}"
-                    )
+                    verbose_logger.warning(f"RUBRIK_SAMPLING_RATE={parsed_rate} clamped to {self.sampling_rate}")
             except ValueError:
-                verbose_logger.warning(
-                    f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0"
-                )
+                verbose_logger.warning(f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0")
 
         self.key = api_key or os.getenv("RUBRIK_API_KEY")
         if not self.key:
-            verbose_logger.warning(
-                "Rubrik: No API key configured. Requests will be unauthenticated."
-            )
+            verbose_logger.warning("Rubrik: No API key configured. Requests will be unauthenticated.")
         _batch_size = os.getenv("RUBRIK_BATCH_SIZE")
 
         if _batch_size:
             try:
                 self.batch_size = int(_batch_size)
             except ValueError:
-                verbose_logger.warning(
-                    f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default"
-                )
+                verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
 
         # Cap the in-memory retry queue so a Rubrik webhook outage cannot let
         # authenticated traffic accumulate prompt/response payloads until the
@@ -118,18 +109,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         _webhook_url = api_base or os.getenv("RUBRIK_WEBHOOK_URL")
 
         if _webhook_url is None:
-            raise ValueError(
-                "Rubrik webhook URL not configured. "
-                "Set RUBRIK_WEBHOOK_URL or pass api_base."
-            )
+            raise ValueError("Rubrik webhook URL not configured. Set RUBRIK_WEBHOOK_URL or pass api_base.")
 
         _webhook_url = _webhook_url.rstrip("/").removesuffix("/v1")
         self.tool_blocking_endpoint = f"{_webhook_url}{_WEBHOOK_PATH_TOOL_BLOCKING}"
         self.logging_endpoint = f"{_webhook_url}{_WEBHOOK_PATH_LOGGING_BATCH}"
 
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         self.tool_blocking_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback,
@@ -143,9 +129,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Periodic flush is started lazily on the first log event so that
         # low-traffic deployments still get their batches drained even when the
         # logger is instantiated outside a running event loop (sync init).
-        self._flush_task: Optional[asyncio.Task[Any]] = (
-            self._start_periodic_flush_task()
-        )
+        self._flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
 
     def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
         """Start the periodic flush task only when an event loop is already running."""
@@ -153,8 +137,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             verbose_logger.debug(
-                "Rubrik logger init: no running event loop, "
-                "periodic flush will start on first log event."
+                "Rubrik logger init: no running event loop, periodic flush will start on first log event."
             )
             return None
         return loop.create_task(self.periodic_flush())
@@ -197,9 +180,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return inputs
 
         try:
-            return await self._check_tool_calls(
-                inputs, tool_calls, request_data, logging_obj
-            )
+            return await self._check_tool_calls(inputs, tool_calls, request_data, logging_obj)
         except ModifyResponseException:
             raise
         except _MalformedToolBlockingResponseError as e:
@@ -218,8 +199,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return inputs
         except Exception as e:
             verbose_logger.error(
-                f"Tool blocking hook failed: {e}. "
-                "Returning original response unchanged.",
+                f"Tool blocking hook failed: {e}. Returning original response unchanged.",
                 exc_info=True,
             )
             return inputs
@@ -234,26 +214,19 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         """Send tool calls to blocking service, raise if any are blocked."""
         message_tool_calls = self._normalize_tool_calls(tool_calls)
 
-        call_details = (
-            getattr(logging_obj, "model_call_details", {}) if logging_obj else {}
-        )
+        call_details = getattr(logging_obj, "model_call_details", {}) if logging_obj else {}
         response = request_data.get("response")
         request_id = getattr(response, "id", None) if response else None
         if logging_obj and not call_details:
             verbose_logger.warning(
-                "Rubrik: logging_obj present but model_call_details is empty "
-                "-- request context will be missing"
+                "Rubrik: logging_obj present but model_call_details is empty -- request context will be missing"
             )
 
         response_data = self._build_tool_call_payload(message_tool_calls, request_id)
         req_data = self._extract_request_data(call_details)
 
-        service_response = await self._post_to_tool_blocking_service(
-            response_data, req_data
-        )
-        blocked_explanation = self._extract_blocked_tools(
-            service_response, message_tool_calls
-        )
+        service_response = await self._post_to_tool_blocking_service(response_data, req_data)
+        blocked_explanation = self._extract_blocked_tools(service_response, message_tool_calls)
 
         if blocked_explanation is not None:
             model = self._resolve_model(request_data, call_details)
@@ -294,9 +267,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     )
                 )
             else:
-                raise TypeError(
-                    f"Cannot normalize tool_call of type {type(tc).__name__}"
-                )
+                raise TypeError(f"Cannot normalize tool_call of type {type(tc).__name__}")
         return result
 
     @staticmethod
@@ -316,9 +287,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     "message": {
                         "role": "assistant",
                         "content": None,
-                        "tool_calls": [
-                            tc.model_dump(exclude_none=True) for tc in tool_calls
-                        ],
+                        "tool_calls": [tc.model_dump(exclude_none=True) for tc in tool_calls],
                     },
                     "finish_reason": "tool_calls",
                 }
@@ -347,16 +316,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         request ``body`` so proxy credentials are not exfiltrated."""
         if not isinstance(proxy_server_request, dict):
             return proxy_server_request
-        return {
-            key: proxy_server_request[key]
-            for key in ("url", "method")
-            if key in proxy_server_request
-        }
+        return {key: proxy_server_request[key] for key in ("url", "method") if key in proxy_server_request}
 
     @staticmethod
-    def _resolve_model(
-        request_data: dict[str, Any], call_details: dict[str, Any]
-    ) -> str:
+    def _resolve_model(request_data: dict[str, Any], call_details: dict[str, Any]) -> str:
         """Get the model name for the ModifyResponseException."""
         response = request_data.get("response")
         if response and hasattr(response, "model"):
@@ -365,21 +328,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     # -- Logging hooks ---------------------------------------------------------
 
-    async def _prepare_log_payload(
-        self, kwargs: dict, event_type: str
-    ) -> StandardLoggingPayload | None:
+    async def _prepare_log_payload(self, kwargs: dict, event_type: str) -> StandardLoggingPayload | None:
         """Shared logic for success and failure logging."""
         if random.random() > self.sampling_rate:
-            verbose_logger.debug(
-                f"Skipping Rubrik {event_type} logging "
-                f"(sampling_rate={self.sampling_rate})"
-            )
+            verbose_logger.debug(f"Skipping Rubrik {event_type} logging (sampling_rate={self.sampling_rate})")
             return None
 
         # Deep-copy so mutations don't affect other callbacks sharing this object
-        standard_logging_payload: StandardLoggingPayload = safe_deep_copy(
-            kwargs["standard_logging_object"]
-        )
+        standard_logging_payload: StandardLoggingPayload = safe_deep_copy(kwargs["standard_logging_object"])
 
         # For Anthropic /v1/messages requests, LiteLLM creates a separate
         # ModelResponse (with a generated chatcmpl-* id) for logging, which
@@ -431,8 +387,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 await self.flush_queue()
         except Exception as e:
             verbose_logger.error(
-                f"Rubrik {event_type} logging hook failed: {e}. "
-                "Skipping logging for this event.",
+                f"Rubrik {event_type} logging hook failed: {e}. Skipping logging for this event.",
                 exc_info=True,
             )
 
@@ -474,9 +429,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(
-                f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}"
-            )
+            verbose_logger.exception(f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}")
             raise
         except Exception:
             verbose_logger.exception("Rubrik Layer Error")
@@ -494,9 +447,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return
 
         log_queue_snapshot = list(self.log_queue)
-        verbose_logger.debug(
-            "Rubrik: Flushing batch of %s events", len(log_queue_snapshot)
-        )
+        verbose_logger.debug("Rubrik: Flushing batch of %s events", len(log_queue_snapshot))
         await self._log_batch_to_rubrik(
             data=log_queue_snapshot,
         )
@@ -549,9 +500,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "request": request_data,
             "response": response_data,
         }
-        verbose_logger.debug(
-            f"Sending request to tool blocking service: {self.tool_blocking_endpoint}"
-        )
+        verbose_logger.debug(f"Sending request to tool blocking service: {self.tool_blocking_endpoint}")
         http_response = await self.tool_blocking_client.post(
             self.tool_blocking_endpoint,
             json=envelope,
@@ -577,24 +526,19 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         """
         choices = service_response.get("choices", [])
         if not choices:
-            raise _MalformedToolBlockingResponseError(
-                "Tool blocking service returned empty response"
-            )
+            raise _MalformedToolBlockingResponseError("Tool blocking service returned empty response")
 
         message = choices[0].get("message", {})
         returned_tool_calls = message.get("tool_calls") or []
         blocking_explanation = message.get("content", "")
 
         allowed_id_counts: Counter = Counter(
-            tc["id"]
-            for tc in returned_tool_calls
-            if isinstance(tc, dict) and tc.get("id")
+            tc["id"] for tc in returned_tool_calls if isinstance(tc, dict) and tc.get("id")
         )
         required_id_counts: Counter = Counter(tc.id for tc in all_tool_calls if tc.id)
 
         all_allowed = len(returned_tool_calls) >= len(all_tool_calls) and all(
-            allowed_id_counts.get(tc_id, 0) >= count
-            for tc_id, count in required_id_counts.items()
+            allowed_id_counts.get(tc_id, 0) >= count for tc_id, count in required_id_counts.items()
         )
 
         if all_allowed:

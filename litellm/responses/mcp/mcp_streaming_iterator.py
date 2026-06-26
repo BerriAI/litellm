@@ -5,6 +5,8 @@ from litellm._uuid import uuid
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    ErrorEvent,
+    ErrorEventError,
     MCPCallArgumentsDeltaEvent,
     MCPCallArgumentsDoneEvent,
     MCPCallCompletedEvent,
@@ -41,9 +43,7 @@ async def create_mcp_list_tools_events(
         for tool in mcp_tools_with_litellm_proxy:
             if isinstance(tool, dict) and "server_url" in tool:
                 server_url = tool.get("server_url")
-                if isinstance(server_url, str) and server_url.startswith(
-                    "litellm_proxy/mcp/"
-                ):
+                if isinstance(server_url, str) and server_url.startswith("litellm_proxy/mcp/"):
                     server_name = server_url.split("/")[-1]
                     mcp_servers.append(server_name)
 
@@ -88,9 +88,7 @@ async def create_mcp_list_tools_events(
             first_tool = mcp_tools_with_litellm_proxy[0]
             if isinstance(first_tool, dict):
                 server_label_value = first_tool.get("server_label", "")
-                server_label = (
-                    str(server_label_value) if server_label_value is not None else ""
-                )
+                server_label = str(server_label_value) if server_label_value is not None else ""
 
         # Format tools for OpenAI output_item.done format
         formatted_tools = []
@@ -269,7 +267,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
-        self.phase = "initial_response"  # initial_response -> mcp_discovery -> tool_execution -> follow_up_response -> finished
+        self.phase = (
+            "initial_response"  # initial_response -> mcp_discovery -> tool_execution -> follow_up_response -> finished
+        )
         self.finished = False
 
         # Event queues and generation flags
@@ -278,15 +278,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
         self.mcp_discovery_generated = True  # Events are already generated
-        self.mcp_events = (
-            mcp_events  # Store the initial MCP events for backward compatibility
-        )
+        self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
 
         # Iterator references
-        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = (
-            base_iterator  # Will be created when needed
-        )
+        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = base_iterator  # Will be created when needed
         self.follow_up_iterator: Optional[Any] = None
 
         # Response collection for tool execution
@@ -295,9 +291,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Set up model metadata (will be updated when we get the real iterator)
         self.model = self.original_request_params.get("model", "unknown")
         self.litellm_metadata = {}
-        self.custom_llm_provider = self.original_request_params.get(
-            "custom_llm_provider", None
-        )
+        self.custom_llm_provider = self.original_request_params.get("custom_llm_provider", None)
         self.litellm_call_id = self.original_request_params.get("litellm_call_id")
         self.litellm_trace_id = self.original_request_params.get("litellm_trace_id")
 
@@ -311,6 +305,18 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Cache the response ID to ensure consistency across all events
         self._cached_response_id: Optional[str] = None
+
+        # Internal failures (initial LLM call, tool execution, follow-up call)
+        # are stashed here so they can be surfaced to the client as an `error`
+        # stream event, or re-raised before any SSE bytes are written (eager
+        # path in aresponses_api_with_mcp for the initial call).
+        self._initial_creation_error: Optional[Exception] = None
+        self._stream_error: Optional[Exception] = None
+        self._error_event_emitted = False
+        # Highest sequence_number emitted so far; the terminal `error` event
+        # must be numbered after it to keep the stream monotonic for strict
+        # clients.
+        self._last_sequence_number = 0
 
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
@@ -334,15 +340,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
-            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                headers_obj
-            )
-            self.mcp_server_auth_headers = (
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            )
-            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
-                headers_obj
-            )
+            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
 
         # Also check if headers are provided in tools array (from request body)
         tools = self.original_request_params.get("tools")
@@ -353,10 +353,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if tool_headers and isinstance(tool_headers, dict):
                         # Merge tool headers into mcp_server_auth_headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = (
-                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
-                                headers_obj_from_tool
-                            )
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                            headers_obj_from_tool
                         )
 
                         if tool_mcp_server_auth_headers:
@@ -369,9 +367,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                             ) in tool_mcp_server_auth_headers.items():
                                 if server_alias not in self.mcp_server_auth_headers:
                                     self.mcp_server_auth_headers[server_alias] = {}
-                                self.mcp_server_auth_headers[server_alias].update(
-                                    headers_dict
-                                )
+                                self.mcp_server_auth_headers[server_alias].update(headers_dict)
 
                         # Also merge raw headers
                         if self.raw_headers is None:
@@ -384,14 +380,36 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-            self.mcp_tools_with_litellm_proxy
+        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
+
+    def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
+        """Build an OpenAI-style `error` stream event from the stashed internal
+        failure, so clients receive a real terminal error instead of a stream
+        that silently ends mid-flow."""
+        err = self._stream_error
+        status_code = getattr(err, "status_code", None)
+        return ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=self._last_sequence_number + 1,
+            error=ErrorEventError(
+                type="mcp_gateway_error",
+                code=str(status_code) if status_code is not None else "internal_error",
+                message=str(err) if err is not None else "MCP gateway stream failed",
+                param=None,
+            ),
         )
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        chunk = await self._anext_impl()
+        sequence_number = getattr(chunk, "sequence_number", None)
+        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
+            self._last_sequence_number = sequence_number
+        return chunk
+
+    async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
         """
         Phase-based streaming:
         1. initial_response - Stream the first LLM response (includes response.created, response.in_progress, response.output_item.added)
@@ -449,6 +467,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     raise
             else:
                 self.phase = "finished"
+                # Tool execution or the follow-up call failed: emit a terminal
+                # `error` event so the client can distinguish a failed stream
+                # from a completed one.
+                if self._stream_error is not None and not self._error_event_emitted:
+                    self._error_event_emitted = True
+                    return self._make_stream_error_event()
                 raise StopAsyncIteration
 
         # Phase 6: Finished
@@ -471,13 +495,17 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             await self._create_initial_response_iterator()
 
         if self.base_iterator is None:
-            # LLM call failed — still emit MCP discovery events before finishing
-            if self.mcp_discovery_events:
-                self.phase = "mcp_discovery"
-            else:
-                self.phase = "finished"
-                raise StopAsyncIteration
-            return None
+            # The initial LLM call failed. Do NOT emit MCP discovery events: a
+            # stream that starts with mcp_list_tools events and no
+            # response.created violates the Responses API streaming contract
+            # and crashes SDK stream accumulators (openai-node: "expected
+            # 'response.created' event, got response.mcp_list_tools.in_progress").
+            # Surface the failure as an `error` event instead.
+            self.phase = "finished"
+            if self._stream_error is not None:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
+            raise StopAsyncIteration
 
         if self.base_iterator:
             if hasattr(self.base_iterator, "__anext__"):
@@ -489,9 +517,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         response_obj = getattr(chunk, "response", None)
                         if response_obj and hasattr(response_obj, "id"):
                             self._cached_response_id = response_obj.id
-                            verbose_logger.debug(
-                                f"Cached response ID: {self._cached_response_id}"
-                            )
+                            verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
 
                     # After emitting response.output_item.added, transition to MCP discovery
                     if not self.initial_events_emitted and hasattr(chunk, "type"):
@@ -519,9 +545,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         raise
             else:
                 # base_iterator is not async iterable (likely a ResponsesAPIResponse)
-                if self.should_auto_execute and isinstance(
-                    self.base_iterator, ResponsesAPIResponse
-                ):
+                if self.should_auto_execute and isinstance(self.base_iterator, ResponsesAPIResponse):
                     self.collected_response = self.base_iterator
                     self.phase = "tool_execution"
                     await self._generate_tool_execution_events()
@@ -534,9 +558,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         """Check if this chunk indicates the response is completed"""
         from litellm.types.llms.openai import ResponsesAPIStreamEvents
 
-        return (
-            getattr(chunk, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        )
+        return getattr(chunk, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
     async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
         """
@@ -552,9 +574,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             response_obj = getattr(chunk, "response", None)
             if response_obj and hasattr(response_obj, "id"):
                 if response_obj.id != self._cached_response_id:
-                    verbose_logger.debug(
-                        f"Updating response ID from {response_obj.id} to {self._cached_response_id}"
-                    )
+                    verbose_logger.debug(f"Updating response ID from {response_obj.id} to {self._cached_response_id}")
                     response_obj.id = self._cached_response_id
 
         # If auto-execution is enabled, check for completed responses
@@ -582,15 +602,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
             params_for_llm = {}
             for key, value in params.items():
-                params_for_llm[key] = (
-                    value  # Copy all params as-is since tools are already processed
-                )
+                params_for_llm[key] = value  # Copy all params as-is since tools are already processed
 
-            tools_count = (
-                len(params_for_llm.get("tools", []))
-                if params_for_llm.get("tools")
-                else 0
-            )
+            tools_count = len(params_for_llm.get("tools", [])) if params_for_llm.get("tools") else 0
             verbose_logger.debug(f"Making LLM call with {tools_count} tools")
             response = await aresponses(**params_for_llm)
 
@@ -600,12 +614,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 # Copy metadata from the real iterator
                 self.model = getattr(response, "model", self.model)
                 self.litellm_metadata = getattr(response, "litellm_metadata", {})
-                self.custom_llm_provider = getattr(
-                    response, "custom_llm_provider", self.custom_llm_provider
-                )
-                verbose_logger.debug(
-                    f"Created base iterator: {type(self.base_iterator)}"
-                )
+                self.custom_llm_provider = getattr(response, "custom_llm_provider", self.custom_llm_provider)
+                verbose_logger.debug(f"Created base iterator: {type(self.base_iterator)}")
             else:
                 # Non-streaming response - this shouldn't happen but handle it
                 verbose_logger.warning(f"Got non-streaming response: {type(response)}")
@@ -618,8 +628,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.base_iterator = None
-            # Don't set phase to "finished" here — let __anext__ emit any
-            # pre-generated MCP discovery events before ending the iteration.
+            # Stash the failure so aresponses_api_with_mcp can re-raise it
+            # before any SSE bytes are written (eager creation), or so
+            # __anext__ can emit an `error` event instead of ending silently.
+            self._initial_creation_error = e
+            self._stream_error = e
 
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
@@ -632,11 +645,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Extract tool calls from the response
             if self.collected_response is not None:
-                tool_calls = (
-                    LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
-                        self.collected_response
-                    )
-                )  # type: ignore[arg-type]
+                tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(self.collected_response)  # type: ignore[arg-type]
             else:
                 tool_calls = []
             if not tool_calls:
@@ -672,6 +681,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
+                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -734,10 +744,25 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.tool_results = []
+            # Drop the queued per-tool events: emitting mcp_call.in_progress
+            # items that never receive a completed/failed terminal event is a
+            # protocol deviation. The terminal `error` event carries the
+            # failure instead.
+            self.tool_execution_events = []
+            # Remember the failure. Without this, the follow-up call is made
+            # with function_call items but no function_call_output items and
+            # the provider rejects it with "No tool output found for function
+            # call ...".
+            self._stream_error = e
 
     async def _create_follow_up_iterator(self) -> None:
         """Create the follow-up response iterator with tool results"""
         if not self.collected_response or not hasattr(self, "tool_results"):
+            return
+        # Tool execution already failed; skip the doomed follow-up call (it
+        # would be rejected with "No tool output found for function call ...")
+        # and let __anext__ emit the terminal error event.
+        if self._stream_error is not None:
             return
 
         from litellm.responses.main import aresponses
@@ -779,6 +804,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.follow_up_iterator = None
+            # Surface via a terminal `error` event in __anext__ instead of
+            # silently ending the stream with no terminal event.
+            self._stream_error = e
 
     def __iter__(self):
         return self

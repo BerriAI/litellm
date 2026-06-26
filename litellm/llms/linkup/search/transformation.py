@@ -22,9 +22,7 @@ class _LinkupSearchRequestRequired(TypedDict):
 
     q: str  # Required - The natural language question for which you want to retrieve context
     depth: Literal["deep", "standard"]  # Required - Defines the precision of the search
-    outputType: Literal[
-        "searchResults", "sourcedAnswer", "structured"
-    ]  # Required - The type of output
+    outputType: Literal["searchResults", "sourcedAnswer", "structured"]  # Required - The type of output
 
 
 class LinkupSearchRequest(_LinkupSearchRequestRequired, total=False):
@@ -69,9 +67,7 @@ class LinkupSearchConfig(BaseSearchConfig):
             default_api_base=self.LINKUP_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "LINKUP_API_KEY is not set. Set `LINKUP_API_KEY` environment variable."
-            )
+            raise ValueError("LINKUP_API_KEY is not set. Set `LINKUP_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -141,10 +137,7 @@ class LinkupSearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         return result_data

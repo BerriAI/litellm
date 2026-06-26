@@ -20,9 +20,7 @@ def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
     # Choose base class
-    base_class: type = (
-        OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
-    )
+    base_class: type = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
         @overload
@@ -48,13 +46,9 @@ def create_config_class(provider: SimpleProviderConfig):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
 
             if is_async:
-                return super()._transform_messages(
-                    messages=messages, model=model, is_async=True
-                )
+                return super()._transform_messages(messages=messages, model=model, is_async=True)
             else:
-                return super()._transform_messages(
-                    messages=messages, model=model, is_async=False
-                )
+                return super()._transform_messages(messages=messages, model=model, is_async=False)
 
         def _get_openai_compatible_provider_info(
             self, api_base: Optional[str], api_key: Optional[str]
@@ -101,9 +95,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
             supported_params = super().get_supported_openai_params(model=model)
 
-            _supports_fc = supports_function_calling(
-                model=model, custom_llm_provider=provider.slug
-            )
+            _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
             if not _supports_fc:
                 tool_params = [

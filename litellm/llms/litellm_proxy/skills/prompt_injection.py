@@ -147,9 +147,7 @@ class SkillPromptInjectionHandler:
             return data
 
         # Build the skill injection text
-        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(
-            skill_contents
-        )
+        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(skill_contents)
 
         if use_anthropic_format:
             # Anthropic messages API: use top-level 'system' parameter
@@ -243,12 +241,7 @@ class SkillPromptInjectionHandler:
         func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
 
         # Use instructions as description, fall back to description or title
-        description = (
-            skill.instructions
-            or skill.description
-            or skill.display_title
-            or f"Skill: {skill.skill_id}"
-        )
+        description = skill.instructions or skill.description or skill.display_title or f"Skill: {skill.skill_id}"
 
         # Truncate description if too long (OpenAI has limits)
         max_desc_length = 1024
@@ -276,9 +269,7 @@ class SkillPromptInjectionHandler:
 
         return tool
 
-    def convert_skill_to_anthropic_tool(
-        self, skill: LiteLLM_SkillsTable
-    ) -> Dict[str, Any]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 
@@ -290,12 +281,7 @@ class SkillPromptInjectionHandler:
         """
         func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
 
-        description = (
-            skill.instructions
-            or skill.description
-            or skill.display_title
-            or f"Skill: {skill.skill_id}"
-        )
+        description = skill.instructions or skill.description or skill.display_title or f"Skill: {skill.skill_id}"
 
         max_desc_length = 1024
         if len(description) > max_desc_length:

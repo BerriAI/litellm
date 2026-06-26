@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_ObjectPermissionTable, ObjectPermissionDict
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
@@ -18,6 +18,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
+    validate_key_vector_stores_against_team,
 )
 
 
@@ -84,6 +85,38 @@ async def test_set_object_permission():
     # Verify other fields remain in result
     assert result["user_id"] == "test_user"
     assert result["models"] == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_set_object_permission_persists_mcp_tool_search_enabled():
+    """
+    Regression: mcp_tool_search_enabled must be carried into the Prisma create
+    payload so it persists to LiteLLM_ObjectPermissionTable. The field was
+    present on the Pydantic models but missing from the create path, so keys
+    generated with mcp_tool_search_enabled=True silently lost the flag.
+    """
+    mock_prisma_client = MagicMock()
+    mock_created_permission = MagicMock()
+    mock_created_permission.object_permission_id = "perm_id"
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=mock_created_permission
+    )
+
+    data_json = {
+        "object_permission": {
+            "mcp_servers": ["server_a"],
+            "mcp_tool_search_enabled": True,
+        },
+    }
+
+    await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
+
+    created_data = (
+        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+            "data"
+        ]
+    )
+    assert created_data["mcp_tool_search_enabled"] is True
 
 
 # ---- Tests for _extract_requested_mcp_server_ids ----
@@ -890,3 +923,137 @@ async def test_validate_search_tools_raises_when_not_subset():
             team_obj=_make_team_obj_search(search_tools=["t1"]),
         )
     assert exc.value.status_code == 403
+
+
+# ---- Personal-key non-admin gates on toolsets / vector_stores / search_tools ----
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_personal_non_admin_cannot_assign_mcp_toolsets(
+    mock_access_groups, mock_allow_all
+):
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_toolsets": ["ts-private"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "ts-private" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_personal_admin_can_assign_mcp_toolsets(
+    mock_access_groups, mock_allow_all
+):
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_toolsets": ["ts-private"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_personal_non_admin_cannot_assign_vector_stores():
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_vector_stores_against_team(
+            object_permission={"vector_stores": ["vs-private"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "vs-private" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_personal_admin_can_assign_vector_stores():
+    await validate_key_vector_stores_against_team(
+        object_permission={"vector_stores": ["vs-private"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_key_vector_stores_unrestricted_at_create():
+    """Team-scoped keys retain their existing trust model at create time."""
+    team_obj = _make_team_obj_search()
+    await validate_key_vector_stores_against_team(
+        object_permission={"vector_stores": ["vs-anything"]},
+        team_obj=team_obj,
+        is_proxy_admin=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_personal_non_admin_cannot_assign_search_tools():
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_search_tools_against_team(
+            object_permission={"search_tools": ["st-private"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "st-private" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_personal_admin_can_assign_search_tools():
+    await validate_key_search_tools_against_team(
+        object_permission={"search_tools": ["st-private"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_object_permission_passes_for_personal_non_admin():
+    """An empty / absent object_permission must not be blocked."""
+    await validate_key_vector_stores_against_team(
+        object_permission=None,
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission={"vector_stores": []},
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+    await validate_key_search_tools_against_team(
+        object_permission=None,
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+
+
+def test_object_permission_dict_mirrors_pydantic_model():
+    """ObjectPermissionDict must stay field-for-field aligned with
+    LiteLLM_ObjectPermissionBase. If a new field is added to the Pydantic
+    model, this test fails until the TypedDict is updated to match."""
+    from typing import get_type_hints
+
+    pydantic_fields = set(LiteLLM_ObjectPermissionBase.model_fields.keys())
+    typeddict_fields = set(get_type_hints(ObjectPermissionDict).keys())
+    assert pydantic_fields == typeddict_fields, (
+        f"ObjectPermissionDict drifted from LiteLLM_ObjectPermissionBase.\n"
+        f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
+        f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
+    )

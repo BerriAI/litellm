@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.91.0"
+version = "1.92.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -63,7 +63,7 @@ proxy = [
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.26.0,<2.0",
     "litellm-proxy-extras==0.4.74",
-    "litellm-enterprise==0.1.44",
+    "litellm-enterprise==0.1.45",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
     "polars>=1.38.1,<2.0",
@@ -90,7 +90,7 @@ extra_proxy = [
     # Not in PyPI proxy extra.
     "resend>=2.23.0,<3.0",
     "redisvl>=0.4.1,<1.0; python_version < '3.14'",
-    "a2a-sdk>=0.3.24,<1.0",
+    "a2a-sdk>=1.1.0,<2.0",
 ]
 utils = [
     # Not in Docker or PyPI proxy extra.
@@ -193,7 +193,7 @@ proxy-dev = [
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
     "azure-identity==1.25.2",
-    "a2a-sdk==0.3.24",
+    "a2a-sdk==1.1.0",
 ]
 ci = [
     # These are lazily imported at call sites; keep them out of core deps to
@@ -234,29 +234,18 @@ healthcheck = [
 ]
 
 [build-system]
-requires = ["maturin==1.9.4"]
-build-backend = "maturin"
-
-[tool.maturin]
-manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
-module-name = "litellm.rust_bridge._native"
-python-source = "."
-bindings = "pyo3"
-exclude = [
-    "litellm/proxy/enterprise",
-    "litellm/proxy/enterprise/**",
-    "**/__pycache__",
-    "**/__pycache__/**",
-    "**/.pytest_cache",
-    "**/.pytest_cache/**",
-    "**/.ruff_cache",
-    "**/.ruff_cache/**",
-]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"
 
 [tool.uv]
 constraint-dependencies = [
     "tornado>=6.5.6",
     "aiohttp>=3.14.1,<4.0",
+    "packaging>=24.0",
+]
+override-dependencies = [
+    # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
+    "packaging>=24.0",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
@@ -269,11 +258,23 @@ litellm-enterprise = { workspace = true }
 [tool.uv.workspace]
 members = ["enterprise", "litellm-proxy-extras"]
 
+[tool.uv.build-backend]
+module-root = ""
+source-exclude = [
+    "litellm/proxy/enterprise",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+]
+
 [tool.isort]
 profile = "black"
 
 [tool.commitizen]
-version = "1.91.0"
+version = "1.92.0"
 version_files = [
     "pyproject.toml:^version",
 ]

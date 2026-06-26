@@ -11,6 +11,7 @@ from .commands.agents import agent_commands
 from .commands.auth import get_stored_api_key, login, logout, whoami
 from .commands.chat import chat
 from .commands.credentials import credentials
+from .commands.encryption import encryption
 from .commands.http import http
 from .commands.keys import keys
 
@@ -103,6 +104,8 @@ cli.add_command(whoami)
 cli.add_command(models)
 # Add the credentials command group
 cli.add_command(credentials)
+# Add the encryption migration command group
+cli.add_command(encryption)
 # Add the chat command group
 cli.add_command(chat)
 # Add the http command group

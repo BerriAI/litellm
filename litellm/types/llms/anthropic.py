@@ -365,9 +365,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-AllAnthropicMessageValues = Union[
-    AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
-]
+AllAnthropicMessageValues = Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
@@ -385,14 +383,10 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
-    container: Optional[
-        Dict[str, Any]
-    ]  # Container config with skills for code execution
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
     speed: Optional[str]  # Fast mode support for Opus models
-    output_config: Optional[
-        AnthropicOutputConfig
-    ]  # Configuration for Claude's output behavior
+    output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
     reasoning_effort: Optional[str]
 
@@ -497,9 +491,7 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = Union[
-    ToolUseBlock, TextBlock, ChatCompletionThinkingBlock
-]
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock, ChatCompletionThinkingBlock]
 
 ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
@@ -625,6 +617,8 @@ class AnthropicResponseContentBlockRedactedThinking(BaseModel):
 
 
 class AnthropicResponseUsageBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     input_tokens: int
     output_tokens: int
 

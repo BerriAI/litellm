@@ -323,6 +323,7 @@ LLM_CONFIG_NAMES = (
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
     "SonioxAudioTranscriptionConfig",
+    "GDCGeminiConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -1156,6 +1157,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
+    ),
+    "GDCGeminiConfig": (
+        ".llms.gdc.chat.transformation",
+        "GDCGeminiConfig",
     ),
     "ModelScopeChatConfig": (
         ".llms.modelscope.chat.transformation",

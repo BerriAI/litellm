@@ -20,6 +20,7 @@ replaced by a list-based pipeline:
 import gc
 import io
 import json
+import tempfile
 import time
 import tracemalloc
 
@@ -41,15 +42,15 @@ from litellm.llms.vertex_ai.files.transformation import (
 from litellm.types.llms.openai import CreateFileRequest
 
 
-def _resumable_stream(transformed) -> BaseFileUploadStream:
-    """Pull the streaming body out of a resumable-upload transform result."""
-    return transformed["resumable_chunked_upload"]["body_stream"]
+def _upload_stream(transformed) -> BaseFileUploadStream:
+    """Pull the streaming body out of the upload transform result."""
+    return transformed["streaming_media_upload"]["body_stream"]
 
 
 def _join_upload_body(transformed) -> bytes:
     """Materialize a transform result's upload body for byte-level assertions."""
-    if isinstance(transformed, dict) and "resumable_chunked_upload" in transformed:
-        return b"".join(_resumable_stream(transformed).iter_bytes())
+    if isinstance(transformed, dict) and "streaming_media_upload" in transformed:
+        return b"".join(_upload_stream(transformed).iter_bytes())
     if isinstance(transformed, BaseFileUploadStream):
         return b"".join(transformed.iter_bytes())
     if isinstance(transformed, str):
@@ -83,17 +84,13 @@ def _reference_vertex_jsonl_string(cfg: VertexAIFilesConfig, content: str) -> st
     transform, so the streaming path can be checked against it for parity."""
     entries = [json.loads(line) for line in content.splitlines() if line.strip()]
     return "\n".join(
-        json.dumps(
-            _openai_batch_jsonl_entry_to_vertex_wrapped_request(
-                entry, cfg._map_openai_to_vertex_params
-            )
-        )
+        json.dumps(_openai_batch_jsonl_entry_to_vertex_wrapped_request(entry, cfg._map_openai_to_vertex_params))
         for entry in entries
     )
 
 
 class TestStreamingOutputParity:
-    def test_transform_create_file_request_returns_resumable_stream_parity(self):
+    def test_transform_create_file_request_returns_streaming_body_parity(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(300)
         request: CreateFileRequest = {
@@ -105,14 +102,12 @@ class TestStreamingOutputParity:
             model="", create_file_data=request, optional_params={}, litellm_params={}
         )
 
-        # A batch upload must be a resumable-upload config carrying a streaming
-        # body, so the handler can chunk it; a buffered bytes/str return would
-        # defeat the OOM fix.
-        assert isinstance(out, dict) and "resumable_chunked_upload" in out
-        assert isinstance(_resumable_stream(out), BaseFileUploadStream)
-        assert _join_upload_body(out).decode("utf-8") == _reference_vertex_jsonl_string(
-            cfg, raw.decode("utf-8")
-        )
+        # A batch upload must be a streaming-media config carrying a streaming
+        # body, so the handler can stream it to GCS; a buffered bytes/str return
+        # would defeat the OOM fix.
+        assert isinstance(out, dict) and "streaming_media_upload" in out
+        assert isinstance(_upload_stream(out), BaseFileUploadStream)
+        assert _join_upload_body(out).decode("utf-8") == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
 
 
 class TestFileLikeInputNotPartiallyConsumed:
@@ -215,9 +210,7 @@ class TestStreamingLineIterator:
             def seek(self, *args):
                 raise io.UnsupportedOperation("not seekable")
 
-        handle = _NonSeekable(
-            b'{"custom_id": "request-0"}\n{"custom_id": "request-1"}\n'
-        )
+        handle = _NonSeekable(b'{"custom_id": "request-0"}\n{"custom_id": "request-1"}\n')
         with pytest.raises(ValueError, match="seekable"):
             list(_iter_openai_jsonl_lines(handle))
 
@@ -235,13 +228,8 @@ class TestGetObjectNameLazyParse:
         cfg = VertexAIFilesConfig()
         # Tail rows are deliberately not valid JSON. Parsing the whole payload
         # would raise here; a first-row-only parse must not.
-        raw = (
-            b'{"custom_id": "r-0", "body": {"model": "gemini-2.5-flash"}}\n'
-            b"garbage line that is not json\n"
-        )
-        object_name = cfg.get_object_name(
-            ("batch.jsonl", raw, "application/jsonl"), purpose="batch"
-        )
+        raw = b'{"custom_id": "r-0", "body": {"model": "gemini-2.5-flash"}}\ngarbage line that is not json\n'
+        object_name = cfg.get_object_name(("batch.jsonl", raw, "application/jsonl"), purpose="batch")
         assert "gemini-2.5-flash" in object_name
 
 
@@ -278,15 +266,11 @@ class TestStreamingPeakMemory:
         def drain_stream():
             # Consume the upload body one row at a time, as the chunked uploader
             # does, without accumulating it.
-            for _ in _OpenAIToVertexBatchUploadStream(
-                raw, cfg._map_openai_to_vertex_params
-            ).iter_bytes():
+            for _ in _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params).iter_bytes():
                 pass
 
         streaming_peak = self._measure(drain_stream)
-        list_peak = self._measure(
-            lambda: _reference_vertex_jsonl_string(cfg, content_str)
-        )
+        list_peak = self._measure(lambda: _reference_vertex_jsonl_string(cfg, content_str))
 
         # Core guard: the lazily consumed streaming body peaks well under a list
         # pipeline that materializes every transformed row. Building full
@@ -305,9 +289,7 @@ class TestStreamingPeakMemory:
         # first-row parse should allocate only a small fraction of the payload;
         # parsing every row would blow past this bound.
         peak = self._measure(lambda: cfg.get_object_name(file_data, purpose="batch"))
-        assert (
-            peak / len(raw) < 2.0
-        ), "get_object_name should not copy the whole payload"
+        assert peak / len(raw) < 2.0, "get_object_name should not copy the whole payload"
 
 
 class TestPathSourcedStreaming:
@@ -341,12 +323,10 @@ class TestPathSourcedStreaming:
             litellm_params={"gcs_bucket_name": "test-bucket"},
             data=data,
         )
-        assert "uploadType=resumable" in url
+        assert "uploadType=media" in url
 
-        out = cfg.transform_create_file_request(
-            model="", create_file_data=data, optional_params={}, litellm_params={}
-        )
-        assert isinstance(out, dict) and "resumable_chunked_upload" in out
+        out = cfg.transform_create_file_request(model="", create_file_data=data, optional_params={}, litellm_params={})
+        assert isinstance(out, dict) and "streaming_media_upload" in out
         body = _join_upload_body(out).decode("utf-8")
         assert body == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
         lines = body.splitlines()
@@ -371,7 +351,7 @@ class TestPathSourcedStreaming:
             out = cfg.transform_create_file_request(
                 model="", create_file_data=data, optional_params={}, litellm_params={}
             )
-            for _ in _resumable_stream(out).iter_bytes():
+            for _ in _upload_stream(out).iter_bytes():
                 pass  # drain without accumulating
 
         gc.collect()
@@ -384,20 +364,15 @@ class TestPathSourcedStreaming:
 
         # Streaming from disk must not materialize the payload. Reading the whole
         # file into bytes (the pre-fix path) would push peak past the file size.
-        assert peak < len(raw) * 0.3, (
-            f"peak {peak} not bounded vs payload {len(raw)} "
-            f"(ratio {peak / len(raw):.2f})"
-        )
+        assert peak < len(raw) * 0.3, f"peak {peak} not bounded vs payload {len(raw)} (ratio {peak / len(raw):.2f})"
 
     def test_path_source_stream_is_reiterable(self, tmp_path):
         cfg = VertexAIFilesConfig()
         path, _ = self._write_jsonl(tmp_path, 50)
         data = self._batch_request(path)
 
-        out = cfg.transform_create_file_request(
-            model="", create_file_data=data, optional_params={}, litellm_params={}
-        )
-        stream = _resumable_stream(out)
+        out = cfg.transform_create_file_request(model="", create_file_data=data, optional_params={}, litellm_params={})
+        stream = _upload_stream(out)
         first = b"".join(stream.iter_bytes())
         second = b"".join(stream.iter_bytes())
         assert first == second and len(first) > 0
@@ -436,25 +411,20 @@ def _logging_obj() -> Logging:
     )
 
 
-def _gcs_resumable_mock(session_url: str, final_status: int = 200):
-    """A fake GCS resumable endpoint: POST opens a session (URI in Location),
-    each PUT appends and returns 308 until the final chunk returns 200/201."""
-    state = {"received": bytearray(), "ranges": [], "methods": [], "urls": []}
+def _gcs_media_mock(status: int = 200):
+    """A fake GCS simple-media endpoint: one request carries the whole object;
+    capture the body and headers and return the object resource."""
+    state = {"received": bytearray(), "methods": [], "urls": [], "headers": [], "timeouts": []}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         state["methods"].append(request.method)
         state["urls"].append(str(request.url))
-        if request.method == "POST":
-            return httpx.Response(200, headers={"location": session_url})
-        body = await request.aread()
-        content_range = request.headers["content-range"]
-        state["ranges"].append(content_range)
-        state["received"].extend(body)
-        if content_range.rsplit("/", 1)[-1] == "*":
-            return httpx.Response(
-                308, headers={"range": f"bytes=0-{len(state['received']) - 1}"}
-            )
-        return httpx.Response(final_status, json=_GCS_OBJECT_JSON)
+        state["headers"].append(dict(request.headers))
+        # httpx records the resolved per-request timeout here, so the test can
+        # assert the caller's timeout was forwarded rather than the client default.
+        state["timeouts"].append(request.extensions.get("timeout"))
+        state["received"].extend(await request.aread())
+        return httpx.Response(status, json=_GCS_OBJECT_JSON)
 
     return handler, state
 
@@ -465,8 +435,8 @@ def _async_handler_with(mock) -> AsyncHTTPHandler:
     return handler
 
 
-class TestResumableUploadUrl:
-    def test_batch_jsonl_uses_resumable_upload_type(self):
+class TestUploadUrl:
+    def test_batch_jsonl_uses_media_upload_type(self):
         cfg = VertexAIFilesConfig()
         request: CreateFileRequest = {
             "file": ("batch.jsonl", _make_openai_jsonl_bytes(3), "application/jsonl"),
@@ -480,29 +450,12 @@ class TestResumableUploadUrl:
             litellm_params={"gcs_bucket_name": "test-bucket"},
             data=request,
         )
-        assert "uploadType=resumable" in url
-        assert "uploadType=media" not in url
+        # A single media upload is one continuous transfer (no per-chunk
+        # round-trips), which is what keeps large uploads under client/LB timeouts.
+        assert "uploadType=media" in url
+        assert "uploadType=resumable" not in url
 
-    def test_batch_text_plain_uses_resumable_upload_type(self):
-        # Clients often label a .jsonl batch upload as text/plain; it must still
-        # take the streaming/resumable path, not the buffered media path.
-        cfg = VertexAIFilesConfig()
-        request: CreateFileRequest = {
-            "file": ("batch.jsonl", _make_openai_jsonl_bytes(3), "text/plain"),
-            "purpose": "batch",
-        }
-        url = cfg.get_complete_file_url(
-            api_base=None,
-            api_key=None,
-            model="",
-            optional_params={},
-            litellm_params={"gcs_bucket_name": "test-bucket"},
-            data=request,
-        )
-        assert "uploadType=resumable" in url
-        assert "uploadType=media" not in url
-
-    def test_binary_upload_stays_simple_media(self):
+    def test_binary_upload_uses_media_upload_type(self):
         cfg = VertexAIFilesConfig()
         request: CreateFileRequest = {
             "file": ("doc.pdf", b"%PDF-1.4 binary", "application/pdf"),
@@ -520,14 +473,12 @@ class TestResumableUploadUrl:
         assert "uploadType=resumable" not in url
 
 
-class TestResumableStreamBody:
+class TestUploadStreamBody:
     def test_stream_matches_legacy_pipeline(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(120)
         stream = _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params)
-        assert b"".join(stream.iter_bytes()).decode(
-            "utf-8"
-        ) == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
+        assert b"".join(stream.iter_bytes()).decode("utf-8") == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
 
     def test_stream_is_reiterable_for_retries(self):
         # A one-shot generator would make a transport retry upload an empty body;
@@ -545,59 +496,19 @@ class TestResumableStreamBody:
         # an empty body silently.
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(40)
-        stream = _OpenAIToVertexBatchUploadStream(
-            io.BytesIO(raw), cfg._map_openai_to_vertex_params
-        )
+        stream = _OpenAIToVertexBatchUploadStream(io.BytesIO(raw), cfg._map_openai_to_vertex_params)
         first = b"".join(stream.iter_bytes())
         second = b"".join(stream.iter_bytes())
         assert first == second and len(first) > 0
 
 
-class TestResumableChunking:
-    def test_intermediate_chunks_are_exactly_chunk_size(self):
-        pieces = list(BaseLLMHTTPHandler._iter_resumable_chunks(iter([b"x" * 10]), 4))
-        assert pieces == [b"xxxx", b"xxxx", b"xx"]
-
-    def test_exact_multiple_yields_no_trailing_empty(self):
-        # An exactly chunk-aligned stream yields only full chunks; the upload
-        # finalizes on the last data chunk instead of an extra empty request.
-        pieces = list(BaseLLMHTTPHandler._iter_resumable_chunks(iter([b"x" * 8]), 4))
-        assert pieces == [b"xxxx", b"xxxx"]
-
-    def test_empty_stream_yields_nothing(self):
-        # A 0-byte stream yields no chunks; the caller finalizes with one empty
-        # request (bytes */0).
-        assert list(BaseLLMHTTPHandler._iter_resumable_chunks(iter([]), 4)) == []
-
-    def test_default_chunk_size_is_256kib_multiple(self):
-        assert BaseLLMHTTPHandler._RESUMABLE_CHUNK_SIZE % (256 * 1024) == 0
-
-    def test_content_range_intermediate_uses_star_total(self):
-        assert (
-            BaseLLMHTTPHandler._resumable_content_range(0, 4096, is_final=False)
-            == "bytes 0-4095/*"
-        )
-
-    def test_content_range_final_uses_real_total(self):
-        assert (
-            BaseLLMHTTPHandler._resumable_content_range(8192, 100, is_final=True)
-            == "bytes 8192-8291/8292"
-        )
-
-    def test_content_range_empty_finalize(self):
-        assert (
-            BaseLLMHTTPHandler._resumable_content_range(8192, 0, is_final=True)
-            == "bytes */8192"
-        )
-
-
 @pytest.mark.asyncio
-class TestResumableUploadProtocol:
-    """End-to-end against a faked GCS resumable endpoint. These are the tests
-    that fail if the handler buffers the whole body, drops bytes, mislabels a
-    Content-Range, follows the 308 instead of continuing, or skips finalize."""
+class TestStreamingMediaUpload:
+    """End-to-end against a faked GCS media endpoint. These fail if the handler
+    buffers the payload in memory, drops bytes, omits Content-Length (which would
+    flip httpx to chunked transfer-encoding), or makes more than one request."""
 
-    async def _run(self, raw: bytes, chunk_size: int, final_status: int = 200):
+    async def _run(self, raw: bytes, status: int = 200, timeout=None):
         cfg = VertexAIFilesConfig()
         request: CreateFileRequest = {
             "file": ("batch.jsonl", raw, "application/jsonl"),
@@ -614,11 +525,8 @@ class TestResumableUploadProtocol:
         transformed = cfg.transform_create_file_request(
             model="", create_file_data=request, optional_params={}, litellm_params={}
         )
-        transformed["resumable_chunked_upload"]["chunk_size"] = chunk_size
         expected = _join_upload_body(transformed)
-
-        session_url = "https://storage.googleapis.com/upload/sess?upload_id=SID"
-        mock, state = _gcs_resumable_mock(session_url, final_status=final_status)
+        mock, state = _gcs_media_mock(status=status)
         response = await BaseLLMHTTPHandler().async_create_file(
             transformed_request=transformed,
             litellm_params={},
@@ -627,70 +535,52 @@ class TestResumableUploadProtocol:
             api_base=api_base,
             logging_obj=_logging_obj(),
             client=_async_handler_with(mock),
-            timeout=None,
+            timeout=timeout,
         )
-        return expected, state, response, session_url, api_base
+        return expected, state, response
 
-    async def test_streams_in_chunks_and_reassembles(self):
+    async def test_single_request_carries_whole_payload(self):
         raw = _make_openai_jsonl_bytes(300)
-        chunk_size = 4096
-        expected, state, response, session_url, api_base = await self._run(
-            raw, chunk_size
-        )
+        expected, state, response = await self._run(raw)
 
-        # One session-open POST, then a sequence of chunk PUTs.
-        assert state["methods"][0] == "POST"
-        assert set(state["methods"][1:]) == {"PUT"}
-        assert state["methods"].count("PUT") >= 2, "payload must span multiple chunks"
+        # Exactly one request (the single media upload), and it lands on the
+        # media endpoint, not a resumable session.
+        assert state["methods"] == ["POST"]
+        assert "uploadType=media" in state["urls"][0]
 
-        # POST opens a resumable session; every chunk goes to the session URI.
-        assert "uploadType=resumable" in state["urls"][0]
-        assert all(u == session_url for u in state["urls"][1:])
-
-        # Every non-final chunk is exactly chunk_size with an unknown-total range;
-        # the final chunk carries the real total.
-        intermediate = state["ranges"][:-1]
-        for index, content_range in enumerate(intermediate):
-            assert (
-                content_range
-                == f"bytes {index * chunk_size}-{(index + 1) * chunk_size - 1}/*"
-            )
-        total = len(expected)
-        last_offset = len(intermediate) * chunk_size
-        if last_offset == total:  # payload landed on a chunk boundary
-            assert state["ranges"][-1] == f"bytes */{total}"
-        else:
-            assert state["ranges"][-1] == f"bytes {last_offset}-{total - 1}/{total}"
-
-        # The bytes GCS received are exactly the transformed batch payload.
+        # The body is streamed with chunked transfer-encoding and no
+        # Content-Length, which is what proves it is neither buffered in memory
+        # nor staged to a temp file (the disk-exhaustion guard) before sending.
+        headers = state["headers"][0]
+        assert headers.get("transfer-encoding") == "chunked"
+        assert "content-length" not in headers
+        # httpx reassembles the chunked body; GCS receives exactly the transform.
         assert bytes(state["received"]) == expected
         assert response.object == "file"
 
-    async def test_exact_multiple_finalizes_on_last_data_chunk(self):
-        # A body that is an exact multiple of the chunk size finalizes on its
-        # last data chunk (bytes (TOTAL-chunk)-(TOTAL-1)/TOTAL), with no extra
-        # empty finalize request.
-        chunk_size = 256
-        total = chunk_size * 3
-        stream = _FixedBytesStream(b"a" * total)
-        config = {"body_stream": stream, "chunk_size": chunk_size}
-        session_url = "https://storage.googleapis.com/upload/sess?upload_id=SID"
-        mock, state = _gcs_resumable_mock(session_url)
-
-        response = await BaseLLMHTTPHandler()._aresumable_chunked_upload(
-            client=_async_handler_with(mock),
-            initiate_url="https://storage.googleapis.com/upload?uploadType=resumable",
-            base_headers={"Authorization": "Bearer x"},
-            config=config,
-            timeout=None,
-        )
-
-        assert state["ranges"][-1] == f"bytes {total - chunk_size}-{total - 1}/{total}"
-        assert "*" not in state["ranges"][-1]
-        assert bytes(state["received"]) == b"a" * total
-        assert response.status_code == 200
-
-    async def test_failed_chunk_raises(self):
+    async def test_failed_upload_raises(self):
         raw = _make_openai_jsonl_bytes(80)
         with pytest.raises(Exception):
-            await self._run(raw, chunk_size=4096, final_status=403)
+            await self._run(raw, status=403)
+
+    async def test_request_timeout_is_forwarded(self):
+        # The caller's per-request timeout must reach the GCS upload; every other
+        # upload branch forwards it. httpx records the resolved timeout in
+        # request.extensions["timeout"]; a dropped timeout would show the client
+        # default instead of the value passed here.
+        raw = _make_openai_jsonl_bytes(20)
+        _, state, _ = await self._run(raw, timeout=httpx.Timeout(137.0))
+        forwarded = state["timeouts"][0]
+        assert forwarded is not None
+        assert forwarded.get("read") == 137.0 and forwarded.get("write") == 137.0
+
+    async def test_upload_does_not_stage_to_disk(self, monkeypatch):
+        # Disk-exhaustion guard: the transformed body must stream to GCS, never be
+        # written to a temp file first. If any tempfile is created during the
+        # upload, an attacker could fill the proxy's temp volume with large
+        # concurrent uploads.
+        created = []
+        real_tempfile = tempfile.TemporaryFile
+        monkeypatch.setattr(tempfile, "TemporaryFile", lambda *a, **k: (created.append(1), real_tempfile(*a, **k))[1])
+        await self._run(_make_openai_jsonl_bytes(50))
+        assert created == []

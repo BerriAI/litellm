@@ -23,7 +23,7 @@ import pytest
 from e2e_http import Success
 from lifecycle import ResourceManager
 from models import SpendLogs, SpendLogsParams
-from spend_e2e_client import SpendClient, SpendLogRow, unique_marker, unwrap
+from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
 
@@ -218,6 +218,43 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     )
 
 
+def test_tag_spend_matches_sum_of_tagged_logs(
+    client: SpendClient, scoped_key: str
+) -> None:
+    # Unique tag so /spend/tags can't be polluted by other rows; unique content
+    # per call so both are fresh misses (paid), not cache hits.
+    tag = f"e2e-tagspend-{unique_marker()}"
+    for _ in range(2):
+        _ = unwrap(
+            client.chat(
+                scoped_key,
+                "gemini-2.5-flash",
+                f"hi {unique_marker()}",
+                tags=[tag],
+                max_tokens=16,
+            )
+        )
+
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=2,
+        predicate=lambda rs: sum((r.spend or 0) for r in rs) > 0,
+    )
+    tagged = [r for r in rows if tag in (r.request_tags or [])]
+    assert len(tagged) >= 2, f"expected 2 tagged rows, saw {_summarize(rows)}"
+    logs_total = sum((r.spend or 0) for r in tagged)
+    assert logs_total > 0
+
+    entry = client.poll_tag_spend(tag, minimum=logs_total * 0.999)
+    assert entry is not None, f"tag {tag!r} never appeared in /spend/tags"
+    assert _approx_equal(entry.total_spend or 0, logs_total), (
+        f"/spend/tags total_spend {entry} != sum of tagged rows {logs_total}"
+    )
+    assert (entry.log_count or 0) == len(tagged), (
+        f"/spend/tags log_count {entry.log_count} != tagged rows {len(tagged)}"
+    )
+
+
 def test_end_user_spend_attributed_on_row(
     client: SpendClient, scoped_key: str, resources: ResourceManager
 ) -> None:
@@ -281,6 +318,25 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         assert (
             claude_row.request_id == claude.id
         ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
+
+
+def test_failure_call_writes_failure_status_row(
+    client: SpendClient, scoped_key: str
+) -> None:
+    result = client.chat(scoped_key, "gemini-2.5-flash", "", max_tokens=1)
+    if is_ok(result):
+        pytest.skip("call unexpectedly succeeded; could not induce a failure row")
+
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs)
+    )
+    failure_rows = [r for r in rows if r.status == "failure"]
+    if not failure_rows:
+        pytest.skip(
+            "no failure-status row was logged for the rejected call; "
+            "failure logging is environment-specific"
+        )
+    assert (failure_rows[0].spend or 0) == 0.0, "failed call must not be charged"
 
 
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:

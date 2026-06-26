@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from contextlib import ExitStack
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import Request, UploadFile
-from starlette.datastructures import Headers, QueryParams
+from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 sys.path.insert(
@@ -18,8 +19,11 @@ sys.path.insert(
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     HttpPassThroughEndpointHelpers,
+    InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _registered_pass_through_routes,
     create_pass_through_route,
+    initialize_pass_through_endpoints,
     pass_through_request,
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
@@ -94,7 +98,7 @@ async def test_make_multipart_http_request():
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
-    form_data = {"file": upload_file, "text_field": "test value"}
+    form_data = FormData([("file", upload_file), ("text_field", "test value")])
     request.form = AsyncMock(return_value=form_data)
 
     # Mock httpx client
@@ -123,9 +127,61 @@ async def test_make_multipart_http_request():
 
     assert call_args["method"] == "POST"
     assert str(call_args["url"]) == "http://test.com"
-    assert isinstance(call_args["files"], dict)
-    assert isinstance(call_args["data"], dict)
-    assert call_args["data"]["text_field"] == "test value"
+    assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
+    assert call_args["data"] == {"text_field": ["test value"]}
+
+
+@pytest.mark.asyncio
+async def test_make_multipart_http_request_forwards_repeated_fields():
+    """
+    Regression: a client sending several parts under the same field name
+    (e.g. ``-F file=@a.pdf -F file=@b.pdf``) must have every part forwarded.
+    Starlette's ``FormData.items()`` collapses duplicate keys to the last value,
+    so the handler must read ``multi_items()`` and emit one httpx files tuple per
+    file plus a list value per repeated non-file field.
+    """
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    def _upload(filename: str, content: bytes) -> UploadFile:
+        f = UploadFile(
+            file=BytesIO(content),
+            filename=filename,
+            headers=Headers({"content-type": "application/pdf"}),
+        )
+        f.read = AsyncMock(return_value=content)
+        return f
+
+    form_data = FormData(
+        [
+            ("file", _upload("a.pdf", b"PDF-ONE")),
+            ("file", _upload("b.pdf", b"PDF-TWO")),
+            ("other_parameter", "xxx"),
+            ("other_parameter", "yyy"),
+        ]
+    )
+    request.form = AsyncMock(return_value=form_data)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    async_client = MagicMock()
+    async_client.request = AsyncMock(return_value=mock_response)
+
+    await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com"),
+        headers={},
+        requested_query_params=None,
+    )
+
+    call_args = async_client.request.call_args[1]
+
+    assert call_args["files"] == [
+        ("file", ("a.pdf", b"PDF-ONE", "application/pdf")),
+        ("file", ("b.pdf", b"PDF-TWO", "application/pdf")),
+    ]
+    assert call_args["data"] == {"other_parameter": ["xxx", "yyy"]}
 
 
 @pytest.mark.asyncio
@@ -149,7 +205,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
-    form_data = {"file": upload_file, "key": "value"}
+    form_data = FormData([("file", upload_file), ("key", "value")])
     request.form = AsyncMock(return_value=form_data)
 
     # Mock httpx client
@@ -193,9 +249,8 @@ async def test_make_multipart_http_request_removes_content_type_header():
     # Verify other parameters are correct
     assert call_args["method"] == "POST"
     assert str(call_args["url"]) == "http://test.com"
-    assert isinstance(call_args["files"], dict)
-    assert isinstance(call_args["data"], dict)
-    assert call_args["data"]["key"] == "value"
+    assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
+    assert call_args["data"] == {"key": ["value"]}
     assert call_args["params"] == {"param": "value"}
 
     # Verify the original headers dict was not modified (copy was used)
@@ -219,7 +274,7 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     upload_headers = Headers({"content-type": "text/plain"})
     upload_file = UploadFile(file=file, filename="test.txt", headers=upload_headers)
     upload_file.read = AsyncMock(return_value=file_content)
-    request.form = AsyncMock(return_value={"file": upload_file})
+    request.form = AsyncMock(return_value=FormData([("file", upload_file)]))
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -240,7 +295,7 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     call_args = async_client.request.call_args[1]
     assert "files" in call_args
     assert "json" not in call_args
-    assert call_args["files"]["file"][0] == "test.txt"
+    assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
 
 
 @pytest.mark.asyncio
@@ -3225,7 +3280,10 @@ async def test_multipart_passthrough_preserves_boundary():
     async def mock_httpx_request(method, url, **kwargs):
         # Verify that files parameter is passed (not json)
         assert "files" in kwargs, "Files should be passed for multipart requests"
-        assert "file" in kwargs["files"], "File field should be in files dict"
+        file_parts = [
+            value for name, value in kwargs["files"] if name == "file"
+        ]
+        assert len(file_parts) == 1, "File field should be in files"
 
         # Verify content-type is NOT in headers (httpx will set it with correct boundary)
         headers = kwargs.get("headers", {})
@@ -3233,7 +3291,7 @@ async def test_multipart_passthrough_preserves_boundary():
             "content-type" not in headers
         ), "content-type should be removed for multipart"
 
-        filename, content, content_type = kwargs["files"]["file"]
+        filename, content, content_type = file_parts[0]
         assert filename == "test.txt"
         assert content == b"test file content"
         assert content_type == "text/plain"
@@ -3255,7 +3313,7 @@ async def test_multipart_passthrough_preserves_boundary():
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
-    form_data = {"file": upload_file}
+    form_data = FormData([("file", upload_file)])
     request.form = AsyncMock(return_value=form_data)
 
     # Test the multipart handler directly
@@ -3313,3 +3371,251 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+class TestStaleRouteCleanupOnReload:
+    """Regression tests for the PERF-13 / issue #19921 reload leak.
+
+    ``initialize_pass_through_endpoints`` is re-run every 30s by the
+    ``add_deployment_job`` scheduler. Endpoints sourced from the DB/config
+    without a persisted ``id`` get a fresh UUID each cycle, so their route key
+    ("{id}:{type}:{path}:{methods}") changes every reload. The old cleanup
+    called ``remove_endpoint_routes(route_key)`` which matches on ``endpoint_id``
+    and therefore never matched a route key, so ``_registered_pass_through_routes``
+    grew without bound. That unbounded dict turned the O(n) per-cycle cleanup and
+    the per-request ``is_registered_pass_through_route`` scan into a CPU sink.
+    """
+
+    def setup_method(self):
+        _registered_pass_through_routes.clear()
+
+    def teardown_method(self):
+        _registered_pass_through_routes.clear()
+
+    @staticmethod
+    def _patches():
+        stack = ExitStack()
+        stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists"
+            )
+        )
+        stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
+        mock_set_env = stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
+            )
+        )
+        mock_set_env.return_value = {}
+        return stack
+
+    @staticmethod
+    def _paths_in_registry():
+        return sorted(v["path"] for v in _registered_pass_through_routes.values())
+
+    @pytest.mark.asyncio
+    async def test_registry_stays_bounded_across_reloads_for_idless_endpoint(self):
+        """A DB/config endpoint with no id must not grow the registry per reload.
+
+        Mutation check: with the old ``remove_endpoint_routes`` call this asserts
+        2 but the registry holds ``2 * num_cycles`` entries, so it fails.
+        """
+        num_cycles = 25
+        with self._patches():
+            for _ in range(num_cycles):
+                # Fresh dict each cycle mirrors the DB loader rebuilding objects;
+                # a reused dict would cache the minted id and hide the bug.
+                await initialize_pass_through_endpoints(
+                    [
+                        {
+                            "path": "/vertex-passthrough",
+                            "target": "http://example.com",
+                            "include_subpath": True,
+                        }
+                    ]
+                )
+
+        assert len(_registered_pass_through_routes) == 2
+        assert self._paths_in_registry() == [
+            "/vertex-passthrough",
+            "/vertex-passthrough",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_departed_endpoint_is_removed_on_next_reload(self):
+        """A route present in one cycle but absent the next is dropped.
+
+        Mutation check: the old cleanup leaves the departed ``/a`` key behind,
+        so the registry would hold both paths instead of only ``/b``.
+        """
+        with self._patches():
+            await initialize_pass_through_endpoints(
+                [{"path": "/a", "target": "http://example.com"}]
+            )
+            assert self._paths_in_registry() == ["/a"]
+
+            await initialize_pass_through_endpoints(
+                [{"path": "/b", "target": "http://example.com"}]
+            )
+
+        assert self._paths_in_registry() == ["/b"]
+
+    @pytest.mark.asyncio
+    async def test_live_route_survives_reload_and_stays_resolvable(self):
+        """The currently-registered route must remain after the stale-key sweep.
+
+        Guards against a cleanup that over-removes (e.g. stripping the shared
+        path of the freshly re-registered endpoint).
+        """
+        with self._patches():
+            for _ in range(3):
+                await initialize_pass_through_endpoints(
+                    [
+                        {
+                            "path": "/live-passthrough",
+                            "target": "http://example.com",
+                            "include_subpath": True,
+                        }
+                    ]
+                )
+
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/live-passthrough"
+        )
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/live-passthrough/some/subpath"
+        )
+
+
+# Regression (LIT-3538): a pre-call guardrail block on a passthrough endpoint
+# must be logged at WARNING without a traceback, not as an ERROR with a full
+# stack trace. The generic ``except Exception`` in ``pass_through_request`` used
+# to call ``verbose_proxy_logger.exception(...)`` for every exception, so an
+# intentional guardrail block (which the rest of the codebase already classifies
+# via ``CustomGuardrail._is_guardrail_intervention``) produced scary error noise
+# even though the client correctly receives the 4xx.
+from fastapi import HTTPException as _FastAPIHTTPException
+
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+)
+
+_PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
+
+
+def _lit3538_user_api_key_dict():
+    d = MagicMock()
+    d.api_key = "sk-test"
+    d.user_id = "user-1"
+    d.team_id = "team-1"
+    d.org_id = None
+    d.metadata = {}
+    d.team_metadata = {}
+    d.parent_otel_span = None
+    d.request_route = "/mock/echo"
+    return d
+
+
+def _lit3538_request():
+    r = MagicMock()
+    r.method = "POST"
+    r.query_params = {}
+    r.url = "http://testserver/mock/echo"
+    r.state = SimpleNamespace()
+    headers = MagicMock()
+    headers.copy.return_value = {}
+    r.headers = headers
+    return r
+
+
+async def _drive_pass_through_block(raised_exception):
+    """Drive the real ``pass_through_request`` so its pre_call_hook raises
+    ``raised_exception``, returning (status_code, logger_mock)."""
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=raised_exception)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+
+    logger = MagicMock()
+
+    patches = [
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch(f"{_PT_MODULE}.verbose_proxy_logger", logger),
+        patch(
+            f"{_PT_MODULE}._read_request_body",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(f"{_PT_MODULE}._safe_get_request_headers", return_value={}),
+        patch(
+            "litellm.proxy.pass_through_endpoints.passthrough_guardrails."
+            "PassthroughGuardrailHandler.collect_guardrails",
+            return_value=[],
+        ),
+    ]
+
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        status_code = None
+        try:
+            await pass_through_request(
+                request=_lit3538_request(),
+                target="https://upstream.example/echo",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_lit3538_user_api_key_dict(),
+                stream=False,
+            )
+        except Exception as e:  # ProxyException carrying the original status
+            status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
+    return status_code, logger
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_exception, expected_code",
+    [
+        (
+            GuardrailRaisedException(guardrail_name="g", message="blocked"),
+            400,
+        ),
+        (
+            BlockedPiiEntityError(entity_type="EMAIL", guardrail_name="presidio"),
+            400,
+        ),
+        (
+            _FastAPIHTTPException(
+                status_code=400, detail={"error": "Violated moderation policy"}
+            ),
+            400,
+        ),
+    ],
+)
+async def test_pre_call_guardrail_block_logs_warning_not_exception(
+    guardrail_exception, expected_code
+):
+    status_code, logger = await _drive_pass_through_block(guardrail_exception)
+
+    assert int(status_code) == expected_code
+    assert (
+        logger.exception.call_count == 0
+    ), "guardrail block must not be logged as an ERROR with a traceback"
+    assert (
+        logger.warning.call_count == 1
+    ), "guardrail block must be logged once at WARNING"
+
+
+@pytest.mark.asyncio
+async def test_non_guardrail_exception_still_logs_with_traceback():
+    status_code, logger = await _drive_pass_through_block(
+        RuntimeError("upstream connection reset")
+    )
+
+    assert int(status_code) == 500
+    assert (
+        logger.exception.call_count == 1
+    ), "a genuine failure must still be logged via verbose_proxy_logger.exception"
+    assert (
+        logger.warning.call_count == 0
+    ), "a genuine failure must not be downgraded to WARNING"

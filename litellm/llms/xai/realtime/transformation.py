@@ -105,10 +105,7 @@ class XAIRealtimeNormalizer:
 
     @staticmethod
     def _ensure_server_vad_create_response(turn_detection: dict) -> None:
-        if (
-            turn_detection.get("type") == "server_vad"
-            and "create_response" not in turn_detection
-        ):
+        if turn_detection.get("type") == "server_vad" and "create_response" not in turn_detection:
             turn_detection["create_response"] = True
 
     # ---------------------------------------------------------------------------
@@ -128,9 +125,7 @@ class XAIRealtimeNormalizer:
         if isinstance(part, dict):
             self._content_part_by_key[self._content_part_key(event)] = part
 
-    def _update_content_part_field(
-        self, event: dict, *, part_type: str, field: str, value: object
-    ) -> None:
+    def _update_content_part_field(self, event: dict, *, part_type: str, field: str, value: object) -> None:
         if value is None:
             return
         key = self._content_part_key(event)
@@ -164,9 +159,7 @@ class XAIRealtimeNormalizer:
             return event
 
         if event_type == "response.output_text.done":
-            self._update_content_part_field(
-                event, part_type="text", field="text", value=event.get("text")
-            )
+            self._update_content_part_field(event, part_type="text", field="text", value=event.get("text"))
             return event
 
         if event_type == "response.output_audio_transcript.done":
@@ -250,9 +243,7 @@ class XAIRealtimeNormalizer:
         }
 
     @staticmethod
-    def _normalize_usage(
-        usage: object, *, empty_as_null: bool
-    ) -> Optional[dict[str, Any]]:
+    def _normalize_usage(usage: object, *, empty_as_null: bool) -> Optional[dict[str, Any]]:
         """Coerce a usage object into the full OpenAI GA shape.
 
         ``empty_as_null=True`` for ``response.created`` (usage optional).

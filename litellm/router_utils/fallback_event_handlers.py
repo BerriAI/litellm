@@ -43,9 +43,7 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
-def get_fallback_model_group(
-    fallbacks: List[Any], model_group: str
-) -> Tuple[Optional[List[str]], Optional[int]]:
+def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Optional[List[str]], Optional[int]]:
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
@@ -141,16 +139,12 @@ async def run_async_fallback(
             kwargs["max_fallbacks"] = max_fallbacks
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
-            response = await litellm_router.async_function_with_fallbacks(
-                *args, **kwargs
-            )
+            response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
                 response=response,
                 attempted_fallbacks=fallback_depth,
-                fallback_errors=(
-                    list(fallback_errors) if include_fallback_errors else None
-                ),
+                fallback_errors=(list(fallback_errors) if include_fallback_errors else None),
             )
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
@@ -170,9 +164,7 @@ async def run_async_fallback(
     raise error_from_fallbacks
 
 
-async def log_success_fallback_event(
-    original_model_group: str, kwargs: dict, original_exception: Exception
-):
+async def log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
     """
     Log a successful fallback event to all registered callbacks.
 
@@ -187,9 +179,7 @@ async def log_success_fallback_event(
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        CustomLogger
-    )
+    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -199,14 +189,10 @@ async def log_success_fallback_event(
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(
-                f"Error in log_success_fallback_event: {str(e)}"
-            )
+            verbose_router_logger.error(f"Error in log_success_fallback_event: {str(e)}")
 
 
-async def log_failure_fallback_event(
-    original_model_group: str, kwargs: dict, original_exception: Exception
-):
+async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
     """
     Log a failed fallback event to all registered callbacks.
 
@@ -221,9 +207,7 @@ async def log_failure_fallback_event(
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        CustomLogger
-    )
+    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -233,9 +217,7 @@ async def log_failure_fallback_event(
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(
-                f"Error in log_failure_fallback_event: {str(e)}"
-            )
+            verbose_router_logger.error(f"Error in log_failure_fallback_event: {str(e)}")
 
 
 def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
@@ -264,7 +246,5 @@ def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
     return False
 
 
-def run_non_standard_fallback_format(
-    fallbacks: Union[List[str], List[Dict[str, Any]]], model_group: str
-):
+def run_non_standard_fallback_format(fallbacks: Union[List[str], List[Dict[str, Any]]], model_group: str):
     pass

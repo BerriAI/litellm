@@ -12,6 +12,7 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
+from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
     GCPIAMCredentialProvider,
     _token_cache,
@@ -169,6 +170,46 @@ def test_socket_timeouts_in_cluster_kwargs():
     kwargs = _get_redis_cluster_kwargs()
     assert "socket_timeout" in kwargs
     assert "socket_connect_timeout" in kwargs
+
+
+def test_reconnect_kwargs_in_cluster_kwargs():
+    """Health check and keepalive must survive the cluster kwarg allow-list so
+    operators can tune Redis cluster reconnection behavior via config."""
+    kwargs = _get_redis_cluster_kwargs()
+    assert "health_check_interval" in kwargs
+    assert "socket_keepalive" in kwargs
+
+
+@patch("litellm._redis.async_redis.RedisCluster")
+def test_async_cluster_sets_reconnect_defaults(mock_cluster_cls):
+    """
+    The async RedisCluster client must be built with a periodic health check and
+    TCP keepalive so a connection silently dropped by a cluster restart (e.g.
+    ElastiCache Serverless maintenance) is revalidated and reconnected before
+    reuse instead of stalling in re-initialization. Regression for LIT-4083.
+    """
+    get_redis_async_client(startup_nodes=[{"host": "cluster-node", "port": 6379}])
+
+    mock_cluster_cls.assert_called_once()
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["health_check_interval"] == REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
+    assert call_kwargs["health_check_interval"] > 0
+    assert call_kwargs["socket_keepalive"] is True
+
+
+@patch("litellm._redis.async_redis.RedisCluster")
+def test_async_cluster_reconnect_defaults_are_overridable(mock_cluster_cls):
+    """An explicit health_check_interval / socket_keepalive from config must win
+    over the built-in reconnect defaults."""
+    get_redis_async_client(
+        startup_nodes=[{"host": "cluster-node", "port": 6379}],
+        health_check_interval=7,
+        socket_keepalive=False,
+    )
+
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["health_check_interval"] == 7
+    assert call_kwargs["socket_keepalive"] is False
 
 
 def test_get_redis_async_client_with_connection_pool():

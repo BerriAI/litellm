@@ -178,9 +178,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
         model format: "azure_ai/agents/<agent_id>" or "agents/<agent_id>" or just "<agent_id>"
         """
-        agent_id = optional_params.get("agent_id") or optional_params.get(
-            "assistant_id"
-        )
+        agent_id = optional_params.get("agent_id") or optional_params.get("assistant_id")
         if agent_id:
             return agent_id
 

@@ -125,6 +125,34 @@ class EmbedResponse(BaseModel):
     model: str | None = None
 
 
+# ---------- ocr ----------
+
+
+class OcrDocument(BaseModel):
+    """A document for /v1/ocr in Mistral OCR format: a document_url for PDFs/docs
+    or an image_url for images. exclude_none on serialize drops the unset one."""
+
+    type: str
+    document_url: str | None = None
+    image_url: str | None = None
+
+
+class OcrBody(BaseModel):
+    model: str
+    document: OcrDocument
+
+
+class OcrPage(BaseModel):
+    index: int
+    markdown: str
+
+
+class OcrResponse(BaseModel):
+    object: str | None = None
+    model: str | None = None
+    pages: list[OcrPage] = []
+
+
 # ---------- spend logs ----------
 
 
@@ -216,14 +244,10 @@ class CustomPricing(BaseModel):
     def token_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """Spend for a fresh (uncached) call under these rates: the proxy's
         custom-pricing formula (prompt * input + completion * output)."""
-        assert (
-            self.input_cost_per_token is not None
-            and self.output_cost_per_token is not None
-        ), "custom pricing has no per-token rates"
-        return (
-            prompt_tokens * self.input_cost_per_token
-            + completion_tokens * self.output_cost_per_token
+        assert self.input_cost_per_token is not None and self.output_cost_per_token is not None, (
+            "custom pricing has no per-token rates"
         )
+        return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
 class ModelInfoEntry(BaseModel):

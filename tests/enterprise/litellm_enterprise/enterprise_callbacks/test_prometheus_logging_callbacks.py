@@ -607,6 +607,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_provider="openai",
         client_ip=None,
         user_agent=None,
+        requested_model=None,
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
@@ -626,6 +627,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_provider="openai",
         client_ip=None,
         user_agent=None,
+        requested_model=None,
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 

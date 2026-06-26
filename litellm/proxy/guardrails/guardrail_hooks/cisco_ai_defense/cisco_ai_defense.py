@@ -165,11 +165,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
         self.api_key: str = resolved_api_key
 
-        self.api_base: str = (
-            api_base
-            or os.environ.get("CISCO_AI_DEFENSE_API_BASE")
-            or CISCO_DEFAULT_API_BASE
-        ).rstrip("/")
+        self.api_base: str = (api_base or os.environ.get("CISCO_AI_DEFENSE_API_BASE") or CISCO_DEFAULT_API_BASE).rstrip(
+            "/"
+        )
 
         self.inspection_type: str = self._resolve_choice(
             value=inspection_type,
@@ -179,34 +177,21 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             setting_name="inspection_type",
         )
 
-        inferred = self._infer_inspection_type_from_mode(
-            kwargs.get("event_hook"), self.inspection_type
-        )
+        inferred = self._infer_inspection_type_from_mode(kwargs.get("event_hook"), self.inspection_type)
         if inferred != self.inspection_type:
             verbose_proxy_logger.info(
-                "Cisco AI Defense: inferred inspection_type=%s from "
-                "MCP-only event_hook configuration (was %s)",
+                "Cisco AI Defense: inferred inspection_type=%s from MCP-only event_hook configuration (was %s)",
                 inferred,
                 self.inspection_type,
             )
             self.inspection_type = inferred
 
         if inspect_path:
-            self.inspect_path = (
-                inspect_path if inspect_path.startswith("/") else f"/{inspect_path}"
-            )
+            self.inspect_path = inspect_path if inspect_path.startswith("/") else f"/{inspect_path}"
         else:
-            self.inspect_path = (
-                CISCO_MCP_INSPECT_PATH
-                if self.inspection_type == "mcp"
-                else CISCO_CHAT_INSPECT_PATH
-            )
+            self.inspect_path = CISCO_MCP_INSPECT_PATH if self.inspection_type == "mcp" else CISCO_CHAT_INSPECT_PATH
 
-        self.enabled_rules = (
-            [self._normalize_rule(rule) for rule in enabled_rules]
-            if enabled_rules
-            else None
-        )
+        self.enabled_rules = [self._normalize_rule(rule) for rule in enabled_rules] if enabled_rules else None
         self.integration_profile_id = integration_profile_id
         self.integration_profile_version = integration_profile_version
         self.integration_tenant_id = integration_tenant_id
@@ -233,18 +218,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             resolved_timeout = self._coerce_timeout(timeout)
         else:
             env_timeout = os.environ.get("CISCO_AI_DEFENSE_TIMEOUT")
-            resolved_timeout = (
-                self._coerce_timeout(env_timeout) if env_timeout is not None else None
-            )
-        self.timeout: float = (
-            resolved_timeout
-            if resolved_timeout is not None
-            else DEFAULT_TIMEOUT_SECONDS
-        )
+            resolved_timeout = self._coerce_timeout(env_timeout) if env_timeout is not None else None
+        self.timeout: float = resolved_timeout if resolved_timeout is not None else DEFAULT_TIMEOUT_SECONDS
 
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # Register broadly; runtime filtering happens in ``_surface_matches``.
         supported_event_hooks = [
@@ -295,8 +272,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if candidate in allowed:
             return candidate
         verbose_proxy_logger.warning(
-            "Cisco AI Defense guardrail: invalid value '%s' for %s, falling "
-            "back to default '%s'. Allowed values: %s",
+            "Cisco AI Defense guardrail: invalid value '%s' for %s, falling back to default '%s'. Allowed values: %s",
             candidate,
             setting_name,
             default,
@@ -310,8 +286,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             parsed = float(value)
         except (TypeError, ValueError):
             verbose_proxy_logger.warning(
-                "Cisco AI Defense guardrail: invalid timeout value '%s', "
-                "using default %ss",
+                "Cisco AI Defense guardrail: invalid timeout value '%s', using default %ss",
                 value,
                 DEFAULT_TIMEOUT_SECONDS,
             )
@@ -354,29 +329,23 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         if not self._surface_matches(is_mcp):
             verbose_proxy_logger.debug(
-                "Cisco AI Defense guardrail: call_type=%s does not match "
-                "configured inspection_type=%s, skipping",
+                "Cisco AI Defense guardrail: call_type=%s does not match configured inspection_type=%s, skipping",
                 call_type,
                 self.inspection_type,
             )
             return data
 
-        event_type = (
-            GuardrailEventHooks.pre_mcp_call if is_mcp else GuardrailEventHooks.pre_call
-        )
+        event_type = GuardrailEventHooks.pre_mcp_call if is_mcp else GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
         if is_mcp:
-            await self._inspect_mcp_request(
-                data=data, user_api_key_dict=user_api_key_dict
-            )
+            await self._inspect_mcp_request(data=data, user_api_key_dict=user_api_key_dict)
         else:
             messages = self._extract_inspect_messages_from_request(data)
             if not messages:
                 verbose_proxy_logger.debug(
-                    "Cisco AI Defense guardrail: no scannable messages in "
-                    "pre-call request, skipping"
+                    "Cisco AI Defense guardrail: no scannable messages in pre-call request, skipping"
                 )
                 return data
             await self._inspect_chat(
@@ -385,9 +354,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 user_api_key_dict=user_api_key_dict,
             )
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 
     @log_guardrail_information
@@ -411,18 +378,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if not self._surface_matches(is_mcp):
             return data
 
-        event_type = (
-            GuardrailEventHooks.during_mcp_call
-            if is_mcp
-            else GuardrailEventHooks.during_call
-        )
+        event_type = GuardrailEventHooks.during_mcp_call if is_mcp else GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
         if is_mcp:
-            await self._inspect_mcp_request(
-                data=data, user_api_key_dict=user_api_key_dict
-            )
+            await self._inspect_mcp_request(data=data, user_api_key_dict=user_api_key_dict)
         else:
             messages = self._extract_inspect_messages_from_request(data)
             if not messages:
@@ -433,9 +394,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 user_api_key_dict=user_api_key_dict,
             )
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 
     @log_guardrail_information
@@ -448,19 +407,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if self.inspection_type != "chat":
             return response
 
-        if (
-            self.should_run_guardrail(
-                data=data, event_type=GuardrailEventHooks.post_call
-            )
-            is not True
-        ):
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return response
 
         response_messages = self._extract_response_messages(response)
         if not response_messages:
             verbose_proxy_logger.debug(
-                "Cisco AI Defense guardrail: no response content to scan, "
-                "skipping post-call analysis"
+                "Cisco AI Defense guardrail: no response content to scan, skipping post-call analysis"
             )
             return response
 
@@ -475,9 +428,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             response_obj=response,
         )
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return response
 
     async def async_post_call_streaming_iterator_hook(
@@ -495,12 +446,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 yield chunk
             return
 
-        if (
-            self.should_run_guardrail(
-                data=request_data, event_type=GuardrailEventHooks.post_call
-            )
-            is not True
-        ):
+        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
             async for chunk in response:
                 yield chunk
             return
@@ -526,8 +472,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         if not isinstance(all_chunks[0], (ModelResponse, ModelResponseStream)):
             verbose_proxy_logger.warning(
-                "Cisco AI Defense guardrail (%s): unsupported streaming "
-                "chunk shape (%s) — failing closed.",
+                "Cisco AI Defense guardrail (%s): unsupported streaming chunk shape (%s) — failing closed.",
                 self.guardrail_name,
                 type(all_chunks[0]).__name__,
             )
@@ -551,13 +496,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         response_messages = self._extract_response_messages(assembled)
         original_stream_text = self._extract_streaming_chunk_scan_text(all_chunks)
-        assembled_text = " ".join(
-            m.get("content", "") for m in response_messages if isinstance(m, dict)
-        )
+        assembled_text = " ".join(m.get("content", "") for m in response_messages if isinstance(m, dict))
         if original_stream_text and original_stream_text not in assembled_text:
-            response_messages.append(
-                {"role": "assistant", "content": original_stream_text}
-            )
+            response_messages.append({"role": "assistant", "content": original_stream_text})
         if not response_messages:
             for chunk in all_chunks:
                 yield chunk
@@ -591,9 +532,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 exc,
             )
             error_obj = {
-                "message": (
-                    "Cisco AI Defense streaming scan failed — response withheld."
-                ),
+                "message": ("Cisco AI Defense streaming scan failed — response withheld."),
                 "type": "guardrail_scan_error",
                 "code": 500,
                 "guardrail": self.guardrail_name,
@@ -601,9 +540,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
             return
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=request_data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
         if self._streaming_content_was_modified(all_chunks, assembled):
             mock_iterator = MockResponseIterator(model_response=assembled)
@@ -613,9 +550,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
-    def _build_block_payload(
-        self, context: _ScanContext, verdict: _CiscoVerdict
-    ) -> Dict[str, Any]:
+    def _build_block_payload(self, context: _ScanContext, verdict: _CiscoVerdict) -> Dict[str, Any]:
         """Canonical block payload used across all four block paths.
 
         Same dict is the ``HTTPException.detail`` for chat / MCP request
@@ -646,25 +581,17 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         payload, so this is a near-passthrough that just adds ``code``
         / ``guardrail`` defaults for non-Cisco / unstructured details.
         """
-        error_obj: Dict[str, Any] = (
-            dict(exc.detail)
-            if isinstance(exc.detail, dict)
-            else {"message": str(exc.detail)}
-        )
+        error_obj: Dict[str, Any] = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         error_obj.setdefault("message", error_obj.get("error", "Guardrail block"))
         error_obj.setdefault("code", exc.status_code)
         error_obj.setdefault("guardrail", self.guardrail_name)
         return error_obj
 
     @classmethod
-    def _streaming_content_was_modified(
-        cls, original_chunks: List[Any], assembled: ModelResponse
-    ) -> bool:
+    def _streaming_content_was_modified(cls, original_chunks: List[Any], assembled: ModelResponse) -> bool:
         """Decide whether redact changed content or tool/function arguments."""
         original_text = cls._extract_streaming_chunk_scan_text(original_chunks)
-        assembled_text = " ".join(
-            m.get("content", "") for m in cls._extract_response_messages(assembled)
-        )
+        assembled_text = " ".join(m.get("content", "") for m in cls._extract_response_messages(assembled))
         return original_text != assembled_text
 
     @classmethod
@@ -772,9 +699,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             "action": verdict.action,
             "is_safe": verdict.is_safe,
             "severity": verdict.severity,
-            "classifications": (
-                list(verdict.classifications) if verdict.classifications else []
-            ),
+            "classifications": (list(verdict.classifications) if verdict.classifications else []),
             "rule_violations": sorted(
                 {
                     rule.get("rule_name")
@@ -800,9 +725,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 fields[target_key] = value
 
         payload = {k: v for k, v in fields.items() if v not in (None, [], "")}
-        line = "CISCO_AI_DEFENSE_DECISION " + json.dumps(
-            payload, default=str, sort_keys=True, separators=(",", ":")
-        )
+        line = "CISCO_AI_DEFENSE_DECISION " + json.dumps(payload, default=str, sort_keys=True, separators=(",", ":"))
 
         if verdict.action == _ACTION_ALLOW:
             verbose_proxy_logger.info(line)
@@ -853,9 +776,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         payload = self._build_chat_payload(messages, request_data, user_api_key_dict)
         start_time = datetime.now()
         try:
-            inspect_response = await self._post_inspection(
-                url=url, payload=payload, surface="chat"
-            )
+            inspect_response = await self._post_inspection(url=url, payload=payload, surface="chat")
         except HTTPException:
             # Re-raise; _post_inspection only raises CiscoAIDefenseGuardrailAPIError,
             # but be defensive in case downstream evolves.
@@ -926,17 +847,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             except Exception:
                 body_snippet = ""
             raise CiscoAIDefenseGuardrailAPIError(
-                f"Cisco AI Defense {surface} API returned HTTP {status_code}: "
-                f"{body_snippet}"
+                f"Cisco AI Defense {surface} API returned HTTP {status_code}: {body_snippet}"
             ) from exc
         except httpx.TimeoutException as exc:
             raise CiscoAIDefenseGuardrailAPIError(
                 f"Cisco AI Defense {surface} API call timed out after {self.timeout}s"
             ) from exc
         except httpx.RequestError as exc:
-            raise CiscoAIDefenseGuardrailAPIError(
-                f"Cisco AI Defense {surface} API request failed: {exc}"
-            ) from exc
+            raise CiscoAIDefenseGuardrailAPIError(f"Cisco AI Defense {surface} API request failed: {exc}") from exc
 
         try:
             return response.json()
@@ -1038,9 +956,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 normalized["classification"] = classification
             return normalized
 
-        raise ValueError(
-            f"Cisco AI Defense guardrail: invalid rule definition: {rule!r}"
-        )
+        raise ValueError(f"Cisco AI Defense guardrail: invalid rule definition: {rule!r}")
 
     # ------------------------------------------------------------------
     # Response processing
@@ -1078,15 +994,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         jsonrpc_error = self._extract_jsonrpc_error(inspect_response)
         if jsonrpc_error is not None:
             verbose_proxy_logger.warning(
-                "Cisco AI Defense guardrail: API returned JSON-RPC error "
-                "envelope (code=%s message=%s)",
+                "Cisco AI Defense guardrail: API returned JSON-RPC error envelope (code=%s message=%s)",
                 jsonrpc_error.get("code"),
                 jsonrpc_error.get("message"),
             )
             return self._handle_api_error(
                 CiscoAIDefenseGuardrailAPIError(
-                    f"AI Defense error code={jsonrpc_error.get('code')} "
-                    f"message={jsonrpc_error.get('message')}"
+                    f"AI Defense error code={jsonrpc_error.get('code')} message={jsonrpc_error.get('message')}"
                 ),
                 request_data=request_data,
                 start_time=start_time,
@@ -1103,11 +1017,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         # examples & SDK return `classifications` (plural). Accept both.
         classifications = (
             verdict_dict.get("classifications")
-            or (
-                [verdict_dict["classification"]]
-                if verdict_dict.get("classification")
-                else []
-            )
+            or ([verdict_dict["classification"]] if verdict_dict.get("classification") else [])
             or []
         )
         verdict = _CiscoVerdict(
@@ -1140,9 +1050,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
         else:
             logging_event_type = (
-                GuardrailEventHooks.post_call
-                if context.direction == "output"
-                else GuardrailEventHooks.pre_call
+                GuardrailEventHooks.post_call if context.direction == "output" else GuardrailEventHooks.pre_call
             )
 
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -1151,11 +1059,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 inspect_response, surface=context.surface, action=action
             ),
             request_data=request_data,
-            guardrail_status=(
-                "guardrail_intervened"
-                if action in (_ACTION_BLOCK, _ACTION_REDACT)
-                else "success"
-            ),
+            guardrail_status=("guardrail_intervened" if action in (_ACTION_BLOCK, _ACTION_REDACT) else "success"),
             start_time=start_time.timestamp(),
             end_time=end_time.timestamp(),
             duration=duration,
@@ -1171,9 +1075,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return inspect_response
 
         if action == _ACTION_REDACT:
-            redacted = self._apply_redaction(
-                request_data, response_obj, context, verdict
-            )
+            redacted = self._apply_redaction(request_data, response_obj, context, verdict)
             if redacted:
                 verbose_proxy_logger.info(
                     "Cisco AI Defense guardrail (%s): redaction applied (event_id=%s)",
@@ -1196,17 +1098,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
 
         verbose_proxy_logger.info(
-            "Cisco AI Defense guardrail (%s): violation in monitor mode — "
-            "request allowed to proceed (event_id=%s)",
+            "Cisco AI Defense guardrail (%s): violation in monitor mode — request allowed to proceed (event_id=%s)",
             context.surface,
             verdict.event_id,
         )
         return inspect_response
 
     @staticmethod
-    def _stash_verdict_on_request(
-        request_data: dict, context: _ScanContext, verdict: _CiscoVerdict
-    ) -> None:
+    def _stash_verdict_on_request(request_data: dict, context: _ScanContext, verdict: _CiscoVerdict) -> None:
         """Surface the Cisco verdict on the request metadata for observability."""
         metadata_store = request_data.setdefault("metadata", {})
         if not isinstance(metadata_store, dict):
@@ -1221,9 +1120,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             metadata_store[f"{prefix}_severity"] = verdict.severity
         if verdict.rules:
             metadata_store[f"{prefix}_rules"] = [
-                rule.get("rule_name")
-                for rule in verdict.rules
-                if isinstance(rule, dict)
+                rule.get("rule_name") for rule in verdict.rules if isinstance(rule, dict)
             ]
         if verdict.event_id:
             metadata_store[f"{prefix}_event_id"] = verdict.event_id
@@ -1307,9 +1204,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return any(key in payload for key in cls._DECISION_FIELDS)
 
     @classmethod
-    def _unwrap_verdict_envelope(
-        cls, inspect_response: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _unwrap_verdict_envelope(cls, inspect_response: Dict[str, Any]) -> Dict[str, Any]:
         """Return the dict that actually holds is_safe / action / rules.
 
         Cisco AI Defense returns the verdict at different nesting depths
@@ -1461,25 +1356,17 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         ``on_flagged_action``).
         """
         if context.surface == "mcp" and context.direction == "input":
-            return self._redact_mcp_input(
-                request_data, verdict.sanitized_text, verdict.sanitized_mcp_arguments
-            )
+            return self._redact_mcp_input(request_data, verdict.sanitized_text, verdict.sanitized_mcp_arguments)
         if context.surface == "mcp" and context.direction == "output":
             if response_obj is None:
                 return False
             if verdict.sanitized_text:
-                return self._set_mcp_tool_response_text(
-                    response_obj, verdict.sanitized_text
-                )
+                return self._set_mcp_tool_response_text(response_obj, verdict.sanitized_text)
             return False
         if context.surface == "chat" and context.direction == "input":
-            return self._redact_chat_input(
-                request_data, verdict.sanitized_text, verdict.sanitized_messages
-            )
+            return self._redact_chat_input(request_data, verdict.sanitized_text, verdict.sanitized_messages)
         if context.surface == "chat" and context.direction == "output":
-            return self._redact_chat_output(
-                response_obj, verdict.sanitized_text, verdict.sanitized_messages
-            )
+            return self._redact_chat_output(response_obj, verdict.sanitized_text, verdict.sanitized_messages)
         return False
 
     @staticmethod
@@ -1507,9 +1394,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             ):
                 if not isinstance(args_path, dict):
                     continue
-                string_keys = [
-                    key for key, value in args_path.items() if isinstance(value, str)
-                ]
+                string_keys = [key for key, value in args_path.items() if isinstance(value, str)]
                 if len(string_keys) != 1:
                     continue
                 args_path[string_keys[0]] = sanitized_text
@@ -1543,9 +1428,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 return instructions_redacted
         if sanitized_messages:
             if uses_input:
-                rewritten = self._sanitized_messages_to_responses_input(
-                    sanitized_messages
-                )
+                rewritten = self._sanitized_messages_to_responses_input(sanitized_messages)
                 if rewritten is not None:
                     request_data["input"] = rewritten
                     return True
@@ -1554,9 +1437,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return True
         if sanitized_text:
             if uses_input:
-                rewritten_input = self._rewrite_responses_input_text(
-                    request_data.get("input"), sanitized_text
-                )
+                rewritten_input = self._rewrite_responses_input_text(request_data.get("input"), sanitized_text)
                 if rewritten_input is not None:
                     request_data["input"] = rewritten_input
                     return True
@@ -1589,17 +1470,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             if instruction_text:
                 request_data["instructions"] = instruction_text
                 return True
-        if sanitized_text and not any(
-            key in request_data for key in ("input", "messages", "prompt")
-        ):
+        if sanitized_text and not any(key in request_data for key in ("input", "messages", "prompt")):
             request_data["instructions"] = sanitized_text
             return True
         return False
 
     @classmethod
-    def _instruction_text_from_messages(
-        cls, messages: List[Dict[str, Any]]
-    ) -> Optional[str]:
+    def _instruction_text_from_messages(cls, messages: List[Dict[str, Any]]) -> Optional[str]:
         for message in messages:
             if not isinstance(message, dict):
                 continue
@@ -1610,18 +1487,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return None
 
     @classmethod
-    def _non_instruction_messages(
-        cls, messages: Optional[List[Dict[str, Any]]]
-    ) -> Optional[List[Dict[str, Any]]]:
+    def _non_instruction_messages(cls, messages: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
         if messages is None:
             return None
         return [
             message
             for message in messages
-            if not (
-                isinstance(message, dict)
-                and cls._is_instruction_role(message.get("role"))
-            )
+            if not (isinstance(message, dict) and cls._is_instruction_role(message.get("role")))
         ]
 
     @staticmethod
@@ -1661,15 +1533,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         choices = getattr(response_obj, "choices", None)
         if isinstance(choices, list):
-            return self._redact_model_response_choices(
-                choices, sanitized_text, sanitized_messages
-            )
+            return self._redact_model_response_choices(choices, sanitized_text, sanitized_messages)
 
         output_items = getattr(response_obj, "output", None)
         if isinstance(output_items, list):
-            return self._redact_responses_api_output(
-                output_items, sanitized_text, sanitized_messages
-            )
+            return self._redact_responses_api_output(output_items, sanitized_text, sanitized_messages)
 
         return False
 
@@ -1689,9 +1557,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 replacement = next(msg_iter, None)
                 replacement_text = sanitized_text or "[REDACTED]"
                 if replacement is not None:
-                    text = CiscoAIDefenseGuardrail._normalize_message_content(
-                        replacement.get("content")
-                    )
+                    text = CiscoAIDefenseGuardrail._normalize_message_content(replacement.get("content"))
                     if text:
                         replacement_text = text
                         choice.message.content = text
@@ -1700,9 +1566,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     if getattr(choice.message, "content", None):
                         choice.message.content = replacement_text
                         applied = True
-                if CiscoAIDefenseGuardrail._redact_message_reasoning_fields(
-                    choice.message, replacement_text
-                ):
+                if CiscoAIDefenseGuardrail._redact_message_reasoning_fields(choice.message, replacement_text):
                     applied = True
                 CiscoAIDefenseGuardrail._clear_tool_call_arguments(choice.message)
             return applied
@@ -1715,9 +1579,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if getattr(msg, "content", None):
                     msg.content = sanitized_text
                     applied = True
-                if CiscoAIDefenseGuardrail._redact_message_reasoning_fields(
-                    msg, sanitized_text
-                ):
+                if CiscoAIDefenseGuardrail._redact_message_reasoning_fields(msg, sanitized_text):
                     applied = True
                 CiscoAIDefenseGuardrail._clear_tool_call_arguments(msg)
             return applied
@@ -1735,9 +1597,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             for message in sanitized_messages:
                 if not isinstance(message, dict):
                     continue
-                text = CiscoAIDefenseGuardrail._normalize_message_content(
-                    message.get("content")
-                )
+                text = CiscoAIDefenseGuardrail._normalize_message_content(message.get("content"))
                 if text:
                     replacement = text
                     break
@@ -1751,9 +1611,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return applied
 
     @classmethod
-    def _redact_message_reasoning_fields(
-        cls, message: object, replacement_text: str
-    ) -> bool:
+    def _redact_message_reasoning_fields(cls, message: object, replacement_text: str) -> bool:
         """Remove preserved reasoning fields and expose the sanitized text."""
         if not cls._extract_message_reasoning_parts(message):
             return False
@@ -1786,22 +1644,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _clear_tool_call_arguments(cls, message: object) -> None:
         """Clear tool-call / function-call arguments after Cisco redaction."""
-        tool_calls = (
-            message.get("tool_calls")
-            if isinstance(message, dict)
-            else getattr(message, "tool_calls", None)
-        )
+        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
         for tc in tool_calls or []:
-            fn = (
-                tc.get("function")
-                if isinstance(tc, dict)
-                else getattr(tc, "function", None)
-            )
+            fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
             cls._clear_arguments_field(fn)
         function_call = (
-            message.get("function_call")
-            if isinstance(message, dict)
-            else getattr(message, "function_call", None)
+            message.get("function_call") if isinstance(message, dict) else getattr(message, "function_call", None)
         )
         cls._clear_arguments_field(function_call)
 
@@ -1814,17 +1662,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         replacement_text: Optional[str] = sanitized_text
         if not replacement_text and sanitized_messages:
             replacement_text = " ".join(
-                self._normalize_message_content(m.get("content"))
-                for m in sanitized_messages
-                if isinstance(m, dict)
+                self._normalize_message_content(m.get("content")) for m in sanitized_messages if isinstance(m, dict)
             ).strip()
         if not replacement_text:
             return False
         applied = False
         for item in output_items:
-            content = getattr(item, "content", None) or (
-                item.get("content") if isinstance(item, dict) else None
-            )
+            content = getattr(item, "content", None) or (item.get("content") if isinstance(item, dict) else None)
             if isinstance(content, list):
                 for part in content:
                     if isinstance(part, dict):
@@ -1839,11 +1683,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                                 applied = True
                             except (AttributeError, TypeError, ValueError):
                                 continue
-            args = (
-                item.get("arguments")
-                if isinstance(item, dict)
-                else getattr(item, "arguments", None)
-            )
+            args = item.get("arguments") if isinstance(item, dict) else getattr(item, "arguments", None)
             if isinstance(args, str) and args:
                 self._clear_arguments_field(item)
                 applied = True
@@ -1866,17 +1706,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             content = m.get("content")
             if isinstance(content, str):
                 ptype = "output_text" if role == "assistant" else "input_text"
-                out.append(
-                    {"role": role, "content": [{"type": ptype, "text": content}]}
-                )
+                out.append({"role": role, "content": [{"type": ptype, "text": content}]})
             elif isinstance(content, list):
                 out.append({"role": role, "content": content})
         return out or None
 
     @staticmethod
-    def _rewrite_responses_input_text(
-        original_input: object, sanitized_text: str
-    ) -> Optional[object]:
+    def _rewrite_responses_input_text(original_input: object, sanitized_text: str) -> Optional[object]:
         """Apply ``sanitized_text`` to a Responses API ``input`` value.
 
         Handles plain string, list of message items (rewrites the last
@@ -1958,17 +1794,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
             if surface == "mcp":
-                evt = (
-                    GuardrailEventHooks.during_mcp_call
-                    if direction == "output"
-                    else GuardrailEventHooks.pre_mcp_call
-                )
+                evt = GuardrailEventHooks.during_mcp_call if direction == "output" else GuardrailEventHooks.pre_mcp_call
             else:
-                evt = (
-                    GuardrailEventHooks.post_call
-                    if direction == "output"
-                    else GuardrailEventHooks.pre_call
-                )
+                evt = GuardrailEventHooks.post_call if direction == "output" else GuardrailEventHooks.pre_call
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response={
@@ -1986,8 +1814,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         if self.fallback_on_error == "allow":
             verbose_proxy_logger.warning(
-                "Cisco AI Defense guardrail: API unavailable, proceeding "
-                "without scanning (fallback_on_error='allow')"
+                "Cisco AI Defense guardrail: API unavailable, proceeding without scanning (fallback_on_error='allow')"
             )
             return {
                 "is_safe": True,
@@ -2000,8 +1827,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             detail={
                 "error": "Cisco AI Defense guardrail unavailable",
                 "message": (
-                    "Cisco AI Defense scanning service is temporarily "
-                    "unavailable and fallback_on_error='block'"
+                    "Cisco AI Defense scanning service is temporarily unavailable and fallback_on_error='block'"
                 ),
                 "error_type": type(error).__name__,
             },
@@ -2017,9 +1843,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     # parts, ``output_text`` for assistant turns, ``summary_text`` /
     # ``reasoning_text`` for reasoning summaries that may appear in
     # conversation history).
-    _TEXT_PART_TYPES = frozenset(
-        {"text", "input_text", "output_text", "summary_text", "reasoning_text"}
-    )
+    _TEXT_PART_TYPES = frozenset({"text", "input_text", "output_text", "summary_text", "reasoning_text"})
 
     @staticmethod
     def _extract_inspect_messages_from_request(
@@ -2028,9 +1852,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         """Build {role, content} messages for the Cisco AI Defense chat API."""
         messages: List[Dict[str, str]] = []
 
-        instructions_text = CiscoAIDefenseGuardrail._normalize_message_content(
-            data.get("instructions")
-        )
+        instructions_text = CiscoAIDefenseGuardrail._normalize_message_content(data.get("instructions"))
         if instructions_text:
             messages.append({"role": "system", "content": instructions_text})
 
@@ -2042,14 +1864,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             if not role:
                 continue
             parts: List[str] = []
-            text = CiscoAIDefenseGuardrail._normalize_message_content(
-                message.get("content")
-            )
+            text = CiscoAIDefenseGuardrail._normalize_message_content(message.get("content"))
             if text:
                 parts.append(text)
-            parts.extend(
-                CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(message)
-            )
+            parts.extend(CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(message))
             if parts:
                 messages.append({"role": role, "content": " ".join(parts)})
 
@@ -2058,14 +1876,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             # message-shaped dicts (with role + nested content array), or
             # a flat list of content-part dicts. Flatten properly so the
             # scan sees every text segment, not just the top-level ones.
-            messages.extend(
-                CiscoAIDefenseGuardrail._flatten_responses_input(data.get("input"))
-            )
+            messages.extend(CiscoAIDefenseGuardrail._flatten_responses_input(data.get("input")))
 
         if not messages and data.get("prompt") is not None:
-            prompt_text = CiscoAIDefenseGuardrail._normalize_message_content(
-                data.get("prompt")
-            )
+            prompt_text = CiscoAIDefenseGuardrail._normalize_message_content(data.get("prompt"))
             if prompt_text:
                 messages.append({"role": "user", "content": prompt_text})
 
@@ -2163,24 +1977,18 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if not isinstance(part, dict):
                     continue
                 part_type = part.get("type")
-                if part_type in CiscoAIDefenseGuardrail._TEXT_PART_TYPES and part.get(
-                    "text"
-                ):
+                if part_type in CiscoAIDefenseGuardrail._TEXT_PART_TYPES and part.get("text"):
                     parts.append(str(part["text"]))
                     continue
                 nested = part.get("content")
                 if nested is not None:
-                    nested_text = CiscoAIDefenseGuardrail._normalize_message_content(
-                        nested
-                    )
+                    nested_text = CiscoAIDefenseGuardrail._normalize_message_content(nested)
                     if nested_text:
                         parts.append(nested_text)
                 for key in ("arguments", "output"):
                     value = part.get(key)
                     if value:
-                        parts.append(
-                            CiscoAIDefenseGuardrail._normalize_message_content(value)
-                        )
+                        parts.append(CiscoAIDefenseGuardrail._normalize_message_content(value))
             return " ".join(parts)
         return str(content)
 
@@ -2200,21 +2008,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if not isinstance(choice, Choices):
                     continue
                 parts: List[str] = []
-                content = CiscoAIDefenseGuardrail._normalize_message_content(
-                    getattr(choice.message, "content", None)
-                )
+                content = CiscoAIDefenseGuardrail._normalize_message_content(getattr(choice.message, "content", None))
                 if content:
                     parts.append(content)
-                parts.extend(
-                    CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(
-                        choice.message
-                    )
-                )
-                parts.extend(
-                    CiscoAIDefenseGuardrail._extract_message_reasoning_parts(
-                        choice.message
-                    )
-                )
+                parts.extend(CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(choice.message))
+                parts.extend(CiscoAIDefenseGuardrail._extract_message_reasoning_parts(choice.message))
                 if parts:
                     result.append({"role": "assistant", "content": " ".join(parts)})
             return result
@@ -2233,17 +2031,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return []
         output_parts: List[str] = []
         for item in output_items:
-            get = (
-                item.get
-                if isinstance(item, dict)
-                else (lambda k: getattr(item, k, None))
-            )
+            get = item.get if isinstance(item, dict) else (lambda k: getattr(item, k, None))
             for part in get("content") or []:
-                pget = (
-                    part.get
-                    if isinstance(part, dict)
-                    else (lambda k: getattr(part, k, None))
-                )
+                pget = part.get if isinstance(part, dict) else (lambda k: getattr(part, k, None))
                 for key in ("text", "reasoning", "thinking"):
                     value = pget(key)
                     if isinstance(value, str) and value:
@@ -2296,19 +2086,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _extract_message_tool_argument_parts(cls, message: object) -> List[str]:
         parts: List[str] = []
-        tool_calls = (
-            message.get("tool_calls")
-            if isinstance(message, dict)
-            else getattr(message, "tool_calls", None)
-        )
+        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
         for tool_call in tool_calls or []:
             args = cls._extract_tool_call_arguments(tool_call)
             if args:
                 parts.append(args)
         function_call = (
-            message.get("function_call")
-            if isinstance(message, dict)
-            else getattr(message, "function_call", None)
+            message.get("function_call") if isinstance(message, dict) else getattr(message, "function_call", None)
         )
         if function_call is not None:
             args = cls._extract_function_call_arguments(function_call)
@@ -2321,11 +2105,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         """Pull ``function.arguments`` off a tool_calls entry (dict or model)."""
         if tool_call is None:
             return None
-        function = (
-            tool_call.get("function")
-            if isinstance(tool_call, dict)
-            else getattr(tool_call, "function", None)
-        )
+        function = tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
         return CiscoAIDefenseGuardrail._extract_function_call_arguments(function)
 
     @staticmethod

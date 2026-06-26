@@ -43,11 +43,7 @@ def get_optional_params_add_message(
         "metadata": None,
     }
 
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (k in default_params and v != default_params[k])
-    }
+    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -55,9 +51,7 @@ def get_optional_params_add_message(
         if len(non_default_params.keys()) > 0:
             keys = list(non_default_params.keys())
             for k in keys:
-                if (
-                    litellm.drop_params is True and k not in supported_params
-                ):  # drop the unsupported non-default values
+                if litellm.drop_params is True and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise litellm.utils.UnsupportedParamsError(
@@ -108,11 +102,7 @@ def get_optional_params_image_gen(
         "user": None,
     }
 
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (k in default_params and v != default_params[k])
-    }
+    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -120,9 +110,7 @@ def get_optional_params_image_gen(
         if len(non_default_params.keys()) > 0:
             keys = list(non_default_params.keys())
             for k in keys:
-                if (
-                    litellm.drop_params is True and k not in supported_params
-                ):  # drop the unsupported non-default values
+                if litellm.drop_params is True and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(

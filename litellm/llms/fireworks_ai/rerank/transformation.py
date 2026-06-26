@@ -154,19 +154,11 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             "documents": optional_rerank_params["documents"],
         }
 
-        if (
-            "top_n" in optional_rerank_params
-            and optional_rerank_params["top_n"] is not None
-        ):
+        if "top_n" in optional_rerank_params and optional_rerank_params["top_n"] is not None:
             request_data["top_n"] = optional_rerank_params["top_n"]
 
-        if (
-            "return_documents" in optional_rerank_params
-            and optional_rerank_params["return_documents"] is not None
-        ):
-            request_data["return_documents"] = optional_rerank_params[
-                "return_documents"
-            ]
+        if "return_documents" in optional_rerank_params and optional_rerank_params["return_documents"] is not None:
+            request_data["return_documents"] = optional_rerank_params["return_documents"]
 
         return request_data
 
@@ -221,9 +213,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results - Fireworks AI uses "data" instead of "results"
-        _results: List[dict] | None = raw_response_json.get(
-            "data"
-        ) or raw_response_json.get("results")
+        _results: List[dict] | None = raw_response_json.get("data") or raw_response_json.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
@@ -261,11 +251,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             rerank_results.append(rerank_result)
 
         # Use model name as id if no id is provided
-        response_id = (
-            raw_response_json.get("id")
-            or raw_response_json.get("model")
-            or str(uuid.uuid4())
-        )
+        response_id = raw_response_json.get("id") or raw_response_json.get("model") or str(uuid.uuid4())
 
         return RerankResponse(
             id=response_id,

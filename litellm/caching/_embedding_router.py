@@ -27,9 +27,7 @@ def resolve_embedding_router(
     if llm_router is None:
         return None
     router_model_names: list[str] = (
-        [m["model_name"] for m in llm_model_list if "model_name" in m]
-        if llm_model_list is not None
-        else []
+        [m["model_name"] for m in llm_model_list if "model_name" in m] if llm_model_list is not None else []
     )
     if embedding_model in router_model_names:
         return llm_router

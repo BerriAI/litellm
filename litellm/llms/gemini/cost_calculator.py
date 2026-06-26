@@ -10,9 +10,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
-def cost_per_token(
-    model: str, usage: "Usage", service_tier: Optional[str] = None
-) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: "Usage", service_tier: Optional[str] = None) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 

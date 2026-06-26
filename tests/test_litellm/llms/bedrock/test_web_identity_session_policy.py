@@ -29,6 +29,7 @@ claude_platform statement are present and cover every documented
 action.
 """
 
+import base64
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -155,6 +156,78 @@ class TestClaudePlatformActionsCovered:
             "session policy must not grant aws-external-anthropic:* — "
             "the ceiling should match the documented action set"
         )
+
+
+def _make_jwt(payload: dict) -> str:
+    def _segment(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+
+    return f"{_segment({'alg': 'RS256', 'typ': 'JWT'})}.{_segment(payload)}.signature"
+
+
+class TestInvalidIdentityTokenSurfacesAudience:
+    """LIT-4026: when STS rejects the web identity token with
+    ``InvalidIdentityToken`` (the "Incorrect token audience" case), the raised
+    error must name the ``aud``/``iss`` the token actually carries so an
+    operator can diagnose the mismatch without enabling LITELLM_LOG=DEBUG on a
+    prod instance."""
+
+    _AUD = "https://guidepoint.litellm-prod.ai"
+    _ISS = "https://accounts.google.com"
+    _STS_MESSAGE = (
+        "An error occurred (InvalidIdentityToken) when calling the "
+        "AssumeRoleWithWebIdentity operation: Incorrect token audience"
+    )
+
+    def _raise_invalid_identity_token(self) -> Exception:
+        from litellm.llms.bedrock.base_aws_llm import AwsAuthError, BaseAWSLLM
+
+        token = _make_jwt({"aud": self._AUD, "iss": self._ISS, "sub": "svc-account"})
+
+        mock_sts = MagicMock()
+
+        class _InvalidIdentityTokenException(Exception):
+            pass
+
+        mock_sts.exceptions.InvalidIdentityTokenException = (
+            _InvalidIdentityTokenException
+        )
+        mock_sts.assume_role_with_web_identity.side_effect = (
+            _InvalidIdentityTokenException(self._STS_MESSAGE)
+        )
+
+        with (
+            patch("boto3.client", return_value=mock_sts),
+            patch(
+                "litellm.llms.bedrock.base_aws_llm.get_secret",
+                return_value=token,
+            ),
+            pytest.raises(AwsAuthError) as exc_info,
+        ):
+            BaseAWSLLM()._auth_with_web_identity_token(
+                aws_web_identity_token="oidc/google/" + self._AUD,
+                aws_role_name="arn:aws:iam::123456789012:role/litellm-bedrock-role",
+                aws_session_name="test-session",
+                aws_region_name="us-east-1",
+                aws_sts_endpoint=None,
+            )
+        return exc_info.value
+
+    def test_error_names_token_audience(self):
+        err = self._raise_invalid_identity_token()
+        assert self._AUD in str(err)
+
+    def test_error_names_token_issuer(self):
+        err = self._raise_invalid_identity_token()
+        assert self._ISS in str(err)
+
+    def test_error_preserves_original_sts_reason(self):
+        err = self._raise_invalid_identity_token()
+        assert "Incorrect token audience" in str(err)
+
+    def test_error_is_401(self):
+        err = self._raise_invalid_identity_token()
+        assert err.status_code == 401
 
 
 class TestPolicyTransportConditions:

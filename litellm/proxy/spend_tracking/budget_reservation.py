@@ -50,9 +50,7 @@ def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
         return set()
     entries = budget_reservation.get("entries") or []
     return {
-        entry["counter_key"]
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("counter_key") is not None
+        entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
     }
 
 
@@ -132,9 +130,7 @@ async def reserve_budget_for_request(
                     cached_spend = await _get_current_counter_value(counter=counter)
                 current_spend = cached_spend + reservation_cost
             if current_spend > counter.max_budget:
-                remaining_before_reservation = counter.max_budget - (
-                    current_spend - reservation_cost
-                )
+                remaining_before_reservation = counter.max_budget - (current_spend - reservation_cost)
                 if remaining_before_reservation > 1e-12:
                     await _resize_applied_reservation(
                         entries=applied_entries,
@@ -163,9 +159,7 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
-    input_cost = estimate_request_input_cost(
-        request_body=request_body, route=route, llm_router=llm_router
-    )
+    input_cost = estimate_request_input_cost(request_body=request_body, route=route, llm_router=llm_router)
     return {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
@@ -227,9 +221,7 @@ async def release_budget_reservation_on_cancel(
     incurred_cost = float(budget_reservation.get("input_cost") or 0.0)
     try:
         await asyncio.shield(
-            reconcile_budget_reservation(
-                budget_reservation=budget_reservation, actual_cost=incurred_cost
-            )
+            reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
         )
     except (asyncio.CancelledError, Exception):
         pass
@@ -450,20 +442,11 @@ async def _get_team_member_budget_counter(
     user_object: Optional[LiteLLM_UserTable],
     user_api_key_cache: DualCache,
 ) -> Optional[_BudgetCounter]:
-    if (
-        team_object is None
-        or team_object.team_id is None
-        or user_object is None
-        or valid_token.user_id is None
-    ):
+    if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
-    membership_cache_key = (
-        f"team_membership:{valid_token.user_id}:{team_object.team_id}"
-    )
-    cached_team_membership = await user_api_key_cache.async_get_cache(
-        key=membership_cache_key
-    )
+    membership_cache_key = f"team_membership:{valid_token.user_id}:{team_object.team_id}"
+    cached_team_membership = await user_api_key_cache.async_get_cache(key=membership_cache_key)
     team_membership: Optional[LiteLLM_TeamMembership] = None
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
         team_membership = cached_team_membership
@@ -484,11 +467,7 @@ async def _get_team_member_budget_counter(
     if team_member_budget is None or team_member_budget <= 0:
         return None
 
-    team_member_spend = (
-        cast(LiteLLM_TeamMembership, team_membership).spend
-        if team_membership is not None
-        else 0.0
-    )
+    team_member_spend = cast(LiteLLM_TeamMembership, team_membership).spend if team_membership is not None else 0.0
     return _BudgetCounter(
         counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
         source_cache_key=membership_cache_key,
@@ -609,9 +588,7 @@ async def _reserve_counter(
                 counter_key=counter.counter_key,
                 source_cache_key=counter.source_cache_key,
             )
-        elif (
-            counter.spend_log_entity_id is not None and counter.window_start is not None
-        ):
+        elif counter.spend_log_entity_id is not None and counter.window_start is not None:
             initialized = await _ensure_window_spend_counter_initialized(
                 counter_key=counter.counter_key,
                 entity_type=counter.entity_type,
@@ -723,9 +700,7 @@ async def _set_reserved_entry_actual_cost(
         # persisted, so the DB floor would discard it. Keep the original
         # fail-closed behavior (raise -> reserve_budget_for_request releases and
         # denies) rather than admitting against an inconsistent counter.
-        raise RuntimeError(
-            f"Cannot resize budget reservation against inconsistent counter {counter_key}"
-        )
+        raise RuntimeError(f"Cannot resize budget reservation against inconsistent counter {counter_key}")
     entry["applied_adjustment"] = target_adjustment
 
 
@@ -760,9 +735,7 @@ async def _release_applied_entries_best_effort(
             )
         except Exception:
             counter_key = entry.get("counter_key")
-            verbose_proxy_logger.exception(
-                "Failed to release partial budget reservation during exception cleanup"
-            )
+            verbose_proxy_logger.exception("Failed to release partial budget reservation during exception cleanup")
             if counter_key is None:
                 continue
             try:
@@ -1048,18 +1021,14 @@ def _estimate_input_tokens(
         if "input" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("input"))
         if "query" in request_body or "documents" in request_body:
-            query_tokens = _count_text_tokens(
-                model=model, text=request_body.get("query")
-            )
+            query_tokens = _count_text_tokens(model=model, text=request_body.get("query"))
             document_tokens = _count_text_tokens(
                 model=model,
                 text=request_body.get("documents"),
             )
             return query_tokens + document_tokens
     except Exception:
-        verbose_proxy_logger.debug(
-            "Unable to count input tokens for budget reservation", exc_info=True
-        )
+        verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
 
     max_input_tokens = _to_int(model_info.get("max_input_tokens"))
     if max_input_tokens is not None:
@@ -1093,10 +1062,7 @@ def _estimate_output_tokens(
     #     the reservation up to remaining team headroom and pin the counter
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
-    model_ceiling = (
-        _to_int(model_info.get("max_output_tokens"))
-        or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
-    )
+    model_ceiling = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
     if requested is None:
         requested = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
     return min(requested, model_ceiling)

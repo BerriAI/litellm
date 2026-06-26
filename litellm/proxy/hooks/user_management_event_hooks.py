@@ -62,9 +62,7 @@ class UserManagementEventHooks:
                 where={"user_id": response.user_id}
             )
 
-            user_row_litellm_typed = LiteLLM_UserTable(
-                **user_row.model_dump(exclude_none=True)
-            )
+            user_row_litellm_typed = LiteLLM_UserTable(**user_row.model_dump(exclude_none=True))
             asyncio.create_task(
                 UserManagementEventHooks.create_internal_user_audit_log(
                     user_id=user_row_litellm_typed.user_id,
@@ -73,15 +71,11 @@ class UserManagementEventHooks:
                     user_api_key_dict=user_api_key_dict,
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     before_value=None,
-                    after_value=user_row_litellm_typed.model_dump_json(
-                        exclude_none=True
-                    ),
+                    after_value=user_row_litellm_typed.model_dump_json(exclude_none=True),
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.warning(
-                "Unable to create audit log for user on `/user/new` - {}".format(str(e))
-            )
+            verbose_proxy_logger.warning("Unable to create audit log for user on `/user/new` - {}".format(str(e)))
         pass
 
     @staticmethod
@@ -117,16 +111,13 @@ class UserManagementEventHooks:
             use_enterprise_email_hooks = True
         except ImportError:
             verbose_proxy_logger.warning(
-                "Defaulting to using Legacy Email Hooks."
-                + CommonProxyErrors.missing_enterprise_package.value
+                "Defaulting to using Legacy Email Hooks." + CommonProxyErrors.missing_enterprise_package.value
             )
             use_enterprise_email_hooks = False
 
         if use_enterprise_email_hooks and (data.send_invite_email is True):
-            initialized_email_loggers = (
-                litellm.logging_callback_manager.get_custom_loggers_for_type(
-                    callback_type=BaseEmailLogger  # type: ignore
-                )
+            initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger  # type: ignore
             )
             if len(initialized_email_loggers) > 0:
                 for email_logger in initialized_email_loggers:

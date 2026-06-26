@@ -49,8 +49,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         if not api_key:
             raise ValueError(
-                "OpenRouter API key is required. Set OPENROUTER_API_KEY "
-                "environment variable or pass api_key parameter."
+                "OpenRouter API key is required. Set OPENROUTER_API_KEY environment variable or pass api_key parameter."
             )
 
         headers.update(
@@ -66,10 +65,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: dict,
     ) -> str:
         api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("OPENROUTER_API_BASE")
-            or "https://openrouter.ai/api/v1"
+            api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
         )
 
         api_base = api_base.rstrip("/")

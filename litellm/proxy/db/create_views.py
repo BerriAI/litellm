@@ -154,9 +154,7 @@ async def create_missing_views(db: _db):
 
         verbose_logger.debug("MonthlyGlobalSpendPerKey Created!")
     try:
-        await db.query_raw(
-            """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
-        )
+        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
     except Exception as e:
         error_msg = str(e).lower()

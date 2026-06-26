@@ -103,9 +103,7 @@ class GenerateContentHelper:
         Returns:
             GenerateContentSetupResult containing all setup information
         """
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
-            "litellm_logging_obj"
-        )
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
 
         # get llm provider logic
@@ -135,11 +133,11 @@ class GenerateContentHelper:
             litellm_params.custom_llm_provider = custom_llm_provider
 
         # get provider config
-        generate_content_provider_config: Optional[
-            BaseGoogleGenAIGenerateContentConfig
-        ] = ProviderConfigManager.get_provider_google_genai_generate_content_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        generate_content_provider_config: Optional[BaseGoogleGenAIGenerateContentConfig] = (
+            ProviderConfigManager.get_provider_google_genai_generate_content_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if generate_content_provider_config is None:
@@ -163,30 +161,24 @@ class GenerateContentHelper:
         # Construct request body
         #########################################################################################
         # Create Google Optional Params Config
-        generate_content_config_dict = (
-            generate_content_provider_config.map_generate_content_optional_params(
-                generate_content_config_dict=config or {},
-                model=model,
-            )
+        generate_content_config_dict = generate_content_provider_config.map_generate_content_optional_params(
+            generate_content_config_dict=config or {},
+            model=model,
         )
         # Extract systemInstruction from kwargs to pass to transform
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
         # Native top-level REST fields arrive as loose kwargs and are otherwise dropped.
         native_request_fields: dict[str, object] = {
             field: kwargs[field]
             for field in generate_content_provider_config.get_generate_content_request_top_level_fields()
             if field in kwargs
         }
-        request_body = (
-            generate_content_provider_config.transform_generate_content_request(
-                model=model,
-                contents=contents,
-                tools=tools,
-                generate_content_config_dict=generate_content_config_dict,
-                system_instruction=system_instruction,
-            )
+        request_body = generate_content_provider_config.transform_generate_content_request(
+            model=model,
+            contents=contents,
+            tools=tools,
+            generate_content_config_dict=generate_content_config_dict,
+            system_instruction=system_instruction,
         )
 
         # Pre Call logging
@@ -328,12 +320,8 @@ def generate_content(
             config = kwargs.pop("generationConfig")
         # Check for mock response first
         litellm_params = GenericLiteLLMParams(**kwargs)
-        if litellm_params.mock_response and isinstance(
-            litellm_params.mock_response, str
-        ):
-            return GenerateContentHelper.mock_generate_content_response(
-                mock_response=litellm_params.mock_response
-            )
+        if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
+            return GenerateContentHelper.mock_generate_content_response(mock_response=litellm_params.mock_response)
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
@@ -346,9 +334,7 @@ def generate_content(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -375,9 +361,7 @@ def generate_content(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=_merge_native_request_fields(
-                setup_result.native_request_fields, extra_body
-            ),
+            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
@@ -439,9 +423,7 @@ async def agenerate_content_stream(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -449,17 +431,15 @@ async def agenerate_content_stream(
                 kwargs.pop("stream", None)
 
             # Use the adapter to convert to completion format
-            return (
-                await GenerateContentToCompletionHandler.async_generate_content_handler(
-                    model=model,
-                    contents=contents,  # type: ignore
-                    config=setup_result.generate_content_config_dict,
-                    litellm_params=setup_result.litellm_params,
-                    tools=tools,
-                    stream=True,
-                    extra_headers=extra_headers,
-                    **kwargs,
-                )
+            return await GenerateContentToCompletionHandler.async_generate_content_handler(
+                model=model,
+                contents=contents,  # type: ignore
+                config=setup_result.generate_content_config_dict,
+                litellm_params=setup_result.litellm_params,
+                tools=tools,
+                stream=True,
+                extra_headers=extra_headers,
+                **kwargs,
             )
 
         # Call the handler with async enabled and streaming
@@ -474,9 +454,7 @@ async def agenerate_content_stream(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=_merge_native_request_fields(
-                setup_result.native_request_fields, extra_body
-            ),
+            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
             timeout=timeout or request_timeout,
             _is_async=True,
             client=kwargs.get("client"),
@@ -533,9 +511,7 @@ def generate_content_stream(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -565,9 +541,7 @@ def generate_content_stream(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=_merge_native_request_fields(
-                setup_result.native_request_fields, extra_body
-            ),
+            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),

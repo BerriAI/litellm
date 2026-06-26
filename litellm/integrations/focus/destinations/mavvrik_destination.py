@@ -41,14 +41,9 @@ def _validate_api_endpoint(api_endpoint: str) -> None:
 def _validate_gcs_url(url: str, label: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme != "https":
-        raise ValueError(
-            f"Mavvrik FOCUS destination: {label} must be HTTPS, got scheme '{parsed.scheme}'"
-        )
+        raise ValueError(f"Mavvrik FOCUS destination: {label} must be HTTPS, got scheme '{parsed.scheme}'")
     hostname = (parsed.hostname or "").lower()
-    if not (
-        hostname == "storage.googleapis.com"
-        or hostname.endswith(".storage.googleapis.com")
-    ):
+    if not (hostname == "storage.googleapis.com" or hostname.endswith(".storage.googleapis.com")):
         raise ValueError(
             f"Mavvrik FOCUS destination: {label} must be a GCS endpoint (storage.googleapis.com), got '{hostname}'"
         )
@@ -90,9 +85,7 @@ class FocusMavvrikDestination(FocusDestination):
         self.api_endpoint = api_endpoint.rstrip("/")
         self.connection_id = connection_id
         self.prefix = prefix
-        self._http: AsyncHTTPHandler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self._http: AsyncHTTPHandler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self._registered = False
 
     @property
@@ -132,9 +125,7 @@ class FocusMavvrikDestination(FocusDestination):
                 "Re-enable the connection in the Mavvrik dashboard."
             )
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}"
-            )
+            raise RuntimeError(f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}")
         self._registered = True
         metrics_marker = resp.json().get("metricsMarker", 0)
         verbose_logger.debug(
@@ -159,13 +150,9 @@ class FocusMavvrikDestination(FocusDestination):
             )
         signed_url = resp.json().get("url")
         if not signed_url:
-            raise RuntimeError(
-                f"Mavvrik FOCUS destination: response missing 'url' field: {resp.json()}"
-            )
+            raise RuntimeError(f"Mavvrik FOCUS destination: response missing 'url' field: {resp.json()}")
         _validate_gcs_url(signed_url, "signed URL")
-        verbose_logger.debug(
-            "Mavvrik FOCUS destination: got signed URL for date %s", date_str
-        )
+        verbose_logger.debug("Mavvrik FOCUS destination: got signed URL for date %s", date_str)
         return signed_url
 
     async def _upload_to_gcs(self, signed_url: str, content: bytes) -> None:
@@ -205,9 +192,7 @@ class FocusMavvrikDestination(FocusDestination):
 
         session_uri = init_resp.headers.get("Location")
         if not session_uri:
-            raise RuntimeError(
-                "Mavvrik FOCUS destination: GCS session init missing Location header"
-            )
+            raise RuntimeError("Mavvrik FOCUS destination: GCS session init missing Location header")
         _validate_gcs_url(session_uri, "session URI")
 
         verbose_logger.debug(
@@ -224,11 +209,7 @@ class FocusMavvrikDestination(FocusDestination):
                 chunk = gzip_bytes[offset : offset + _GCS_CHUNK_SIZE]
                 chunk_end = offset + len(chunk) - 1
                 is_final = (offset + len(chunk)) >= total
-                content_range = (
-                    f"bytes {offset}-{chunk_end}/{total}"
-                    if is_final
-                    else f"bytes {offset}-{chunk_end}/*"
-                )
+                content_range = f"bytes {offset}-{chunk_end}/{total}" if is_final else f"bytes {offset}-{chunk_end}/*"
                 expected_statuses = {200, 201} if is_final else {308}
 
                 resp = await self._http.client.request(
@@ -256,12 +237,8 @@ class FocusMavvrikDestination(FocusDestination):
         except Exception:
             # Cancel the open GCS session so it doesn't linger for up to 1 week.
             try:
-                await self._http.client.request(
-                    method="DELETE", url=session_uri, timeout=10.0
-                )
-                verbose_logger.debug(
-                    "Mavvrik FOCUS destination: cancelled GCS session after error"
-                )
+                await self._http.client.request(method="DELETE", url=session_uri, timeout=10.0)
+                verbose_logger.debug("Mavvrik FOCUS destination: cancelled GCS session after error")
             except Exception:
                 pass
             raise
@@ -283,12 +260,9 @@ class FocusMavvrikDestination(FocusDestination):
             )
         if resp.status_code >= 400:
             raise RuntimeError(
-                f"Mavvrik FOCUS destination: failed to update metricsMarker "
-                f"({resp.status_code}): {resp.text[:200]}"
+                f"Mavvrik FOCUS destination: failed to update metricsMarker ({resp.status_code}): {resp.text[:200]}"
             )
-        verbose_logger.debug(
-            "Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch
-        )
+        verbose_logger.debug("Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch)
 
     async def get_metrics_marker(self) -> Optional[int]:
         """Register with Mavvrik and return the current metricsMarker.
@@ -311,14 +285,10 @@ class FocusMavvrikDestination(FocusDestination):
                 "Re-enable the connection in the Mavvrik dashboard."
             )
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}"
-            )
+            raise RuntimeError(f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}")
         self._registered = True
         metrics_marker = resp.json().get("metricsMarker", 0)
-        verbose_logger.debug(
-            "Mavvrik FOCUS destination: got metricsMarker=%s", metrics_marker
-        )
+        verbose_logger.debug("Mavvrik FOCUS destination: got metricsMarker=%s", metrics_marker)
         return metrics_marker
 
     async def deliver(
@@ -356,6 +326,4 @@ class FocusMavvrikDestination(FocusDestination):
         await self._upload_to_gcs(signed_url, content)
         await self._update_metrics_marker(date_epoch)
 
-        verbose_logger.debug(
-            "Mavvrik FOCUS destination: upload complete for date=%s", date_str
-        )
+        verbose_logger.debug("Mavvrik FOCUS destination: upload complete for date=%s", date_str)

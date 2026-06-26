@@ -95,6 +95,31 @@ export const useTeams = (): UseQueryResult<Team[]> => {
   });
 };
 
+const ALL_TEAMS_PAGE_SIZE = 100;
+
+const fetchAllTeamsPaged = async (accessToken: string): Promise<Team[]> => {
+  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE);
+  const totalPages = firstPage.total_pages ?? 1;
+  if (totalPages <= 1) return firstPage.teams;
+
+  const remainingPages: TeamsResponse[] = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE)),
+  );
+  return [firstPage, ...remainingPages].flatMap((page) => page.teams);
+};
+
+export const useAllTeams = (): UseQueryResult<Team[]> => {
+  const { accessToken } = useAuthorized();
+  return useQuery<Team[]>({
+    queryKey: teamKeys.list({
+      filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE, accessToken: accessToken ?? "" },
+    }),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!),
+    enabled: Boolean(accessToken),
+    staleTime: 30000,
+  });
+};
+
 export const useTeam = (teamId?: string) => {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();

@@ -3,20 +3,22 @@
 
 basedpyright's ``--outputjson`` is reduced to a count of errors per *rule*
 (``reportAny``, ``reportArgumentType``, ...) and checked against a committed
-budget of the form ``{rule: {baseline, slack}}``, the same shape as
+budget of the form ``{rule: {limit}}``, the same shape as
 ``ruff-strict-budget.json``. A rule fails only when its codebase-wide total is
-both over its ceiling (``baseline + slack``) *and* higher than the count on the
-base it merges into, so a change is blamed for the errors it adds, never for
-drift that already sits in the base. That ``> base`` guard is what stops an
-unrelated PR from inheriting a red once two PRs each land near the ceiling and
-their sum crosses it: the bystander's count equals its base, so it is spared,
-while any PR that actually grows the rule past the cap still fails.
+both over its ``limit`` *and* higher than the count on the base it merges into,
+so a change is blamed for the errors it adds, never for drift that already sits
+in the base. That ``> base`` guard is what stops an unrelated PR from inheriting
+a red once two PRs each land near the limit and their sum crosses it: the
+bystander's count equals its base, so it is spared, while any PR that actually
+grows the rule past its limit still fails.
 
 Head counts are read from stdin (the caller runs basedpyright once and pipes
 ``--outputjson`` in); the base count is a second basedpyright pass over a
 detached worktree at the merge-base, run under the same environment so import
-resolution matches. ``--update`` re-captures the absolute per-rule baselines for
-the ratchet, preserving each rule's slack.
+resolution matches. ``--update`` ratchets each rule's ``limit`` down by the
+number of errors this branch fixed relative to its branch point (the merge-base),
+so the headroom you were granted shrinks by exactly what you cleared and never
+grows.
 
 ``--outputjson`` is used rather than text diagnostics because the latter wrap
 across lines, leaving the ``(reportRule)`` on a continuation line away from the
@@ -44,10 +46,10 @@ DEFAULT_BASE = "origin/litellm_internal_staging"
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
 
-# Ceiling for a rule that shows up at HEAD but isn't in the budget at all -- a
-# brand-new error category (new construct, or a tool/version change). baseline
-# is treated as 0, so the rule fails once it clears this much slack.
-DEFAULT_SLACK = 10
+# Limit for a rule that shows up at HEAD but isn't in the budget at all -- a
+# brand-new error category (new construct, or a tool/version change). The rule
+# fails once it clears this many errors.
+DEFAULT_LIMIT = 10
 
 
 class Breach(NamedTuple):
@@ -57,18 +59,11 @@ class Breach(NamedTuple):
     added: int
 
 
-def _seed_slack(baseline: int) -> int:
-    """Slack written for a rule first captured into a budget; busy rules get
-    more headroom, mirroring the tiering in ruff-strict-budget.json. Existing
-    rules keep whatever slack their JSON already declares."""
-    return 10 if baseline >= 50 else 3
-
-
 def _to_relative(raw: str, root: Path) -> str | None:
     path = Path(raw)
     absolute = path if path.is_absolute() else root / path
     try:
-        return absolute.resolve().relative_to(root).as_posix()
+        return absolute.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return None
 
@@ -142,7 +137,7 @@ def evaluate(
     breaches = []
     for code, total in head.items():
         spec = budget.get(code)
-        cap = spec["baseline"] + spec["slack"] if spec else DEFAULT_SLACK
+        cap = spec["limit"] if spec else DEFAULT_LIMIT
         prior = base.get(code, 0)
         if total > cap and total > prior:
             breaches.append(Breach(code, total, cap, total - prior))
@@ -155,24 +150,47 @@ def is_vacuous_run(
     """True when nothing was parsed but the budget expects errors -- the
     signature of a type checker that crashed or produced no output. The CI pipe
     swallows the tool's exit code (`tool || true`), so without this guard an
-    empty run would clear every ceiling and pass silently."""
-    return not counts and any(spec["baseline"] for spec in budget.values())
+    empty run would clear every limit and pass silently."""
+    return not counts and any(spec["limit"] for spec in budget.values())
 
 
-def cmd_update(counts: Mapping[str, int]) -> None:
-    existing = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
-    budget = {
+def ratcheted_budget(
+    budget: Mapping[str, Mapping[str, int]],
+    current: Mapping[str, int],
+    base: Mapping[str, int],
+) -> dict[str, dict[str, int]]:
+    """Each rule's limit lowered by the errors `current` fixed vs `base`.
+
+    `base` is the count at the branch point (the commit this branch diverged
+    from). The drop is clamped to what was actually cleared (a rule that grew
+    stays put), so the limit only ever falls. Rules absent from the budget are
+    dropped: a genuinely new error category is added to the JSON deliberately,
+    not on update.
+    """
+    return {
         code: {
-            "baseline": count,
-            "slack": (
-                existing[code]["slack"] if code in existing else _seed_slack(count)
-            ),
+            "limit": max(0, spec["limit"] - max(0, base.get(code, 0) - current.get(code, 0)))
         }
-        for code, count in sorted(counts.items())
+        for code, spec in sorted(budget.items())
     }
-    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+
+
+def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None:
+    """Ratchet each rule's limit down by the errors this branch fixed.
+
+    `current` is the working-tree count (piped in); the reference count comes
+    from a second basedpyright pass over a detached worktree at the branch point
+    (the merge-base with `base_ref`), so a branch's fixes tighten its own ceilings
+    by exactly what they cleared since it diverged, and limits never rise.
+    """
+    budget = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
+    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    updated = ratcheted_budget(budget, current, base_counts(base_point))
+    BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
+    cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
     print(
-        f"Re-captured basedpyright per-rule budget: {len(budget)} rules, {sum(counts.values())} errors total"
+        f"Ratcheted basedpyright limits down by {cleared} errors this branch fixed "
+        f"across {len(updated)} rules"
     )
 
 
@@ -180,10 +198,10 @@ def cmd_check(base_ref: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
     head = count_basedpyright(sys.stdin.read())
     if is_vacuous_run(head, budget):
-        expected = sum(spec["baseline"] for spec in budget.values())
+        expected = sum(spec["limit"] for spec in budget.values())
         print(
-            f"FAIL: basedpyright produced no errors, but {BUDGET_PATH.name} expects "
-            f"~{expected}. The type checker almost certainly crashed or emitted "
+            f"FAIL: basedpyright produced no errors, but {BUDGET_PATH.name} allows "
+            f"up to ~{expected}. The type checker almost certainly crashed or emitted "
             f"nothing; refusing to certify a vacuous run."
         )
         raise SystemExit(1)
@@ -199,17 +217,17 @@ def cmd_check(base_ref: str) -> None:
     breaches = evaluate(head, base, budget)
     if not breaches:
         print(
-            f"OK: every rule is within its basedpyright ceiling or no higher than base ({sum(head.values())} errors total)"
+            f"OK: every rule is within its basedpyright limit or no higher than base ({sum(head.values())} errors total)"
         )
         return
-    print("FAIL: basedpyright errors exceed the per-rule ceiling:")
+    print("FAIL: basedpyright errors exceed the per-rule limit:")
     for breach in breaches:
         print(
-            f"  {breach.code}: total {breach.total} over cap {breach.cap} (this change added {breach.added})"
+            f"  {breach.code}: total {breach.total} over limit {breach.cap} (this change added {breach.added})"
         )
     print(
         "Reduce the new errors or remove an equal number elsewhere; the ceiling is "
-        "baseline + slack in basedpyright-code-budget.json."
+        "the limit in basedpyright-code-budget.json."
     )
     summary = "; ".join(f"{b.code} {b.total}/{b.cap} (+{b.added})" for b in breaches)
     print(f"BREACHED RULES: {summary}")
@@ -222,7 +240,7 @@ def main() -> None:
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
     if args.update:
-        cmd_update(count_basedpyright(sys.stdin.read()))
+        cmd_update(count_basedpyright(sys.stdin.read()), args.base)
     else:
         cmd_check(args.base)
 
