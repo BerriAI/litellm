@@ -1,6 +1,6 @@
 import importlib
 import os
-from typing import TYPE_CHECKING, Dict, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes
@@ -15,7 +15,10 @@ if TYPE_CHECKING:
 
 
 def get_cost_for_web_search_request(
-    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo"
+    custom_llm_provider: str,
+    usage: "Usage",
+    model_info: "ModelInfo",
+    response_object: Optional[Any] = None,
 ) -> Optional[float]:
     """
     Get the cost for a web search request for a given model.
@@ -24,6 +27,8 @@ def get_cost_for_web_search_request(
         custom_llm_provider: The custom LLM provider.
         usage: The usage object.
         model_info: The model info.
+        response_object: The full response object (used by providers that encode
+            web-search call counts in the output rather than in usage fields).
     """
     if custom_llm_provider == "gemini":
         from .gemini.cost_calculator import cost_per_web_search_request
@@ -59,6 +64,12 @@ def get_cost_for_web_search_request(
         from .xai.cost_calculator import cost_per_web_search_request
 
         return cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "openai":
+        from .openai.cost_calculation import cost_per_web_search_request as openai_cost_per_web_search_request
+
+        return openai_cost_per_web_search_request(
+            response_object=response_object, model_info=model_info
+        )
     else:
         return None
 

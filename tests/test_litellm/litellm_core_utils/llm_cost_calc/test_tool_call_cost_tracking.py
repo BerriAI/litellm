@@ -324,3 +324,101 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+# Regression tests: gpt-5 web search cost via Responses API (issue #31316)
+
+
+@pytest.fixture(autouse=False)
+def local_cost_map():
+    """Load model costs from the local JSON file, not the remote CDN."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    yield
+    del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
+
+
+def _make_responses_api_response(web_search_call_count: int) -> "ResponsesAPIResponse":
+    """Construct a ResponsesAPIResponse with N web_search_call output items."""
+    from types import SimpleNamespace
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    output = [SimpleNamespace(type="web_search_call") for _ in range(web_search_call_count)]
+    output.append(SimpleNamespace(type="message"))
+    return ResponsesAPIResponse.model_construct(
+        id="resp_test",
+        created_at=1234567890,
+        status="completed",
+        model="gpt-5",
+        object="response",
+        output=output,
+    )
+
+
+def test_gpt5_has_search_context_cost_per_query(local_cost_map):
+    """gpt-5 model info must include search_context_cost_per_query after the fix."""
+    model_info = litellm.get_model_info("gpt-5")
+    assert model_info.get("search_context_cost_per_query") is not None, (
+        "gpt-5 is missing search_context_cost_per_query; web search via Responses API will be billed at $0"
+    )
+    assert model_info["search_context_cost_per_query"]["search_context_size_medium"] == 0.01
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "gpt-5.5"])
+def test_gpt5_family_has_search_context_cost(model, local_cost_map):
+    """All main gpt-5 family models must carry web-search pricing."""
+    model_info = litellm.get_model_info(model)
+    pricing = model_info.get("search_context_cost_per_query")
+    assert pricing is not None, f"{model} missing search_context_cost_per_query"
+    assert pricing.get("search_context_size_medium", 0) > 0, (
+        f"{model} search_context_size_medium must be positive"
+    )
+
+
+def test_openai_responses_api_single_web_search_cost(local_cost_map):
+    """A single web_search_call in a gpt-5 Responses API response costs $0.01."""
+    response = _make_responses_api_response(web_search_call_count=1)
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        custom_llm_provider="openai",
+        usage=None,
+        response_object=response,
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(0.01), f"Expected $0.01 for 1 web search, got ${cost}"
+
+
+def test_openai_responses_api_multiple_web_search_cost(local_cost_map):
+    """N web_search_call items in a gpt-5 Responses API response cost N * $0.01."""
+    response = _make_responses_api_response(web_search_call_count=4)
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        custom_llm_provider="openai",
+        usage=None,
+        response_object=response,
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(0.04), f"Expected $0.04 for 4 web searches, got ${cost}"
+
+
+def test_openai_chat_completion_no_false_positive():
+    """A ModelResponse (chat completion) without url_citation annotations must not bill web search."""
+    from litellm.types.utils import Choices, Message
+
+    response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[
+            Choices(finish_reason="stop", index=0, message=Message(content="hi", role="assistant"))
+        ],
+        created=1234567890,
+        model="gpt-5",
+        object="chat.completion",
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        custom_llm_provider="openai",
+        usage=None,
+        response_object=response,
+        standard_built_in_tools_params=None,
+    )
+    assert cost == 0.0, f"Chat completion without web search should cost $0, got ${cost}"
