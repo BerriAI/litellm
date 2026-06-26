@@ -1308,17 +1308,30 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
-    def _trusted(self, **creds) -> dict:
+    def _trusted(self, **deployment_litellm_params) -> dict:
+        """Build the trusted snapshot the way the proxy does: deployment
+        litellm_params funneled through ``CredentialLiteLLMParams`` (the strict
+        allowlist ``get_deployment_credentials_with_provider`` applies) before
+        retrieval ever sees them. Injecting a raw ``MappingProxyType`` would
+        bypass that filter and hide whether a bucket field actually survives
+        into the snapshot in production."""
         from types import MappingProxyType
 
+        from litellm.types.router import CredentialLiteLLMParams
+
+        snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
+            exclude_none=True
+        )
         params = self._litellm_params()
-        params["_litellm_internal_model_credentials"] = MappingProxyType(dict(creds))
+        params["_litellm_internal_model_credentials"] = MappingProxyType(snapshot)
         return params
 
     def test_retrieves_from_distinct_output_bucket(self, monkeypatch):
         """Batch outputs can land in a separate s3_output_bucket_name. Retrieval
         must validate the file id against the output bucket too, not just the
-        input bucket, or the very outputs the feature serves are unreachable."""
+        input bucket, or the very outputs the feature serves are unreachable.
+        The snapshot is built through the production credential filter, so this
+        fails if s3_output_bucket_name is dropped from that allowlist."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
