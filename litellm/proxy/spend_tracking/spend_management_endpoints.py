@@ -2305,9 +2305,7 @@ async def ui_view_request_response_for_request_id(
             request_id=request_id,
         )
 
-    custom_loggers = (
-        litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
-    )
+    custom_loggers = litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     start_date_obj: datetime | None = None
     end_date_obj: datetime | None = None
     if start_date is not None:
