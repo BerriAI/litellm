@@ -1761,6 +1761,9 @@ class NewTeamRequest(TeamBase):
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
+    team_member_soft_budget: Optional[float] = (
+        None  # allow user to set a soft (alert-only) budget for all team members
+    )
     team_member_rpm_limit: Optional[int] = (
         None  # allow user to set RPM limit for all team members
     )
@@ -1818,6 +1821,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
+    team_member_soft_budget: Optional[float] = None
     team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None

@@ -221,6 +221,7 @@ class TeamMemberBudgetHandler:
     @staticmethod
     def should_create_budget(
         team_member_budget: Optional[float] = None,
+        team_member_soft_budget: Optional[float] = None,
         team_member_rpm_limit: Optional[int] = None,
         team_member_tpm_limit: Optional[int] = None,
         team_member_budget_duration: Optional[str] = None,
@@ -229,6 +230,7 @@ class TeamMemberBudgetHandler:
         return any(
             [
                 team_member_budget is not None,
+                team_member_soft_budget is not None,
                 team_member_rpm_limit is not None,
                 team_member_tpm_limit is not None,
                 team_member_budget_duration is not None,
@@ -241,6 +243,7 @@ class TeamMemberBudgetHandler:
         new_team_data_json: dict,
         user_api_key_dict: UserAPIKeyAuth,
         team_member_budget: Optional[float] = None,
+        team_member_soft_budget: Optional[float] = None,
         team_member_rpm_limit: Optional[int] = None,
         team_member_tpm_limit: Optional[int] = None,
         team_member_budget_duration: Optional[str] = None,
@@ -266,6 +269,8 @@ class TeamMemberBudgetHandler:
 
         if team_member_budget is not None:
             budget_request.max_budget = team_member_budget
+        if team_member_soft_budget is not None:
+            budget_request.soft_budget = team_member_soft_budget
         if team_member_rpm_limit is not None:
             budget_request.rpm_limit = team_member_rpm_limit
         if team_member_tpm_limit is not None:
@@ -296,6 +301,7 @@ class TeamMemberBudgetHandler:
         user_api_key_dict: UserAPIKeyAuth,
         updated_kv: dict,
         team_member_budget: Optional[float] = None,
+        team_member_soft_budget: Optional[float] = None,
         team_member_rpm_limit: Optional[int] = None,
         team_member_tpm_limit: Optional[int] = None,
         team_member_budget_duration: Optional[str] = None,
@@ -316,6 +322,8 @@ class TeamMemberBudgetHandler:
 
             if team_member_budget is not None:
                 budget_request.max_budget = team_member_budget
+            if team_member_soft_budget is not None:
+                budget_request.soft_budget = team_member_soft_budget
             if team_member_rpm_limit is not None:
                 budget_request.rpm_limit = team_member_rpm_limit
             if team_member_tpm_limit is not None:
@@ -328,7 +336,7 @@ class TeamMemberBudgetHandler:
                 user_api_key_dict=user_api_key_dict,
             )
             verbose_proxy_logger.info(
-                f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
+                f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_soft_budget={team_member_soft_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
             )
             if updated_kv.get("metadata") is None:
                 updated_kv["metadata"] = {}
@@ -340,6 +348,7 @@ class TeamMemberBudgetHandler:
                 new_team_data_json=updated_kv,
                 user_api_key_dict=user_api_key_dict,
                 team_member_budget=team_member_budget,
+                team_member_soft_budget=team_member_soft_budget,
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
@@ -353,6 +362,7 @@ class TeamMemberBudgetHandler:
     def _clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
+        data_dict.pop("team_member_soft_budget", None)
         data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
@@ -378,6 +388,8 @@ class TeamMemberBudgetHandler:
             budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
             if "team_member_budget" in explicitly_set_fields:
                 budget_request.max_budget = None
+            if "team_member_soft_budget" in explicitly_set_fields:
+                budget_request.soft_budget = None
             if "team_member_budget_duration" in explicitly_set_fields:
                 budget_request.budget_duration = None
                 budget_request.budget_reset_at = None
@@ -976,6 +988,7 @@ async def new_team(
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_soft_budget: Optional[float] - The soft (alert-only) budget allocated to an individual team member. Triggers an alert when crossed, without blocking requests.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -1202,6 +1215,7 @@ async def new_team(
 
         if TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
+            team_member_soft_budget=data.team_member_soft_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
@@ -1211,6 +1225,7 @@ async def new_team(
                 new_team_data_json=data_json,
                 user_api_key_dict=user_api_key_dict,
                 team_member_budget=data.team_member_budget,
+                team_member_soft_budget=data.team_member_soft_budget,
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
@@ -1672,6 +1687,7 @@ async def update_team(
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_soft_budget: Optional[float] - The soft (alert-only) budget allocated to an individual team member. Triggers an alert when crossed, without blocking requests.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -1679,6 +1695,7 @@ async def update_team(
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
@@ -1912,6 +1929,7 @@ async def update_team(
             field
             for field in [
                 "team_member_budget",
+                "team_member_soft_budget",
                 "team_member_rpm_limit",
                 "team_member_tpm_limit",
                 "team_member_budget_duration",
@@ -1923,6 +1941,7 @@ async def update_team(
             _team_member_fields_in_request
             and TeamMemberBudgetHandler.should_create_budget(
                 team_member_budget=data.team_member_budget,
+                team_member_soft_budget=data.team_member_soft_budget,
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
@@ -1933,6 +1952,7 @@ async def update_team(
                 user_api_key_dict=user_api_key_dict,
                 updated_kv=updated_kv,
                 team_member_budget=data.team_member_budget,
+                team_member_soft_budget=data.team_member_soft_budget,
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,

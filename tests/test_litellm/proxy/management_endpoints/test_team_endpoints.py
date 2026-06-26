@@ -1735,6 +1735,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
             user_api_key_dict,
             updated_kv,
             team_member_budget=None,
+            team_member_soft_budget=None,
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
@@ -2166,6 +2167,7 @@ async def test_update_team_with_team_member_budget_duration():
             user_api_key_dict,
             updated_kv,
             team_member_budget=None,
+            team_member_soft_budget=None,
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
@@ -4826,9 +4828,7 @@ async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
             "team_id": "standalone-uncapped-123",
             "organization_id": None,
             "max_budget": None,
-            "members_with_roles": [
-                {"user_id": "uncapped-team-admin", "role": "admin"}
-            ],
+            "members_with_roles": [{"user_id": "uncapped-team-admin", "role": "admin"}],
         }
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
@@ -9344,3 +9344,67 @@ async def test_team_info_forwards_key_limit_to_get_data():
         )
 
     assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_sets_soft_budget():
+    """
+    Regression for issue #31097: a team-member-level soft budget must be plumbed
+    onto the underlying budget row when a team is created. Before the fix the
+    handler did not accept or set soft_budget, so the value was silently dropped.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    assert TeamMemberBudgetHandler.should_create_budget(team_member_soft_budget=42.0)
+
+    created_budget = MagicMock()
+    created_budget.budget_id = "team-budget-abc"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new=AsyncMock(return_value=created_budget),
+    ) as mock_new_budget:
+        await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=NewTeamRequest(team_alias="acme"),
+            new_team_data_json={},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            team_member_soft_budget=42.0,
+        )
+
+    budget_obj = mock_new_budget.call_args.kwargs["budget_obj"]
+    assert budget_obj.soft_budget == 42.0
+    assert budget_obj.max_budget is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_updates_soft_budget():
+    """
+    Regression for issue #31097: updating a team must set the team-member soft
+    budget on the existing budget row (the /team/update path the UI uses).
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    updated_budget = MagicMock()
+    updated_budget.budget_id = "team-budget-abc"
+    team_table = SimpleNamespace(metadata={"team_member_budget_id": "team-budget-abc"})
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new=AsyncMock(return_value=updated_budget),
+    ) as mock_update_budget:
+        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            updated_kv={},
+            team_member_soft_budget=55.0,
+        )
+
+    budget_obj = mock_update_budget.call_args.kwargs["budget_obj"]
+    assert budget_obj.soft_budget == 55.0
