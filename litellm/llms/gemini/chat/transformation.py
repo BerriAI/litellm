@@ -88,14 +88,14 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "n",
             "stop",
             "logprobs",
-            "frequency_penalty",
-            "presence_penalty",
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
             "include_server_side_tool_invocations",
             "service_tier",
         ]
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(["frequency_penalty", "presence_penalty"])
         if supports_reasoning(model, custom_llm_provider="gemini"):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")

@@ -1831,6 +1831,33 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
     ), f"presence_penalty should be in supported params for {non_gemini_3_model}"
 
 
+def test_google_ai_studio_gemini_gates_penalty_parameters_by_model():
+    """GoogleAIStudioGeminiConfig must gate frequency_penalty/presence_penalty
+    behind _supports_penalty_parameters like its VertexGeminiConfig parent, instead
+    of advertising them for every model and then silently dropping them downstream"""
+    from litellm.utils import get_optional_params
+
+    config = GoogleAIStudioGeminiConfig()
+
+    for model in ["gemini-3-pro-preview", "gemini-2.5-pro-preview-06-05"]:
+        supported = config.get_supported_openai_params(model)
+        assert "frequency_penalty" not in supported
+        assert "presence_penalty" not in supported
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model=model,
+                custom_llm_provider="gemini",
+                frequency_penalty=0.5,
+                presence_penalty=0.3,
+                drop_params=False,
+            )
+
+    supported = config.get_supported_openai_params("gemini-1.5-pro")
+    assert "frequency_penalty" in supported
+    assert "presence_penalty" in supported
+
+
 def test_vertex_ai_annotation_streaming_events():
     """
     Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
