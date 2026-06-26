@@ -13,6 +13,40 @@ from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
+def _export_langfuse_generation_span(metadata, *, generation_name="gen", model="doubao"):
+    """Run a success event through a real (in-memory) Langfuse OTEL exporter and
+    return the finished generation span, so trace-id tests assert against the
+    actually-exported OTEL span context rather than a mock."""
+    exporter = InMemorySpanExporter()
+    logger = LangfuseOtelLogger(
+        config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+        callback_name="langfuse_otel",
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"generation_name": generation_name, **metadata}
+        },
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": model,
+        "call_type": "acompletion",
+    }
+    response_obj = {
+        "id": "chatcmpl-test",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.now()
+    with patch("litellm.integrations.arize._utils.set_attributes"):
+        logger.log_success_event(
+            kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+        )
+    return next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes.get("langfuse.generation.name") == generation_name
+    )
+
+
 class TestLangfuseOtelIntegration:
     def test_get_langfuse_otel_config_with_required_env_vars(self):
         """Test that config is created correctly with required environment variables."""
@@ -296,6 +330,28 @@ class TestLangfuseOtelIntegration:
 
         assert generation_span.attributes.get("langfuse.trace.id") == trace_id
         assert format(generation_span.context.trace_id, "032x") == expected_otel_trace_id
+
+    def test_valid_hex_trace_id_used_directly(self):
+        """A ``metadata.trace_id`` that is already a valid 32-hex OTEL id must be
+        used verbatim (lowercased) as the trace identity, never re-hashed, so an
+        explicit valid id is preserved end to end."""
+        for given, expected in (
+            ("abcdef0123456789abcdef0123456789", "abcdef0123456789abcdef0123456789"),
+            ("ABCDEF0123456789ABCDEF0123456789", "abcdef0123456789abcdef0123456789"),
+        ):
+            span = _export_langfuse_generation_span({"trace_id": given})
+            assert format(span.context.trace_id, "032x") == expected
+
+    def test_dashed_uuid_trace_id_normalized(self):
+        """A dashed UUID ``metadata.trace_id`` must map to its dash-stripped
+        32-hex form (LiteLLM's conventional trace id), not be sha256-hashed."""
+        span = _export_langfuse_generation_span(
+            {"trace_id": "123e4567-e89b-12d3-a456-426614174000"}
+        )
+        assert (
+            format(span.context.trace_id, "032x")
+            == "123e4567e89b12d3a456426614174000"
+        )
 
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
