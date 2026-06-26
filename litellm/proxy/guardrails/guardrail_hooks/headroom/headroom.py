@@ -7,7 +7,7 @@ from httpx import Response as HttpxResponse
 from typing_extensions import TypeGuard
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -131,6 +131,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         return [item for item in compressed_messages if _is_str_object_dict(item)]
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
