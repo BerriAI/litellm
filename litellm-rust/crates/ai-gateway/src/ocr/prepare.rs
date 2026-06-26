@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 
 use super::hooks::OcrLifecycleHooks;
 use super::types::{OcrRequest, PreparedOcrRequest};
-use crate::integrations::custom_guardrail::CustomGuardrailRunner;
-use crate::integrations::custom_logger::CustomLoggerRunner;
+use litellm_core::integrations::custom_guardrail::CustomGuardrailRunner;
+use litellm_core::integrations::custom_logger::CustomLoggerRunner;
 
 pub(crate) struct PreparedOcrCall {
     pub(crate) request: PreparedOcrRequest,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_ai_gateway::integrations::custom_guardrail::{
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };

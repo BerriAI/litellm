@@ -13,13 +13,13 @@ use super::common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
 };
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
-use crate::integrations::custom_guardrail::{
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
+use litellm_core::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
 };
 

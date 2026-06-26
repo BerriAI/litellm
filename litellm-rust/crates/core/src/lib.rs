@@ -1,5 +1,6 @@
 pub mod call_lifecycle;
 pub mod error;
+pub mod integrations;
 pub mod ocr;
 pub mod providers;
 pub mod realtime;

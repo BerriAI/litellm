@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_ai_gateway::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogError, LogFuture, ModelCallDetails,
 };
 use pyo3::prelude::*;

@@ -25,11 +25,9 @@ pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
 
-// Realtime request logging. Only the server serves realtime, so these are
-// `server`-gated; `io::realtime` exposes the generic `observe` hook while the
-// collector and callback fan-out live here.
+// Realtime server collector. Integration traits and callback fan-out live in
+// `litellm-core`; the gateway only wires them into transport/runtime state.
 mod constants;
-pub mod integrations;
 #[cfg(feature = "server")]
 mod realtime;
 
