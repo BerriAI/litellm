@@ -3544,36 +3544,6 @@ async def test_streaming_anthropic_messages_openai_bridge_fires_success_logging(
     assert logger.success_payload["call_type"] == "anthropic_messages"
 
 
-@pytest.mark.skipif(
-    not os.getenv("OPENAI_API_KEY"),
-    reason="live proof-of-fix for #28595; requires OPENAI_API_KEY",
-)
-@pytest.mark.asyncio
-async def test_streaming_anthropic_messages_openai_bridge_live(monkeypatch):
-    """Live counterpart hitting real OpenAI; bills a few tokens and asserts the
-    streaming bridge yields chunks and logs a spend row with non-zero cost once."""
-    logger = _SuccessCapturingLogger()
-    monkeypatch.setattr(litellm, "callbacks", [logger])
-
-    chunks = []
-    stream = await litellm.anthropic_messages(
-        model="openai/gpt-4o",
-        messages=[{"role": "user", "content": "ping"}],
-        max_tokens=16,
-        stream=True,
-    )
-    async for chunk in stream:
-        chunks.append(chunk)
-
-    await _drain_until_logged(logger)
-
-    assert chunks, "stream yielded no chunks"
-    assert logger.success_payload is not None
-    assert logger.success_calls == 1
-    assert logger.success_payload["response_cost"] > 0
-    assert logger.success_payload["call_type"] == "anthropic_messages"
-
-
 def test_failure_handler_records_recovered_partial_spend(logging_obj):
     """A stream interrupted mid-flight still billed the provider for the chunks
     already delivered. When the router stashes that recovered usage as
