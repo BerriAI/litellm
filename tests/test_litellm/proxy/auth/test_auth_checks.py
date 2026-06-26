@@ -459,7 +459,12 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     assert token_data["user_id"] == "test_user"
     assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
     assert token_data["models"] == ["gpt-3.5-turbo"]
-    assert token_data["max_budget"] == litellm.max_ui_session_budget
+    # CLI session tokens carry no per-key budget; spend is enforced via the
+    # shared team/user counters. The $0.25 UI session cap must not leak in.
+    assert token_data.get("max_budget") is None
+    # is_session_token=True causes key_management_endpoints to use the team
+    # budget as the delegation ceiling instead of treating None as unlimited.
+    assert token_data.get("is_session_token") is True
 
     # Verify expiration time is set to 24 hours (default)
     assert "expires" in token_data
@@ -502,6 +507,55 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
     assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
     assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
+
+
+def test_get_cli_jwt_auth_token_unique_per_session(valid_sso_user_defined_values):
+    """Each CLI login mints a unique token id (per-session spend isolation) while
+    keeping a stable, user-scoped key_alias for log grouping. A regression that
+    pins token back to a constant would collapse both ids and fail here."""
+    from litellm.constants import CLI_SESSION_KEY_PREFIX
+
+    def _decode(token: str) -> dict:
+        decrypted = decrypt_value_helper(
+            token, key="ui_hash_key", exception_type="debug"
+        )
+        assert decrypted is not None
+        return json.loads(decrypted)
+
+    first = _decode(
+        ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    )
+    second = _decode(
+        ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    )
+
+    assert first["token"].startswith(f"{CLI_SESSION_KEY_PREFIX}-")
+    assert second["token"].startswith(f"{CLI_SESSION_KEY_PREFIX}-")
+    assert first["token"] != second["token"]
+
+    expected_alias = f"{CLI_SESSION_KEY_PREFIX}-test_user"
+    assert first["key_alias"] == second["key_alias"] == expected_alias
+    assert first["key_name"] == second["key_name"] == expected_alias
+
+
+def test_get_cli_jwt_auth_token_applies_fallback_budget(valid_sso_user_defined_values):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values, max_budget=litellm.max_ui_session_budget
+    )
+    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    assert decrypted is not None
+    assert json.loads(decrypted).get("max_budget") == litellm.max_ui_session_budget
+
+
+def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
+    valid_sso_user_defined_values,
+):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values, max_budget=None
+    )
+    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    assert decrypted is not None
+    assert json.loads(decrypted).get("max_budget") is None
 
 
 @pytest.mark.asyncio

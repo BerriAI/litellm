@@ -2,7 +2,7 @@
 Mistral OCR transformation implementation.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
 
@@ -44,6 +44,7 @@ class MistralOCRConfig(BaseOCRConfig):
         - extract_footer: Whether to extract document footer
         - table_format: Table output format ("markdown" or "html")
         - confidence_scores_granularity: Confidence score level ("word" or "page")
+        - include_blocks: Whether to return paragraph-level bounding boxes and typed content blocks (OCR 4)
         - id: Request identifier
         """
         return [
@@ -58,10 +59,11 @@ class MistralOCRConfig(BaseOCRConfig):
             "extract_footer",
             "table_format",
             "confidence_scores_granularity",
+            "include_blocks",
             "id",
         ]
 
-    def get_api_key_env_var(self) -> Optional[str]:
+    def get_api_key_env_var(self) -> str | None:
         return MISTRAL_OCR_API_KEY_ENV_VAR
 
     def map_ocr_params(
@@ -90,9 +92,9 @@ class MistralOCRConfig(BaseOCRConfig):
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -118,10 +120,10 @@ class MistralOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """

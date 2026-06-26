@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -10,6 +11,9 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+)
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -368,6 +372,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return None
 
     @staticmethod
+    def _get_exact_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the exact model-map entry only.
+
+        Unlike ``_get_model_capability``, does not walk stripped provider aliases.
+        Use when a feature is tied to a specific host (e.g. Anthropic API fast mode).
+        """
+        value = litellm.model_cost.get(model, {}).get(key)
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
     def _supports_model_capability(model: str, key: str) -> bool:
         """Check a boolean capability ``key`` in the model map.
 
@@ -488,7 +502,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             "computer_20241022": "computer-use-2024-10-22",
         }
         return computer_tool_beta_mapping.get(
-            computer_tool_version, "computer-use-2024-10-22"  # Default fallback
+            computer_tool_version,
+            "computer-use-2024-10-22",  # Default fallback
         )
 
     def get_anthropic_beta_list(
@@ -533,6 +548,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return list(set(betas))
 
+    @staticmethod
+    def _make_api_key_auth_header(
+        api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False
+    ) -> dict:
+        if use_bearer_for_custom_base and (
+            api_base
+            and "api.anthropic.com" not in api_base
+            and not api_key.startswith("sk-ant-")
+        ):
+            value = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
+            return {"authorization": value}
+        return {"x-api-key": api_key}
+
     def get_anthropic_headers(
         self,
         api_key: Optional[str] = None,
@@ -552,6 +580,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers: Optional[List[str]] = None,
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
+        api_base: str | None = None,
+        use_bearer_for_custom_base: bool = False,
     ) -> dict:
         betas = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -600,7 +630,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
-            headers["x-api-key"] = api_key
+            headers.update(
+                self._make_api_key_auth_header(
+                    api_key, api_base, use_bearer_for_custom_base
+                )
+            )
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -629,6 +663,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
+        use_bearer_for_custom_base: bool = bool(
+            isinstance(litellm_params, dict)
+            and litellm_params.get("use_bearer_for_custom_base", False)
+        )
         # Check for Anthropic OAuth token in headers
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
@@ -684,6 +724,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             effort_used=effort_used,
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
+            api_base=api_base,
+            use_bearer_for_custom_base=use_bearer_for_custom_base,
         )
 
         headers = {**headers, **anthropic_headers}
@@ -719,18 +761,24 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
 
     @staticmethod
-    def get_auth_header(api_key: Optional[str] = None) -> Optional[dict]:
+    def get_auth_header(
+        api_key: str | None = None,
+        api_base: str | None = None,
+        use_bearer_for_custom_base: bool = False,
+    ) -> dict | None:
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
-        Checks ANTHROPIC_API_KEY first (-> x-api-key), then
-        ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
+        Checks ANTHROPIC_API_KEY first (-> x-api-key or Bearer depending on
+        use_bearer_for_custom_base), then ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
         Returns None if neither is available.
         """
         resolved_key = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
-            return {"x-api-key": resolved_key}
+            return AnthropicModelInfo._make_api_key_auth_header(
+                resolved_key, api_base, use_bearer_for_custom_base
+            )
         auth_token = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}
@@ -744,7 +792,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
-        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if api_base is None or auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
@@ -987,6 +1035,67 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text = block.get("text")
     return not isinstance(text, str) or not text.strip()
+
+
+def normalize_anthropic_tool_use_id(raw_id: str) -> str:
+    """
+    Normalize a tool_use / tool_result id for Anthropic's ``^[a-zA-Z0-9_-]+$``
+    pattern.
+
+    Strips Gemini thought-signature suffixes (``__thought__``) first, then
+    replaces any remaining invalid characters with underscores.
+    """
+    base_id = (
+        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+        else raw_id
+    )
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
+    return sanitized or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+    if not isinstance(block, dict):
+        return block
+    block_type = block.get("type")
+    if block_type in ("tool_use", "server_tool_use"):
+        raw_id = block.get("id")
+        if isinstance(raw_id, str):
+            normalized = normalize_anthropic_tool_use_id(raw_id)
+            if normalized != raw_id:
+                return {**block, "id": normalized}
+    elif block_type == "tool_result":
+        raw_id = block.get("tool_use_id")
+        if isinstance(raw_id, str):
+            normalized = normalize_anthropic_tool_use_id(raw_id)
+            if normalized != raw_id:
+                return {**block, "tool_use_id": normalized}
+    return block
+
+
+def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+    """
+    Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
+    ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
+    ``^[a-zA-Z0-9_-]+$`` requirement.
+
+    Cross-provider clients (e.g. Claude Code routed through kimi) may replay
+    conversation history containing ids like ``functions.Bash:0`` with ``.``
+    and ``:`` — valid on the upstream provider but rejected by Anthropic when
+    the session is switched to a native Anthropic deployment.
+    """
+    out: list[Any] = []
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        content = m["content"]
+        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
+        if new_content == content:
+            out.append(m)
+        else:
+            out.append({**m, "content": new_content})
+    return out
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

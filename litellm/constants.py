@@ -30,6 +30,9 @@ DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
+# Max records accepted in one POST /v1/callbacks/logs batch. Bounds the blast
+# radius: each record fans out to spend logs + every callback integration.
+MAX_CALLBACK_LOG_RECORDS = 1000
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
     os.getenv("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10)
@@ -293,7 +296,8 @@ DEFAULT_SSL_CIPHERS = os.getenv(
     "ECDHE-ECDSA-AES256-GCM-SHA384:"
     "ECDHE-ECDSA-AES128-GCM-SHA256:"
     # Priority 3: Additional modern ciphers (good balance)
-    "ECDHE-RSA-CHACHA20-POLY1305:" "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
     # Priority 4: Widely compatible fallbacks (slower but universally supported)
     "ECDHE-RSA-AES256-SHA384:"  # Common fallback
     "ECDHE-RSA-AES128-SHA256:"  # Very widely supported
@@ -882,31 +886,29 @@ openai_compatible_providers: List = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
 ]
-openai_text_completion_compatible_providers: List = (
-    [  # providers that support `/v1/completions`
-        "together_ai",
-        "fireworks_ai",
-        "hosted_vllm",
-        "meta_llama",
-        "llamafile",
-        "featherless_ai",
-        "nebius",
-        "dashscope",
-        "modelscope",
-        "moonshot",
-        "publicai",
-        "synthetic",
-        "tensormesh",
-        "apertis",
-        "nano-gpt",
-        "poe",
-        "chutes",
-        "v0",
-        "lambda_ai",
-        "hyperbolic",
-        "wandb",
-    ]
-)
+openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
+    "together_ai",
+    "fireworks_ai",
+    "hosted_vllm",
+    "meta_llama",
+    "llamafile",
+    "featherless_ai",
+    "nebius",
+    "dashscope",
+    "modelscope",
+    "moonshot",
+    "publicai",
+    "synthetic",
+    "tensormesh",
+    "apertis",
+    "nano-gpt",
+    "poe",
+    "chutes",
+    "v0",
+    "lambda_ai",
+    "hyperbolic",
+    "wandb",
+]
 _openai_like_providers: List = [
     "predibase",
     "databricks",
@@ -1530,7 +1532,7 @@ LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_SSO_SESSION_TTL_SECONDS = 600
-CLI_JWT_TOKEN_NAME = "cli-jwt-token"
+CLI_SESSION_KEY_PREFIX = "cli-session"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(
     os.getenv("CLI_JWT_EXPIRATION_HOURS")

@@ -20,7 +20,6 @@ from litellm.integrations.otel.model.payloads import LLMCallSpanData
 
 
 class LangtraceMapper:
-
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         "gen_ai.operation.name": lambda d: "chat",
         "langtrace.service.name": lambda d: d.provider or None,

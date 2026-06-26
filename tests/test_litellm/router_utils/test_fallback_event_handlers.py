@@ -2,7 +2,10 @@ import json
 
 import pytest
 
-from litellm.router_utils.fallback_event_handlers import run_async_fallback
+from litellm.router_utils.fallback_event_handlers import (
+    get_fallback_model_group,
+    run_async_fallback,
+)
 
 
 class StreamingWrapper:
@@ -137,3 +140,16 @@ async def test_run_async_fallback_skips_original_model_group():
     )
 
     assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+def test_get_fallback_model_group_does_not_mutate_fallbacks():
+    """A string fallback must be resolved without mutating the caller's
+    fallbacks list, which is the live router config shared across requests."""
+    fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
+
+    fallback_model_group, _ = get_fallback_model_group(
+        fallbacks=fallbacks, model_group="unmatched-model"
+    )
+
+    assert fallback_model_group == ["gpt-4o-mini"]
+    assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]

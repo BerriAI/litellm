@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined, LinkOutlined } from "@ant-design/icons";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 const logos = "/ui/assets/logos/";
 
@@ -56,7 +57,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
       {value && (
         <div className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
           <img
-            src={value}
+            src={resolveLogoSrc(value)}
             alt="Selected logo"
             className="w-10 h-10 object-contain rounded"
             onError={(e) => {
@@ -96,7 +97,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
                 style={{ width: 40, height: 40 }}
               >
                 <img
-                  src={logo.url}
+                  src={resolveLogoSrc(logo.url)}
                   alt={logo.name}
                   className="w-5 h-5 object-contain"
                   onError={() => handleImgError(logo.url)}

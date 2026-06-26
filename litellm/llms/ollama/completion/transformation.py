@@ -337,7 +337,8 @@ class OllamaConfig(BaseConfig):
         model_response.model = "ollama/" + model
         _prompt = request_data.get("prompt", "")
         prompt_tokens = response_json.get(
-            "prompt_eval_count", len(encoding.encode(_prompt, disallowed_special=()))  # type: ignore
+            "prompt_eval_count",
+            len(encoding.encode(_prompt, disallowed_special=())),  # type: ignore
         )
         completion_tokens = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))

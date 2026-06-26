@@ -24,7 +24,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             return "MaxDepthExceeded"
         # Base-case: if it is a primitive, simply return it.
         if isinstance(obj, str):
-            return strip_null_bytes(obj)
+            return obj.replace("\x00", "") if "\x00" in obj else obj
         if isinstance(obj, (int, float, bool, type(None))):
             return obj
         # Check for circular reference.
@@ -36,7 +36,8 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             result = {}
             for k, v in obj.items():
                 if isinstance(k, (str)):
-                    result[strip_null_bytes(k)] = _serialize(v, seen, depth + 1)
+                    clean_k = k.replace("\x00", "") if "\x00" in k else k
+                    result[clean_k] = _serialize(v, seen, depth + 1)
             seen.remove(id(obj))
             return result
         elif isinstance(obj, list):

@@ -30,7 +30,9 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
     Function,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
+    Usage,
 )
 
 
@@ -105,6 +107,34 @@ def _input_json_deltas(events: List[dict]) -> List[str]:
         if e.get("type") == "content_block_delta"
         and e["delta"].get("type") == "input_json_delta"
     ]
+
+
+def test_held_stop_reason_usage_merge_preserves_openai_cache_token_details():
+    """OpenAI-compatible usage chunks carry cache reads in prompt_tokens_details."""
+    wrapper = AnthropicStreamWrapper(completion_stream=iter([]), model="claude-x")
+    wrapper.holding_stop_reason_chunk = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn"},
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+
+    usage_chunk = MagicMock()
+    usage_chunk.usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+
+    merged_chunk = wrapper._merge_usage_into_held_stop_reason_chunk(usage_chunk)
+
+    assert merged_chunk["usage"]["input_tokens"] == 70
+    assert merged_chunk["usage"]["output_tokens"] == 50
+    assert merged_chunk["usage"]["cache_read_input_tokens"] == 30
+    assert merged_chunk["usage"]["cache_creation_input_tokens"] == 20
 
 
 def test_first_text_delta_after_tool_use_is_not_dropped_sync():

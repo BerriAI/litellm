@@ -1502,7 +1502,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
         except Exception as e:
             verbose_proxy_logger.error(f"PANW Prisma AIRS streaming error: {str(e)}")
-            yield f'data: {json.dumps({"error": {"message": "Security scan failed - streaming response blocked for safety", "type": "guardrail_scan_error", "code": 500, "guardrail": self.guardrail_name}})}\n\n'
+            yield f"data: {json.dumps({'error': {'message': 'Security scan failed - streaming response blocked for safety', 'type': 'guardrail_scan_error', 'code': 500, 'guardrail': self.guardrail_name}})}\n\n"
 
     async def _scan_tool_calls_for_guardrail(
         self,

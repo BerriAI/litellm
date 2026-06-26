@@ -390,12 +390,13 @@ async def _process_request(
 
     # Validate container_id ownership if present in path_params.
     if "container_id" in path_params:
-        original_container_id, resolved_provider = (
-            await assert_user_can_access_container(
-                container_id=path_params["container_id"],
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
+        (
+            original_container_id,
+            resolved_provider,
+        ) = await assert_user_can_access_container(
+            container_id=path_params["container_id"],
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
         )
         data.update(
             await get_container_forwarding_params(

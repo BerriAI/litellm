@@ -100,9 +100,9 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
                 in ["enabled", "disabled", "auto"]  # legal values, see docs
             ):
                 # Add thinking parameter to extra_body for all legal cases
-                optional_params.setdefault("extra_body", {})[
-                    "thinking"
-                ] = thinking_value
+                optional_params.setdefault("extra_body", {})["thinking"] = (
+                    thinking_value
+                )
             else:
                 # Skip adding thinking parameter when it's not set or has invalid value
                 pass

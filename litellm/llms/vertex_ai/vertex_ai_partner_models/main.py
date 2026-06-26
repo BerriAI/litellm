@@ -194,9 +194,11 @@ class VertexAIPartnerModels(VertexBase):
                     encoding=encoding,
                 )
             elif "claude" in model:
-                if headers is None:
-                    headers = {}
-                headers.update({"Authorization": "Bearer {}".format(access_token)})
+                # Build a new dict so we never mutate the shared deployment extra_headers object.
+                headers = {
+                    **(headers or {}),
+                    "Authorization": "Bearer {}".format(access_token),
+                }
 
                 optional_params.update(
                     {

@@ -15,6 +15,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
 # Test basic web search cost calculations
 def test_web_search_cost_low():
     web_search_options = WebSearchOptions(search_context_size="low")
@@ -320,6 +326,138 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
     assert (
         cost >= web_search_cost
     ), f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-3.1-flash-lite",  # resolves directly via get_model_info
+        "gemini/gemini-3.1-flash-lite",  # provider-prefixed, resolves via model_cost fallback
+    ],
+)
+def test_gemini_3x_web_search_billed_per_query(model, local_model_cost_map):
+    """
+    Gemini 3.x bills web search per individual query (web_search_billing_unit == "per_query"),
+    so N searches cost N * $0.014.
+
+    Regression for the bug where the billing unit was dropped between the pricing JSON and the
+    cost calculator: the field was missing from the ModelInfoBase TypedDict and from the
+    ModelInfoBase(...) constructor in _get_model_info_helper, so get_model_info returned it as
+    None and cost_per_web_search_request fell back to the per_prompt clamp, collapsing N queries
+    to a single charge. The "gemini/..." case additionally covers response_cost_calculator
+    resolving a provider-prefixed model name that get_model_info cannot map under vertex_ai.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    web_search_requests = 2
+    model_info = litellm.get_model_info(model)
+    assert model_info["web_search_billing_unit"] == "per_query"
+    per_query_cost = model_info["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    expected_cost = per_query_cost * web_search_requests
+
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11, web_search_requests=web_search_requests
+        ),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(expected_cost), (
+        f"Expected {web_search_requests} x ${per_query_cost} = ${expected_cost} "
+        f"per_query search fee, got ${cost}"
+    )
+
+
+def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):
+    """
+    Gemini 2.x bills web search per grounded prompt: multiple internal queries are one flat
+    $0.035 fee. Guards the per_prompt clamp against the per_query plumbing, which makes
+    web_search_billing_unit always present on the resolved ModelInfo (None for 2.x), so the
+    clamp must treat a None billing unit as per_prompt rather than skipping the clamp.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "vertex_ai/gemini-2.5-flash"
+    model_info = litellm.get_model_info(model)
+    assert not model_info.get("web_search_billing_unit")
+    expected_cost = model_info["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11, web_search_requests=2
+        ),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(expected_cost), (
+        f"Expected flat ${expected_cost} per_prompt search fee (2 queries clamped to 1), "
+        f"got ${cost}"
+    )
+
+
+def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
+    local_model_cost_map,
+):
+    """
+    Regression for the provider-prefix fallback in _handle_web_search_cost. When the initial
+    get_model_info lookup fails for a "/"-containing model, the retry re-resolves model_info from
+    the prefix and must adopt that prefix's provider for routing. Otherwise an unrelated model
+    (here OpenRouter, which carries no web search pricing) is re-resolved but still routed through
+    the request's vertex_ai Gemini calculator, which charges its $0.035 per_prompt default for a
+    model that should cost nothing for web search.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "openrouter/google/gemini-3.1-flash-lite"
+    model_info = litellm.get_model_info(model)
+    assert model_info["litellm_provider"] == "openrouter"
+    assert not model_info.get("search_context_cost_per_query")
+
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11, web_search_requests=2
+        ),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0, (
+        "A non-Gemini provider-prefixed model with no web search pricing must not be charged "
+        f"the vertex_ai per_prompt default via the prefix fallback, got ${cost}"
+    )
 
 
 # Note: File search integration test removed due to complex annotation detection logic

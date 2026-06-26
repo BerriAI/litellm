@@ -372,9 +372,7 @@ class IBMWatsonXMixin:
     def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
         payload: dict = {}
         if model.startswith("deployment/"):
-            return (
-                {}
-            )  # Deployment models do not support 'space_id' or 'project_id' in their payload
+            return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model
         if api_params["project_id"] is not None:
             payload["project_id"] = api_params["project_id"]

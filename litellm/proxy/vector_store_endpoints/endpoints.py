@@ -42,9 +42,9 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
-    vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
-        await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
-    )
+    vector_store_to_run: Optional[
+        LiteLLM_ManagedVectorStore
+    ] = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
     if vector_store_to_run is not None:
         if user_api_key_dict is not None:
             await assert_user_can_access_vector_store(

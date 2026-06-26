@@ -20,13 +20,13 @@ help:
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
-	@echo "  make format             - Apply Black code formatting"
-	@echo "  make format-check       - Check Black code formatting (matches CI)"
-	@echo "  make lint               - Run all linting (Ruff, basedpyright, Black check, circular imports, import safety)"
+	@echo "  make format             - Apply ruff format code formatting"
+	@echo "  make format-check       - Check ruff format code formatting (matches CI)"
+	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
 	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
-	@echo "  make lint-black         - Check Black formatting (matches CI)"
+	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
@@ -82,11 +82,13 @@ install-hooks:
 	./scripts/install_git_hooks.sh
 
 # Formatting
+# 88-column wrap matches the Black width the whole repo is formatted to; ruff.toml's
+# global line-length is 120 (for E501/isort), so 88 is forced here.
 format: install-dev
-	cd litellm && $(UV_RUN) black . && cd ..
+	cd litellm && $(UV_RUN) ruff format --line-length 88 --exclude '/enterprise/' . && cd ..
 
 format-check: install-dev
-	cd litellm && $(UV_RUN) black --check . && cd ..
+	cd litellm && $(UV_RUN) ruff format --check --line-length 88 --exclude '/enterprise/' . && cd ..
 
 # Linting targets
 lint-ruff: install-dev
@@ -131,7 +133,7 @@ lint-basedpyright: install-dev
 lint-basedpyright-budget-update: install-dev
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
 
-lint-black: format-check
+lint-format: format-check
 
 lint-ruff-budget: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py

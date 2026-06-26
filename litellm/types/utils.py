@@ -273,6 +273,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
+    web_search_billing_unit: Optional[
+        Literal["per_query", "per_prompt"]
+    ]  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     tiered_pricing: Optional[
         List[Dict[str, Any]]
@@ -1539,6 +1542,9 @@ class PromptTokensDetailsWrapper(
     video_length_seconds: Optional[float] = None
     """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
 
+    audio_length_seconds: Optional[float] = None
+    """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
+
     cache_creation_tokens: Optional[int] = None
     """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
 
@@ -1553,6 +1559,8 @@ class PromptTokensDetailsWrapper(
             del self.image_count
         if self.video_length_seconds is None:
             del self.video_length_seconds
+        if self.audio_length_seconds is None:
+            del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
         if self.cache_creation_tokens is None:
@@ -2441,7 +2449,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
 class TranscriptionUsageDurationObject(BaseModel):
     type: Literal["duration"]
-    seconds: int
+    seconds: float
 
 
 class TranscriptionUsageInputTokenDetailsObject(BaseModel):

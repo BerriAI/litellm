@@ -632,7 +632,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Extract tool calls from the response
             if self.collected_response is not None:
-                tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(self.collected_response)  # type: ignore[arg-type]
+                tool_calls = (
+                    LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
+                        self.collected_response
+                    )
+                )  # type: ignore[arg-type]
             else:
                 tool_calls = []
             if not tool_calls:

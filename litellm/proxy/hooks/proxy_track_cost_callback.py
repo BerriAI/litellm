@@ -281,12 +281,14 @@ class _ProxyDBLogger(CustomLogger):
                         )
                     )
 
-                    await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
-                        token=user_api_key,
-                        key_alias=key_alias,
-                        end_user_id=end_user_id,
-                        response_cost=response_cost,
-                        max_budget=end_user_max_budget,
+                    await (
+                        proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
+                            token=user_api_key,
+                            key_alias=key_alias,
+                            end_user_id=end_user_id,
+                            response_cost=response_cost,
+                            max_budget=end_user_max_budget,
+                        )
                     )
                 elif budget_reservation is not None:
                     await _release_budget_reservation(

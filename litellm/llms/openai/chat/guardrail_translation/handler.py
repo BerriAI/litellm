@@ -259,9 +259,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional][
-                    "text"
-                ] = guardrail_response
+                messages[msg_idx]["content"][content_idx_optional]["text"] = (
+                    guardrail_response
+                )
 
     async def _apply_guardrail_responses_to_input_tool_calls(
         self,
@@ -746,7 +746,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                choice.message.content[content_idx_optional]["text"] = guardrail_response  # type: ignore
+                choice.message.content[content_idx_optional]["text"] = (
+                    guardrail_response  # type: ignore
+                )
 
     async def _apply_guardrail_responses_to_output_tool_calls(
         self,

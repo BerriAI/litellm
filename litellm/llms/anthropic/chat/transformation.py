@@ -229,6 +229,11 @@ DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
     "Sonnet 4.6+, and Mythos Preview."
 )
 
+DROP_UNSUPPORTED_SPEED_WARNING = (
+    "Dropping unsupported `speed` for model=%s "
+    "(drop_params=True). Fast mode is only supported on select Opus models."
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -373,6 +378,51 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicConfig._supports_effort_level(model, level)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
         )
+
+    @staticmethod
+    def _model_supports_speed_param(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """Whether the model accepts Anthropic's ``speed`` parameter (fast mode).
+
+        Fast mode is direct Anthropic API-only (not Bedrock, Vertex, or Azure).
+        Those providers strip their prefix before this shared transform runs, so a
+        bare ``claude-opus-4-8`` would otherwise resolve to the direct-API entry;
+        the routed provider is checked explicitly to keep them out.
+        """
+        if custom_llm_provider is not None and custom_llm_provider != "anthropic":
+            return False
+        return (
+            AnthropicModelInfo._get_exact_model_capability(model, "supports_speed")
+            is True
+        )
+
+    @staticmethod
+    def _maybe_drop_speed_param(
+        model: str,
+        optional_params: dict,
+        drop_params: bool,
+        custom_llm_provider: Optional[str] = None,
+    ) -> None:
+        if "speed" not in optional_params:
+            return
+        if AnthropicConfig._model_supports_speed_param(model, custom_llm_provider):
+            return
+        if not (litellm.drop_params or drop_params):
+            speed_value = optional_params.get("speed")
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support speed={speed_value!r}. "
+                    "To drop unsupported params, set "
+                    "`litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(
+            DROP_UNSUPPORTED_SPEED_WARNING,
+            model,
+        )
+        optional_params.pop("speed", None)
 
     @staticmethod
     def _raise_invalid_reasoning_effort(
@@ -700,7 +750,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     additional_tool_params[k] = v
 
             returned_tool = AnthropicHostedTools(
-                type=tool["type"], name=function_name, **additional_tool_params  # type: ignore
+                type=tool["type"],
+                name=function_name,
+                **additional_tool_params,  # type: ignore
             )
         elif tool["type"] == "url":  # mcp server tool
             mcp_server = AnthropicMcpServerTool(**tool)  # type: ignore
@@ -1569,8 +1621,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_context_management
                         )
             elif param == "speed" and isinstance(value, str):
-                # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
+                AnthropicConfig._maybe_drop_speed_param(
+                    model=model,
+                    optional_params=optional_params,
+                    drop_params=drop_params,
+                    custom_llm_provider=self.custom_llm_provider,
+                )
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
@@ -1875,6 +1932,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        AnthropicConfig._maybe_drop_speed_param(
+            model=model,
+            optional_params=optional_params,
+            drop_params=litellm.drop_params
+            or litellm_params.get("drop_params") is True,
+            custom_llm_provider=self.custom_llm_provider,
+        )
+
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params
         )
@@ -2081,7 +2146,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[

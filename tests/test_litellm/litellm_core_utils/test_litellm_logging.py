@@ -11,7 +11,9 @@ sys.path.insert(
 
 import time
 
+import litellm
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
 from litellm.types.utils import ModelResponse, TextCompletionResponse
@@ -3406,6 +3408,140 @@ def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_resp
     assert isinstance(result, ModelResponse)
     assert result.model == "openai/my-local"
     assert result.usage.prompt_tokens == 4  # type: ignore[attr-defined]
+
+
+class _SuccessCapturingLogger(CustomLogger):
+    """Records the success payload. success_payload is populated only in
+    async_log_success_event, so it stays None when the buggy no-op
+    async_log_stream_event path runs for streaming."""
+
+    def __init__(self):
+        super().__init__()
+        self.success_payload = None
+        self.success_calls = 0
+        self.stream_event_calls = 0
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_calls += 1
+        self.success_payload = kwargs.get("standard_logging_object")
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.stream_event_calls += 1
+
+
+def _responses_stream_sse_bytes():
+    """A full Responses stream: an opened message item, two text deltas, then the
+    terminal response.completed carrying usage. Exercises mid-stream delta handling
+    in addition to end-of-stream success logging."""
+    import json
+
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "msg-1",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hello ",
+            "sequence_number": 2,
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "world",
+            "sequence_number": 3,
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 4,
+            "response": _responses_api_response_with_text("hello world").model_dump(),
+        },
+    ]
+    return [f"data: {json.dumps(e)}\n\n".encode("utf-8") for e in events]
+
+
+def _fake_streaming_responses_http_response():
+    sse_chunks = _responses_stream_sse_bytes()
+
+    async def aiter_bytes(*args, **kwargs):
+        for chunk in sse_chunks:
+            yield chunk
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.headers = {}
+    resp.aiter_bytes = aiter_bytes
+    return resp
+
+
+def _chunk_text(chunk):
+    if isinstance(chunk, (bytes, bytearray)):
+        return chunk.decode("utf-8", "ignore")
+    return str(chunk)
+
+
+async def _drain_until_logged(logger, max_iter=30):
+    for _ in range(max_iter):
+        if logger.success_payload is not None:
+            break
+        await asyncio.sleep(0.1)
+
+
+@pytest.mark.asyncio
+async def test_streaming_anthropic_messages_openai_bridge_fires_success_logging(
+    monkeypatch,
+):
+    """Regression for #28595 / #28943. The existing tests above call
+    _handle_anthropic_messages_response_logging directly; they do not cover the
+    streaming wiring that originally broke. Drive a real streaming
+    anthropic_messages call routed to the OpenAI Responses backend (upstream SSE
+    mocked) and assert the bridge surfaces delta chunks and fires success logging
+    exactly once with real cost. On the broken version the stream ran but only the
+    no-op async_log_stream_event was called, so success_payload stayed None and the
+    SpendLogs row never landed."""
+    logger = _SuccessCapturingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    chunks = []
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_fake_streaming_responses_http_response()),
+    ):
+        stream = await litellm.anthropic_messages(
+            model="openai/gpt-4o",
+            api_key="sk-test-28595",
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=16,
+            stream=True,
+        )
+        async for chunk in stream:  # logging fires on stream end; must drain fully
+            chunks.append(chunk)
+
+    await _drain_until_logged(logger)
+
+    assert chunks, "stream yielded no chunks"
+    assert any("content_block_delta" in _chunk_text(c) for c in chunks), (
+        "no delta chunks surfaced; the streaming text deltas were not forwarded"
+    )
+    assert logger.success_payload is not None, (
+        "async_log_success_event never fired for streaming /v1/messages -> openai "
+        "Responses bridge; the no-op stream path dropped the spend row"
+    )
+    assert logger.success_calls == 1, "bridge call must log success exactly once"
+    assert logger.success_payload["response_cost"] > 0
+    assert logger.success_payload["call_type"] == "anthropic_messages"
 
 
 def test_failure_handler_records_recovered_partial_spend(logging_obj):

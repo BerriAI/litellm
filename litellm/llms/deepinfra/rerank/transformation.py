@@ -2,7 +2,7 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import httpx
 
@@ -30,9 +30,9 @@ class DeepinfraRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Constructs the complete DeepInfra inference endpoint URL for rerank.
@@ -67,8 +67,8 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("DEEPINFRA_API_KEY")
@@ -98,12 +98,13 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         # Start with the basic parameters
         optional_rerank_params = {}
@@ -132,7 +133,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         # Convert OptionalRerankParams to dict as expected by parent class
         if optional_rerank_params is None:
@@ -145,7 +146,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},

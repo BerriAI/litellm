@@ -27,7 +27,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 import socket
 import httpx
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 def _can_resolve_openai():
@@ -513,10 +513,26 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=mock_side_effect,
-    ) as mock_global_post:
+    # Batch jsonl file creation now streams to a GCS resumable session via
+    # _aresumable_chunked_upload (httpx send), not AsyncHTTPHandler.post, so mock
+    # that entry point to return the GCS object response. The resumable protocol
+    # itself is covered in test_vertex_ai_files_streaming.py.
+    mock_upload_response = httpx.Response(
+        200,
+        json=mock_file_response,
+        request=httpx.Request("PUT", "https://storage.googleapis.com/upload"),
+    )
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            side_effect=mock_side_effect,
+        ) as mock_global_post,
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler._aresumable_chunked_upload",
+            new_callable=AsyncMock,
+            return_value=mock_upload_response,
+        ),
+    ):
         litellm.set_verbose = True
         litellm._turn_on_debug()
         file_name = "vertex_batch_completions.jsonl"

@@ -676,9 +676,11 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
 @pytest.mark.asyncio
 async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_challenge():
     """
-    OAuth2 server with ``delegate_auth_to_upstream=True`` should let the
-    upstream MCP server's RFC 9728 challenge reach the client instead of
-    pre-emptively returning LiteLLM's gateway authorization_uri challenge.
+    OAuth2 server with ``delegate_auth_to_upstream=True`` where the client
+    already presents a bearer token the upstream rejects: the request bypasses
+    the preemptive challenge (a token is present) and reaches the session
+    manager, whose upstream ``MCPUpstreamAuthError`` is surfaced verbatim so the
+    client sees the upstream's RFC 9728 challenge rather than the gateway's.
     """
     from fastapi import HTTPException
 
@@ -722,9 +724,7 @@ async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_cha
     delegated_server.needs_user_oauth_token = True
     delegated_server.server_id = "delegated-oauth-server"
 
-    upstream_challenge = (
-        'Bearer resource_metadata="https://upstream.example.com/.well-known/oauth-protected-resource"'
-    )
+    upstream_challenge = 'Bearer resource_metadata="https://upstream.example.com/.well-known/oauth-protected-resource"'
 
     with (
         patch(
@@ -735,7 +735,7 @@ async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_cha
                 None,
                 ["delegated_oauth_server"],
                 None,
-                None,
+                {"Authorization": "Bearer upstream-token-the-upstream-rejects"},
                 None,
             ),
         ),
@@ -863,16 +863,24 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
 
 
 @pytest.mark.asyncio
-async def test_handle_streamable_http_mcp_delegated_server_without_token_reaches_session_manager():
+async def test_handle_streamable_http_mcp_delegated_server_without_token_returns_preemptive_resource_metadata_401():
     """
     OAuth2 server with ``delegate_auth_to_upstream=True`` and no stored token
-    should not receive LiteLLM's gateway authorization_uri challenge. The
-    request continues so the upstream MCP server can emit its RFC 9728 challenge.
+    must fail fast with a 401 carrying a ``resource_metadata=`` challenge that
+    points at the gateway's proxied oauth-protected-resource well-known, so the
+    MCP client starts PKCE against the upstream IdP. On ``initialize`` the
+    gateway answers locally and never probes upstream, so this preemptive
+    challenge is the only thing that can drive the client into the OAuth flow;
+    falling through to the session manager (or emitting the gateway
+    ``authorization_uri=`` challenge) leaves the client with no tools and no
+    sign-in prompt.
     """
+    from fastapi import HTTPException
+
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager_stateless,
+            session_manager_stateful,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -880,7 +888,12 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_reaches
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/mcp",
+        "path": "/mcp/delegated_oauth_server",
+        "_original_path": "/delegated_oauth_server/mcp",
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("litellm.example.com", 443),
         "headers": [
             (b"content-type", b"application/json"),
             (b"host", b"litellm.example.com"),
@@ -889,7 +902,7 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_reaches
     receive = AsyncMock(
         return_value={
             "type": "http.request",
-            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
             "more_body": False,
         }
     )
@@ -900,6 +913,7 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_reaches
     delegated_server.auth_type = MCPAuth.oauth2
     delegated_server.delegate_auth_to_upstream = True
     delegated_server.needs_user_oauth_token = True
+    delegated_server.server_id = "delegated-oauth-server"
 
     with (
         patch(
@@ -936,12 +950,20 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_reaches
             return_value=delegated_server,
         ),
         patch.object(
-            session_manager_stateless,
+            session_manager_stateful,
             "handle_request",
             new_callable=AsyncMock,
         ) as mock_handle_request,
     ):
-        await handle_streamable_http_mcp(scope, receive, send)
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
 
     assert mock_get_stored_token.await_count == 1
-    assert mock_handle_request.await_count == 1
+    assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert "resource_metadata=" in challenge
+    assert "authorization_uri=" not in challenge
+    assert (
+        "/.well-known/oauth-protected-resource/delegated_oauth_server/mcp" in challenge
+    )

@@ -132,13 +132,11 @@ def update_breakdown_metrics(
                     ),
                 )
             )
-        breakdown.models[record.model].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.models[record.model]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
-            )
+        breakdown.models[record.model].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.models[record.model].api_key_breakdown[record.api_key].metrics,
+            record,
         )
 
     # Update model group breakdown
@@ -247,11 +245,11 @@ def update_breakdown_metrics(
                 ),
             )
         )
-    breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = (
-        update_metrics(
-            breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
-            record,
-        )
+    breakdown.providers[provider].api_key_breakdown[
+        record.api_key
+    ].metrics = update_metrics(
+        breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
+        record,
     )
 
     # Update endpoint breakdown
@@ -338,13 +336,11 @@ def update_breakdown_metrics(
                     ),
                 )
             )
-        breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.entities[entity_value]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
-            )
+        breakdown.entities[entity_value].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
+            record,
         )
 
     return breakdown

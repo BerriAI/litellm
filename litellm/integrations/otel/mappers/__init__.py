@@ -38,7 +38,7 @@ def resolve_mappers(names: Iterable[str]) -> list[AttributeMapper]:
         factory = _MAPPER_BY_NAME.get(name)
         if factory is None:
             raise ValueError(
-                f"unknown mapper name {name!r}; known: " f"{sorted(_MAPPER_BY_NAME)}"
+                f"unknown mapper name {name!r}; known: {sorted(_MAPPER_BY_NAME)}"
             )
         out.append(factory())
     return out

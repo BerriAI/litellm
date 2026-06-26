@@ -14,7 +14,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.proxy_server as ps
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
@@ -1360,3 +1364,83 @@ async def test_retrieve_model_by_inaccessible_public_name_404s(monkeypatch):
 
     assert exc_info.value.status_code == 404
     router.get_deployment_by_model_group_name.assert_not_called()
+
+
+def test_get_direct_access_models_expands_all_proxy_models_sentinel():
+    """A user provisioned with 'all-proxy-models' has direct access to every non-team
+    deployment. The sentinel must resolve via get_model_ids, not be looked up as a
+    literal model_name (which matches nothing). Regression for GH#22791."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1", "global-id-2"]
+    router.get_model_list.return_value = []
+
+    user = LiteLLM_UserTable(
+        user_id="u",
+        models=[ps.SpecialModelNames.all_proxy_models.value],
+        teams=[],
+    )
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ["global-id-1", "global-id-2"]
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    router.get_model_list.assert_not_called()
+
+
+def test_get_direct_access_models_resolves_explicit_model_names():
+    """Without the sentinel, only the user's explicitly listed models resolve to ids;
+    the all-proxy-models shortcut must not fire."""
+    router = MagicMock()
+    router.get_model_list.return_value = [{"model_info": {"id": "gpt4o-id"}}]
+
+    user = LiteLLM_UserTable(user_id="u", models=["gpt-4o"], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ["gpt4o-id"]
+    router.get_model_ids.assert_not_called()
+    router.get_model_list.assert_called_once_with(model_name="gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
+    monkeypatch,
+):
+    """An internal user provisioned with 'all-proxy-models' and no teams must see proxy
+    models on the Models+Endpoints page. Before the fix _populate_team_access_on_models
+    marked direct_access=False, so _filter_models_to_user_accessible dropped every model
+    and the page was empty. Regression for GH#22791."""
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    user_row = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[ps.SpecialModelNames.all_proxy_models.value],
+        teams=[],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+
+    caller = UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[]
+    )
+
+    populated = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[global_row],
+    )
+    visible = ps._filter_models_to_user_accessible(populated)
+
+    assert [m["model_info"]["id"] for m in visible] == ["global-id-1"]
+    assert visible[0]["model_info"]["direct_access"] is True

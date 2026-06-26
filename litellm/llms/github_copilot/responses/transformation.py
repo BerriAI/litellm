@@ -58,8 +58,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
         )
     except Exception as e:
         verbose_logger.debug(
-            "github_copilot_supports_responses_api: get_model_info failed "
-            "for %s: %s",
+            "github_copilot_supports_responses_api: get_model_info failed for %s: %s",
             model,
             e,
         )

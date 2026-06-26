@@ -156,9 +156,9 @@ class CustomOpenAPISpec:
                     filtered_params = [
                         param for param in existing_params if param.get("in") == "path"
                     ]
-                    openapi_schema["paths"][path]["post"][
-                        "parameters"
-                    ] = filtered_params
+                    openapi_schema["paths"][path]["post"]["parameters"] = (
+                        filtered_params
+                    )
 
     @staticmethod
     def _move_defs_to_components(

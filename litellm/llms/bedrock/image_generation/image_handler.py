@@ -115,7 +115,11 @@ class BedrockImageGeneration(BaseAWSLLM):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -154,7 +158,11 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
 
         try:
-            response = await async_client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = await async_client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code

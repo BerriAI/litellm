@@ -197,8 +197,7 @@ def _build_system_prompt(is_admin: bool) -> str:
     """Build role-appropriate system prompt with today's date."""
     tool_desc = _TOOL_DESCRIPTIONS_ADMIN if is_admin else _TOOL_DESCRIPTIONS_BASE
     return (
-        f"{_SYSTEM_PROMPT_BASE}\n\n{tool_desc}"
-        f"Today's date: {date.today().isoformat()}"
+        f"{_SYSTEM_PROMPT_BASE}\n\n{tool_desc}Today's date: {date.today().isoformat()}"
     )
 
 
@@ -352,7 +351,9 @@ def _summarise_usage_data(data: Dict[str, Any]) -> str:
 
     model_lines = _ranked_lines(
         models,
-        lambda n, d: f"  - {n}: ${d['spend']:.4f} ({int(d['api_requests'])} reqs, {int(d['total_tokens'])} tokens)",
+        lambda n, d: (
+            f"  - {n}: ${d['spend']:.4f} ({int(d['api_requests'])} reqs, {int(d['total_tokens'])} tokens)"
+        ),
         TOP_N_MODELS,
     )
     provider_lines = _ranked_lines(

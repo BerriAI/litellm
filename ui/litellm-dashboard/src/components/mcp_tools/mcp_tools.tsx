@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
 import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
@@ -484,7 +485,7 @@ const MCPToolsViewer = ({
                                 <div className="flex items-start space-x-2">
                                   {tool.mcp_info.logo_url && (
                                     <img
-                                      src={tool.mcp_info.logo_url}
+                                      src={resolveLogoSrc(tool.mcp_info.logo_url)}
                                       alt={`${tool.mcp_info.server_name} logo`}
                                       className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
                                     />

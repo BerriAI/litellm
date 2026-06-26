@@ -65,9 +65,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             **kwargs,
         )
 
-        self.optional_params_request_body: (
-            AzureTextModerationRequestBodyOptionalParams
-        ) = {
+        self.optional_params_request_body: AzureTextModerationRequestBodyOptionalParams = {
             "categories": kwargs.get("categories")
             or [
                 "Hate",

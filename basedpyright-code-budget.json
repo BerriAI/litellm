@@ -4,7 +4,7 @@
     "slack": 2500
   },
   "reportArgumentType": {
-    "baseline": 1934,
+    "baseline": 1814,
     "slack": 180
   },
   "reportAssignmentType": {
@@ -69,7 +69,7 @@
   },
   "reportMatchNotExhaustive": {
     "baseline": 1,
-    "slack": 3
+    "slack": 0
   },
   "reportMissingParameterType": {
     "baseline": 3933,

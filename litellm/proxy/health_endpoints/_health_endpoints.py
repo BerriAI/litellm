@@ -1849,7 +1849,10 @@ async def test_model_connection(
             "responses",
             "ocr",
         ]
-    ] = fastapi.Body("chat", description="The mode to test the model with"),
+    ] = fastapi.Body(
+        None,
+        description="The mode to test the model with. If not provided, auto-detected from model capabilities.",
+    ),
     litellm_params: Dict = fastapi.Body(
         None,
         description="Parameters for litellm.completion, litellm.embedding for the health check",

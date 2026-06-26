@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +27,13 @@ else:
 # Create a thread pool with a maximum of 10 threads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
+
+class RealtimeEventNormalizer(Protocol):
+    def should_drop(self, event: object) -> bool: ...
+    def normalize(self, event: dict) -> dict: ...
+    def patch_outgoing_session(self, session: dict) -> dict: ...
+
+
 DefaultLoggedRealTimeEventTypes = [
     "session.created",
     "response.create",
@@ -48,6 +55,7 @@ class RealTimeStreaming:
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
         force_transcription_model: Optional[str] = None,
+        event_normalizer: Optional[RealtimeEventNormalizer] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -101,11 +109,16 @@ class RealTimeStreaming:
         self._flushing_pending_messages_until_setup: bool = False
         self._pending_messages_until_setup: List[str] = []
         self._pending_messages_byte_total: int = 0
+        # Gemini Live rejects a follow-up BidiGenerateContentSetup once any
+        # content (realtimeInput / clientContent / toolResponse) has been sent.
+        self._content_sent_after_setup: bool = False
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
         self._force_transcription_model = force_transcription_model
         self._is_transcription_session: bool = force_transcription_model is not None
+        # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
+        self._event_normalizer = event_normalizer
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -169,7 +182,9 @@ class RealTimeStreaming:
         try:
             event_type = message_obj.get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
-                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
+                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(
+                    **message_obj
+                )  # type: ignore
             else:
                 # Catch-all base object so unknown/new event names never raise.
                 typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
@@ -351,15 +366,36 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
-                # Send first; only cache the setup payload once the backend
-                # has actually accepted it. Caching before send would leave
-                # ``session_configuration_request`` populated after a failed
-                # send, causing subsequent client session.update messages to
-                # be treated as "subsequent" and dropped even though the
-                # backend never received the original setup.
-                await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
-                self._cache_session_configuration_request(msg)
-                sent = True
+                try:
+                    msg_obj = json.loads(msg)
+                except (json.JSONDecodeError, TypeError):
+                    msg_obj = None
+                if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(
+                    msg_obj
+                ):
+                    if self._content_sent_after_setup:
+                        verbose_logger.debug(
+                            "Dropping follow-up setup after content was already sent to backend"
+                        )
+                        continue
+                    await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
+                    self._cache_session_configuration_request(msg)
+                    sent = True
+                else:
+                    is_content_message = isinstance(
+                        msg_obj, dict
+                    ) and self.provider_config.is_content_message(msg_obj)
+                    # Send first, then mutate state, so a failed send leaves both
+                    # ``session_configuration_request`` and
+                    # ``_content_sent_after_setup`` untouched. Caching or marking
+                    # content before send would leave the session believing the
+                    # backend received a setup/content frame it never got, causing
+                    # subsequent client session.update messages to be dropped.
+                    await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
+                    self._cache_session_configuration_request(msg)
+                    if is_content_message:
+                        self._content_sent_after_setup = True
+                    sent = True
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
         return True
@@ -555,7 +591,27 @@ class RealTimeStreaming:
                 return False
         return True
 
+    def _should_drop_event_from_client(self, event: object) -> bool:
+        """Return True for provider-specific events that must not reach GA clients."""
+        if self._event_normalizer is not None:
+            return self._event_normalizer.should_drop(event)
+        return False
+
+    def _normalize_event_for_ga_client(self, event: dict) -> dict:
+        """Apply per-provider GA normalization before forwarding to clients."""
+        if self._event_normalizer is not None:
+            return self._event_normalizer.normalize(event)
+        return event
+
+    def _event_to_client_json(self, event: dict) -> str:
+        return json.dumps(self._normalize_event_for_ga_client(event))
+
     async def _send_event_to_client(self, event: Any, event_str: str) -> bool:
+        if self._should_drop_event_from_client(event):
+            return False
+        if isinstance(event, dict):
+            event = self._normalize_event_for_ga_client(event)
+            event_str = json.dumps(event)
         if self._client_wants_beta and isinstance(event, dict):
             try:
                 translated = self._translate_event_to_beta(event)
@@ -843,6 +899,8 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
+            if self._should_drop_event_from_client(event):
+                continue
             is_session_created_event = (
                 isinstance(event, dict) and event.get("type") == "session.created"
             )
@@ -934,7 +992,7 @@ class RealTimeStreaming:
             and self._has_audio_transcription_guardrails()
         ):
             self.store_message(event_obj)
-            await self.websocket.send_text(raw_response)
+            await self.websocket.send_text(self._event_to_client_json(event_obj))
             await self._send_to_backend(self._make_disable_auto_response_message())
             return True
 
@@ -942,7 +1000,7 @@ class RealTimeStreaming:
             transcript = event_obj.get("transcript", "")
             self._collect_user_input_from_backend_event(event_obj)
             self.store_message(event_obj)
-            await self.websocket.send_text(raw_response)
+            await self.websocket.send_text(self._event_to_client_json(event_obj))
 
             # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
             # assistant turn: capture audio-duration usage for cost and never
@@ -995,20 +1053,23 @@ class RealTimeStreaming:
                         await self.websocket.send_text(raw_response)
                         continue
 
+                    if self._should_drop_event_from_client(event):
+                        continue
+
                     if await self._handle_raw_backend_message(event, raw_response):
                         continue
+
+                    event = self._normalize_event_for_ga_client(event)
                     self.store_message(event)
 
                     if not self._client_wants_beta:
-                        await self.websocket.send_text(raw_response)
+                        await self.websocket.send_text(json.dumps(event))
                         continue
 
                     translated = self._translate_event_to_beta(event)
                     if translated is None:
                         continue
-                    await self.websocket.send_text(
-                        raw_response if translated is event else json.dumps(translated)
-                    )
+                    await self.websocket.send_text(json.dumps(translated))
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.exception(
@@ -1140,8 +1201,7 @@ class RealTimeStreaming:
 
         Returns None when the event must be dropped (the GA-only
         conversation.item.done has no beta counterpart). Returns the original
-        event object unchanged when no translation applies, so the caller can
-        forward the raw frame without re-serializing; otherwise returns a
+        event object unchanged when no translation applies; otherwise returns a
         translated copy.
         """
         event_type = event.get("type", "")
@@ -1400,6 +1460,14 @@ class RealTimeStreaming:
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)
                             msg_obj["session"] = session
+                            message = json.dumps(msg_obj)
+
+                    if msg_type == "session.update" and self._event_normalizer:
+                        session = msg_obj.get("session")
+                        if isinstance(session, dict):
+                            msg_obj["session"] = (
+                                self._event_normalizer.patch_outgoing_session(session)
+                            )
                             message = json.dumps(msg_obj)
 
                 except (json.JSONDecodeError, AttributeError):

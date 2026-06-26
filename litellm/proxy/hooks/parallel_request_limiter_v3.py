@@ -2943,9 +2943,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
             if pipeline_operations:
-                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=pipeline_operations,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
+                await (
+                    self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                        increment_list=pipeline_operations,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
                 )
             if reserved_tokens > 0:
                 self._mark_reservation_released(kwargs)
@@ -3104,9 +3106,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Releasing reserved TPM tokens on proxy-level "
                     f"rejection: {reserved_tokens}"
                 )
-                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=ops,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                await (
+                    self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                        increment_list=ops,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
                 )
             self._mark_reservation_released(request_data)
         except Exception as e:

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Union
 
 import httpx
 from typing_extensions import Required, TypedDict
@@ -64,9 +64,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM rerank URL.
@@ -106,17 +106,18 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         """
         Map Cohere/OpenAI rerank params to Nvidia NIM format.
@@ -145,8 +146,8 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> dict:
         """
         Validate that the Nvidia NIM API key is present.
@@ -177,7 +178,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         """
         Transform request to Nvidia NIM format.
@@ -234,12 +235,18 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         }
 
         # Add optional top_k parameter if provided (already mapped from top_n in map_cohere_rerank_params)
-        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:  # type: ignore
+        if (
+            "top_k" in optional_rerank_params
+            and optional_rerank_params.get("top_k") is not None
+        ):  # type: ignore
             request_data["top_k"] = optional_rerank_params.get("top_k")  # type: ignore
 
         # Add Nvidia-specific truncate parameter if provided
         # This is passed through from non_default_params, not in base OptionalRerankParams
-        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:  # type: ignore
+        if (
+            "truncate" in optional_rerank_params
+            and optional_rerank_params.get("truncate") is not None
+        ):  # type: ignore
             truncate_value = optional_rerank_params.get("truncate")  # type: ignore
             if truncate_value in ["NONE", "END"]:
                 request_data["truncate"] = truncate_value  # type: ignore
@@ -252,7 +259,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},

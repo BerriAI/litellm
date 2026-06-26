@@ -1,0 +1,13 @@
+# Sample realtime config for the LiteLLM Rust AI Gateway.
+#
+# The gateway loads this model_list at boot via the embedded python config
+# reader (litellm.proxy.read_model_list), which reuses the proxy's own reader —
+# so include:, os.environ/ secrets, and DB-stored models all work here too.
+#
+# Secrets are referenced (never inlined) via os.environ/. A real deploy can
+# override this file (e.g. mount a Render secret file at LITELLM_CONFIG_PATH).
+model_list:
+  - model_name: gpt-realtime
+    litellm_params:
+      model: openai/gpt-realtime
+      api_key: os.environ/OPENAI_API_KEY

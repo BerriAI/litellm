@@ -523,7 +523,9 @@ class ProxyLogging:
                     or "outage_alerts" in self.alert_types
                     or "region_outage_alerts" in self.alert_types
                 ):
-                    litellm.logging_callback_manager.add_litellm_callback(self.slack_alerting_instance)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_callback(
+                        self.slack_alerting_instance
+                    )  # type: ignore
                 litellm.logging_callback_manager.add_litellm_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
                 )
@@ -1691,10 +1693,8 @@ class ProxyLogging:
 
         for callback in callbacks:
             if isinstance(callback, str):
-                resolved: Any = (
-                    litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
-                    )
+                resolved: Any = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 resolved = callback
@@ -3627,7 +3627,9 @@ class PrismaClient:
                 return response
             elif table_name == "user_notification":
                 if query_type == "find_unique":
-                    response = await UserNotificationsRepository(self).table.find_unique(  # type: ignore
+                    response = await UserNotificationsRepository(
+                        self
+                    ).table.find_unique(  # type: ignore
                         where={"user_id": user_id}  # type: ignore
                     )
                 elif query_type == "find_all":
@@ -3831,7 +3833,9 @@ class PrismaClient:
                 print_verbose(
                     "PrismaClient: Before upsert into litellm_verificationtoken"
                 )
-                new_verification_token = await VerificationTokenRepository(self).table.upsert(  # type: ignore
+                new_verification_token = await VerificationTokenRepository(
+                    self
+                ).table.upsert(  # type: ignore
                     where={
                         "token": hashed_token,
                     },
@@ -5717,19 +5721,19 @@ async def update_daily_tag_spend(
     """
     n_retry_times = 3
     try:
-        if (
-            proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis()
-        ):
+        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
             await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
                 proxy_logging_obj=proxy_logging_obj,
             )
         else:
-            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
-                prisma_client=prisma_client,
-                n_retry_times=n_retry_times,
-                proxy_logging_obj=proxy_logging_obj,
+            await (
+                proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
+                    prisma_client=prisma_client,
+                    n_retry_times=n_retry_times,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
     except Exception as e:
         # NOTE: keep this as a plain ``error`` (no traceback) to match the

@@ -11,7 +11,16 @@ lint.external = [
     "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
 ]
 line-length = 120
-exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+
+# `ruff format` (replacing Black) must wrap at 88, the width Black used and the whole
+# history is formatted to. The global line-length stays 120 because E501 and the import
+# sorter (I001, strict gate) are tuned to it and ruff has no per-formatter line-length,
+# so 88 is passed at the `ruff format --line-length 88` call sites (Makefile + CI).
+format.exclude = ["**/enterprise/**"]
+
+# Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
+# (Black did) while `ruff check` keeps skipping them.
+lint.exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 
 
 [lint.per-file-ignores]

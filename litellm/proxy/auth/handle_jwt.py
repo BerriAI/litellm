@@ -1970,9 +1970,8 @@ class JWTAuthManager:
         """Main authentication and authorization builder"""
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
         # JWT auth if the token itself is a well-formed JWT (3-part structure).
-        if (
-            jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-            and not jwt_handler.is_jwt(token=api_key)
+        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
+            token=api_key
         ):
             verbose_proxy_logger.debug(
                 "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
@@ -2173,16 +2172,18 @@ class JWTAuthManager:
 
         # If JWT did not resolve team_id, attempt single-team DB fallback.
         if team_id is None:
-            team_id, team_object, team_membership_object = (
-                await JWTAuthManager._resolve_single_team_fallback(
-                    user_object=user_object,
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-                )
+            (
+                team_id,
+                team_object,
+                team_membership_object,
+            ) = await JWTAuthManager._resolve_single_team_fallback(
+                user_object=user_object,
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
 
         ## MAP USER TO TEAMS

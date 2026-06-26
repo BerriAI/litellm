@@ -35,7 +35,6 @@ from litellm.integrations.otel.model.spans import db_system
 
 
 class GenAIMapper:
-
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
@@ -81,9 +80,13 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}original": lambda d: d.cost.original,
         f"{LiteLLM.COST_PREFIX}discount_amount": lambda d: d.cost.discount_amount,
         f"{LiteLLM.COST_PREFIX}discount_percent": lambda d: d.cost.discount_percent,
-        f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: d.cost.margin_fixed_amount,
+        f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: (
+            d.cost.margin_fixed_amount
+        ),
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
-        f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
+        f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: (
+            d.cost.margin_total_amount
+        ),
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
     }
 

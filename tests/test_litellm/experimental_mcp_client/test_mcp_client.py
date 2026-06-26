@@ -1,6 +1,5 @@
 import asyncio
 import os
-import ssl
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -541,6 +540,46 @@ class TestExecuteSessionOperationSurfacesTransportError:
 
         result = await client._execute_session_operation(transport_ctx, _op)
         assert result == "done"
+
+
+class TestMCPClientResolvedAuth:
+    """A pre-resolved httpx.Auth is attached to the upstream client's auth= slot."""
+
+    @pytest.mark.asyncio
+    async def test_resolved_auth_feeds_the_auth_slot(self):
+        resolved = httpx.Auth()
+        client = MCPClient(
+            server_url="https://upstream.example.com", resolved_auth=resolved
+        )
+        http_client = client._create_httpx_client_factory()()
+        try:
+            assert http_client.auth is resolved
+        finally:
+            await http_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_resolved_auth_takes_precedence_over_aws_auth(self):
+        resolved = httpx.Auth()
+        client = MCPClient(
+            server_url="https://upstream.example.com",
+            resolved_auth=resolved,
+            aws_auth=httpx.Auth(),
+        )
+        http_client = client._create_httpx_client_factory()()
+        try:
+            assert http_client.auth is resolved
+        finally:
+            await http_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_without_resolved_auth_falls_back_to_aws_auth(self):
+        aws = httpx.Auth()
+        client = MCPClient(server_url="https://upstream.example.com", aws_auth=aws)
+        http_client = client._create_httpx_client_factory()()
+        try:
+            assert http_client.auth is aws
+        finally:
+            await http_client.aclose()
 
 
 if __name__ == "__main__":
