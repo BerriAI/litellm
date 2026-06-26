@@ -743,29 +743,53 @@ async def _common_key_generation_helper(
     _enforce_upperbound_key_params(data, fill_defaults=True)
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
-    # with an explicit budget cannot grant a key a higher budget than their own.
-    # Callers with max_budget=None (unlimited) can delegate any budget.
-    # A UI/CLI session token's max_budget is a per-session chat spend cap
-    # (max_ui_session_budget), not a delegation authority, so it is exempt only
-    # when creating a team key - that key's spend is bounded by the team budget
-    # at request time. Personal keys keep the ceiling; nothing else bounds them.
+    # cannot grant a key a higher budget than their own authority.
     is_ui_session_team_key = (
         user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
         and _requested_team_id is not None
+    )
+    # Session tokens (lite login) carry max_budget=None to avoid a per-session
+    # LLM spend cap, but that None must not be read as "unlimited delegation
+    # authority". A personal key (no team) has no team-budget enforcement at
+    # request time, so a session token cannot delegate any budget for one.
+    if (
+        user_api_key_dict.is_session_token
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not is_ui_session_team_key
+        and _requested_max_budget is not None
+        and team_table is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"max_budget ({_requested_max_budget}) cannot be set without "
+                    "specifying team_id when using a CLI session token."
+                )
+            },
+        )
+    delegation_ceiling = (
+        user_api_key_dict.max_budget
+        if user_api_key_dict.max_budget is not None
+        else (
+            team_table.max_budget
+            if user_api_key_dict.is_session_token and team_table is not None
+            else None
+        )
     )
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and not is_ui_session_team_key
         and _requested_max_budget is not None
-        and user_api_key_dict.max_budget is not None
-        and _requested_max_budget > user_api_key_dict.max_budget
+        and delegation_ceiling is not None
+        and _requested_max_budget > delegation_ceiling
     ):
         raise HTTPException(
             status_code=400,
             detail={
                 "error": (
                     f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
-                    f"own max_budget ({user_api_key_dict.max_budget})."
+                    f"own max_budget ({delegation_ceiling})."
                 )
             },
         )
