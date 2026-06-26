@@ -33,6 +33,11 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
 # Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
 
+# Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
+# request in the cost-calc path, so the f-strings are built once here instead
+# of being rebuilt for every model_info key on every call.
+_SERVICE_TIER_SUFFIXES: tuple[str, ...] = tuple(f"_{st.value}" for st in ServiceTier)
+
 
 def _get_token_detail_value(details: object, key: str) -> Optional[int]:
     if isinstance(details, dict):
@@ -131,8 +136,10 @@ def _generic_cost_per_character(
             assert (
                 "input_cost_per_character" in model_info
                 and model_info["input_cost_per_character"] is not None
-            ), "model info for model={} does not have 'input_cost_per_character'-pricing\nmodel_info={}".format(
-                model, model_info
+            ), (
+                "model info for model={} does not have 'input_cost_per_character'-pricing\nmodel_info={}".format(
+                    model, model_info
+                )
             )
             custom_prompt_cost = model_info["input_cost_per_character"]
 
@@ -152,8 +159,10 @@ def _generic_cost_per_character(
             assert (
                 "output_cost_per_character" in model_info
                 and model_info["output_cost_per_character"] is not None
-            ), "model info for model={} does not have 'output_cost_per_character'-pricing\nmodel_info={}".format(
-                model, model_info
+            ), (
+                "model info for model={} does not have 'output_cost_per_character'-pricing\nmodel_info={}".format(
+                    model, model_info
+                )
             )
             custom_completion_cost = model_info["output_cost_per_character"]
         completion_cost = completion_characters * custom_completion_cost
@@ -248,7 +257,7 @@ def _get_token_base_cost(
         k
         for k in model_info
         if k.startswith("input_cost_per_token_above_")
-        and not any(k.endswith(f"_{st.value}") for st in ServiceTier)
+        and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
         return (
@@ -414,9 +423,8 @@ def _get_cost_per_unit(
 
     # If the service tier key doesn't exist or is None, try to fall back to the standard key
     if cost_per_unit is None:
-        # Check if any service tier suffix exists in the cost key using ServiceTier enum
-        for service_tier in ServiceTier:
-            suffix = f"_{service_tier.value}"
+        # Check if any service tier suffix exists in the cost key
+        for suffix in _SERVICE_TIER_SUFFIXES:
             if suffix in cost_key:
                 # Extract the base key by removing the matched suffix
                 base_key = cost_key.replace(suffix, "")
@@ -481,6 +489,7 @@ class PromptTokensDetailsResult(TypedDict):
     character_count: int
     image_count: int
     video_length_seconds: float
+    audio_length_seconds: float
 
 
 def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
@@ -531,6 +540,13 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         )
         or 0.0
     )
+    audio_length_seconds = (
+        cast(
+            Optional[float],
+            getattr(usage.prompt_tokens_details, "audio_length_seconds", 0),
+        )
+        or 0.0
+    )
 
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
@@ -542,6 +558,7 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         character_count=character_count,
         image_count=image_count,
         video_length_seconds=float(video_length_seconds),
+        audio_length_seconds=float(audio_length_seconds),
     )
 
 
@@ -663,6 +680,14 @@ def _calculate_input_cost(
             prompt_tokens_details["video_length_seconds"],
         )
 
+    ### AUDIO LENGTH COST
+    if prompt_tokens_details["audio_length_seconds"]:
+        prompt_cost += calculate_cost_component(
+            model_info,
+            "input_cost_per_audio_per_second",
+            prompt_tokens_details["audio_length_seconds"],
+        )
+
     return prompt_cost
 
 
@@ -739,6 +764,7 @@ def generic_cost_per_token(
         character_count=0,
         image_count=0,
         video_length_seconds=0.0,
+        audio_length_seconds=0.0,
     )
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)

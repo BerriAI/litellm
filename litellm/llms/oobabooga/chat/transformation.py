@@ -65,7 +65,9 @@ class OobaboogaConfig(OpenAIGPTConfig):
             )
         else:
             try:
-                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
+                model_response.choices[0].message.content = completion_response[
+                    "choices"
+                ][0]["message"]["content"]  # type: ignore
             except Exception as e:
                 raise OobaboogaError(
                     message=str(e),

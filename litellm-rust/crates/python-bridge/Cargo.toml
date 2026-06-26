@@ -6,12 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "litellm_python_bridge"
+name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
 litellm-core.workspace = true
-litellm-providers.workspace = true
+litellm-ai-gateway = { workspace = true, default-features = false }
 pyo3 = { workspace = true, features = ["extension-module"] }
 pyo3-async-runtimes.workspace = true
 serde_json.workspace = true

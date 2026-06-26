@@ -97,9 +97,9 @@ class InMemoryPromptRegistry:
         Prompt id to Prompt object mapping
         """
 
-        self.prompt_id_to_custom_prompt: Dict[str, Optional[CustomPromptManagement]] = (
-            {}
-        )
+        self.prompt_id_to_custom_prompt: Dict[
+            str, Optional[CustomPromptManagement]
+        ] = {}
         """
         Guardrail id to CustomGuardrail object mapping
         """
@@ -142,7 +142,9 @@ class InMemoryPromptRegistry:
                 raise ValueError(
                     f"CustomPromptManagement is required, got {type(custom_prompt_callback)}"
                 )
-            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(
+                custom_prompt_callback
+            )  # type: ignore
         else:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
 

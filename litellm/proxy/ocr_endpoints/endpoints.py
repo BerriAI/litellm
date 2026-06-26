@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -26,8 +27,6 @@ def _build_document_from_upload(
     Delegates to convert_file_document_to_url_document after resolving MIME type
     from the upload's content_type header or filename.
     """
-    from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
-
     mime_type = content_type.split(";")[0].strip() if content_type else None
     if not mime_type or mime_type == "application/octet-stream":
         if filename:

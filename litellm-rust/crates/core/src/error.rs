@@ -13,16 +13,18 @@ pub enum CoreError {
     MissingField(&'static str),
     #[error("invalid response: {0}")]
     InvalidResponse(String),
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
     #[error("{0}")]
     Auth(String),
     #[error("OCR request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("OCR network error: {0}")]
     Network(String),
+    #[error("routing error: {0}")]
+    Routing(String),
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {

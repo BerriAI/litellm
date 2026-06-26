@@ -3,7 +3,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -92,6 +91,42 @@ async def test_redis_cache_async_increment_default_does_not_bump_existing_ttl(
         await redis_cache.async_increment(key="rate_limit:window", value=1)
 
     mock_redis_instance.expire.assert_not_awaited()
+
+
+@pytest.mark.parametrize("namespace", [None, "litellm"])
+@pytest.mark.asyncio
+async def test_async_delete_cache_applies_namespace(
+    namespace, monkeypatch, redis_no_ping
+):
+    """async_delete_cache must prefix keys with the namespace, matching every
+    other cache operation. Without this, Redis NOPERM errors occur when an
+    ACL restricts DEL to the litellm:* pattern."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_delete_cache(key="3997c4abcdef")
+
+    expected_key = "litellm:3997c4abcdef" if namespace else "3997c4abcdef"
+    mock_redis_instance.delete.assert_awaited_once_with(expected_key)
+
+
+@pytest.mark.parametrize("namespace", [None, "litellm"])
+def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
+    """delete_cache must prefix keys with the namespace, matching every other
+    cache operation."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_client = MagicMock()
+    redis_cache.redis_client = mock_redis_client
+
+    redis_cache.delete_cache(key="3997c4abcdef")
+
+    expected_key = "litellm:3997c4abcdef" if namespace else "3997c4abcdef"
+    mock_redis_client.delete.assert_called_once_with(expected_key)
 
 
 @pytest.mark.asyncio
@@ -517,3 +552,177 @@ async def test_async_lpop_with_float_redis_version(
 
             # Verify the method completed without error
             assert result is not None
+
+
+# LIT-3374: the namespace must be applied uniformly across every key-taking
+# Redis operation, not just get/set/increment. Before the fix these paths wrote
+# or read raw keys, so with a namespace configured the prefixed keys other
+# operations created were silently missed.
+
+
+@pytest.mark.parametrize(
+    "namespace, raw_keys, expected_keys",
+    [
+        (None, ["{k:v}:tokens", "{k:v}:requests"], ["{k:v}:tokens", "{k:v}:requests"]),
+        (
+            "litellm_sandbox",
+            ["{k:v}:tokens", "{k:v}:requests"],
+            ["litellm_sandbox:{k:v}:tokens", "litellm_sandbox:{k:v}:requests"],
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_register_script_namespaces_keys(
+    namespace, raw_keys, expected_keys, monkeypatch, redis_no_ping
+):
+    """The callable returned by async_register_script (used by the rate limiter
+    Lua scripts, pod-lock release, and budget limiters) must namespace every key
+    it is invoked with. The hash tag is preserved so cluster slotting is intact."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+
+    registered_script = AsyncMock(return_value="ok")
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.register_script = MagicMock(return_value=registered_script)
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        script = redis_cache.async_register_script("return 1")
+        result = await script(keys=raw_keys, args=[60])
+
+    assert result == "ok"
+    registered_script.assert_awaited_once_with(
+        keys=expected_keys, args=[60], client=None
+    )
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+@pytest.mark.asyncio
+async def test_async_delete_cache_namespaces_key(
+    namespace, expected, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_delete_cache("k")
+    mock_redis_instance.delete.assert_awaited_once_with(expected)
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+@pytest.mark.asyncio
+async def test_delete_cache_keys_namespaces_keys(
+    namespace, expected, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.delete_cache_keys(["k"])
+    mock_redis_instance.delete.assert_awaited_once_with(expected)
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+@pytest.mark.asyncio
+async def test_async_get_ttl_namespaces_key(
+    namespace, expected, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.ttl = AsyncMock(return_value=42)
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        ttl = await redis_cache.async_get_ttl("k")
+    assert ttl == 42
+    mock_redis_instance.ttl.assert_awaited_once_with(expected)
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+@pytest.mark.asyncio
+async def test_async_lpop_namespaces_key(
+    namespace, expected, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.lpop = AsyncMock(return_value=b"value")
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_lpop(key="k")
+    mock_redis_instance.lpop.assert_awaited_once_with(expected, None)
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+@pytest.mark.asyncio
+async def test_async_rpush_namespaces_key(
+    namespace, expected, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.rpush = AsyncMock(return_value=1)
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_rpush("k", ["v"])
+    mock_redis_instance.rpush.assert_awaited_once_with(expected, "v")
+
+
+@pytest.mark.parametrize("namespace, expected_match", [(None, "k*"), ("ns", "ns:k*")])
+@pytest.mark.asyncio
+async def test_async_scan_iter_namespaces_pattern(
+    namespace, expected_match, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+
+    captured = {}
+
+    def scan_iter(match, count):
+        captured["match"] = match
+
+        async def gen():
+            for _ in ():
+                yield _
+
+        return gen()
+
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.scan_iter = scan_iter
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_scan_iter(pattern="k")
+    assert captured["match"] == expected_match
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+def test_increment_cache_namespaces_key(
+    namespace, expected, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_client = MagicMock()
+    mock_client.incr.return_value = 5
+    mock_client.ttl.return_value = 100
+    redis_cache.redis_client = mock_client
+    redis_cache.increment_cache(key="k", value=1)
+    mock_client.incr.assert_called_once_with(name=expected, amount=1)
+
+
+@pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
+def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_client = MagicMock()
+    redis_cache.redis_client = mock_client
+    redis_cache.delete_cache(key="k")
+    mock_client.delete.assert_called_once_with(expected)

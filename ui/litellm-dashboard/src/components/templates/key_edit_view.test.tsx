@@ -600,6 +600,96 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should submit budget_limits: [] when the last budget window is deleted", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const deleteWindowButton = await screen.findByRole("button", { name: "✕" });
+    await userEvent.click(deleteWindowButton);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toEqual([]);
+    });
+  });
+
+  it("should resend existing budget windows on submit when they are left untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toEqual([{ budget_duration: "30d", max_budget: 100 }]);
+    });
+  });
+
+  it("should omit budget_limits (not clear stored windows) when a window is left incomplete", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    await userEvent.clear(maxBudgetInput);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
   it("should display 'AI APIs' label for the llm_api key type option", async () => {
     const keyDataWithLlmApiRoutes = {
       ...MOCK_KEY_DATA,

@@ -1020,7 +1020,7 @@ def _apply_cost_discount(
 
         if verbose_logger.isEnabledFor(logging.DEBUG):
             verbose_logger.debug(
-                f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
+                f"Applied {discount_percent * 100}% discount to {custom_llm_provider}: "
                 f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
             )
 
@@ -1088,7 +1088,7 @@ def _apply_cost_margin(
             verbose_logger.debug(
                 f"Applied margin to {custom_llm_provider or 'global'}: "
                 f"${original_cost:.6f} -> ${final_cost:.6f} "
-                f"(margin: {margin_percent*100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
+                f"(margin: {margin_percent * 100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
             )
 
         return final_cost, margin_percent, margin_fixed_amount, margin_total_amount
@@ -1621,7 +1621,9 @@ def completion_cost(
                     model in litellm.replicate_models or "replicate" in model
                 ) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
+                    return get_replicate_completion_pricing(
+                        completion_response, total_time
+                    )  # type: ignore
 
                 if model is None:
                     raise ValueError(

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
 use litellm_core::error::CoreError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -28,15 +29,12 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     Ok(json.call_method1("loads", (encoded,))?.unbind())
 }
 
-/// Map a core error to the closest Python exception. Caller-input problems
-/// (auth, bad types, missing fields) -> `ValueError`; everything else
-/// (network, upstream status, parse failures) -> `RuntimeError`.
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
         CoreError::Auth(message) => PyValueError::new_err(message),
         CoreError::InvalidProvider(_)
-        | CoreError::InvalidType { .. }
         | CoreError::InvalidRequest(_)
+        | CoreError::InvalidType { .. }
         | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
@@ -84,7 +82,6 @@ fn marshal_inputs(
     Ok((document, extra_headers, optional_params, timeout))
 }
 
-/// Perform a Mistral OCR call end to end and return the response as a dict.
 #[pyfunction]
 #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
 #[allow(clippy::too_many_arguments)]
@@ -99,7 +96,6 @@ fn ocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -108,20 +104,21 @@ fn ocr(
         timeout_seconds,
     )?;
 
-    // Release the GIL while the sync API waits on async Rust work.
     let result = gil::release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(litellm_providers::ocr::ocr(
-            litellm_providers::ocr::OcrRequest {
-                model: &model,
-                document,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: &custom_llm_provider,
-                extra_headers,
-                optional_params,
-                timeout,
-            },
-        ))
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
+            model: &model,
+            document,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            optional_params,
+            timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
+        }))
     });
 
     match result {
@@ -130,7 +127,6 @@ fn ocr(
     }
 }
 
-/// Perform an OCR call end to end and return an asyncio awaitable.
 #[pyfunction]
 #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
 #[allow(clippy::too_many_arguments)]
@@ -145,7 +141,6 @@ fn aocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -155,15 +150,19 @@ fn aocr(
     )?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = litellm_providers::ocr::ocr(litellm_providers::ocr::OcrRequest {
+        let value = run_ocr(OcrRequest {
             model: &model,
             document,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
-            custom_llm_provider: &custom_llm_provider,
+            custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
             timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
         })
         .await
         .map_err(core_error_to_pyerr)?;
@@ -172,8 +171,6 @@ fn aocr(
     })
 }
 
-/// Bridge GIL accounting, e.g. `{"releases": 12}`. Lets the Python side observe
-/// how often the sync bridge has dropped the GIL while awaiting Rust work.
 #[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
@@ -182,7 +179,7 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pymodule]
-fn litellm_python_bridge(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;

@@ -601,6 +601,15 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     return model
 
 
+def is_bedrock_application_inference_profile_arn(model: str) -> bool:
+    """
+    An application inference profile ARN ends in an opaque id with no provider
+    substring, so the invoke path cannot resolve a provider from it. Such ARNs
+    must use the converse route, which needs no provider.
+    """
+    return ":application-inference-profile/" in model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
@@ -620,6 +629,31 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
     # e.g. "us.anthropic.claude-opus-4-6-v1[1m]" -> "us.anthropic.claude-opus-4-6-v1"
     model = re.sub(r"\[\w+\]$", "", model)
     return model
+
+
+MANTLE_MESSAGES_PATH = "/anthropic/v1/messages"
+
+
+def build_mantle_messages_url(
+    api_base: Optional[str],
+    aws_bedrock_runtime_endpoint: Optional[str],
+    region: str,
+) -> str:
+    """Build the bedrock-mantle Anthropic /messages URL.
+
+    Honors an explicit endpoint override (``api_base``, then
+    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
+    endpoints are reachable; otherwise falls back to the public regional host.
+    The mantle messages path is appended unless the override already carries it,
+    so callers can pass either the host or the full messages URL.
+    """
+    override = api_base or aws_bedrock_runtime_endpoint
+    if override:
+        base = override.rstrip("/")
+        if base.endswith(MANTLE_MESSAGES_PATH):
+            return base
+        return f"{base}{MANTLE_MESSAGES_PATH}"
+    return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 
 def get_bedrock_base_model(model: str) -> str:
@@ -879,9 +913,12 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "mantle/": "mantle",
         }
 
-        # Check explicit routes first
+        # Check explicit routes first. Match each prefix only as a leading path
+        # segment so the `bedrock_mantle/` provider prefix is never mistaken for
+        # the `mantle/` invoke route (which would mangle
+        # `bedrock_mantle/openai.gpt-5.5` into `bedrock_openai.gpt-5.5`).
         for prefix, route_type in route_mappings.items():
-            if prefix in model:
+            if BedrockModelInfo._model_has_route_prefix(model, prefix):
                 return route_type
 
         # Check for nova spec prefixes (nova/ and nova-2/)
@@ -889,6 +926,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if _model_after_bedrock.startswith(
             "nova-2/"
         ) or _model_after_bedrock.startswith("nova/"):
+            return "converse"
+
+        if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)
@@ -905,14 +945,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit converse route.
         """
-        return "converse/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse/")
 
     @staticmethod
     def _explicit_claude_platform_route(model: str) -> bool:
         """
         Check if the model is an explicit Claude Platform on AWS route.
         """
-        return "claude_platform/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "claude_platform/")
 
     @staticmethod
     def get_claude_platform_model(model: str) -> str:
@@ -942,42 +982,58 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit invoke route.
         """
-        return "invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "invoke/")
 
     @staticmethod
     def _explicit_agent_route(model: str) -> bool:
         """
         Check if the model is an explicit agent route.
         """
-        return "agent/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agent/")
 
     @staticmethod
     def _explicit_agentcore_route(model: str) -> bool:
         """
         Check if the model is an explicit agentcore route.
         """
-        return "agentcore/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agentcore/")
+
+    @staticmethod
+    def _model_has_route_prefix(model: str, prefix: str) -> bool:
+        """Whether a route prefix (e.g. ``mantle/``) appears as a leading path segment.
+
+        A route token is only valid at the start of the model id or immediately
+        after a ``/``. A plain substring check matches the ``bedrock_mantle/``
+        provider prefix against the ``mantle/`` route, so the body model gets
+        mangled to ``bedrock_openai.gpt-5.5``; anchoring to a segment boundary
+        keeps the bare model id intact.
+
+        ``f"/{prefix}" in model`` matches the token as a segment at any path
+        depth, not just the second segment; that is intentional and acceptable
+        for these short, unambiguous route tokens.
+        """
+        return model.startswith(prefix) or f"/{prefix}" in model
 
     @staticmethod
     def _explicit_mantle_route(model: str) -> bool:
         """
         Check if the model is an explicit mantle route (bedrock-mantle endpoint).
         """
-        return "mantle/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "mantle/")
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
         """
-        return "converse_like/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse_like/")
 
     @staticmethod
     def _explicit_async_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit async invoke route.
         """
-        return "async_invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "async_invoke/")
 
     @staticmethod
     def _explicit_openai_route(model: str) -> bool:
@@ -985,7 +1041,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit openai route.
         Used for Bedrock imported models that use OpenAI Chat Completions format.
         """
-        return "openai/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "openai/")
 
     @staticmethod
     def get_bedrock_provider_config_for_messages_api(

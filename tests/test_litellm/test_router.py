@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import os
@@ -12,6 +13,7 @@ sys.path.insert(
 
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -2409,6 +2411,177 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     assert merged.total_tokens == 49
 
 
+def _midstream_rate_limit_error():
+    rate_limit_error = litellm.RateLimitError(
+        message="vertex_ai_betaException - Resource exhausted.",
+        model="gemini",
+        llm_provider="vertex_ai_beta",
+    )
+    midstream_error = MidStreamFallbackError(
+        message=str(rate_limit_error),
+        model="gemini",
+        llm_provider="vertex_ai_beta",
+        original_exception=rate_limit_error,
+        is_pre_first_chunk=True,
+    )
+    return rate_limit_error, midstream_error
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_surfaces_rate_limit_without_fallbacks():
+    """Regression for #26015: a mid-stream 429 with no fallbacks configured must
+    surface a clean RateLimitError, not leak the internal MidStreamFallbackError
+    wrapper to the client, and must terminate instead of hanging."""
+    rate_limit_error, midstream_error = _midstream_rate_limit_error()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+
+    class _RaisingStream:
+        def __init__(self):
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise midstream_error
+
+    stream = _RaisingStream()
+    setattr(stream, "model", "gemini")
+    setattr(stream, "custom_llm_provider", "vertex_ai_beta")
+    setattr(stream, "logging_obj", MagicMock())
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=midstream_error),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=stream,
+            messages=[{"role": "user", "content": "Hello"}],
+            initial_kwargs={"model": "gemini", "stream": True},
+        )
+
+        async def _consume():
+            async for _ in result:
+                pass
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await asyncio.wait_for(_consume(), timeout=10)
+
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value is rate_limit_error
+
+
+def test_completion_streaming_iterator_surfaces_rate_limit_without_fallbacks():
+    """Sync counterpart of
+    test_acompletion_streaming_iterator_surfaces_rate_limit_without_fallbacks."""
+    rate_limit_error, midstream_error = _midstream_rate_limit_error()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+
+    class _RaisingSyncStream:
+        def __init__(self):
+            self.model = "gemini"
+            self.custom_llm_provider = "vertex_ai_beta"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise midstream_error
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+        side_effect=midstream_error,
+    ):
+        result = router._completion_streaming_iterator(
+            model_response=_RaisingSyncStream(),
+            messages=[{"role": "user", "content": "Hello"}],
+            initial_kwargs={"model": "gemini", "stream": True},
+        )
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            list(result)
+
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value is rate_limit_error
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_surfaces_rate_limit_without_fallbacks():
+    """Responses-API counterpart of
+    test_acompletion_streaming_iterator_surfaces_rate_limit_without_fallbacks."""
+    rate_limit_error, midstream_error = _midstream_rate_limit_error()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+    src = _make_responses_iterator(error=midstream_error, model="gemini")
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=midstream_error),
+    ):
+        wrapped = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gemini",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+
+        async def _consume():
+            async for _ in wrapped:
+                pass
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await asyncio.wait_for(_consume(), timeout=10)
+
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value is rate_limit_error
+
+
 @pytest.mark.asyncio
 async def test_async_function_with_fallbacks_common_utils():
     """Test the async_function_with_fallbacks_common_utils method"""
@@ -3060,6 +3233,36 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
     assert credentials["custom_llm_provider"] == "bedrock"
+
+
+def test_get_deployment_credentials_with_provider_includes_bucket_name():
+    """
+    Regression: bucket_name must survive the CredentialLiteLLMParams filter so
+    managed-files batch retrieval can resolve the GCS/S3 bucket. Previously it was
+    dropped, causing "GCS bucket_name is required" when fetching batch output files.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "my-batch-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="vertex-gemini"
+    )
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "my-batch-bucket"
+    assert credentials["vertex_project"] == "my-project"
+    assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
 def test_get_deployment_credentials_with_provider_resolves_credential_name():

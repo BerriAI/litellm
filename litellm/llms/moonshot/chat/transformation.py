@@ -64,7 +64,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"  # type: ignore
+        api_base = (
+            api_base
+            or get_secret_str("MOONSHOT_API_BASE")
+            or "https://api.moonshot.ai/v1"
+        )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
@@ -238,11 +242,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
         """
-        messages.append(
+        optional_params.pop("tool_choice")
+        return [
+            *messages,
             {
                 "role": "user",
                 "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
-            }
-        )
-        optional_params.pop("tool_choice")
-        return messages
+            },
+        ]

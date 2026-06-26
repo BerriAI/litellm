@@ -1930,12 +1930,9 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        mcp_server = await get_mcp_server(prisma_client, server_id)
-        if mcp_server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
+        mcp_server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         if not getattr(mcp_server, "is_byok", False):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2010,12 +2007,9 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        mcp_server = await get_mcp_server(prisma_client, server_id)
-        if mcp_server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
+        await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         user_id = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
@@ -2177,37 +2171,47 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
     ) -> LiteLLM_MCPServerTable:
-        """Return the MCP server the caller may manage env vars for.
+        """Resolve the MCP server a caller may manage their own per-user state for.
 
-        Admins look the server up directly. Non-admins reuse the access-scoped
-        listing that already loads every server they can see, so we don't issue
-        a second per-server query just to re-fetch a record the authorization
-        check produced. A non-admin who can't see the server gets 403 (never
-        404) so server ids can't be enumerated.
+        Looks the server up in the DB, then the in-memory registry, so a
+        config-defined server (which never gets a DB row) resolves too. Admins
+        may reach any server and get a 404 for an unknown id. A non-admin may
+        only reach a server in their allowed set and otherwise gets 403 (never
+        404, so server ids can't be enumerated), using the same allowed-server
+        resolution the MCP gateway enforces on tool calls.
         """
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if registry_server is not None:
+                server = global_mcp_server_manager._build_mcp_server_table(
+                    registry_server
+                )
+
         if _user_has_admin_view(user_api_key_dict):
-            server = await get_mcp_server(prisma_client, server_id)
             if server is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={"error": f"MCP Server {server_id} not found"},
                 )
             return server
-        accessible = await get_all_mcp_servers_for_user(
-            prisma_client, user_api_key_dict
-        )
-        for server in accessible:
-            if server.server_id == server_id:
-                return server
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": (
-                    f"User does not have permission to access mcp server with id {server_id}. "
-                    "You can only manage env vars for mcp servers that you have access to."
-                )
-            },
-        )
+
+        allowed_server_ids: set[str] = set()
+        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
+            allowed_server_ids.update(
+                await global_mcp_server_manager.get_allowed_mcp_servers(auth_context)
+            )
+        if server is None or server.server_id not in allowed_server_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        f"User does not have permission to access mcp server with id {server_id}. "
+                        "You can only manage mcp servers that you have access to."
+                    )
+                },
+            )
+        return server
 
     def _compute_user_env_var_status(
         *,
@@ -2536,9 +2540,9 @@ if MCP_AVAILABLE:
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"][
-                "public_mcp_servers"
-            ] = litellm.public_mcp_servers
+            config["litellm_settings"]["public_mcp_servers"] = (
+                litellm.public_mcp_servers
+            )
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)

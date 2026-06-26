@@ -633,6 +633,7 @@ async def acompletion(
 
     try:
         # Use a partial function to pass your keyword arguments
+        kwargs.pop("acompletion", None)
         func = partial(completion, **completion_kwargs, **kwargs)
 
         # Add the context to the function
@@ -5063,6 +5064,12 @@ def completion(  # type: ignore
     ######### unpacking kwargs #####################
     args = locals()
 
+    # Set by the responses->completion fallback so completion() does not bridge
+    # back to the Responses API: that round-trip mutually recurses forever for a
+    # model whose model_cost mode is "responses" but whose provider has no
+    # Responses API config (get_provider_responses_api_config -> None).
+    skip_responses_api_bridge = kwargs.pop("_skip_responses_api_bridge", False)
+
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -5358,7 +5365,7 @@ def completion(  # type: ignore
 
         messages = update_messages_with_model_file_ids(
             messages=messages,
-            model_id=kwargs.get("model_info", {}).get("id", None),
+            model_id=(kwargs.get("model_info") or {}).get("id", None),
             model_file_id_mapping=cast(
                 Dict[str, Dict[str, str]],
                 kwargs.get("model_file_id_mapping") or {},
@@ -5448,8 +5455,9 @@ def completion(  # type: ignore
             provider_config=provider_config,
         )
 
-        if litellm.add_function_to_prompt and optional_params.get(
-            "functions_unsupported_model", None
+        if (
+            litellm.add_function_to_prompt
+            and optional_params.get("functions_unsupported_model", None)
         ):  # if user opts to add it to prompt, when API doesn't support function calling
             functions_unsupported_model = optional_params.pop(
                 "functions_unsupported_model"
@@ -5559,7 +5567,10 @@ def completion(  # type: ignore
         # detection when the deployment name differs from the model name.
         _azure_detection_model = base_model or model
 
-        if responses_api_model_info.get("mode") == "responses":
+        if (
+            responses_api_model_info.get("mode") == "responses"
+            and not skip_responses_api_bridge
+        ):
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = (
@@ -7584,8 +7595,8 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if _model is not None and (
-        custom_llm_provider == "openai"
+    if (
+        _model is not None and (custom_llm_provider == "openai")
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
         if _model not in litellm.open_ai_chat_completion_models:
             model = "text-completion-openai/" + _model
@@ -7656,7 +7667,9 @@ async def aadapter_completion(
 
         new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-        response: Union[ModelResponse, CustomStreamWrapper] = await acompletion(**new_kwargs)  # type: ignore
+        response: Union[ModelResponse, CustomStreamWrapper] = await acompletion(
+            **new_kwargs
+        )  # type: ignore
         translated_response: Optional[
             Union[BaseModel, AdapterCompletionStreamWrapper]
         ] = None
@@ -8062,7 +8075,12 @@ def transcription(
         )
         # set API KEY
 
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret("OPENAI_API_KEY")
+        )  # type: ignore
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -8403,7 +8421,9 @@ def speech(
                 )
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
 
-            api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+            api_version = (
+                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
 
             api_key = (
                 api_key
@@ -8415,9 +8435,7 @@ def speech(
 
             azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
                 "azure_ad_token", None
-            ) or get_secret(
-                "AZURE_AD_TOKEN"
-            )
+            ) or get_secret("AZURE_AD_TOKEN")
             azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
 
             if extra_headers:
@@ -8874,9 +8892,7 @@ def stream_chunk_builder_text_completion(
         response["usage"]["prompt_tokens"] = token_counter(
             model=model, messages=messages
         )
-    except (
-        Exception
-    ):  # don't allow this failing to block a complete streaming response from being returned
+    except Exception:  # don't allow this failing to block a complete streaming response from being returned
         print_verbose("token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(

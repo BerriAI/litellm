@@ -245,7 +245,11 @@ def create_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("AZURE_API_BASE")
+            )  # type: ignore
 
             api_version = (
                 optional_params.api_version
@@ -340,7 +344,9 @@ def create_fine_tuning_job(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(
+                        method="create_thread", url="https://github.com/BerriAI/litellm"
+                    ),  # type: ignore
                 ),
             )
         return response
@@ -458,7 +464,11 @@ def cancel_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret("AZURE_API_BASE")
+            )  # type: ignore
 
             api_version = (
                 optional_params.api_version
@@ -500,7 +510,9 @@ def cancel_fine_tuning_job(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(
+                        method="create_thread", url="https://github.com/BerriAI/litellm"
+                    ),  # type: ignore
                 ),
             )
         return response
@@ -621,7 +633,11 @@ def list_fine_tuning_jobs(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("AZURE_API_BASE")
+            )  # type: ignore
 
             api_version = (
                 optional_params.api_version
@@ -664,7 +680,9 @@ def list_fine_tuning_jobs(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(
+                        method="create_thread", url="https://github.com/BerriAI/litellm"
+                    ),  # type: ignore
                 ),
             )
         return response
@@ -776,7 +794,11 @@ def retrieve_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("AZURE_API_BASE")
+            )  # type: ignore
 
             api_version = (
                 optional_params.api_version
@@ -818,7 +840,10 @@ def retrieve_fine_tuning_job(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="retrieve_fine_tuning_job", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(
+                        method="retrieve_fine_tuning_job",
+                        url="https://github.com/BerriAI/litellm",
+                    ),  # type: ignore
                 ),
             )
         return response

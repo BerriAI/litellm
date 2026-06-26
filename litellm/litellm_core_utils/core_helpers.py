@@ -361,9 +361,9 @@ def safe_deep_copy(data):
             "litellm_metadata" in data
             and "litellm_parent_otel_span" in data["litellm_metadata"]
         ):
-            data["litellm_metadata"][
-                "litellm_parent_otel_span"
-            ] = litellm_parent_otel_span
+            data["litellm_metadata"]["litellm_parent_otel_span"] = (
+                litellm_parent_otel_span
+            )
     return new_data
 
 

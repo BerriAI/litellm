@@ -31,11 +31,6 @@
       }
     }
   },
-  "default_creds": {
-    "mistral": {
-      "default_api_base": "https://api.mistral.ai/v1"
-    }
-  },
   "providers": {
     "a2a": {
       "display_name": "A2A (Agent-to-Agent) (`a2a`)",
@@ -184,7 +179,6 @@
     },
     "apertis": {
       "display_name": "Apertis (`apertis`)",
-      "url": "https://docs.litellm.ai/docs/providers/apertis",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -466,7 +460,6 @@
     },
     "chutes": {
       "display_name": "Chutes (`chutes`)",
-      "url": "https://docs.litellm.ai/docs/providers/chutes",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -1477,7 +1470,6 @@
     },
     "nanogpt": {
       "display_name": "NanoGPT (`nanogpt`)",
-      "url": "https://docs.litellm.ai/docs/providers/nanogpt",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -1811,7 +1803,6 @@
     },
     "poe": {
       "display_name": "Poe (`poe`)",
-      "url": "https://docs.litellm.ai/docs/providers/poe",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -2039,7 +2030,6 @@
     },
     "synthetic": {
       "display_name": "Synthetic (`synthetic`)",
-      "url": "https://docs.litellm.ai/docs/providers/synthetic",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
