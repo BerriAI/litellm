@@ -91,6 +91,17 @@ class StandardBuiltInToolCostTracking:
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        # A provider-prefixed model (e.g. gemini/gemini-3.1-flash-lite) may not map under the
+        # request's custom_llm_provider. Re-resolve from the prefix and adopt that provider so the
+        # cost is routed and priced with the model_info that was actually resolved, instead of
+        # feeding a re-resolved model into the original provider's calculator.
+        if model_info is None and "/" in model:
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                model=model
+            )
+            if model_info is not None:
+                custom_llm_provider = model_info["litellm_provider"]
+
         if custom_llm_provider is None and model_info is not None:
             custom_llm_provider = model_info["litellm_provider"]
 
