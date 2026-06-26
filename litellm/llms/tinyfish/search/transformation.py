@@ -65,9 +65,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             default_api_base=self.TINYFISH_API_BASE,
         )
         if not resolved_key:
-            raise ValueError(
-                "TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable."
-            )
+            raise ValueError("TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable.")
         return {**headers, "X-API-Key": resolved_key, "Accept": "application/json"}
 
     def get_complete_url(
@@ -77,13 +75,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,
         **kwargs: object,
     ) -> str:
-        resolved_base = (
-            api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
-        )
+        resolved_base = api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
         if isinstance(data, dict) and _TINYFISH_PARAMS_KEY in data:
-            validated_params = _UrlEncodableParams.validate_python(
-                data[_TINYFISH_PARAMS_KEY]
-            )
+            validated_params = _UrlEncodableParams.validate_python(data[_TINYFISH_PARAMS_KEY])
             return f"{resolved_base}?{urlencode(validated_params, doseq=True)}"
         return resolved_base
 
@@ -119,9 +113,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         resolved_query = " ".join(query) if isinstance(query, list) else query
 
         try:
-            domains = _StrList.validate_python(
-                optional_params.get("search_domain_filter")
-            )
+            domains = _StrList.validate_python(optional_params.get("search_domain_filter"))
         except (ValidationError, TypeError):
             domains = []
         if domains:
@@ -139,10 +131,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         raw_max = optional_params.get("max_results")
         if isinstance(raw_max, (int, float, str)):
             try:
-                self._caller_max_results = max(
-                    1, min(int(raw_max), _TINYFISH_RESULT_CAP)
-                )
-            except (ValueError, TypeError):
+                self._caller_max_results = max(1, min(int(raw_max), _TINYFISH_RESULT_CAP))
+            except (ValueError, TypeError, OverflowError):
+                # OverflowError covers int(float('inf')) and similar non-finite floats.
                 verbose_logger.warning(
                     "TinyFish Search: max_results=%r is not a valid integer; ignoring.",
                     raw_max,
@@ -235,9 +226,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             parsed = SearchResponse.model_validate(raw_json)
         except ValidationError as e:
             raise self._wrap_error(
-                error_message=(
-                    f"Response shape does not match LiteLLM's SearchResponse schema: {e}"
-                ),
+                error_message=(f"Response shape does not match LiteLLM's SearchResponse schema: {e}"),
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),
             )
