@@ -8,8 +8,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use litellm_core::error::CoreError;
-use litellm_core::get_llm_provider_logic::{get_custom_llm_provider, CustomLlmProvider};
 use litellm_core::ocr::transformation::{OcrAuthStrategy, OcrResponseHandling};
+use litellm_core::routing_utils::provider::{get_custom_llm_provider, CustomLlmProvider};
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
