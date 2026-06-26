@@ -2203,12 +2203,17 @@ class JWTAuthManager:
 
         # The DB fallback only applies when the token carries no team identity at
         # all. `get_all_jwt_team_ids` ignores `team_id_default` so a configured
-        # default does not hide a claimless token, and `team_id is None` excludes
+        # default does not hide a claimless token, `get_team_alias` covers
+        # alias-only tokens so the alias still resolves via
+        # `find_and_validate_specific_team_id`, and `team_id is None` excludes
         # the RBAC team-role path (which already set `team_id`); otherwise a
         # provisional x-litellm-team-id header could override an RBAC-asserted team.
         db_team_fallback = (
             jwt_handler.litellm_jwtauth.fallback_to_db_teams
             and not jwt_handler.get_all_jwt_team_ids(token=jwt_valid_token)
+            and not jwt_handler.get_team_alias(
+                token=jwt_valid_token, default_value=None
+            )
             and team_id is None
         )
         if specific_team_id and not db_team_fallback:
