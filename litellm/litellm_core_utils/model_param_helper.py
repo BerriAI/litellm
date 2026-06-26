@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Set
 
 from openai.types.chat.completion_create_params import (
@@ -54,9 +55,17 @@ class ModelParamHelper:
         return combined_kwargs
 
     @staticmethod
+    @lru_cache(maxsize=1)
     def _get_all_llm_api_params() -> Set[str]:
         """
-        Gets the supported kwargs for each call type and combines them
+        Gets the supported kwargs for each call type and combines them.
+
+        The result is derived from static type annotations and fixed sets, so it
+        is constant for the process lifetime. It is computed once and cached
+        because it is rebuilt on every request through both the cache-key path
+        (``Cache.get_cache_key``) and the spend-logging path
+        (``_get_relevant_args_to_use_for_logging``). Callers treat the result as
+        read-only.
         """
         chat_completion_kwargs = (
             ModelParamHelper._get_litellm_supported_chat_completion_kwargs()
