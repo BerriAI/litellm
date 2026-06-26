@@ -47,6 +47,13 @@ _MAX_TOKEN_SUPPORT_MODES: frozenset[str] = frozenset(
     {"chat", "completion", "responses"}
 )
 
+# Tool config is meaningless on a trivial health probe and makes some providers
+# fail it outright (OpenRouter server tools like `openrouter:web_search` 500 the
+# probe). Stripped from both the top-level params and `extra_body` before probing.
+_HEALTH_CHECK_STRIPPED_REQUEST_KEYS: frozenset[str] = frozenset(
+    {"tools", "tool_choice"}
+)
+
 
 def _resolve_health_check_mode(
     model_info: Mapping[str, object], litellm_params: Mapping[str, object]
@@ -453,7 +460,20 @@ def _update_litellm_params_for_health_check(
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
+    - works on a copy and strips `tools`/`tool_choice` from the top level and `extra_body`; a trivial probe never needs tool config and some providers (e.g. OpenRouter server tools) 500 when it is present
     """
+    litellm_params = {
+        k: v
+        for k, v in litellm_params.items()
+        if k not in _HEALTH_CHECK_STRIPPED_REQUEST_KEYS
+    }
+    _extra_body = litellm_params.get("extra_body")
+    if isinstance(_extra_body, dict):
+        litellm_params["extra_body"] = {
+            k: v
+            for k, v in _extra_body.items()
+            if k not in _HEALTH_CHECK_STRIPPED_REQUEST_KEYS
+        }
     mode = _resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict

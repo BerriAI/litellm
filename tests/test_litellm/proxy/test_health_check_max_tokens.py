@@ -516,3 +516,55 @@ def test_autodetected_embedding_skips_reasoning_effort():
 
     assert "reasoning_effort" not in updated
     assert "max_tokens" not in updated
+
+
+def test_health_check_strips_tool_config_from_probe():
+    """
+    Regression for #31008: health probes must not carry tool configuration.
+
+    OpenRouter server tools configured via `extra_body.tools` (e.g.
+    `openrouter:web_search`) made the trivial probe 500. `tools`/`tool_choice`
+    are stripped from both the top level and `extra_body`, while other
+    `extra_body` fields (e.g. provider routing) are preserved, and the caller's
+    params are never mutated.
+    """
+    extra_body = {
+        "tools": [{"type": "openrouter:web_search"}],
+        "tool_choice": "auto",
+        "provider": {"order": ["OpenAI"]},
+    }
+    litellm_params = {
+        "model": "openrouter/openai/gpt-4o-mini",
+        "api_key": "fake_key",
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+        "tool_choice": "auto",
+        "extra_body": extra_body,
+    }
+
+    updated = _update_litellm_params_for_health_check({}, litellm_params)
+
+    # probe is stripped of all tool config, top-level and nested
+    assert "tools" not in updated and "tool_choice" not in updated
+    assert "tools" not in updated["extra_body"]
+    assert "tool_choice" not in updated["extra_body"]
+    assert updated["extra_body"]["provider"] == {"order": ["OpenAI"]}
+    assert isinstance(updated["messages"], list)
+
+    # caller's params are not mutated: a fresh object, no probe fields leaked in,
+    # tool config intact both top-level and nested
+    assert updated is not litellm_params
+    assert "messages" not in litellm_params
+    assert "tools" in litellm_params and "tool_choice" in litellm_params
+    assert extra_body["tools"] == [{"type": "openrouter:web_search"}]
+    assert extra_body["tool_choice"] == "auto"
+    assert updated["extra_body"] is not extra_body
+
+
+def test_health_check_probe_without_extra_body_does_not_crash():
+    """A deployment with no `extra_body` must still build a valid probe."""
+    updated = _update_litellm_params_for_health_check(
+        {}, {"model": "openai/gpt-4o-mini", "api_key": "fake_key"}
+    )
+
+    assert "extra_body" not in updated
+    assert isinstance(updated["messages"], list)
