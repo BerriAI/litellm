@@ -2038,8 +2038,9 @@ class JWTAuthManager:
                         ),
                     )
                 except Exception:
-                    verbose_proxy_logger.debug(
-                        "JWT DB team fallback: membership lookup failed for team_id=%s",
+                    verbose_proxy_logger.warning(
+                        "JWT DB team fallback: membership lookup failed for team_id=%s; "
+                        "proceeding without per-team membership budget enforcement",
                         candidate_team_id,
                         exc_info=True,
                     )

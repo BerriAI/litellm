@@ -4828,6 +4828,56 @@ async def test_resolve_db_team_fallback_loads_team_membership():
 
 
 @pytest.mark.asyncio
+async def test_resolve_db_team_fallback_survives_membership_lookup_error():
+    """A transient membership-lookup failure must not deny an otherwise-authorized
+    request: the resolved team is still returned with a None membership (budget
+    enforcement degrades gracefully) instead of the error propagating as a 403."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_flaky",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_flaky"],
+    )
+
+    async def fake_get_team(team_id, **kwargs):
+        return LiteLLM_TeamTable(team_id=team_id)
+
+    async def boom_get_membership(user_id, team_id, **kwargs):
+        raise Exception("transient DB error")
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+            side_effect=boom_get_membership,
+        ),
+    ):
+        (
+            team_id,
+            team_object,
+            team_membership,
+        ) = await JWTAuthManager._resolve_db_team_fallback(
+            user_object=user_object,
+            user_id="u_flaky",
+            requested_model=None,
+            enforce_team_based_model_access=True,
+            team_id_upsert=False,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "team_flaky"
+    assert team_object is not None
+    assert team_membership is None
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_db_fallback_does_not_validate_rbac_team_against_db_membership():
     """When fallback_to_db_teams is on and the JWT carries an RBAC team role but no
     group/team claims, team_id is set from the RBAC object_id (not the provisional
