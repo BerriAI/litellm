@@ -20,6 +20,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # `generate_release_notes: true` makes createRelease enumerate the merged
+      # PRs (and any issues they reference) in the release range to build the
+      # notes. Reading those needs the scopes below. Without them the call 403s
+      # ("Resource not accessible by integration") partway through note
+      # generation — after getLatestRelease succeeds — so no draft, tag, or
+      # release is created and the dependent create-branch job is skipped.
+      pull-requests: read
+      issues: read
     steps:
       - name: Validate inputs
         env:
@@ -144,6 +152,17 @@ jobs:
               });
 
             } catch (error) {
+              // Surface enough context that a future failure isn't an opaque
+              // "Resource not accessible by integration" with no clue which
+              // call or permission was at fault.
+              core.error(`Release creation failed: ${error.status ?? '?'} ${error.message}`);
+              if (error.request) {
+                core.error(`Failed call: ${error.request.method} ${error.request.url}`);
+              }
+              const accepted = error.response?.headers?.['x-accepted-github-permissions'];
+              if (accepted) {
+                core.error(`Endpoint requires permissions: ${accepted}`);
+              }
               core.setFailed(error.message);
             }
 
