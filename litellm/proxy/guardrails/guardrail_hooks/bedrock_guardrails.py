@@ -105,6 +105,19 @@ class GuardrailMessageFilterResult(NamedTuple):
     target_indices: Optional[List[int]]
 
 
+class ApplyGuardrailMessageSelection(NamedTuple):
+    """Messages selected for an apply_guardrail scan + write-back metadata."""
+
+    filtered_messages: Optional[list[AllMessageValues]]
+    # Slice of the flat `texts` list actually scanned (offset, length),
+    # used to write masked content back to the right positions. None = whole list.
+    scanned_slice: Optional[tuple[int, int]]
+    # True when messages were selected by their original role.
+    scanned_role_subset: bool
+    # True when there is nothing to scan (e.g. no user-role message).
+    skip_scan: bool = False
+
+
 def _redact_pii_matches(response_json: dict) -> dict:
     """
     Redact match-like fields from a Bedrock ApplyGuardrail JSON payload.
@@ -369,6 +382,164 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if messages[index].get("role", None) == target_role:
                 return index
         return None
+
+    @staticmethod
+    def _count_message_texts(message: AllMessageValues) -> int:
+        """Count the text segments the guardrail translation layer extracts from a message."""
+        content = message.get("content")
+        if isinstance(content, str):
+            return 1
+        if isinstance(content, list):
+            return sum(
+                1
+                for item in content
+                if isinstance(item, dict) and item.get("text") is not None
+            )
+        return 0
+
+    def _locate_message_texts_slice(
+        self,
+        structured_messages: list[AllMessageValues],
+        target_index: int,
+        texts: list[str],
+    ) -> Optional[tuple[int, int]]:
+        """
+        Map one message's text segments to their (offset, length) slice in the
+        flat `texts` list built by the guardrail translation handler.
+
+        Returns None when the reconstruction does not line up with `texts`
+        (the caller must then avoid positional write-back).
+        """
+        offset = 0
+        total = 0
+        target_count = 0
+        for index, message in enumerate(structured_messages):
+            count = self._count_message_texts(message)
+            if index < target_index:
+                offset += count
+            elif index == target_index:
+                target_count = count
+            total += count
+        if total != len(texts) or target_count == 0:
+            return None
+        return offset, target_count
+
+    def _select_messages_for_apply_guardrail(
+        self,
+        texts: list[str],
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+        input_type: Literal["request", "response"],
+    ) -> ApplyGuardrailMessageSelection:
+        """
+        Decide which messages an apply_guardrail scan should cover.
+
+        With ``experimental_use_latest_role_message_only`` enabled, request
+        scans must select by the ORIGINAL message roles. The flat `texts` list
+        has no role information, and wrapping it in role="user" mock messages
+        makes the latest-user filter degenerate to "latest text of any role",
+        leaking tool/assistant content to the INPUT scan
+        (https://github.com/BerriAI/litellm/issues/23476).
+        """
+        mock_messages: list[AllMessageValues] = [
+            ChatCompletionUserMessage(role="user", content=text) for text in texts
+        ]
+
+        if self.experimental_use_latest_role_message_only is not True:
+            return ApplyGuardrailMessageSelection(
+                filtered_messages=mock_messages,
+                scanned_slice=None,
+                scanned_role_subset=False,
+            )
+
+        # Prefer inputs["structured_messages"]: it is built alongside `texts` by
+        # the translation handler and stays aligned with it even when
+        # skip_system_message_in_guardrail / skip_tool_message_in_guardrail drop
+        # messages. The fallback to request_data["messages"] is the *unfiltered*
+        # list, so it only lines up with `texts` when no skip flags are active.
+        # When a skip flag is set and we land on this fallback (direct
+        # apply_guardrail callers with no structured_messages),
+        # _locate_message_texts_slice will detect the length mismatch and return
+        # None, and the write-back guard below safely skips masking rather than
+        # corrupting positions.
+        structured_messages = cast(
+            Optional[list[AllMessageValues]],
+            inputs.get("structured_messages") or request_data.get("messages"),
+        )
+        if input_type != "request" or not structured_messages:
+            # No role information available (e.g. raw-text callers like
+            # /guardrails/apply_guardrail) — keep the legacy behavior of
+            # scanning the latest text only.
+            filter_result = self._prepare_guardrail_messages_for_role(
+                messages=mock_messages
+            )
+            return ApplyGuardrailMessageSelection(
+                filtered_messages=filter_result.payload_messages or mock_messages,
+                scanned_slice=None,
+                scanned_role_subset=False,
+            )
+
+        latest_user_index = self._find_latest_message_index(
+            structured_messages, target_role="user"
+        )
+        if latest_user_index is None:
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: no user-role message in request, skipping INPUT scan"
+            )
+            return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
+
+        selected_message = structured_messages[latest_user_index]
+        if self._count_message_texts(selected_message) == 0:
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: latest user message has no text content, skipping INPUT scan"
+            )
+            return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
+
+        return ApplyGuardrailMessageSelection(
+            filtered_messages=[selected_message],
+            scanned_slice=self._locate_message_texts_slice(
+                structured_messages=structured_messages,
+                target_index=latest_user_index,
+                texts=texts,
+            ),
+            scanned_role_subset=True,
+        )
+
+    def _merge_masked_texts(
+        self,
+        masked_texts: list,
+        texts: list,
+        scanned_slice: Optional[tuple[int, int]],
+        scanned_role_subset: bool,
+    ) -> list:
+        """
+        Reconcile the guardrail's masked output with the flat `texts` list.
+
+        - No masked output: keep the originals (guardrail allowed content as-is).
+        - A slice was scanned: write masked content back to those positions only,
+          keeping the list aligned with the caller's message↔text mappings.
+        - A role-selected subset was scanned but could not be mapped back to
+          flat-text positions (scanned_slice is None): keep the originals rather
+          than misapply masked content to the wrong message. Guarding on
+          scanned_slice rather than a length comparison also covers the case
+          where the masked subset happens to match len(texts) (e.g. both length
+          1).
+        - Otherwise (whole list scanned): use the masked output as-is.
+        """
+        if not masked_texts:
+            return texts
+        if scanned_slice is not None:
+            offset, length = scanned_slice
+            merged_texts = list(texts)
+            for masked_index, masked_text in enumerate(masked_texts[:length]):
+                merged_texts[offset + masked_index] = masked_text
+            return merged_texts
+        if scanned_role_subset:
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail: could not align masked texts with request texts, skipping masking write-back"
+            )
+            return texts
+        return masked_texts
 
     def _merge_filtered_messages(
         self,
@@ -1639,15 +1810,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             masked_texts = []
 
-            mock_messages: List[AllMessageValues] = [
-                ChatCompletionUserMessage(role="user", content=text) for text in texts
-            ]
-
-            request_messages = mock_messages
-            filter_result = self._prepare_guardrail_messages_for_role(
-                messages=request_messages
+            selection = self._select_messages_for_apply_guardrail(
+                texts=texts,
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
             )
-            filtered_messages = filter_result.payload_messages or mock_messages
+            if selection.skip_scan:
+                return inputs
+            filtered_messages = selection.filtered_messages
+            scanned_slice = selection.scanned_slice
+            scanned_role_subset = selection.scanned_role_subset
 
             # Bedrock will throw an error if there is no text to process
             if filtered_messages:
@@ -1715,10 +1888,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                                 masked_text = str(text_content)
                                 masked_texts.append(masked_text)
 
-            # If no output/outputs were provided, use the original texts
-            # This happens when the guardrail allows content without modification
-            if not masked_texts:
-                masked_texts = texts
+            # Reconcile masked output with the flat `texts` list (write back to
+            # the scanned slice only, or skip if it can't be aligned).
+            masked_texts = self._merge_masked_texts(
+                masked_texts=masked_texts,
+                texts=texts,
+                scanned_slice=scanned_slice,
+                scanned_role_subset=scanned_role_subset,
+            )
 
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"
