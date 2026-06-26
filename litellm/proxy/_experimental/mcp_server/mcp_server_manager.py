@@ -63,8 +63,12 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
+    LazyPerUserOAuthTokenStore,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -523,7 +527,9 @@ class MCPServerManager:
         return None
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
-        self._cred_provider = cred_provider or UpstreamCredentialProvider()
+        self._cred_provider = cred_provider or UpstreamCredentialProvider(
+            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id)
+        )
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
         """
@@ -2059,6 +2065,10 @@ class MCPServerManager:
                         ):
                             resolved_auth = None
                     case Error(err):
+                        if err.tag == "unauthorized":
+                            # The arm signals a missing per-user token semantically; raise the
+                            # per-server OAuth challenge here, where the full MCPServer is in hand.
+                            raise_user_oauth_challenge(server)
                         raise_public(err)
                 return MCPClient(
                     server_url=server_url,
@@ -3670,6 +3680,22 @@ class MCPServerManager:
 
         return mcp_server
 
+    async def has_user_oauth_token(
+        self, server: MCPServer, user_api_key_auth: Optional[UserAPIKeyAuth]
+    ) -> bool:
+        """Whether the v2 resolver can produce a per-user token for this server right now.
+
+        This is the preemptive 401's existence check, routed through the same resolver that drives
+        the egress so every authorization_code resolution (egress and the discovery challenge) runs
+        through v2. Returns False for a server the resolver does not own (a None spec).
+        """
+        spec = to_server_spec(server)
+        if spec is None:
+            return False
+        return await self._cred_provider.has_user_token(
+            to_subject(user_api_key_auth, None), spec
+        )
+
     async def _resolve_oauth2_headers_for_tool_call(
         self,
         mcp_server: MCPServer,
@@ -3682,6 +3708,12 @@ class MCPServerManager:
             or oauth2_headers
             or user_api_key_auth is None
         ):
+            return oauth2_headers
+
+        if to_server_spec(mcp_server) is not None:
+            # Migrated to v2: the resolver owns this server's per-user token (inject or fail-closed
+            # 401). Building it into extra_headers here would let the v2 graft defer to it and
+            # shadow the resolver, double-resolving and hiding the per-server challenge.
             return oauth2_headers
 
         user_id = getattr(user_api_key_auth, "user_id", None)

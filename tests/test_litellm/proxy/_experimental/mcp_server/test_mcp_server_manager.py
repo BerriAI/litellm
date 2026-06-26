@@ -2221,7 +2221,7 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_looks_up_stored_token(self):
-        """Falls back to stored per-user OAuth headers when no token is supplied."""
+        """Falls back to stored per-user OAuth headers for a non-migrated (delegate) oauth2 server."""
         from litellm.proxy._types import UserAPIKeyAuth
 
         manager = MCPServerManager()
@@ -2230,6 +2230,7 @@ class TestMCPServerManager:
             name="oauth-srv",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,  # stays on v1, so v1 still builds the header
         )
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
         stored = {"Authorization": "Bearer stored-user-token"}
@@ -2246,8 +2247,35 @@ class TestMCPServerManager:
         mock_lookup.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_steps_aside_for_migrated_server(self):
+        """A migrated authorization_code server is owned by the v2 resolver, so v1 must not also
+        build the token into extra_headers (which the v2 graft would defer to and shadow).
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,  # per-user, not delegate -> migrated to v2
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer should-not-be-used"}),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+
+        assert result is None  # stepped aside; the v2 resolver handles the token
+        mock_lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_swallows_lookup_exception(self):
-        """Returns supplied headers (None) when the stored-token lookup raises."""
+        """Returns supplied headers (None) when the v1 stored-token lookup raises (delegate path)."""
         from litellm.proxy._types import UserAPIKeyAuth
 
         manager = MCPServerManager()
@@ -2256,6 +2284,7 @@ class TestMCPServerManager:
             name="oauth-srv",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,  # non-migrated, so it reaches the v1 lookup
         )
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
@@ -2267,6 +2296,51 @@ class TestMCPServerManager:
                 server, oauth2_headers=None, user_api_key_auth=user_auth
             )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_has_user_oauth_token_delegates_to_provider(self):
+        """has_user_oauth_token maps the server and delegates the verdict to the v2 resolver."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        for verdict in (True, False):
+
+            class _Provider:
+                async def has_user_token(self, subject, spec):
+                    return verdict
+
+            manager = MCPServerManager(cred_provider=_Provider())
+            server = MCPServer(
+                server_id="s",
+                name="n",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2,
+            )
+            user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+            assert await manager.has_user_oauth_token(server, user_auth) is verdict
+
+    @pytest.mark.asyncio
+    async def test_has_user_oauth_token_short_circuits_for_unmigrated_server(self):
+        """A server the resolver does not own (None spec, e.g. delegate) is False without a call."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        calls: list = []
+
+        class _Provider:
+            async def has_user_token(self, subject, spec):
+                calls.append(spec)
+                return True
+
+        manager = MCPServerManager(cred_provider=_Provider())
+        server = MCPServer(
+            server_id="s",
+            name="n",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+        assert await manager.has_user_oauth_token(server, user_auth) is False
+        assert calls == []  # short-circuited on the None spec, never hit the resolver
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_no_user_id(self):
@@ -2356,7 +2430,6 @@ class TestMCPServerManager:
 
         # Unprefixed resolution
         resolved_server_unpref = manager._get_mcp_server_from_tool_name("create_zap")
-        print(resolved_server_unpref)
         assert resolved_server_unpref is not None
         assert resolved_server_unpref.server_id == server.server_id
 
@@ -2970,14 +3043,17 @@ class TestMCPServerManager:
             object_permission_id="perm_no_mcp",
         )
 
-        with patch.object(
-            manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
-        ), patch.object(
-            MCPRequestHandler,
-            "get_allowed_mcp_servers",
-            new_callable=AsyncMock,
-            return_value=["leaked-server"],
-        ) as mock_inner:
+        with (
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
         assert result == []
