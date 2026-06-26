@@ -11,6 +11,7 @@ from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
@@ -61,6 +62,22 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+
+# Responses-API-only tool types that have no Chat Completions equivalent.
+# Downstream chat-completions providers (DeepSeek, GLM/Z.AI, MiniMax, ...) reject
+# them with "unknown variant" errors. The bridge drops them so the surrounding
+# `function` and `mcp` tools still reach the provider.
+_RESPONSES_ONLY_TOOL_TYPES: frozenset = frozenset(
+    {
+        "custom",
+        "shell",
+        "file_search",
+        "code_interpreter",
+        "image_generation",
+        "computer_use_preview",
+        "local_shell",
+    }
+)
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -1391,17 +1408,42 @@ class LiteLLMCompletionResponsesConfig:
                 )
             elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
+                # Function tools arrive in two shapes:
+                #   Responses-API spec: ``{"type": "function", "name": ..., "parameters": ...}``
+                #   Chat-Completion-nested (Codex / Vercel SDK): ``{"type": "function",
+                #       "function": {"name": ..., "parameters": ...}}``
+                # Read each field from the top level, falling back to the nested
+                # ``function`` object so we never lose the name / parameters
+                # depending on which shape the caller sent.
+                nested_function: Dict[str, Any] = (
+                    typed_tool.get("function")  # type: ignore[assignment]
+                    if isinstance(typed_tool.get("function"), dict)
+                    else {}
+                )
+                name = typed_tool.get("name") or nested_function.get("name") or ""
+                description = (
+                    typed_tool.get("description")
+                    or nested_function.get("description")
+                    or ""
+                )
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
-                parameters = dict(typed_tool.get("parameters", {}) or {})
+                parameters = dict(
+                    typed_tool.get("parameters")
+                    or nested_function.get("parameters")
+                    or {}
+                )
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
+                strict = typed_tool.get("strict")
+                if strict is None:
+                    strict = nested_function.get("strict")
                 chat_completion_tool: Dict[str, Any] = {
                     "type": "function",
                     "function": {
-                        "name": typed_tool.get("name") or "",
-                        "description": typed_tool.get("description") or "",
+                        "name": name,
+                        "description": description,
                         "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
+                        "strict": bool(strict) if strict is not None else False,
                     },
                 }
                 if tool.get("cache_control"):
@@ -1416,6 +1458,19 @@ class LiteLLMCompletionResponsesConfig:
                     chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
+                )
+            elif tool.get("type") in _RESPONSES_ONLY_TOOL_TYPES:
+                # Responses-API-only tool types (custom, shell, file_search,
+                # code_interpreter, image_generation, computer_use_preview,
+                # local_shell) have no Chat Completions equivalent. Downstream
+                # providers (DeepSeek, GLM/Z.AI, MiniMax) reject them with
+                # ``unknown variant``. Drop them with an info-level log so
+                # operators can see the loss in production without raising
+                # the verbose-logger threshold.
+                verbose_logger.info(
+                    "responses-bridge: dropping unsupported tool type '%s' "
+                    "with no Chat Completions equivalent",
+                    tool.get("type"),
                 )
             else:
                 chat_completion_tools.append(

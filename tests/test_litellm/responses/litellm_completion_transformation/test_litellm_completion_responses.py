@@ -1407,6 +1407,123 @@ class TestToolTransformation:
             == "string"
         )
 
+    def test_transform_function_tool_with_chat_completion_nested_shape(self):
+        """Codex / Vercel AI SDK send function tools in chat-completion form:
+        ``{"type": "function", "function": {"name": ..., ...}}``. The bridge
+        must read the name from the nested ``function`` object, not only from
+        the top level.
+        """
+        nested_tool = {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+                "strict": True,
+            },
+        }
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[nested_tool]
+        )
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "read"
+        assert result_tool["function"]["description"] == "read a file"
+        assert result_tool["function"]["parameters"]["properties"]["path"]["type"] == "string"
+        assert result_tool["function"]["strict"] is True
+
+    def test_transform_function_tool_prefers_top_level_name_over_nested(self):
+        """If both top-level and nested names are present, top-level wins
+        (matches the OpenAI Responses spec FunctionToolParam shape)."""
+        tool = {
+            "type": "function",
+            "name": "top_level_name",
+            "function": {"name": "nested_name"},
+            "parameters": {"type": "object"},
+        }
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[tool]
+        )
+        assert result_tools[0]["function"]["name"] == "top_level_name"
+
+    def test_transform_drops_responses_only_tool_types(self):
+        """Tool types that exist only in the Responses API (custom, shell,
+        file_search, code_interpreter, image_generation,
+        computer_use_preview, local_shell) have no Chat Completions
+        equivalent and are rejected by downstream providers (DeepSeek,
+        GLM/Z.AI, MiniMax). The bridge drops them so the surrounding
+        ``function`` and ``mcp`` tools still reach the provider.
+        """
+        tools = [
+            {"type": "custom", "name": "shell", "description": "run shell"},
+            {"type": "shell", "name": "exec"},
+            {"type": "file_search"},
+            {"type": "code_interpreter"},
+            {"type": "image_generation"},
+            {"type": "computer_use_preview"},
+            {"type": "local_shell"},
+            {
+                "type": "function",
+                "name": "kept",
+                "parameters": {"type": "object"},
+            },
+        ]
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "kept"
+
+    def test_transform_preserves_unrecognized_types_for_pass_through(self):
+        """Tools without an explicit ``type`` (e.g. Vertex AI
+        ``{"code_execution": {}}``) continue to pass through as-is.
+        Only the explicit Responses-API-only types are dropped."""
+        vertex_tool = {"code_execution": {}}
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[vertex_tool]
+        )
+        assert len(result_tools) == 1
+        assert result_tools[0] == vertex_tool
+
+    def test_transform_function_tool_nested_strict_falls_back_when_top_level_missing(
+        self,
+    ):
+        """When the top-level lacks ``strict`` and the nested ``function`` object
+        provides it, the nested value is used."""
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "fn",
+                "parameters": {"type": "object"},
+                "strict": True,
+            },
+        }
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[tool]
+        )
+        assert result_tools[0]["function"]["strict"] is True
+
+    def test_transform_function_tool_with_explicit_strict_false_top_level(self):
+        """An explicit top-level ``strict=False`` is honoured (not overridden by
+        a nested ``strict=True``)."""
+        tool = {
+            "type": "function",
+            "name": "fn",
+            "parameters": {"type": "object"},
+            "strict": False,
+            "function": {"strict": True},
+        }
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[tool]
+        )
+        assert result_tools[0]["function"]["strict"] is False
+
 
 class TestUsageTransformation:
     """Test cases for usage transformation from Chat Completion to Responses API format"""
