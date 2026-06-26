@@ -2733,3 +2733,126 @@ async def test_token_exchange_passes_through_upstream_expires_in():
         {"access_token": "tok", "token_type": "Bearer", "expires_in": 43200}
     )
     assert body["expires_in"] == 43200
+
+
+@pytest.mark.asyncio
+async def test_exchange_persists_resolved_client_id_server_side():
+    """For a dynamically-registered server (no static client_id), the per-user
+    client_id from the exchange must be threaded into server-side storage so the
+    token can be refreshed later."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    # No static client_id: the id comes from the caller (dynamic registration).
+    server = MCPServer(
+        server_id="dcr-srv",
+        name="dcr",
+        server_name="dcr",
+        alias="dcr",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {
+        "access_token": "tok",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    store_side = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new=AsyncMock(return_value="alice"),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._store_per_user_token_server_side",
+            new=store_side,
+        ),
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="c",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="dcr-per-user-abc",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+    assert store_side.await_args.kwargs["client_id"] == "dcr-per-user-abc"
+
+
+@pytest.mark.asyncio
+async def test_store_per_user_token_forwards_client_id_to_db():
+    """_store_per_user_token_server_side must pass client_id down to the DB
+    layer so it is persisted alongside the refresh token."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _store_per_user_token_server_side,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="dcr-srv",
+        name="dcr",
+        server_name="dcr",
+        alias="dcr",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        token_url="https://provider.com/oauth/token",
+    )
+    store_db = AsyncMock(return_value=None)
+    cache = MagicMock()
+    cache.set = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+            new=store_db,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache",
+            new=cache,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache._compute_per_user_token_ttl",
+            return_value=60,
+        ),
+    ):
+        await _store_per_user_token_server_side(
+            server=server,
+            user_id="alice",
+            token_response={"access_token": "at", "expires_in": 3600},
+            client_id="dcr-per-user-abc",
+        )
+
+    assert store_db.await_args.kwargs["client_id"] == "dcr-per-user-abc"

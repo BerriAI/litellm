@@ -3498,6 +3498,118 @@ async def test_store_mcp_oauth_user_credential_returns_status():
 
 
 @pytest.mark.asyncio
+async def test_store_mcp_oauth_user_credential_threads_client_id():
+    """The per-user client_id from dynamic client registration must reach
+    store_user_oauth_credential so it can be persisted for refresh."""
+    from litellm.proxy._types import MCPOAuthUserCredentialRequest
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        store_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-1"
+    stored_payload = {
+        "type": "oauth2",
+        "access_token": "tok",
+        "refresh_token": "rt-1",
+        "connected_at": "2026-01-01T00:00:00+00:00",
+        "server_id": server_id,
+    }
+    store_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new=AsyncMock(
+                return_value=generate_mock_mcp_server_db_record(server_id=server_id)
+            ),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+            new=store_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value=stored_payload),
+        ),
+    ):
+        result = await store_mcp_oauth_user_credential(
+            server_id=server_id,
+            payload=MCPOAuthUserCredentialRequest(
+                access_token="tok",
+                refresh_token="rt-1",
+                client_id="dcr-per-user-abc",
+            ),
+            user_api_key_dict=_make_user_auth("user-123"),
+        )
+
+    assert store_mock.await_args.kwargs["client_id"] == "dcr-per-user-abc"
+    # The echoed status reflects that a refresh token is stored.
+    assert result.has_refresh_token is True
+
+
+@pytest.mark.asyncio
+async def test_oauth_status_reports_has_refresh_token():
+    """The status endpoint surfaces whether a refresh token is stored, so a
+    client can tell auto-refresh is wired up without reading the token."""
+    from litellm.proxy._types import MCPOAuthUserCredentialStatus
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        get_mcp_oauth_user_credential_status,
+    )
+
+    server_id = "srv-1"
+    with_refresh = {
+        "type": "oauth2",
+        "access_token": "tok",
+        "refresh_token": "rt-1",
+        "connected_at": "2026-01-01T00:00:00+00:00",
+    }
+    without_refresh = {
+        "type": "oauth2",
+        "access_token": "tok",
+        "connected_at": "2026-01-01T00:00:00+00:00",
+    }
+
+    async def _status_for(cred):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+                new=AsyncMock(return_value=cred),
+            ),
+        ):
+            return await get_mcp_oauth_user_credential_status(
+                server_id=server_id,
+                user_api_key_dict=_make_user_auth("user-123"),
+            )
+
+    with_result = await _status_for(with_refresh)
+    without_result = await _status_for(without_refresh)
+
+    assert isinstance(with_result, MCPOAuthUserCredentialStatus)
+    assert with_result.has_refresh_token is True
+    assert without_result.has_refresh_token is False
+
+
+@pytest.mark.asyncio
 async def test_delete_mcp_oauth_user_credential_only_deletes_oauth():
     """delete_mcp_oauth_user_credential only deletes OAuth2 credentials, not BYOK."""
     from litellm.proxy._types import MCPOAuthUserCredentialStatus

@@ -270,6 +270,7 @@ async def _store_per_user_token_server_side(
     server: MCPServer,
     user_id: str,
     token_response: Dict[str, Any],
+    client_id: Optional[str] = None,
 ) -> None:
     """Persist the OAuth token server-side and warm the Redis cache.
 
@@ -317,6 +318,7 @@ async def _store_per_user_token_server_side(
             refresh_token=refresh_token,
             expires_in=expires_in,
             scopes=scopes,
+            client_id=client_id,
         )
         verbose_logger.info(
             "_store_per_user_token_server_side: stored token for user=%s server=%s",
@@ -491,6 +493,7 @@ async def exchange_token_with_server(
                     server=mcp_server,
                     user_id=user_id,
                     token_response=token_response,
+                    client_id=resolved_client_id,
                 )
             except Exception as exc:
                 verbose_logger.warning(

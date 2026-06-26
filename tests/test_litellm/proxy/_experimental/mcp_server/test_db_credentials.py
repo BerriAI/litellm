@@ -11,6 +11,7 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -21,6 +22,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     get_user_oauth_credential,
     is_oauth_credential_expired,
     list_user_oauth_credentials,
+    refresh_user_oauth_token,
     resolve_valid_user_oauth_token,
     rotate_mcp_user_credentials_master_key,
     rotate_mcp_user_env_vars_master_key,
@@ -577,6 +579,141 @@ async def test_resolve_returns_none_for_missing_credential(monkeypatch):
         is None
     )
     refresh.assert_not_called()
+
+
+# ── client_id persistence + refresh resolution ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_store_persists_client_id():
+    # A per-user client_id from dynamic client registration must round-trip so it
+    # is available at refresh time.
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_oauth_credential(
+        prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", client_id="dcr-abc"
+    )
+
+    row = MagicMock()
+    row.credential_b64 = _stored_value(prisma)
+    row.server_id = "srv-1"
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
+
+    result = await get_user_oauth_credential(prisma, "alice", "srv-1")
+    assert result is not None
+    assert result["client_id"] == "dcr-abc"
+
+
+@pytest.mark.asyncio
+async def test_store_omits_client_id_when_absent():
+    # Statically-configured servers pass no client_id; the payload must not carry
+    # an empty key.
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_oauth_credential(prisma, "alice", "srv-1", "at-1")
+
+    row = MagicMock()
+    row.credential_b64 = _stored_value(prisma)
+    row.server_id = "srv-1"
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
+
+    result = await get_user_oauth_credential(prisma, "alice", "srv-1")
+    assert result is not None
+    assert "client_id" not in result
+
+
+def _mock_token_endpoint(monkeypatch, body):
+    """Patch db.get_async_httpx_client so refresh hits a fake token endpoint and
+    return the AsyncMock that captured the POST call."""
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock(return_value=None)
+    response.json = MagicMock(return_value=body)
+    post = AsyncMock(return_value=response)
+    client = MagicMock()
+    client.post = post
+    monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **_: client)
+    return post
+
+
+@pytest.mark.asyncio
+async def test_refresh_uses_stored_client_id_when_server_has_none(monkeypatch):
+    # Regression: a dynamically-registered server has no static client_id, so the
+    # refresh POST must carry the client_id stored with the credential. Before the
+    # fix, getattr(server, "client_id") was None and the POST omitted it, so the
+    # provider rejected the refresh.
+    prisma = _make_prisma_with_existing(row=None)
+    post = _mock_token_endpoint(
+        monkeypatch, {"access_token": "at-new", "expires_in": 3600}
+    )
+    server = SimpleNamespace(
+        token_url="https://provider.example/token",
+        server_id="srv-1",
+        client_id=None,
+        client_secret=None,
+    )
+    cred = {
+        "type": "oauth2",
+        "access_token": "at-old",
+        "refresh_token": "rt-1",
+        "client_id": "dcr-per-user-abc",
+    }
+
+    await refresh_user_oauth_token(prisma, "alice", server, cred)
+
+    sent = post.call_args.kwargs["data"]
+    assert sent["grant_type"] == "refresh_token"
+    assert sent["client_id"] == "dcr-per-user-abc"
+
+
+@pytest.mark.asyncio
+async def test_refresh_falls_back_to_server_client_id(monkeypatch):
+    # A statically-configured server keeps its client_id on the server object; the
+    # credential carries none, so refresh must fall back to the server value.
+    prisma = _make_prisma_with_existing(row=None)
+    post = _mock_token_endpoint(
+        monkeypatch, {"access_token": "at-new", "expires_in": 3600}
+    )
+    server = SimpleNamespace(
+        token_url="https://provider.example/token",
+        server_id="srv-1",
+        client_id="static-server-client",
+        client_secret=None,
+    )
+    cred = {"type": "oauth2", "access_token": "at-old", "refresh_token": "rt-1"}
+
+    await refresh_user_oauth_token(prisma, "alice", server, cred)
+
+    assert post.call_args.kwargs["data"]["client_id"] == "static-server-client"
+
+
+@pytest.mark.asyncio
+async def test_refresh_repersists_client_id(monkeypatch):
+    # The rotated row must keep the per-user client_id so the NEXT refresh still
+    # has it (otherwise the second refresh would lose it).
+    prisma = _make_prisma_with_existing(row=None)
+    _mock_token_endpoint(monkeypatch, {"access_token": "at-new", "expires_in": 3600})
+    server = SimpleNamespace(
+        token_url="https://provider.example/token",
+        server_id="srv-1",
+        client_id=None,
+        client_secret=None,
+    )
+    cred = {
+        "type": "oauth2",
+        "access_token": "at-old",
+        "refresh_token": "rt-1",
+        "client_id": "dcr-per-user-abc",
+    }
+
+    await refresh_user_oauth_token(prisma, "alice", server, cred)
+
+    row = MagicMock()
+    row.credential_b64 = _stored_value(prisma)
+    row.server_id = "srv-1"
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
+    persisted = await get_user_oauth_credential(prisma, "alice", "srv-1")
+    assert persisted is not None
+    assert persisted["client_id"] == "dcr-per-user-abc"
 
 
 # ── per-user env-var rotation ─────────────────────────────────────────────────
