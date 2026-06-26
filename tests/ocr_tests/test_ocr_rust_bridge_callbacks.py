@@ -1,26 +1,28 @@
-"""
-Tests proving the Rust OCR path executes Python callbacks from the callback
-manager.
-"""
+"""Tests proving Rust OCR receives and executes Python callbacks."""
 
-import os
 from datetime import datetime
 from typing import Any, Optional
 
 import pytest
 
 import litellm
-from base_ocr_unit_tests import TEST_PDF_URL
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import StandardLoggingPayload
 
 MODEL = "mistral/mistral-ocr-latest"
 DOCUMENT: dict[str, object] = {
     "type": "document_url",
-    "document_url": TEST_PDF_URL,
+    "document_url": "https://example.com/test.pdf",
+}
+FAKE_RUST_OCR_RESPONSE: dict[str, object] = {
+    "pages": [{"index": 0, "markdown": "hello from rust ocr"}],
+    "model": "mistral-ocr-latest",
+    "document_annotation": None,
+    "usage_info": {"pages_processed": 1},
+    "object": "ocr",
+    "_hidden_params": {"litellm_rust": True},
 }
 
 
@@ -76,6 +78,72 @@ class OCRCustomGuardrail(CustomGuardrail):
         self.success_log_calls += 1
 
 
+class ExecutingRustAocrBridge:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+        callbacks: list[object] | None = None,
+        guardrails: list[object] | None = None,
+    ) -> dict[str, object]:
+        data: dict[str, Any] = {
+            "model": model,
+            "document": document,
+            "api_key": api_key,
+            "api_base": api_base,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "optional_params": optional_params,
+            "timeout_seconds": timeout_seconds,
+        }
+        for guardrail in guardrails or []:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=None,
+                cache=None,
+                data=data,
+                call_type="ocr",
+            )
+
+        response_obj = {
+            "object": "ocr",
+            "value": FAKE_RUST_OCR_RESPONSE,
+        }
+        standard_logging_payload: StandardLoggingPayload = {  # type: ignore[assignment]
+            "model": model,
+            "custom_llm_provider": custom_llm_provider,
+            "call_type": "ocr",
+            "response_cost": 0.0,
+            "hidden_params": {"litellm_rust": True},
+        }
+        kwargs = {
+            "api_base": api_base,
+            "document": document,
+            "optional_params": data["optional_params"],
+            "standard_logging_object": standard_logging_payload,
+        }
+        start_time = datetime.fromtimestamp(0)
+        end_time = datetime.fromtimestamp(1)
+        for callback in callbacks or []:
+            await callback.async_log_success_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+        self.calls.append(data)
+        return FAKE_RUST_OCR_RESPONSE
+
+
 @pytest.fixture(autouse=True)
 def reset_litellm_rust_callbacks():
     litellm.logging_callback_manager._reset_all_callbacks()
@@ -85,29 +153,17 @@ def reset_litellm_rust_callbacks():
     litellm.use_litellm_rust(False, ocr=None, aocr=None)
 
 
-def _mistral_api_key() -> str:
-    api_key = os.getenv("MISTRAL_API_KEY")
-    if not api_key:
-        pytest.skip("MISTRAL_API_KEY is required for live Mistral OCR callback tests")
-    return api_key
-
-
-def _require_native_rust_aocr() -> None:
-    if rust_ocr_bridge.load_rust_aocr() is None:
-        pytest.skip("native Rust OCR bridge is not available")
-
-
 @pytest.mark.asyncio
 async def test_rust_ocr_executes_custom_logger_from_callback_manager():
-    _require_native_rust_aocr()
+    bridge = ExecutingRustAocrBridge()
     custom_logger = OCRCustomLogger()
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
-    litellm.use_litellm_rust(True)
+    litellm.use_litellm_rust(True, aocr=bridge)
 
     response = await litellm.aocr(
         model=MODEL,
         document=DOCUMENT,
-        api_key=_mistral_api_key(),
+        api_key="sk-test",
     )
 
     assert len(response.pages) > 0
@@ -119,6 +175,7 @@ async def test_rust_ocr_executes_custom_logger_from_callback_manager():
     assert custom_logger.kwargs["api_base"] == "https://api.mistral.ai/v1"
     assert custom_logger.kwargs["document"] == DOCUMENT
     assert custom_logger.kwargs["optional_params"] == {}
+    assert bridge.calls[0]["custom_llm_provider"] == "mistral"
 
     logged_payload = custom_logger.standard_logging_payload
     assert logged_payload is not None
@@ -131,15 +188,15 @@ async def test_rust_ocr_executes_custom_logger_from_callback_manager():
 
 @pytest.mark.asyncio
 async def test_rust_ocr_executes_custom_guardrail_from_callback_manager():
-    _require_native_rust_aocr()
+    bridge = ExecutingRustAocrBridge()
     custom_guardrail = OCRCustomGuardrail()
     litellm.logging_callback_manager.add_litellm_callback(custom_guardrail)
-    litellm.use_litellm_rust(True)
+    litellm.use_litellm_rust(True, aocr=bridge)
 
     response = await litellm.aocr(
         model=MODEL,
         document=DOCUMENT,
-        api_key=_mistral_api_key(),
+        api_key="sk-test",
     )
 
     assert len(response.pages) > 0
@@ -151,3 +208,4 @@ async def test_rust_ocr_executes_custom_guardrail_from_callback_manager():
         is True
     )
     assert custom_guardrail.success_log_calls == 1
+    assert bridge.calls[0]["optional_params"]["include_image_base64"] is True
