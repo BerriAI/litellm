@@ -172,17 +172,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             json_schema = nested_schema.get("schema")
         elif "response_schema" in response_format:
             json_schema = response_format["response_schema"]
-        if not json_schema:
-            return messages, optional_params
 
-        messages = messages + [
-            {
-                "role": "user",
-                "content": response_schema_prompt(
-                    model=model, response_schema=json_schema
-                ),
-            }
-        ]
+        # DeepSeek rejects the json_schema *type* itself, so the format must always be
+        # downgraded to json_object — even when the schema body is absent/empty, where
+        # there is simply nothing to inject. Only convey the schema (and satisfy the
+        # "json" keyword requirement) via the prompt when one is actually present.
+        if json_schema:
+            messages = messages + [
+                {
+                    "role": "user",
+                    "content": response_schema_prompt(
+                        model=model, response_schema=json_schema
+                    ),
+                }
+            ]
         optional_params = {
             **optional_params,
             "response_format": {"type": "json_object"},

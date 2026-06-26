@@ -134,6 +134,25 @@ def test_downgrade_json_schema_to_json_object():
     assert "answer" in injected["content"]
 
 
+def test_downgrade_json_schema_without_schema_body_still_downgrades():
+    """DeepSeek rejects the json_schema type itself, so a json_schema response_format
+    with no nested schema must still be downgraded to json_object (nothing to inject,
+    but the format must not reach the API unchanged and 400)."""
+    config = DeepSeekChatConfig()
+    original_messages = [{"role": "user", "content": "Reply in json."}]
+    for response_format in (
+        {"type": "json_schema"},
+        {"type": "json_schema", "json_schema": {}},
+    ):
+        messages, optional_params = config._downgrade_json_schema_to_json_object(
+            model="deepseek-chat",
+            messages=list(original_messages),
+            optional_params={"response_format": response_format},
+        )
+        assert optional_params["response_format"] == {"type": "json_object"}
+        assert messages == original_messages
+
+
 def test_downgrade_is_noop_for_json_object():
     config = DeepSeekChatConfig()
     original_messages = [{"role": "user", "content": "Is the sky blue?"}]
