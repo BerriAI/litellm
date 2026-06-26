@@ -6,7 +6,6 @@ from typing_extensions import TYPE_CHECKING, TypedDict
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolParam,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import ChatCompletionMessageToolCall
@@ -110,7 +109,7 @@ class GenericGuardrailAPIResponse:
 
     texts: Optional[List[str]]
     images: Optional[List[str]]
-    tools: Optional[List[ChatCompletionToolParam]]
+    tools: Optional[List[GuardrailToolParam]]
     action: str
     blocked_reason: Optional[str]
 
@@ -120,7 +119,7 @@ class GenericGuardrailAPIResponse:
         texts: Optional[List[str]] = None,
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
-        tools: Optional[List[ChatCompletionToolParam]] = None,
+        tools: Optional[List[GuardrailToolParam]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
