@@ -1125,7 +1125,7 @@ async def oauth_protected_resource_mcp(
     )
 
 
-def _has_usable_passthrough_endpoint(metadata: Dict[str, object]) -> bool:
+def _has_usable_passthrough_endpoint(metadata: dict[str, object]) -> bool:
     """True iff ``metadata`` advertises at least one passthrough endpoint as a
     non-empty string, matching ``_select_passthrough_endpoint``'s usability
     test. The discovery probe relies on this so it keeps trying later RFC 8414
@@ -1155,7 +1155,7 @@ def _select_passthrough_endpoint(
     return relay
 
 
-async def _get_oauth_metadata_json(discovery_url: str) -> Optional[Dict[str, object]]:
+async def _get_oauth_metadata_json(discovery_url: str) -> Optional[dict[str, object]]:
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     try:
         response = await async_client.get(
@@ -1177,7 +1177,7 @@ async def _get_oauth_metadata_json(discovery_url: str) -> Optional[Dict[str, obj
         return None
     if not isinstance(decoded, dict):
         return None
-    return cast(Dict[str, object], decoded)
+    return cast(dict[str, object], decoded)
 
 
 async def _fetch_upstream_authorization_server_metadata(
