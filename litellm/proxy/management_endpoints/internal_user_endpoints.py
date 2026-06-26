@@ -1257,6 +1257,25 @@ def _check_user_update_authz(
         )
 
 
+async def _invalidate_user_spend_counter_if_changed(
+    non_default_values: dict[str, Any],
+) -> None:
+    """Invalidate the cross-pod spend counter after a direct ``spend`` change.
+
+    A direct ``spend`` change must also invalidate the cross-pod spend counter
+    enforcement reads; the DB write alone leaves a warm counter at the stale
+    value. ``non_default_values["user_id"]`` is populated in every branch of the
+    caller (incl. the email-new-user insert path, whose response is a bare model
+    and not safely subscriptable).
+    """
+    if non_default_values.get("spend") is not None:
+        from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+        await _invalidate_spend_counter(
+            counter_key=f"spend:user:{non_default_values['user_id']}"
+        )
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1388,17 +1407,7 @@ async def _update_single_user_helper(
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
 
-        # A direct `spend` change must also invalidate the cross-pod spend
-        # counter enforcement reads; the DB write alone leaves a warm counter
-        # at the stale value. `non_default_values["user_id"]` is populated in
-        # every branch above (incl. the email-new-user insert path, whose
-        # response is a bare model and not safely subscriptable).
-        if non_default_values.get("spend") is not None:
-            from litellm.proxy.proxy_server import _invalidate_spend_counter
-
-            await _invalidate_spend_counter(
-                counter_key=f"spend:user:{non_default_values['user_id']}"
-            )
+        await _invalidate_user_spend_counter_if_changed(non_default_values)
 
     if response is None:
         raise HTTPException(
