@@ -245,7 +245,7 @@ def test_volcengine_model_cost_metadata_is_complete():
     assert asr["litellm_provider"] == "volcengine"
     assert asr["mode"] == "audio_transcription"
     assert asr["input_cost_per_second"] > 0
-    assert asr["output_cost_per_second"] == 0.0
+    assert "output_cost_per_second" not in asr
     assert asr["supported_endpoints"] == ["/v1/audio/transcriptions"]
     assert asr["supports_audio_input"] is True
     assert asr["supports_audio_output"] is False

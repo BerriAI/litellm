@@ -347,7 +347,7 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
-def test_transcription_cost_uses_input_second_pricing_when_output_is_zero():
+def test_volcengine_bigasr_cost_uses_input_second_pricing():
     from litellm import completion_cost
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -367,7 +367,7 @@ def test_transcription_cost_uses_input_second_pricing_when_output_is_zero():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
-def test_volcengine_seedasr_cost_uses_input_second_pricing_when_output_is_zero():
+def test_volcengine_seedasr_cost_uses_input_second_pricing():
     from litellm import completion_cost
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

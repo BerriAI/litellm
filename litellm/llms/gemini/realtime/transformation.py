@@ -582,12 +582,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         logging_session_id: str,
         session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
+        session_configuration_request_dict: BidiGenerateContentSetup = {}
         if session_configuration_request:
-            session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-                session_configuration_request
-            ).get("setup", {})
-        else:
-            session_configuration_request_dict = {}
+            try:
+                session_configuration_request_dict = json.loads(
+                    session_configuration_request
+                ).get("setup", {})
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                session_configuration_request_dict = {}
 
         _model = session_configuration_request_dict.get("model") or model
         generation_config = session_configuration_request_dict.get("generationConfig", {}) or {}

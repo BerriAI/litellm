@@ -42899,7 +42899,6 @@
             "sample_rate_hz": 16000
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
         "source": "https://www.volcengine.com/docs/6561/1359370",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -42939,7 +42938,6 @@
             "sample_rate_hz": 16000
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
         "source": "https://www.volcengine.com/docs/6561/1359370",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
