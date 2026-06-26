@@ -1627,7 +1627,12 @@ class TestMissingChoicesGuard:
         assert "no 'choices'" in exc_info.value.message
 
     def test_convert_to_model_response_object_empty_choices_raises_api_error(self):
-        """Empty choices list raises APIError."""
+        """Empty choices list raises APIError, same as missing/null choices.
+
+        Provider-specific repair (e.g. github_copilot synthesizing choices for
+        Anthropic-native responses) happens before this guard, in the provider
+        config; the core utility keeps treating empty choices as an error.
+        """
         from litellm.exceptions import APIError
 
         response_object = {
@@ -1683,7 +1688,9 @@ class TestMissingChoicesGuard:
 
         assert "no 'choices'" in exc_info.value.message
 
-    def test_convert_to_model_response_object_stream_true_no_choices_raises_api_error(self):
+    def test_convert_to_model_response_object_stream_true_no_choices_raises_api_error(
+        self,
+    ):
         """Missing choices via stream=True path raises APIError when generator is consumed."""
         from litellm.exceptions import APIError
 
@@ -2475,6 +2482,13 @@ class TestConvertToModelResponseObjectCompletion:
     def test_model_response_none_raises(self):
         with pytest.raises(Exception):
             convert_to_model_response_object(
-                response_object={"choices": [{"message": {"content": "hi", "role": "assistant"}, "finish_reason": "stop"}]},
+                response_object={
+                    "choices": [
+                        {
+                            "message": {"content": "hi", "role": "assistant"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
                 model_response_object=None,
             )

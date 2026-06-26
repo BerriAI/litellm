@@ -2446,7 +2446,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
 class TranscriptionUsageDurationObject(BaseModel):
     type: Literal["duration"]
-    seconds: int
+    seconds: float
 
 
 class TranscriptionUsageInputTokenDetailsObject(BaseModel):
