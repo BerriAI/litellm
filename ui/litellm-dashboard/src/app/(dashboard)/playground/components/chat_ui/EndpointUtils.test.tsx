@@ -16,6 +16,7 @@ vi.mock("@/components/chat_ui/mode_endpoint_mapping", () => ({
     SPEECH: "speech",
     TRANSCRIPTION: "transcription",
     A2A_AGENTS: "a2a_agents",
+    OCR: "ocr",
   },
   getEndpointType: vi.fn(),
   ModelMode: {
@@ -28,6 +29,7 @@ vi.mock("@/components/chat_ui/mode_endpoint_mapping", () => ({
     IMAGE_EDITS: "image_edits",
     ANTHROPIC_MESSAGES: "anthropic_messages",
     EMBEDDING: "embedding",
+    OCR: "ocr",
   },
 }));
 
@@ -149,6 +151,22 @@ describe("determineEndpointType", () => {
     const videoResult = determineEndpointType("video-model", mockModelInfo);
     expect(getEndpointType).toHaveBeenCalledWith("video_generation");
     expect(videoResult).toBe(EndpointType.VIDEO);
+  });
+
+  it("should map ocr mode models to the OCR endpoint type", () => {
+    const mockModelInfo: ModelGroup[] = [
+      {
+        model_group: "mistral-ocr-latest",
+        mode: "ocr",
+      },
+    ];
+
+    vi.mocked(getEndpointType).mockReturnValueOnce(EndpointType.OCR);
+
+    const result = determineEndpointType("mistral-ocr-latest", mockModelInfo);
+
+    expect(getEndpointType).toHaveBeenCalledWith("ocr");
+    expect(result).toBe(EndpointType.OCR);
   });
 
   it("should prioritize the first matching model when there are duplicates", () => {

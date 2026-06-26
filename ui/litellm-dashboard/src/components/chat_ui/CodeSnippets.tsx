@@ -542,6 +542,24 @@ response = client.audio.transcriptions.create(
 print(response.text)
 `;
       break;
+    case EndpointType.OCR:
+      endpointSpecificCode = `
+import requests
+
+with open("path/to/your/document.pdf", "rb") as document:
+\tresponse = requests.post(
+\t\t"${apiBase}/v1/ocr",
+\t\theaders={"Authorization": "Bearer ${effectiveApiKey || "YOUR_LITELLM_API_KEY"}"},
+\t\tdata={"model": "${modelNameForCode}"},
+\t\tfiles={"file": document},
+\t)
+\tresponse.raise_for_status()
+
+for page in response.json().get("pages", []):
+\tprint(f"--- Page {page['index'] + 1} ---")
+\tprint(page["markdown"])
+`;
+      break;
     case EndpointType.SPEECH:
       endpointSpecificCode = `
 # Make the text-to-speech request

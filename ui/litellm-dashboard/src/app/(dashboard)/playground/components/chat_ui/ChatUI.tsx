@@ -48,6 +48,7 @@ import { Agent, fetchAvailableAgents } from "../../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
+import { makeOpenAIOCRRequest } from "../../llm_calls/ocr";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
 import A2AMetrics from "./A2AMetrics";
@@ -244,6 +245,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
+  const [uploadedOcrDocument, setUploadedOcrDocument] = useState<File | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
@@ -559,8 +561,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(null);
   };
 
+  const handleOcrDocumentUpload = (file: File): false => {
+    setUploadedOcrDocument(file);
+    return false;
+  };
+
+  const handleRemoveOcrDocument = () => {
+    setUploadedOcrDocument(null);
+  };
+
   const handleSendMessage = async () => {
-    if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
+    if (
+      inputMessage.trim() === "" &&
+      endpointType !== EndpointType.TRANSCRIPTION &&
+      endpointType !== EndpointType.MCP &&
+      endpointType !== EndpointType.OCR
+    )
       return;
 
     // For image edits, require both image and prompt
@@ -572,6 +588,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // For audio transcriptions, require audio file
     if (endpointType === EndpointType.TRANSCRIPTION && !uploadedAudio) {
       NotificationsManager.fromBackend("Please upload an audio file for transcription");
+      return;
+    }
+
+    if (endpointType === EndpointType.OCR && !uploadedOcrDocument) {
+      NotificationsManager.fromBackend("Please upload a document or image for OCR");
       return;
     }
 
@@ -633,6 +654,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       EndpointType.EMBEDDINGS,
       EndpointType.TRANSCRIPTION,
       EndpointType.INTERACTIONS,
+      EndpointType.OCR,
     ];
 
     if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
@@ -707,6 +729,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
         ? `🎵 Audio file: ${uploadedAudio.name}\nPrompt: ${inputMessage}`
         : `🎵 Audio file: ${uploadedAudio.name}`;
       displayMessage = createDisplayMessage(audioMessage, false);
+    } else if (endpointType === EndpointType.OCR && uploadedOcrDocument) {
+      displayMessage = createDisplayMessage(`📄 Document: ${uploadedOcrDocument.name}`, false);
     } else if (endpointType === EndpointType.MCP && selectedMCPDirectTool) {
       // For MCP direct mode, show tool name and arguments from form
       const mcpMessage = `🔧 MCP Tool: ${selectedMCPDirectTool}\nArguments: ${JSON.stringify(mcpToolArguments, null, 2)}`;
@@ -898,6 +922,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
               customProxyBaseUrl || undefined,
             );
           }
+        } else if (endpointType === EndpointType.OCR) {
+          if (uploadedOcrDocument) {
+            await makeOpenAIOCRRequest({
+              file: uploadedOcrDocument,
+              updateUI: (markdown, model) => updateTextUI("assistant", markdown, model),
+              selectedModel,
+              accessToken: effectiveApiKey,
+              tags: selectedTags,
+              signal,
+              customBaseUrl: customProxyBaseUrl || undefined,
+            });
+          }
         } else if (endpointType === EndpointType.INTERACTIONS) {
           await makeInteractionsRequest(
             inputMessage,
@@ -984,6 +1020,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (endpointType === EndpointType.TRANSCRIPTION && uploadedAudio) {
         handleRemoveAudio();
       }
+      if (endpointType === EndpointType.OCR && uploadedOcrDocument) {
+        handleRemoveOcrDocument();
+      }
     }
 
     setInputMessage("");
@@ -995,6 +1034,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleRemoveResponsesImage();
     handleRemoveChatImage();
     handleRemoveAudio();
+    handleRemoveOcrDocument();
     NotificationsManager.success("Chat history cleared.");
   };
 
@@ -1867,6 +1907,42 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </div>
                   )}
 
+                  {endpointType === EndpointType.OCR && (
+                    <div className="mb-4">
+                      {!uploadedOcrDocument ? (
+                        <Dragger
+                          beforeUpload={handleOcrDocumentUpload}
+                          accept=".pdf,image/*,.png,.jpg,.jpeg,.webp,.tiff,.bmp"
+                          showUploadList={false}
+                        >
+                          <p className="ant-upload-drag-icon">
+                            <FilePdfOutlined style={{ fontSize: "24px", color: "#666" }} />
+                          </p>
+                          <p className="ant-upload-text text-sm">Click or drag a document or image to upload</p>
+                          <p className="ant-upload-hint text-xs text-gray-500">
+                            Supports PDF, PNG, JPG, JPEG, WEBP, TIFF, BMP
+                          </p>
+                        </Dragger>
+                      ) : (
+                        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                          <div className="flex items-center gap-2 flex-1">
+                            <FilePdfOutlined style={{ fontSize: "20px", color: "#666" }} />
+                            <span className="text-sm font-medium">{uploadedOcrDocument.name}</span>
+                            <span className="text-xs text-gray-500">
+                              ({(uploadedOcrDocument.size / 1024 / 1024).toFixed(2)} MB)
+                            </span>
+                          </div>
+                          <button
+                            className="bg-white shadow-sm border border-gray-200 rounded px-2 py-1 text-red-500 hover:bg-red-50 text-xs"
+                            onClick={handleRemoveOcrDocument}
+                          >
+                            <DeleteOutlined /> Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Audio Upload Section for Transcriptions */}
                   {endpointType === EndpointType.TRANSCRIPTION && (
                     <div className="mb-4">
@@ -2084,7 +2160,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                     ? "Enter text to convert to speech..."
                                     : endpointType === EndpointType.TRANSCRIPTION
                                       ? "Optional: Add context or prompt for transcription..."
-                                      : "Describe the image you want to generate..."
+                                      : endpointType === EndpointType.OCR
+                                        ? "Upload a document above to extract text"
+                                        : "Describe the image you want to generate..."
                           }
                           disabled={isLoading}
                           className="flex-1"
@@ -2114,7 +2192,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               )
                             : endpointType === EndpointType.TRANSCRIPTION
                               ? !uploadedAudio
-                              : !inputMessage.trim())
+                              : endpointType === EndpointType.OCR
+                                ? !uploadedOcrDocument
+                                : !inputMessage.trim())
                         }
                         className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
                       >
