@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
 )
@@ -105,4 +106,44 @@ async def test_completion_start_time_stamped_on_cost_injection_path():
         await asyncio.sleep(0)
 
     assert received  # cost-injection branch was exercised
+    assert isinstance(logging_obj.completion_start_time, datetime)
+
+
+@pytest.mark.asyncio
+async def test_completion_start_time_stamped_on_vertex_cost_injection_path():
+    response = _make_streaming_response([b'data: {"x": 1}\n\n'])
+    logging_obj = _logging_obj()
+
+    with (
+        patch.object(
+            PassThroughStreamingHandler,
+            "_route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ),
+        patch.object(litellm, "include_cost_in_streaming_usage", True),
+        patch.object(
+            PassThroughStreamingHandler,
+            "_extract_model_for_cost_injection",
+            return_value="gemini-2.5-pro",
+        ),
+        patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_process_chunk_with_cost_injection",
+            return_value=None,
+        ),
+    ):
+        received = []
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "gemini-2.5-pro"},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.VERTEX_AI,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-2.5-pro:streamRawPredict",
+        ):
+            received.append(chunk)
+        await asyncio.sleep(0)
+
+    assert received  # VERTEX_AI cost-injection branch was exercised
     assert isinstance(logging_obj.completion_start_time, datetime)
