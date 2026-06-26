@@ -85,7 +85,6 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
         # cost tracking only for completions and embeddings
         if "completions" in endpoint:
-
             provider_chat_config = ProviderConfigManager.get_provider_chat_config(
                 provider=LlmProviders(custom_llm_provider),
                 model=model,
@@ -112,7 +111,6 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             return litellm_model_response
 
         if "embeddings" in endpoint:
-
             provider_embedding_config = (
                 ProviderConfigManager.get_provider_embedding_config(
                     provider=LlmProviders(custom_llm_provider),
