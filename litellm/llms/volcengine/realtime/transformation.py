@@ -200,7 +200,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
                 if not update_payload:
                     return []
                 return cast(
-                    list[str],
+                    list[RealtimeMessage],
                     [
                         encode_json_event(
                             event=EV_UPDATE_CONFIG,

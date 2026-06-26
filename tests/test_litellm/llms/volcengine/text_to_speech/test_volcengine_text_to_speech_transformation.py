@@ -115,6 +115,13 @@ def test_tts_voice_fallback_and_resource_id_mapping():
 
     assert voice == VOLCENGINE_TTS_DEFAULT_VOICE
     assert optional_params["response_format"] == "pcm"
+    for openai_voice in ("cedar", "marin", "verse"):
+        voice, _ = config.map_openai_params(
+            model="seed-tts-2.0",
+            optional_params={},
+            voice=openai_voice,
+        )
+        assert voice == VOLCENGINE_TTS_DEFAULT_VOICE
     assert pick_tts_resource_id("seed-tts-1.0-concurr") == "seed-tts-1.0-concurr"
     assert pick_tts_resource_id("seed-icl-2.0") == "seed-icl-2.0"
     assert pick_tts_resource_id("seed-tts-2.0") == "seed-tts-2.0"

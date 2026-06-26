@@ -57,13 +57,16 @@ VOLCENGINE_OPENAI_VOICE_NAMES = {
     "alloy",
     "ash",
     "ballad",
+    "cedar",
     "coral",
     "echo",
     "fable",
+    "marin",
     "nova",
     "onyx",
     "sage",
     "shimmer",
+    "verse",
 }
 
 
