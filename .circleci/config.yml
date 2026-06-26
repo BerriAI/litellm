@@ -1042,6 +1042,8 @@ jobs:
     docker:
       - *python312_image
     working_directory: ~/project
+    environment:
+      LITELLM_USE_RUST_OCR: "1"
 
     steps:
       - checkout
