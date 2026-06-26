@@ -78,6 +78,7 @@ def _get_spend_logs_metadata(
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
+    litellm_rust: Optional[bool] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
     litellm_call_id: Optional[str] = None,
 ) -> SpendLogsMetadata:
@@ -107,6 +108,7 @@ def _get_spend_logs_metadata(
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            litellm_rust=litellm_rust,
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
@@ -134,6 +136,7 @@ def _get_spend_logs_metadata(
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
+    clean_metadata["litellm_rust"] = litellm_rust
     clean_metadata["cost_breakdown"] = cost_breakdown
     clean_metadata["litellm_call_id"] = litellm_call_id
 
@@ -381,6 +384,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             else None
         ),
         litellm_overhead_time_ms=litellm_overhead_time_ms,
+        litellm_rust=(
+            standard_logging_payload.get("hidden_params", {}).get("litellm_rust", None)
+            if standard_logging_payload is not None
+            else None
+        ),
         cost_breakdown=(
             standard_logging_payload.get("cost_breakdown", None)
             if standard_logging_payload is not None

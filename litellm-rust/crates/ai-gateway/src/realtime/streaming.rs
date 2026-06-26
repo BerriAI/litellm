@@ -178,6 +178,7 @@ impl RealTimeStreaming {
                 user_api_key_team_id: self.metadata.user_api_key_team_id.clone(),
                 ..Default::default()
             },
+            hidden_params: Default::default(),
             messages: None,
         }
     }
