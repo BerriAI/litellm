@@ -134,26 +134,28 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
+            guardrailed_structured_messages = guardrailed_inputs.get("structured_messages")
             if guardrailed_tools is not None:
                 data["tools"] = guardrailed_tools
 
-            # Step 3: Map guardrail responses back to original message structure
-            if guardrailed_texts and texts_to_check:
-                await self._apply_guardrail_responses_to_input_texts(
-                    messages=messages,
-                    responses=guardrailed_texts,
-                    task_mappings=text_task_mappings,
-                )
+            if guardrailed_structured_messages is not None:
+                data["messages"] = guardrailed_structured_messages
+            else:
+                # Step 3: Map guardrail responses back to original message structure
+                if guardrailed_texts and texts_to_check:
+                    await self._apply_guardrail_responses_to_input_texts(
+                        messages=messages,
+                        responses=guardrailed_texts,
+                        task_mappings=text_task_mappings,
+                    )
 
-            # Step 4: Apply guardrailed tool calls back to messages
-            if guardrailed_tool_calls:
-                # Note: The guardrail may modify tool_calls_to_check in place
-                # or we may need to handle returned tool calls differently
-                await self._apply_guardrail_responses_to_input_tool_calls(
-                    messages=messages,
-                    tool_calls=guardrailed_tool_calls,  # type: ignore
-                    task_mappings=tool_call_task_mappings,
-                )
+                # Step 4: Apply guardrailed tool calls back to messages
+                if guardrailed_tool_calls:
+                    await self._apply_guardrail_responses_to_input_tool_calls(
+                        messages=messages,
+                        tool_calls=guardrailed_tool_calls,  # type: ignore
+                        task_mappings=tool_call_task_mappings,
+                    )
 
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s", messages

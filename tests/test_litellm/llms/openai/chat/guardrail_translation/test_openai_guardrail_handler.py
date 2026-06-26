@@ -1137,3 +1137,78 @@ class TestGetStructuredMessages:
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class MockStructuredMessagesGuardrail(CustomGuardrail):
+    """Mock guardrail that returns compressed structured_messages."""
+
+    def __init__(self, compressed_messages: list):
+        super().__init__(guardrail_name="test-compression")
+        self.compressed_messages = compressed_messages
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        result = GenericGuardrailAPIInputs(texts=inputs.get("texts", []))
+        result["structured_messages"] = self.compressed_messages  # type: ignore
+        return result
+
+
+class TestStructuredMessagesResponse:
+    """Test that a guardrail returning structured_messages replaces data['messages']."""
+
+    @pytest.mark.asyncio
+    async def test_structured_messages_replaces_data_messages(self):
+        compressed = [
+            {"role": "user", "content": "Analyze this."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": '{"rows":"[40]{date,revenue}\\n2024-01,120000"}',
+                    }
+                ],
+            },
+        ]
+        guardrail = MockStructuredMessagesGuardrail(compressed_messages=compressed)
+        handler = OpenAIChatCompletionsHandler()
+
+        data = {
+            "messages": [
+                {"role": "user", "content": "Analyze this."},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": '{"rows": [{"date": "2024-01", "revenue": 120000}' + ', {"date": "2024-01", "revenue": 120000}' * 39 + ']}',
+                        }
+                    ],
+                },
+            ]
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+        assert result["messages"] == compressed
+
+    @pytest.mark.asyncio
+    async def test_texts_not_applied_when_structured_messages_returned(self):
+        """When structured_messages is returned, texts are NOT positionally applied."""
+        original_text = "original user message"
+        compressed = [{"role": "user", "content": "compressed replacement"}]
+
+        guardrail = MockStructuredMessagesGuardrail(compressed_messages=compressed)
+        handler = OpenAIChatCompletionsHandler()
+
+        data = {"messages": [{"role": "user", "content": original_text}]}
+
+        result = await handler.process_input_messages(data, guardrail)
+        assert result["messages"] == compressed
+        assert result["messages"][0]["content"] == "compressed replacement"
