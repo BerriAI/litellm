@@ -162,5 +162,5 @@ async fn bridge(
     } else {
         SessionStatus::Failure
     };
-    collector.log_messages(status);
+    collector.log_messages(status).await;
 }

@@ -1634,13 +1634,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             resp = tool_responses_by_id.pop(call_id, None)
             if resp is not None:
                 merged["response"] = resp.get("response")
-                # Keep response signature if call didn't have one
-                if "thought_signature" not in merged and "thought_signature" in resp:
-                    merged["thought_signature"] = resp["thought_signature"]
+                if "thought_signature" in resp:
+                    merged["response_thought_signature"] = resp["thought_signature"]
             invocations.append(merged)
 
         # Any orphan responses (shouldn't happen, but be safe)
         for resp_id, resp_entry in tool_responses_by_id.items():
+            if "thought_signature" in resp_entry:
+                resp_entry["response_thought_signature"] = resp_entry[
+                    "thought_signature"
+                ]
             invocations.append(resp_entry)
 
         return invocations if invocations else None
@@ -3598,16 +3601,22 @@ class ModelResponseIterator:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
-        # Accumulate JSON data
         self.accumulated_json += message
 
-        # Try to parse the accumulated JSON
+        # json.loads on the whole buffer after every fragment is O(n^2) and
+        # holds the GIL, freezing the event loop for seconds on large responses
+        # (https://github.com/BerriAI/litellm/issues/26181). A complete Gemini
+        # chunk is a JSON object/array, so only attempt the parse once the
+        # buffer's last non-whitespace byte can close one.
+        stripped = self.accumulated_json.rstrip()
+        if not stripped or stripped[-1] not in "}]":
+            return None
+
         try:
             _data = json.loads(self.accumulated_json)
             self.accumulated_json = ""  # reset after successful parsing
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next event
             return None
 
     def _common_chunk_parsing_logic(

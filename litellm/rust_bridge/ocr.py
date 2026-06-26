@@ -1,30 +1,21 @@
-"""
-Optional Rust-backed OCR path.
-
-Enable with ``litellm.use_litellm_rust()``; the sync ``litellm.ocr()`` entrypoint
-then routes supported Mistral calls through the compiled ``litellm.rust_bridge._native``
-extension, which performs the whole OCR call (URL, headers, HTTP, parse) in Rust.
-
-No module-level ``litellm`` imports keep this a leaf so ``litellm/ocr/main.py``
-can import it statically without forming an import cycle.
-"""
+"""Thin Python wrapper for the native Rust OCR bridge."""
 
 from __future__ import annotations
 
 import os
-from typing import Awaitable, Final, Protocol, cast
+from typing import Any, Awaitable, Final, Protocol, Union, cast
+
+import httpx
 
 
 class RustOcr(Protocol):
-    """Signature of the compiled Rust OCR entrypoint."""
-
     def __call__(
         self,
         model: str,
         document: dict[str, object],
         api_key: str | None,
         api_base: str | None,
-        custom_llm_provider: str,
+        custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
@@ -33,15 +24,13 @@ class RustOcr(Protocol):
 
 
 class RustAocr(Protocol):
-    """Signature of the compiled ``litellm_python_bridge.aocr`` entrypoint."""
-
     def __call__(
         self,
         model: str,
         document: dict[str, object],
         api_key: str | None,
         api_base: str | None,
-        custom_llm_provider: str,
+        custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
@@ -50,7 +39,7 @@ class RustAocr(Protocol):
 
 
 class _Unset:
-    """Sentinel type so ``ocr=None`` can clear a prior injection while omission preserves it."""
+    pass
 
 
 _UNSET: Final[_Unset] = _Unset()
@@ -76,12 +65,6 @@ def use_litellm_rust(
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
 ) -> None:
-    """Route supported OCR calls through the packaged Rust extension.
-
-    ``ocr`` and ``aocr`` inject bridge callables; when omitted the compiled
-    extension is loaded on demand and any previously injected bridge is
-    preserved. Pass ``None`` explicitly to clear a prior injection.
-    """
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
     _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
@@ -91,17 +74,10 @@ def use_litellm_rust(
 
 
 def rust_ocr_enabled() -> bool:
-    """Whether the Rust OCR path has been turned on via ``use_litellm_rust()``."""
     return _rust_ocr_enabled
 
 
 def load_rust_ocr() -> RustOcr | None:
-    """Return the Rust OCR callable, or ``None`` when no bridge is available.
-
-    Prefers an injected implementation, otherwise loads the compiled
-    ``litellm.rust_bridge._native`` extension; a missing extension yields ``None`` so
-    the caller can fall back to the Python path instead of hard-failing.
-    """
     if _rust_ocr_impl is not None:
         return _rust_ocr_impl
     from litellm.rust_bridge import get_native_bridge
@@ -113,7 +89,6 @@ def load_rust_ocr() -> RustOcr | None:
 
 
 def load_rust_aocr() -> RustAocr | None:
-    """Return the async Rust OCR callable, or ``None`` when unavailable."""
     if _rust_aocr_impl is not None:
         return _rust_aocr_impl
     from litellm.rust_bridge import get_native_bridge
@@ -122,3 +97,63 @@ def load_rust_aocr() -> RustAocr | None:
     if native_bridge is None:
         return None
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
+
+
+def _timeout_to_seconds(timeout: Union[float, httpx.Timeout] | None) -> float | None:
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return float(timeout)
+
+
+def ocr(
+    *,
+    model: str,
+    document: dict[str, Any],
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+    extra_headers: dict[str, Any] | None,
+    optional_params: dict[str, object],
+    timeout: Union[float, httpx.Timeout] | None,
+) -> dict[str, object] | None:
+    rust_ocr = load_rust_ocr()
+    if rust_ocr is None:
+        return None
+    return rust_ocr(
+        model=model,
+        document=cast(dict[str, object], document),
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=cast(dict[str, object] | None, extra_headers),
+        optional_params=optional_params,
+        timeout_seconds=_timeout_to_seconds(timeout),
+    )
+
+
+async def aocr(
+    *,
+    model: str,
+    document: dict[str, Any],
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+    extra_headers: dict[str, Any] | None,
+    optional_params: dict[str, object],
+    timeout: Union[float, httpx.Timeout] | None,
+) -> dict[str, object] | None:
+    rust_aocr = load_rust_aocr()
+    if rust_aocr is None:
+        return None
+    return await rust_aocr(
+        model=model,
+        document=cast(dict[str, object], document),
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=cast(dict[str, object] | None, extra_headers),
+        optional_params=optional_params,
+        timeout_seconds=_timeout_to_seconds(timeout),
+    )

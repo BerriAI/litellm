@@ -574,8 +574,9 @@ class Cache:
             if prompt_kwarg in kwargs:
                 cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
 
-        if isinstance(kwargs.get("metadata"), dict):
-            cache_lookup_kwargs["metadata"] = {}
+        metadata = kwargs.get("metadata")
+        if isinstance(metadata, dict):
+            cache_lookup_kwargs["metadata"] = dict(metadata)
 
         return cache_lookup_kwargs
 

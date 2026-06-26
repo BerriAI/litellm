@@ -466,7 +466,7 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
 
 def update_messages_with_model_file_ids(
     messages: List[AllMessageValues],
-    model_id: str,
+    model_id: str | None,
     model_file_id_mapping: Dict[str, Dict[str, str]],
 ) -> List[AllMessageValues]:
     """
@@ -519,7 +519,7 @@ def update_messages_with_model_file_ids(
                         if file_id:
                             provider_file_id = (
                                 model_file_id_mapping.get(file_id, {}).get(model_id)
-                                if model_file_id_mapping
+                                if model_file_id_mapping and model_id is not None
                                 else None
                             )
                             if (

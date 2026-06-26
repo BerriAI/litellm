@@ -62,6 +62,19 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             "get_supported_generate_content_optional_params is not implemented"
         )
 
+    def get_generate_content_request_top_level_fields(self) -> tuple[str, ...]:
+        """
+        Native Google ``GenerateContentRequest`` fields that sit at the top level
+        (siblings of ``generationConfig``) rather than inside it. The proxy forwards
+        these verbatim from a native request so ``generateContent`` is a drop-in for
+        Google's REST API.
+
+        Excludes ``contents``, ``model`` and ``tools`` (dedicated params),
+        ``systemInstruction`` (dedicated extraction) and ``generationConfig`` (mapped
+        to ``config``).
+        """
+        return ("safetySettings", "toolConfig", "cachedContent", "labels")
+
     @abstractmethod
     def map_generate_content_optional_params(
         self,

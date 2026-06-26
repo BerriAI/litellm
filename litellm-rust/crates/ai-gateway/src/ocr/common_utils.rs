@@ -18,7 +18,7 @@ use litellm_core::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
 };
 
-use super::http_client;
+use super::client::http_client;
 
 const ERROR_BODY_MAX_CHARS: usize = 256;
 const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
@@ -42,7 +42,6 @@ pub(super) fn ocr_provider_config(
         "azure_ai" if is_azure_document_intelligence_model(model) => {
             Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
         }
-        "azure_ai/doc-intelligence" => Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG),
         "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
         "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
         "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),

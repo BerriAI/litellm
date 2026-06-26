@@ -13,7 +13,9 @@ use litellm_core::realtime::types::RealtimeEvent;
 use serde_json::Value;
 
 use crate::constants::DEFAULT_PROVIDER;
-use crate::integrations::custom_logger::CustomLogger;
+use crate::integrations::custom_logger::{
+    CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
+};
 use crate::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload, Usage,
 };
@@ -183,30 +185,45 @@ impl RealTimeStreaming {
     /// Finish the session: stamp the end time and fan the payload out to every
     /// callback. On a logger enqueue error we bump a non-fatal counter (the
     /// realtime session has already ended; a dropped log must never propagate).
-    pub fn log_messages(&mut self, status: SessionStatus) {
+    pub async fn log_messages(&mut self, status: SessionStatus) {
         self.end_time = epoch_seconds();
         let payload = self.build_payload();
+        let timing = CallbackTiming::new(payload.start_time, payload.end_time);
+        let runner = CustomLoggerRunner::new(self.callbacks.clone());
 
         match status {
             SessionStatus::Success => {
-                for callback in &self.callbacks {
-                    if let Err(err) = callback.log_success_event(&payload) {
-                        self.dropped += 1;
-                        eprintln!("litellm-ai-gateway: log_success_event dropped: {err}");
-                    }
-                }
+                let response = CallbackValue::new("realtime", serde_json::Value::Null);
+                let report = runner
+                    .async_log_success_event(
+                        &ModelCallDetails::from_standard_logging_payload(payload),
+                        &response,
+                        timing,
+                    )
+                    .await;
+                self.dropped += report.dropped as u64;
             }
             SessionStatus::Failure => {
-                let error = crate::integrations::types::LoggingError {
+                let error = LoggingError {
                     message: "realtime session ended in failure".to_string(),
                     kind: "RealtimeSessionError".to_string(),
                 };
-                for callback in &self.callbacks {
-                    if let Err(err) = callback.log_failure_event(&payload, &error) {
-                        self.dropped += 1;
-                        eprintln!("litellm-ai-gateway: log_failure_event dropped: {err}");
-                    }
-                }
+                let response = CallbackValue::new(
+                    "error",
+                    serde_json::json!({
+                        "message": error.message,
+                        "kind": error.kind,
+                    }),
+                );
+                let report = runner
+                    .async_log_failure_event(
+                        &ModelCallDetails::from_standard_logging_payload(payload)
+                            .with_failure_error(error),
+                        Some(&response),
+                        timing,
+                    )
+                    .await;
+                self.dropped += report.dropped as u64;
             }
         }
     }
@@ -215,7 +232,8 @@ impl RealTimeStreaming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::types::{LogError, LoggingError};
+    use crate::integrations::custom_logger::LogError;
+    use crate::integrations::custom_logger::LogFuture;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn event(raw: &str) -> RealtimeEvent {
@@ -231,17 +249,28 @@ mod tests {
     }
 
     impl CustomLogger for CapturingLogger {
-        fn log_success_event(&self, payload: &StandardLoggingPayload) -> Result<(), LogError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            *self.last_model.lock().unwrap() = Some(payload.model.clone());
-            self.last_total_tokens
-                .store(payload.total_tokens, Ordering::SeqCst);
-            Ok(())
+        fn async_log_success_event<'a>(
+            &'a self,
+            model_call_details: &'a ModelCallDetails,
+            _response_obj: &'a CallbackValue,
+            _timing: CallbackTiming,
+        ) -> LogFuture<'a> {
+            Box::pin(async move {
+                let payload = model_call_details
+                    .standard_logging_payload
+                    .as_ref()
+                    .expect("standard logging payload");
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                *self.last_model.lock().unwrap() = Some(payload.model.clone());
+                self.last_total_tokens
+                    .store(payload.total_tokens, Ordering::SeqCst);
+                Ok(())
+            })
         }
     }
 
-    #[test]
-    fn observe_accumulates_model_and_tokens_then_logs() {
+    #[tokio::test]
+    async fn observe_accumulates_model_and_tokens_then_logs() {
         let logger = Arc::new(CapturingLogger::default());
         let callbacks: Vec<Arc<dyn CustomLogger>> = vec![logger.clone()];
         let mut streaming = RealTimeStreaming::new(
@@ -284,7 +313,7 @@ mod tests {
             Some("hash123")
         );
 
-        streaming.log_messages(SessionStatus::Success);
+        streaming.log_messages(SessionStatus::Success).await;
         assert_eq!(logger.calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             logger.last_model.lock().unwrap().as_deref(),
@@ -324,19 +353,26 @@ mod tests {
 
     /// A logger whose enqueue always fails should bump the dropped counter, not
     /// panic or propagate.
-    #[test]
-    fn failing_logger_bumps_dropped_counter() {
+    #[tokio::test]
+    async fn failing_logger_bumps_dropped_counter() {
         struct FailingLogger;
         impl CustomLogger for FailingLogger {
-            fn log_success_event(&self, _p: &StandardLoggingPayload) -> Result<(), LogError> {
-                Err(LogError::channel_full())
+            fn async_log_success_event<'a>(
+                &'a self,
+                _model_call_details: &'a ModelCallDetails,
+                _response_obj: &'a CallbackValue,
+                _timing: CallbackTiming,
+            ) -> LogFuture<'a> {
+                Box::pin(async { Err(LogError::channel_full()) })
             }
-            fn log_failure_event(
-                &self,
-                _p: &StandardLoggingPayload,
-                _e: &LoggingError,
-            ) -> Result<(), LogError> {
-                Err(LogError::channel_closed())
+
+            fn async_log_failure_event<'a>(
+                &'a self,
+                _model_call_details: &'a ModelCallDetails,
+                _response_obj: Option<&'a CallbackValue>,
+                _timing: CallbackTiming,
+            ) -> LogFuture<'a> {
+                Box::pin(async { Err(LogError::channel_closed()) })
             }
         }
         let callbacks: Vec<Arc<dyn CustomLogger>> = vec![Arc::new(FailingLogger)];
@@ -346,7 +382,7 @@ mod tests {
             "gpt-realtime".to_string(),
             RequestMetadata::default(),
         );
-        streaming.log_messages(SessionStatus::Success);
+        streaming.log_messages(SessionStatus::Success).await;
         assert_eq!(streaming.dropped(), 1);
     }
 }
