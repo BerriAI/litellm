@@ -107,7 +107,7 @@ async def test_invalidate_drops_a_cached_token():
     first = await store.fetch("u", "s")
     assert first is not None and first.access_token == "t1"  # cached
     inner._values[("u", "s")] = OAuthToken(access_token="t2")  # rotated
-    store.invalidate("u", "s")
+    await store.invalidate("u", "s")
     second = await store.fetch("u", "s")
     assert (
         second is not None and second.access_token == "t2"
@@ -316,3 +316,81 @@ def test_oauth_token_repr_masks_the_secrets():
     assert "rt-secret" not in rendered
     assert "access_token=***" in rendered
     assert "has_refresh_token=True" in rendered
+
+
+class _RecordingBackend:
+    """A TokenCacheBackend that records calls, proving CachedOAuthTokenStore delegates storage."""
+
+    def __init__(self) -> None:
+        self.sets: List[Tuple[str, str, OAuthToken, float]] = []
+        self.deletes: List[Tuple[str, str]] = []
+        self._store: Dict[Tuple[str, str], OAuthToken] = {}
+
+    async def get(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        return self._store.get((user_id, server_id))
+
+    async def set(
+        self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float
+    ) -> None:
+        self.sets.append((user_id, server_id, token, ttl_seconds))
+        self._store[(user_id, server_id)] = token
+
+    async def delete(self, user_id: str, server_id: str) -> None:
+        self.deletes.append((user_id, server_id))
+        self._store.pop((user_id, server_id), None)
+
+
+async def test_cache_delegates_storage_to_an_injected_backend():
+    backend = _RecordingBackend()
+    inner = _FakeStore({("u", "s"): OAuthToken(access_token="at", expires_at=1100.0)})
+    store = CachedOAuthTokenStore(
+        inner,
+        default_ttl_seconds=60,
+        expiry_skew_seconds=30,
+        backend=backend,
+        clock=_Clock(1000.0),
+    )
+
+    token = await store.fetch("u", "s")
+    assert token is not None and token.access_token == "at"
+    # written through to the injected backend, TTL = expires_at - skew - now = 1100 - 30 - 1000
+    assert backend.sets == [("u", "s", token, 70.0)]
+    again = await store.fetch("u", "s")  # served by the backend, not the inner store
+    assert again is not None
+    assert inner.calls == [("u", "s")]
+
+
+async def test_cache_miss_deletes_from_the_injected_backend():
+    backend = _RecordingBackend()
+    store = CachedOAuthTokenStore(
+        _FakeStore({}), default_ttl_seconds=60, backend=backend, clock=_Clock()
+    )
+    assert await store.fetch("u", "s") is None
+    assert backend.deletes == [("u", "s")]  # a miss is never cached
+
+
+class _RecordingCoordinator:
+    """A RefreshCoordinator that records the call and runs the refresh, proving delegation."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, user_id, server_id, refresh, reread):
+        self.calls += 1
+        return await refresh()
+
+
+async def test_refreshing_delegates_single_flight_to_an_injected_coordinator():
+    pair = _RefreshablePair(OAuthToken(access_token="old", expires_at=900.0))
+    coordinator = _RecordingCoordinator()
+    store = RefreshingTokenStore(
+        pair,
+        pair,
+        expiry_skew_seconds=30,
+        coordinator=coordinator,
+        clock=_Clock(1000.0),
+    )
+
+    token = await store.fetch("u", "s")
+    assert token is not None and token.access_token == "refreshed"
+    assert coordinator.calls == 1  # the injected coordinator drove the refresh
