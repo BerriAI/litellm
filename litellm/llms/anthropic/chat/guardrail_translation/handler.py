@@ -167,18 +167,21 @@ class AnthropicMessagesHandler(BaseTranslation):
                 slg_info = (data.get("metadata") or {}).get(
                     "standard_logging_guardrail_information"
                 )
+                print(
+                    f"[headroom-propagate] slg_info={slg_info is not None} "
+                    f"logging_obj_type={type(litellm_logging_obj).__name__} "
+                    f"has_model_call_details={hasattr(litellm_logging_obj, 'model_call_details')}",
+                    flush=True,
+                )
                 if slg_info is not None:
                     try:
-                        log_meta = litellm_logging_obj.model_call_details[
-                            "litellm_params"
-                        ].setdefault("metadata", {})
-                        if log_meta is None:
-                            litellm_logging_obj.model_call_details["litellm_params"][
-                                "metadata"
-                            ] = {}
-                            log_meta = litellm_logging_obj.model_call_details[
-                                "litellm_params"
-                            ]["metadata"]
+                        lp = litellm_logging_obj.litellm_params
+                        if not isinstance(lp, dict):
+                            lp = {}
+                            litellm_logging_obj.litellm_params = lp
+                        if lp.get("metadata") is None:
+                            lp["metadata"] = {}
+                        log_meta = lp["metadata"]
                         existing = log_meta.get(
                             "standard_logging_guardrail_information"
                         )
