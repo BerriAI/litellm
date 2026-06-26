@@ -588,6 +588,53 @@ def test_sort_chunks_handles_dict_hidden_params_created_at():
     assert processor.chunks[1]["id"] == "chunk_2"
 
 
+def test_stream_chunk_builder_uses_earliest_chunk_for_created_and_fingerprint():
+    """created and system_fingerprint must come from the earliest chunk after
+    sorting, not from whatever chunk happened to arrive first in the input"""
+    early = ModelResponseStream(
+        id="chatcmpl-123",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        system_fingerprint="fp_early",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello ", role="assistant"),
+            )
+        ],
+    )
+    late = ModelResponseStream(
+        id="chatcmpl-123",
+        created=2,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        system_fingerprint="fp_late",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="world", role=None),
+            )
+        ],
+    )
+    early._hidden_params = {"created_at": 1}
+    late._hidden_params = {"created_at": 2}
+
+    chunks = []
+    for chunk in [late, early]:
+        chunk_dict = chunk.model_dump()
+        chunk_dict["_hidden_params"] = chunk._hidden_params
+        chunks.append(chunk_dict)
+
+    response = stream_chunk_builder(chunks=chunks)
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+    assert response.created == 1
+    assert response.system_fingerprint == "fp_early"
+
+
 def test_stream_chunk_builder_accepts_dict_snapshot_chunks():
     chunk1 = ModelResponseStream(
         id="chatcmpl-123",
