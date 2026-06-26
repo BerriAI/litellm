@@ -409,6 +409,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
@@ -424,6 +425,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
