@@ -3780,17 +3780,39 @@ if MCP_AVAILABLE:
             *(_probe_oauth2_server(server) for server in candidate_servers)
         )
         for result in probe_results:
-            if result is None or result[1] != 401:
+            if result is None:
                 continue
-            server, _, upstream_www_authenticate = result
-            raise HTTPException(
-                status_code=401,
-                detail="Unauthorized",
-                headers={
-                    "www-authenticate": upstream_www_authenticate
-                    or _get_gateway_oauth2_challenge(scope, server.name)
-                },
-            )
+            server, probe_status, upstream_www_authenticate = result
+            if probe_status == 401:
+                if upstream_www_authenticate:
+                    www_authenticate = upstream_www_authenticate
+                elif getattr(server, "delegate_auth_to_upstream", False) is True:
+                    # Delegate-auth servers run upstream PKCE: point the client
+                    # at the proxied resource_metadata (RFC 9728) so it
+                    # re-authorizes against the upstream IdP, not the gateway
+                    # authorization_uri which would authorize against LiteLLM.
+                    www_authenticate = _get_passthrough_www_authenticate(
+                        scope=scope,
+                        server_name=server.name,
+                        invalid_token=True,
+                    )
+                else:
+                    www_authenticate = _get_gateway_oauth2_challenge(
+                        scope, server.name
+                    )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": www_authenticate},
+                )
+            if probe_status == 403:
+                # Token is valid but the caller lacks permission — do not hint
+                # at re-authorization (RFC 9110: a fresh token with the same
+                # scopes would just hit 403 again and loop indefinitely).
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden",
+                )
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
@@ -4241,6 +4263,20 @@ if MCP_AVAILABLE:
             await _check_passthrough_upstream_auth(
                 scope, user_api_key_auth, mcp_servers, _sse_client_ip
             )
+
+            # Pre-flight auth check for gateway-managed per-user OAuth2 servers
+            # so a present-but-stale stored token surfaces the upstream 401
+            # challenge instead of degrading into an empty tool list on the
+            # /sse transport.
+            await _check_oauth2_upstream_auth(
+                scope=scope,
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                client_ip=_sse_client_ip,
+                allowed_server_ids=toolset_allowed_server_ids,
+            )
+
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
