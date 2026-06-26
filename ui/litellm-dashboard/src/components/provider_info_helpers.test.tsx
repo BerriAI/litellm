@@ -308,17 +308,17 @@ describe("provider_info_helpers", () => {
       expect(result).not.toContain("anthropic-native");
     });
 
-    it("should include bedrock variants (converse, mantle) when called with 'Bedrock' provider key", () => {
+    it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {
       const modelMap = {
         "bedrock-base": { litellm_provider: "bedrock" },
         "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
-        "bedrock-mantle-model": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.4": { litellm_provider: "bedrock_mantle" },
         "openai-model": { litellm_provider: "openai" },
       };
       const result = getProviderModels("Bedrock" as Providers, modelMap);
       expect(result).toContain("bedrock-base");
       expect(result).toContain("bedrock-converse-model");
-      expect(result).toContain("bedrock-mantle-model");
+      expect(result).not.toContain("bedrock_mantle/openai.gpt-5.4");
       expect(result).not.toContain("openai-model");
     });
 
