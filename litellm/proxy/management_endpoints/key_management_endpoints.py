@@ -1465,8 +1465,12 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_team,
+            _is_user_team_admin,
+        )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_key_logging_exporter_assignment,
+            validate_logging_exporter_assignment,
         )
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
@@ -1568,17 +1572,26 @@ async def generate_key_fn(
             route=KeyManagementRoutes.KEY_GENERATE,
         )
 
-        # Team-admin of the key's team may write `metadata.logging_exporters`
-        # on team-owned keys (mirrors how they already manage that team's keys'
-        # budgets/models/limits). Personal keys (no team_table) stay strict.
-        _is_team_admin_of_key_team = team_table is not None and any(
-            member.user_id == user_api_key_dict.user_id and member.role == "admin"
-            for member in team_table.members_with_roles
-        )
-        validate_key_logging_exporter_assignment(
-            metadata=data.metadata,
-            user_api_key_dict=user_api_key_dict,
-            is_team_admin_of_key_team=_is_team_admin_of_key_team,
+        # Team-admin of the key's team or org-admin of that team's org may
+        # write metadata.logging_exporters on team-owned keys (mirrors how
+        # team-admins already manage that team's keys' budgets/models/limits,
+        # and how org-admins manage every team in their org). Personal keys
+        # (no team_table) stay proxy-admin only.
+        validate_logging_exporter_assignment(
+            data.metadata,
+            user_api_key_dict,
+            caller_is_team_admin=(
+                team_table is not None
+                and _is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_table
+                )
+            ),
+            caller_is_org_admin=(
+                team_table is not None
+                and await _is_user_org_admin_for_team(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_table
+                )
+            ),
         )
 
         if team_table is not None:
@@ -2526,8 +2539,12 @@ async def update_key_fn(
     }'
     ```
     """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_org_admin_for_team,
+        _is_user_team_admin,
+    )
     from litellm.proxy.management_endpoints.logging_exporter_validation import (
-        validate_key_logging_exporter_assignment,
+        validate_logging_exporter_assignment,
     )
     from litellm.proxy.proxy_server import (
         llm_router,
@@ -2560,12 +2577,13 @@ async def update_key_fn(
         )
 
         # logging-exporters validation runs once the key's team is known so a
-        # team-admin of that team can attach destinations to the key. A missing
-        # or unauthorized team raises out of get_team_object as HTTPException;
-        # we suppress only that and fall through with is_team_admin_of_key_team
-        # = False so the validator denies the assignment for a non-admin caller.
+        # team-admin of that team (or an org-admin of the team's org) can
+        # attach destinations to the key. A missing or unauthorized team
+        # raises out of get_team_object as HTTPException; we suppress only
+        # that and fall through with both flags False so the validator denies
+        # the assignment for a non-admin caller.
         _key_team_id = getattr(existing_key_row, "team_id", None)
-        _is_team_admin_of_key_team = False
+        _key_team = None
         if _key_team_id is not None:
             try:
                 _key_team = await get_team_object(
@@ -2577,16 +2595,21 @@ async def update_key_fn(
                 )
             except HTTPException:
                 _key_team = None
-            if _key_team is not None:
-                _is_team_admin_of_key_team = any(
-                    member.user_id == user_api_key_dict.user_id
-                    and member.role == "admin"
-                    for member in _key_team.members_with_roles
+        validate_logging_exporter_assignment(
+            data.metadata,
+            user_api_key_dict,
+            caller_is_team_admin=(
+                _key_team is not None
+                and _is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=_key_team
                 )
-        validate_key_logging_exporter_assignment(
-            metadata=data.metadata,
-            user_api_key_dict=user_api_key_dict,
-            is_team_admin_of_key_team=_is_team_admin_of_key_team,
+            ),
+            caller_is_org_admin=(
+                _key_team is not None
+                and await _is_user_org_admin_for_team(
+                    user_api_key_dict=user_api_key_dict, team_obj=_key_team
+                )
+            ),
         )
 
         await _validate_update_key_data(

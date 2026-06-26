@@ -1022,11 +1022,12 @@ async def new_team(
     ```
     """
     try:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_org_id,
+        )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
             validate_logging_exporter_assignment,
         )
-
-        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
         )
@@ -1036,6 +1037,17 @@ async def new_team(
             litellm_proxy_admin_name,
             prisma_client,
             user_api_key_cache,
+        )
+
+        # New team has no admins yet, so only proxy admin or an org admin of
+        # the destination org may assign logging exporters at creation time.
+        validate_logging_exporter_assignment(
+            data.metadata,
+            user_api_key_dict,
+            caller_is_org_admin=await _is_user_org_admin_for_org_id(
+                user_api_key_dict=user_api_key_dict,
+                organization_id=data.organization_id,
+            ),
         )
 
         if prisma_client is None:
@@ -1716,11 +1728,13 @@ async def update_team(
     ```
     """
     try:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_team,
+            _is_user_team_admin,
+        )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
             validate_logging_exporter_assignment,
         )
-
-        validate_logging_exporter_assignment(data.metadata, user_api_key_dict)
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1781,9 +1795,23 @@ async def update_team(
             )
 
         # Verify caller has access to manage this team
+        team_for_auth = LiteLLM_TeamTable(**existing_team_row.model_dump())
         await _verify_team_access(
-            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            team_obj=team_for_auth,
             user_api_key_dict=user_api_key_dict,
+        )
+
+        # logging_exporters gate runs once the team's identity is loaded so we
+        # know whether the caller is team-admin or org-admin of this team.
+        validate_logging_exporter_assignment(
+            data.metadata,
+            user_api_key_dict,
+            caller_is_team_admin=_is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
+            ),
+            caller_is_org_admin=await _is_user_org_admin_for_team(
+                user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
+            ),
         )
 
         _check_passthrough_routes_caller_permission(

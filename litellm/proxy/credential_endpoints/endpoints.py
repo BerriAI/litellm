@@ -48,16 +48,23 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
-async def _caller_team_admin_ids(
+async def _caller_grantable_team_ids(
     user_api_key_dict: UserAPIKeyAuth, prisma_client: "Optional[PrismaClient]"
 ) -> frozenset[str]:
-    """Set of team_ids the caller is team-admin of.
+    """Team ids the caller may add to / remove from a destination's access.teams.
 
-    Empty when the caller has no user_id, no DB connection, or no admin
-    membership on any team. Uses the shared ``get_user_object`` and
-    ``get_team_object`` helpers so the lookup benefits from the proxy's
-    in-process cache and OTEL span propagation; ``members_with_roles`` is a
-    JSON column so the admin-role match is still done in Python.
+    Two paths to grantability:
+
+    1. Direct team-admin: caller is admin of the team (role=admin in
+       ``members_with_roles``).
+    2. Via org-admin: caller is ORG_ADMIN of the team's organization. Org
+       admins manage every team in their org, even teams they aren't a
+       direct member of.
+
+    Empty when the caller has no user_id, no DB connection, or admins
+    nothing. Uses cached ``get_user_object`` / ``get_team_object`` plus one
+    bounded query for org teams; the role match is done in Python because
+    ``members_with_roles`` is a JSON column.
     """
     if user_api_key_dict.user_id is None or prisma_client is None:
         return frozenset()
@@ -73,11 +80,16 @@ async def _caller_team_admin_ids(
             parent_otel_span=user_api_key_dict.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-        if user_obj is None or not getattr(user_obj, "teams", None):
+        if user_obj is None:
             return frozenset()
-        team_ids: list[str] = [tid for tid in user_obj.teams if isinstance(tid, str)]
-        admin_of: list[str] = []
-        for team_id in team_ids:
+
+        # Direct team-admin grants: walk the caller's own team list.
+        team_admin_of: set[str] = set()
+        for team_id in [
+            tid
+            for tid in (getattr(user_obj, "teams", None) or [])
+            if isinstance(tid, str)
+        ]:
             team_obj = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
@@ -89,11 +101,26 @@ async def _caller_team_admin_ids(
                 member.user_id == user_api_key_dict.user_id and member.role == "admin"
                 for member in (team_obj.members_with_roles or [])
             ):
-                admin_of.append(team_id)
-        return frozenset(admin_of)
+                team_admin_of.add(team_id)
+
+        # Org-admin grants: every team in any org the caller admins, even if
+        # the caller isn't a direct member of that team.
+        org_admin_of: list[str] = [
+            m.organization_id
+            for m in (user_obj.organization_memberships or [])
+            if m.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ]
+        org_grantable: set[str] = set()
+        if org_admin_of:
+            org_teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[union-attr]
+                where={"organization_id": {"in": org_admin_of}}
+            )
+            org_grantable = {t.team_id for t in org_teams if t.team_id}
+
+        return frozenset(team_admin_of | org_grantable)
     except Exception:
         # Best-effort lookup. A miss here means the PATCH decider will deny any
-        # team-admin patch other than a no-op, which is the safe fallback.
+        # patch other than a no-op, which is the safe fallback.
         verbose_proxy_logger.exception("team-admin lookup failed")
         return frozenset()
 
@@ -474,7 +501,7 @@ async def update_credential(
         team_admin_ids = (
             frozenset()
             if is_admin
-            else await _caller_team_admin_ids(user_api_key_dict, prisma_client)
+            else await _caller_grantable_team_ids(user_api_key_dict, prisma_client)
         )
         decision = decide_credential_patch(
             is_proxy_admin=is_admin,

@@ -288,7 +288,7 @@ def _team_admin_of(team_ids):
     """A non-admin caller whose user_id is admin of the named teams.
 
     Combined with ``_patch_team_admin_lookup`` it mimics the real
-    ``_caller_team_admin_ids`` resolution without touching the DB.
+    ``_caller_grantable_team_ids`` resolution without touching the DB.
     """
     return UserAPIKeyAuth(
         api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="ta-demo"
@@ -297,14 +297,14 @@ def _team_admin_of(team_ids):
 
 @pytest.fixture
 def _patch_team_admin_lookup(monkeypatch):
-    """Substitute the DB-backed team-admin lookup with a configurable mock."""
+    """Substitute the DB-backed grant-capability lookup with a configurable mock."""
 
     holder = {"ids": frozenset()}
 
     async def _fake(user_api_key_dict, prisma_client):
         return holder["ids"]
 
-    monkeypatch.setattr(endpoints, "_caller_team_admin_ids", _fake)
+    monkeypatch.setattr(endpoints, "_caller_grantable_team_ids", _fake)
     return holder
 
 

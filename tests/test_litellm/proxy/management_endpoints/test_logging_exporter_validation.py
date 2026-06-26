@@ -1,4 +1,11 @@
-"""Validation for admin-owned logging-exporter assignment on key/team/org."""
+"""Validation for admin-owned logging-exporter assignment on key/team/org.
+
+The single ``validate_logging_exporter_assignment`` runs across all four
+endpoints (``/team/new``, ``/team/update``, ``/key/generate``, ``/key/update``,
+``/organization/*``); each call site computes the relevant
+``caller_is_team_admin`` / ``caller_is_org_admin`` flags from the loaded
+team or org and passes them in. Proxy admin always passes.
+"""
 
 import os
 import sys
@@ -14,7 +21,6 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     is_admin_gated_credential_info,
     validate_credential_access,
-    validate_key_logging_exporter_assignment,
     validate_logging_exporter_assignment,
 )
 
@@ -34,7 +40,7 @@ def _registry():
         CredentialItem(
             credential_name="openai-key",
             credential_values={},
-            credential_info={"custom_llm_provider": "openai"},  # a provider credential
+            credential_info={"custom_llm_provider": "openai"},  # provider credential
         ),
     ]
     try:
@@ -47,44 +53,90 @@ def _admin():
     return UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-def _member():
+def _non_admin():
     return UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.INTERNAL_USER)
 
 
-def test_admin_with_known_logging_credential_is_allowed(_registry):
+def _ok(metadata):
+    return {"logging_exporters": metadata}
+
+
+# --- Role allow paths -------------------------------------------------------
+
+
+def test_proxy_admin_always_allowed(_registry):
+    """No flags needed; proxy_admin role suffices."""
+    validate_logging_exporter_assignment(_ok(["langfuse-eu"]), _admin())
+
+
+def test_team_admin_flag_allows_non_admin(_registry):
+    """A non-admin caller flagged caller_is_team_admin=True passes."""
     validate_logging_exporter_assignment(
-        {"logging_exporters": ["langfuse-eu"]}, _admin()
+        _ok(["langfuse-eu"]),
+        _non_admin(),
+        caller_is_team_admin=True,
     )
 
 
-def test_noop_when_assignment_absent(_registry):
-    # an update that does not touch logging_exporters is never gated/validated
-    validate_logging_exporter_assignment({"some_other_key": 1}, _member())
-    validate_logging_exporter_assignment(None, _member())
+def test_org_admin_flag_allows_non_admin(_registry):
+    """A non-admin caller flagged caller_is_org_admin=True passes."""
+    validate_logging_exporter_assignment(
+        _ok(["langfuse-eu"]),
+        _non_admin(),
+        caller_is_org_admin=True,
+    )
 
 
-def test_non_admin_is_forbidden(_registry):
+def test_both_flags_set_allows_non_admin(_registry):
+    """Setting both flags is fine; they're independent OR-ed allows."""
+    validate_logging_exporter_assignment(
+        _ok(["langfuse-eu"]),
+        _non_admin(),
+        caller_is_team_admin=True,
+        caller_is_org_admin=True,
+    )
+
+
+def test_non_admin_with_no_flags_is_forbidden(_registry):
+    """The headline deny: internal_user with no team/org admin context."""
     with pytest.raises(HTTPException) as exc:
-        validate_logging_exporter_assignment(
-            {"logging_exporters": ["langfuse-eu"]}, _member()
-        )
+        validate_logging_exporter_assignment(_ok(["langfuse-eu"]), _non_admin())
     assert exc.value.status_code == 403
 
 
-def test_unknown_credential_is_rejected(_registry):
+def test_proxy_admin_overrides_falsy_flags(_registry):
+    """proxy_admin role wins even when both flags are False."""
+    validate_logging_exporter_assignment(
+        _ok(["langfuse-eu"]),
+        _admin(),
+        caller_is_team_admin=False,
+        caller_is_org_admin=False,
+    )
+
+
+# --- Shape / registry checks (run regardless of who's calling) --------------
+
+
+def test_unknown_credential_rejected_for_admin(_registry):
+    with pytest.raises(HTTPException) as exc:
+        validate_logging_exporter_assignment(_ok(["does-not-exist"]), _admin())
+    assert exc.value.status_code == 400
+
+
+def test_unknown_credential_rejected_for_team_admin(_registry):
     with pytest.raises(HTTPException) as exc:
         validate_logging_exporter_assignment(
-            {"logging_exporters": ["does-not-exist"]}, _admin()
+            _ok(["does-not-exist"]),
+            _non_admin(),
+            caller_is_team_admin=True,
         )
     assert exc.value.status_code == 400
 
 
-def test_provider_credential_is_not_a_valid_logging_exporter(_registry):
-    # openai-key exists but is a provider credential, not a logging destination
+def test_provider_credential_rejected(_registry):
+    """openai-key exists but is provider-typed, not a logging destination."""
     with pytest.raises(HTTPException) as exc:
-        validate_logging_exporter_assignment(
-            {"logging_exporters": ["openai-key"]}, _admin()
-        )
+        validate_logging_exporter_assignment(_ok(["openai-key"]), _admin())
     assert exc.value.status_code == 400
 
 
@@ -94,6 +146,16 @@ def test_non_list_is_rejected(_registry):
             {"logging_exporters": "langfuse-eu"}, _admin()
         )
     assert exc.value.status_code == 400
+
+
+def test_noop_when_field_absent(_registry):
+    """An update that does not touch logging_exporters skips the gate even
+    for a non-admin with no flags."""
+    validate_logging_exporter_assignment({"some_other_key": 1}, _non_admin())
+    validate_logging_exporter_assignment(None, _non_admin())
+
+
+# --- is_admin_gated_credential_info / validate_credential_access ------------
 
 
 @pytest.mark.parametrize(
@@ -135,68 +197,3 @@ def test_validate_credential_access_rejects_bad_shape(access):
     with pytest.raises(HTTPException) as exc:
         validate_credential_access({"access": access})
     assert exc.value.status_code == 400
-
-
-# --- key-scoped validator (LIT-3850 follow-up) ------------------------------
-
-
-def test_key_validator_team_admin_of_key_team_passes(_registry):
-    """team-admin of the key's team may write metadata.logging_exporters."""
-    validate_key_logging_exporter_assignment(
-        metadata={"logging_exporters": ["langfuse-eu"]},
-        user_api_key_dict=_member(),
-        is_team_admin_of_key_team=True,
-    )
-
-
-def test_key_validator_proxy_admin_always_passes(_registry):
-    validate_key_logging_exporter_assignment(
-        metadata={"logging_exporters": ["langfuse-eu"]},
-        user_api_key_dict=_admin(),
-        is_team_admin_of_key_team=False,
-    )
-
-
-def test_key_validator_non_team_admin_is_forbidden(_registry):
-    """A non-admin who isn't team-admin of the key's team is rejected."""
-    with pytest.raises(HTTPException) as exc:
-        validate_key_logging_exporter_assignment(
-            metadata={"logging_exporters": ["langfuse-eu"]},
-            user_api_key_dict=_member(),
-            is_team_admin_of_key_team=False,
-        )
-    assert exc.value.status_code == 403
-
-
-def test_key_validator_personal_key_rejects_non_admin(_registry):
-    """A personal key (no team) means is_team_admin_of_key_team=False; only admin passes."""
-    with pytest.raises(HTTPException) as exc:
-        validate_key_logging_exporter_assignment(
-            metadata={"logging_exporters": ["langfuse-eu"]},
-            user_api_key_dict=_member(),
-            is_team_admin_of_key_team=False,
-        )
-    assert exc.value.status_code == 403
-
-
-def test_key_validator_unknown_credential_rejected_even_for_team_admin(_registry):
-    with pytest.raises(HTTPException) as exc:
-        validate_key_logging_exporter_assignment(
-            metadata={"logging_exporters": ["does-not-exist"]},
-            user_api_key_dict=_member(),
-            is_team_admin_of_key_team=True,
-        )
-    assert exc.value.status_code == 400
-
-
-def test_key_validator_noop_when_absent(_registry):
-    validate_key_logging_exporter_assignment(
-        metadata={"other": 1},
-        user_api_key_dict=_member(),
-        is_team_admin_of_key_team=False,
-    )
-    validate_key_logging_exporter_assignment(
-        metadata=None,
-        user_api_key_dict=_member(),
-        is_team_admin_of_key_team=False,
-    )
