@@ -66,11 +66,11 @@ def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
 
 
 def resolve_azure_image_auth_headers(
-    headers: dict,
+    headers: dict[str, str],
     api_key: Optional[str],
     azure_ad_token_provider: Optional[Callable[[], str]],
     azure_ad_token: Optional[str],
-) -> dict:
+) -> dict[str, str]:
     if api_key:
         return headers
 
@@ -85,7 +85,7 @@ def resolve_azure_image_auth_headers(
     return headers
 
 
-def _with_bearer(headers: dict, token: str) -> dict:
+def _with_bearer(headers: dict[str, str], token: str) -> dict[str, str]:
     without_api_key = {k: v for k, v in headers.items() if k != "api-key"}
     return {**without_api_key, "Authorization": f"Bearer {token}"}
 
