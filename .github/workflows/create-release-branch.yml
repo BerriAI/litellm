@@ -45,12 +45,25 @@ jobs:
             exit 1
           fi
 
+      # Creating a branch at a commit whose `.github/workflows/` tree has drifted
+      # from the default branch hits the same `workflows: write` guard as the
+      # release tag, which GITHUB_TOKEN cannot satisfy. Use the release-app token.
+      - name: Mint release app token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.LITELLM_RELEASE_APP_ID }}
+          private-key: ${{ secrets.LITELLM_RELEASE_APP_PRIVATE_KEY }}
+          owner: BerriAI
+          repositories: litellm
+
       - name: Create release branch
         env:
           TAG: ${{ inputs.tag }}
           COMMIT_HASH: ${{ inputs.commit_hash }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
@@ -70,6 +83,7 @@ jobs:
           COMMIT_HASH: ${{ inputs.commit_hash }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;

@@ -20,14 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      # `generate_release_notes: true` makes createRelease enumerate the merged
-      # PRs (and any issues they reference) in the release range to build the
-      # notes. Reading those needs the scopes below. Without them the call 403s
-      # ("Resource not accessible by integration") partway through note
-      # generation — after getLatestRelease succeeds — so no draft, tag, or
-      # release is created and the dependent create-branch job is skipped.
-      pull-requests: read
-      issues: read
     steps:
       - name: Validate inputs
         env:
@@ -43,12 +35,29 @@ jobs:
             exit 1
           fi
 
+      # The default GITHUB_TOKEN cannot create a tag/release whose target
+      # commit's `.github/workflows/` tree has drifted from the default branch
+      # (older stable lines drift most) — GitHub then demands `workflows: write`,
+      # which is not grantable to GITHUB_TOKEN via `permissions:`. Mint the
+      # LITELLM_RELEASE_APP installation token (Contents + Workflows: write)
+      # instead. This is the same app project-releaser uses to dispatch this
+      # workflow, scoped to BerriAI/litellm.
+      - name: Mint release app token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.LITELLM_RELEASE_APP_ID }}
+          private-key: ${{ secrets.LITELLM_RELEASE_APP_PRIVATE_KEY }}
+          owner: BerriAI
+          repositories: litellm
+
       - name: Create release
         env:
           TAG: ${{ inputs.tag }}
           COMMIT_HASH: ${{ inputs.commit_hash }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
@@ -171,6 +180,10 @@ jobs:
     needs: release
     permissions:
       contents: write
+    # Pass the release-app secrets through so the reusable workflow can mint the
+    # same installation token — branch creation hits the identical
+    # `workflows: write` guard as the release tag on drifted stable lines.
+    secrets: inherit
     uses: ./.github/workflows/create-release-branch.yml
     with:
       tag: ${{ inputs.tag }}
