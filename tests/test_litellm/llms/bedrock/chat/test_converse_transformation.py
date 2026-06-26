@@ -5523,14 +5523,22 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
             "role": "assistant",
             "content": None,
             "tool_calls": [
-                {"id": "c1", "type": "function",
-                 "function": {"name": "render", "arguments": "{}"}}
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "render", "arguments": "{}"},
+                }
             ],
         },
         {
             "role": "tool",
             "tool_call_id": "c1",
-            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA"},
+                }
+            ],
         },
     ]
 
@@ -5538,7 +5546,9 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
         messages, optional_params={}
     )
 
-    rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
+    rewritten = next(
+        m for m in result if m.get("role") == "user" and m is not messages[0]
+    )
     text = rewritten["content"]
     assert text.strip()  # never empty
     assert "non-text tool result omitted" in text
@@ -5756,3 +5766,56 @@ def test_transform_request_with_tools_still_builds_toolconfig(monkeypatch):
     )
 
     assert "toolConfig" in result
+
+
+def test_transform_request_flag_off_restores_raise(monkeypatch):
+    """Opt-out: with bedrock_neutralize_orphaned_tool_blocks=False and
+    modify_params=False, the legacy UnsupportedParamsError contract is restored."""
+    monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="without `tools="):
+        config.transform_request(
+            model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+            messages=_orphaned_tool_history_messages(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_transform_request_flag_off_with_modify_params_restores_dummy_tool(monkeypatch):
+    """Opt-out: with the flag off and modify_params=True, the legacy dummy-tool
+    injection is restored (a toolConfig is produced, not neutralized text)."""
+    monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
+    monkeypatch.setattr(litellm, "modify_params", True)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" in result
+    assert "dummy_tool" in json.dumps(result)
+
+
+def test_transform_request_flag_on_is_default(monkeypatch):
+    """Default-on: without touching the flag, neutralization is the behavior."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    assert litellm.bedrock_neutralize_orphaned_tool_blocks is True
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=_orphaned_tool_history_messages(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)

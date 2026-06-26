@@ -267,7 +267,6 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
 
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
-
 _PARALLEL_TOOL_HISTORY_MESSAGES = [
     {
         "role": "user",
@@ -299,20 +298,11 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
 
 
 @pytest.mark.parametrize(
-    "model, messages, expect_unsupported_params_error",
+    "model, messages",
     [
-        # Bedrock Converse neutralizes orphaned tool blocks to text; no error.
-        (
-            "anthropic.claude-3-sonnet-20240229-v1:0",
-            _PARALLEL_TOOL_HISTORY_MESSAGES,
-            False,
-        ),
-        # Anthropic Messages API: dummy tool is injected without modify_params.
-        (
-            "claude-haiku-4-5-20251001",
-            _PARALLEL_TOOL_HISTORY_MESSAGES,
-            False,
-        ),
+        # Anthropic Messages API: a dummy tool is injected without modify_params,
+        # so tool history with no tools= completes instead of raising.
+        ("claude-haiku-4-5-20251001", _PARALLEL_TOOL_HISTORY_MESSAGES),
         (
             "anthropic.claude-3-sonnet-20240229-v1:0",
             [
@@ -321,7 +311,6 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
                     "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
                 }
             ],
-            False,
         ),
         (
             "claude-haiku-4-5-20251001",
@@ -331,22 +320,18 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
                     "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
                 }
             ],
-            False,
         ),
     ],
 )
-def test_parallel_function_call_anthropic_error_msg(
-    model, messages, expect_unsupported_params_error
-):
+def test_parallel_function_call_anthropic_error_msg(model, messages):
     """
-    Tool history without an explicit ``tools`` param:
+    Tool history without an explicit ``tools`` param must complete, not raise.
 
-    - Bedrock **Converse** neutralizes the orphaned tool blocks into plain text
-      and sends no ``toolConfig`` (see #24158, #27138). It no longer raises.
-    - **Anthropic** (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
-      always get a dummy tool so CLIs work with ``modify_params`` left off.
-
-    Reference Issue: https://github.com/BerriAI/litellm/issues/24158, https://github.com/BerriAI/litellm/issues/27138
+    Anthropic (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
+    inject a dummy tool so CLIs work with ``modify_params`` left off. Bedrock
+    Converse's no-raise behavior is covered offline in
+    ``tests/test_litellm/llms/bedrock/chat/test_converse_transformation.py``
+    (see #24158, #27138), which needs no live credentials.
     """
     # Force modify_params off as a clean baseline: it exercises the Anthropic
     # dummy-tool path, which injects regardless of modify_params
@@ -355,26 +340,14 @@ def test_parallel_function_call_anthropic_error_msg(
     litellm.modify_params = False
     try:
         litellm.set_verbose = True
-
-        if expect_unsupported_params_error:
-            with pytest.raises(litellm.UnsupportedParamsError) as e:
-                second_response = litellm.completion(
-                    model=model,
-                    messages=messages,
-                    temperature=0.2,
-                    seed=22,
-                    drop_params=True,
-                )  # get a new response from the model where it can see the function response
-                print("second response\n", second_response)
-        else:
-            second_response = litellm.completion(
-                model=model,
-                messages=messages,
-                temperature=0.2,
-                seed=22,
-                drop_params=True,
-            )  # get a new response from the model where it can see the function response
-            print("second response\n", second_response)
+        second_response = litellm.completion(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            seed=22,
+            drop_params=True,
+        )  # get a new response from the model where it can see the function response
+        print("second response\n", second_response)
     except litellm.InternalServerError as e:
         print(e)
     except litellm.RateLimitError as e:
