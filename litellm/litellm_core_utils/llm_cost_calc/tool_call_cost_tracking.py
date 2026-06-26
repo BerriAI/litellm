@@ -4,8 +4,6 @@ Helper utilities for tracking the cost of built-in tools.
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ValidationError
-
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.litellm_core_utils.llm_cost_calc.utils import _get_web_search_requests
@@ -23,18 +21,6 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
     Usage,
 )
-
-
-class _AnthropicServerToolUseProbe(BaseModel):
-    web_search_requests: int | None = None
-
-
-class _AnthropicUsageProbe(BaseModel):
-    server_tool_use: _AnthropicServerToolUseProbe | None = None
-
-
-class _AnthropicResponseProbe(BaseModel):
-    usage: _AnthropicUsageProbe | None = None
 
 
 class StandardBuiltInToolCostTracking:
@@ -325,20 +311,6 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _anthropic_web_search_count(response_object: object) -> int | None:
-        """Read usage.server_tool_use.web_search_requests from a raw Anthropic
-        /v1/messages response dict, returning None when absent."""
-        if not isinstance(response_object, dict):
-            return None
-        try:
-            probe = _AnthropicResponseProbe.model_validate(response_object)
-        except ValidationError:
-            return None
-        if probe.usage is None or probe.usage.server_tool_use is None:
-            return None
-        return probe.usage.server_tool_use.web_search_requests
-
-    @staticmethod
     def _usage_with_anthropic_web_search(
         usage: Usage | None, response_object: object
     ) -> Usage | None:
@@ -346,6 +318,10 @@ class StandardBuiltInToolCostTracking:
         raw Anthropic /v1/messages response dict when the reconstructed Usage dropped
         it. The original Usage is returned unchanged when it already exposes the field
         or the response is not an Anthropic dict."""
+        from litellm.llms.anthropic.cost_calculation import (
+            get_anthropic_web_search_requests_from_response,
+        )
+
         if usage is None:
             return None
         if (
@@ -353,8 +329,8 @@ class StandardBuiltInToolCostTracking:
             is not None
         ):
             return usage
-        web_search_requests = (
-            StandardBuiltInToolCostTracking._anthropic_web_search_count(response_object)
+        web_search_requests = get_anthropic_web_search_requests_from_response(
+            response_object
         )
         if web_search_requests is None:
             return usage
@@ -378,12 +354,12 @@ class StandardBuiltInToolCostTracking:
         - ResponsesAPIResponse (streaming + non-streaming)
         - Anthropic /v1/messages raw response dict
         """
+        from litellm.llms.anthropic.cost_calculation import (
+            get_anthropic_web_search_requests_from_response,
+        )
         from litellm.types.utils import PromptTokensDetailsWrapper
 
-        if (
-            StandardBuiltInToolCostTracking._anthropic_web_search_count(response_object)
-            is not None
-        ):
+        if get_anthropic_web_search_requests_from_response(response_object) is not None:
             return True
 
         if isinstance(response_object, ModelResponse):
