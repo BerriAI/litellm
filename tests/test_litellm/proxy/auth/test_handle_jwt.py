@@ -663,7 +663,11 @@ def test_get_all_jwt_team_ids_unions_singular_and_plural():
     # singular field as multi-element list (some IdPs) — merge all, preserve plural-first order
     assert jwt_handler.get_all_jwt_team_ids(
         {"team_id": ["primary", "secondary"], "teams": ["a"]}
-    ) == ["a", "primary", "secondary"]
+    ) == [
+        "a",
+        "primary",
+        "secondary",
+    ]
 
     # neither populated
     assert jwt_handler.get_all_jwt_team_ids({}) == []
@@ -4439,6 +4443,7 @@ async def test_resolve_db_team_fallback_skips_unresolvable_membership():
     ):
         team_id, team_object = await JWTAuthManager._resolve_db_team_fallback(
             user_object=user_object,
+            requested_model=None,
             enforce_team_based_model_access=True,
             team_id_upsert=False,
             prisma_client=None,
@@ -4621,3 +4626,132 @@ async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
     else:
         result = await call_auth_builder()
         assert result["team_id"] == expected_team_id
+
+
+@pytest.mark.parametrize(
+    "fallback_to_db_teams, expect_teams_stripped",
+    [
+        pytest.param(True, False, id="fallback_on_preserves_db_teams"),
+        pytest.param(False, True, id="fallback_off_strips_db_teams"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams_no_claim_team_preservation(
+    fallback_to_db_teams: bool,
+    expect_teams_stripped: bool,
+) -> None:
+    """A no-team-claim JWT must not permanently strip a user's DB team memberships
+    when fallback_to_db_teams is enabled — otherwise the DB fallback that runs
+    right after has nothing to resolve and every request silently wipes the user
+    out of their teams. With the flag off, the legacy mirror-the-IdP behavior
+    (remove teams absent from the token) is preserved."""
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="teams",
+            sync_user_role_and_teams=True,
+            fallback_to_db_teams=fallback_to_db_teams,
+        ),
+    )
+
+    token = {"sub": "u1"}
+    user = LiteLLM_UserTable(
+        user_id="u1",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        teams=["team_a", "team_b"],
+    )
+    prisma = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        new_callable=AsyncMock,
+    ) as mock_patch:
+        await JWTAuthManager.sync_user_role_and_teams(jwt_handler, token, user, prisma)
+
+    if expect_teams_stripped:
+        mock_patch.assert_awaited_once()
+        assert set(mock_patch.call_args.kwargs["teams_ids_to_remove_user_from"]) == {
+            "team_a",
+            "team_b",
+        }
+        assert user.teams == []
+    else:
+        mock_patch.assert_not_called()
+        assert user.teams == ["team_a", "team_b"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_db_team_fallback_skips_team_without_model_access():
+    """The DB-team fallback must apply the same per-team model-access check as the
+    claim-based path: a DB team that cannot access the requested model is skipped
+    in favor of one that can, instead of selecting the first membership blindly."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_model_access",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["restricted_team", "allowed_team"],
+    )
+    teams = {
+        "restricted_team": LiteLLM_TeamTable(
+            team_id="restricted_team", models=["claude-3"]
+        ),
+        "allowed_team": LiteLLM_TeamTable(team_id="allowed_team", models=["gpt-4"]),
+    }
+
+    async def fake_get_team(team_id, **kwargs):
+        return teams[team_id]
+
+    async def fake_can_access(model, team_object, llm_router, team_model_aliases=None):
+        if model in (team_object.models or []):
+            return True
+        raise Exception("model access denied")
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            side_effect=fake_can_access,
+        ),
+    ):
+        team_id, team_object = await JWTAuthManager._resolve_db_team_fallback(
+            user_object=user_object,
+            requested_model="gpt-4",
+            enforce_team_based_model_access=True,
+            team_id_upsert=False,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "allowed_team"
+    assert team_object is teams["allowed_team"]
+
+
+def test_validate_header_team_in_db_membership_does_not_leak_team_ids():
+    """The 403 raised for an x-litellm-team-id header outside the user's DB
+    memberships must not enumerate the user's team IDs back to the caller; any
+    valid-JWT caller could otherwise probe header values to discover team IDs."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_leak",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["secret_team_alpha", "secret_team_beta"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager._validate_header_team_in_db_membership(
+            team_id="outsider_team",
+            user_object=user_object,
+        )
+
+    detail = exc_info.value.detail
+    assert exc_info.value.status_code == 403
+    assert "secret_team_alpha" not in detail
+    assert "secret_team_beta" not in detail
+    assert "outsider_team" in detail

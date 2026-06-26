@@ -1839,7 +1839,12 @@ class JWTAuthManager:
         jwt_team_ids = set(jwt_handler.get_team_ids_from_jwt(jwt_valid_token))
         existing_teams = set(user_object.teams or [])
         teams_to_add = jwt_team_ids - existing_teams
-        teams_to_remove = existing_teams - jwt_team_ids
+        preserve_db_teams_without_claims = (
+            jwt_handler.litellm_jwtauth.fallback_to_db_teams and not jwt_team_ids
+        )
+        teams_to_remove = (
+            set() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
+        )
         if teams_to_add or teams_to_remove:
             from litellm.proxy.management_endpoints.scim.scim_v2 import (
                 patch_team_membership,
@@ -1964,6 +1969,7 @@ class JWTAuthManager:
     @staticmethod
     async def _resolve_db_team_fallback(
         user_object: LiteLLM_UserTable | None,
+        requested_model: str | None,
         enforce_team_based_model_access: bool,
         team_id_upsert: bool,
         prisma_client: PrismaClient | None,
@@ -1973,11 +1979,16 @@ class JWTAuthManager:
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """
         Resolve a team for a user whose JWT carries no team claims by selecting
-        the first of their DB team memberships that loads successfully.
+        the first DB team membership that loads successfully and, when a model is
+        requested, can access that model — mirroring the per-team model-access
+        check the claim-based path enforces, so a team's `models` restriction is
+        not bypassed by the fallback.
 
         Raises HTTP 403 when the user has no usable DB team membership and
         `enforce_team_based_model_access` is set; otherwise returns (None, None).
         """
+        from litellm.proxy.proxy_server import llm_router
+
         user_team_ids = user_object.teams if user_object else []
         for candidate_team_id in user_team_ids:
             try:
@@ -1991,19 +2002,29 @@ class JWTAuthManager:
                 )
             except Exception:
                 continue
-            if team_object:
-                verbose_proxy_logger.debug(
-                    "JWT DB team fallback: resolved team_id=%s from user DB membership",
-                    candidate_team_id,
-                )
-                return candidate_team_id, team_object
+            if not team_object:
+                continue
+            if requested_model:
+                try:
+                    await can_team_access_model(
+                        model=requested_model,
+                        team_object=team_object,
+                        llm_router=llm_router,
+                        team_model_aliases=None,
+                    )
+                except Exception:
+                    continue
+            verbose_proxy_logger.debug(
+                "JWT DB team fallback: resolved team_id=%s from user DB membership",
+                candidate_team_id,
+            )
+            return candidate_team_id, team_object
 
         if enforce_team_based_model_access:
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "User is not a member of any team. Add the user to a team via "
-                    "the LiteLLM UI or API."
+                    "User is not a member of any team. Add the user to a team via the LiteLLM UI or API."
                 ),
             )
         return None, None
@@ -2024,8 +2045,7 @@ class JWTAuthManager:
         raise HTTPException(
             status_code=403,
             detail=(
-                f"Team '{team_id}' (from x-litellm-team-id header) is not in your "
-                f"team memberships. Your teams: {user_team_ids}"
+                f"Team '{team_id}' (from x-litellm-team-id header) is not in your team memberships."
             ),
         )
 
@@ -2254,6 +2274,7 @@ class JWTAuthManager:
         if team_id is None and db_team_fallback:
             team_id, team_object = await JWTAuthManager._resolve_db_team_fallback(
                 user_object=user_object,
+                requested_model=request_data.get("model"),
                 enforce_team_based_model_access=jwt_handler.litellm_jwtauth.enforce_team_based_model_access,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
                 prisma_client=prisma_client,
