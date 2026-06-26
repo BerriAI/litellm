@@ -1005,6 +1005,23 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     search_tools: Optional[List[str]] = None
 
 
+class ObjectPermissionDict(TypedDict, total=False):
+    """Plain-dict mirror of LiteLLM_ObjectPermissionBase used by validators
+    that need to mutate the payload before persistence (e.g. MCP server
+    identifier normalization in object_permission_utils)."""
+
+    mcp_servers: Optional[list[str]]
+    mcp_access_groups: Optional[list[str]]
+    mcp_tool_permissions: Optional[dict[str, list[str]]]
+    mcp_toolsets: Optional[list[str]]
+    blocked_tools: Optional[list[str]]
+    vector_stores: Optional[list[str]]
+    agents: Optional[list[str]]
+    agent_access_groups: Optional[list[str]]
+    models: Optional[list[str]]
+    search_tools: Optional[list[str]]
+
+
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 

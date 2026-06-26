@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_ObjectPermissionTable, ObjectPermissionDict
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
@@ -1009,4 +1009,19 @@ async def test_empty_object_permission_passes_for_personal_non_admin():
         object_permission=None,
         team_obj=None,
         is_proxy_admin=False,
+    )
+
+
+def test_object_permission_dict_mirrors_pydantic_model():
+    """ObjectPermissionDict must stay field-for-field aligned with
+    LiteLLM_ObjectPermissionBase. If a new field is added to the Pydantic
+    model, this test fails until the TypedDict is updated to match."""
+    from typing import get_type_hints
+
+    pydantic_fields = set(LiteLLM_ObjectPermissionBase.model_fields.keys())
+    typeddict_fields = set(get_type_hints(ObjectPermissionDict).keys())
+    assert pydantic_fields == typeddict_fields, (
+        f"ObjectPermissionDict drifted from LiteLLM_ObjectPermissionBase.\n"
+        f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
+        f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
     )

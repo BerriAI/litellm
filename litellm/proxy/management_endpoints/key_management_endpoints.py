@@ -349,6 +349,14 @@ def _personal_key_membership_check(
     return True
 
 
+def _object_permission_to_dict(
+    object_permission: Optional[LiteLLM_ObjectPermissionBase],
+) -> Optional[ObjectPermissionDict]:
+    if object_permission is None:
+        return None
+    return cast(ObjectPermissionDict, object_permission.model_dump(exclude_unset=True))
+
+
 def _personal_key_generation_check(user_api_key_dict: UserAPIKeyAuth, data: GenerateKeyRequest):
     TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -852,9 +860,7 @@ async def _common_key_generation_helper(
         data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
-    _is_proxy_admin_caller = (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    )
+    _is_proxy_admin_caller = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
@@ -2074,7 +2080,7 @@ async def _validate_mcp_servers_for_key_update(
     prisma_client: Any,
     user_api_key_cache: Any,
     is_proxy_admin: bool,
-) -> Optional[dict]:
+) -> Optional[ObjectPermissionDict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
     # If team_id isn't being changed, resolve the existing key's team
@@ -4472,9 +4478,7 @@ async def regenerate_key_fn(
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
-        if data is not None and (
-            data.access_group_ids or data.object_permission is not None
-        ):
+        if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
             if _key_in_db.team_id is not None:
                 regenerate_team_table = await get_team_object(
@@ -4483,17 +4487,13 @@ async def regenerate_key_fn(
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
-            _regen_is_proxy_admin = (
-                user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            )
+            _regen_is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
             )
-            _regen_object_permission_dict = _object_permission_to_dict(
-                data.object_permission
-            )
+            _regen_object_permission_dict = _object_permission_to_dict(data.object_permission)
             await validate_key_mcp_servers_against_team(
                 object_permission=_regen_object_permission_dict,
                 team_obj=regenerate_team_table,
