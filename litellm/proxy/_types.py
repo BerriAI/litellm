@@ -3657,6 +3657,10 @@ class TeamMemberAddRequest(MemberAddRequest):
         default=None,
         description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
     )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.",
+    )
     allowed_models: Optional[List[str]] = Field(
         default=None,
         description="List of models this team member can access. If not set, inherits the team's default_team_member_models or all team models.",

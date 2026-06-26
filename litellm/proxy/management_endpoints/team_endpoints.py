@@ -2225,6 +2225,26 @@ async def _validate_team_member_add_permissions(
             },
         )
 
+    # Available-team self-join grants only the ability to join; per-member
+    # budget and model controls stay admin-only.  Reject them here so a
+    # self-joining non-admin cannot set their own cap, reset window, or model
+    # scope via the bypass.
+    if (
+        data.max_budget_in_team is not None
+        or data.budget_duration is not None
+        or data.allowed_models is not None
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    "Available-team self-join cannot set per-member budget or "
+                    "model controls (max_budget_in_team, budget_duration, "
+                    "allowed_models); these are admin-only."
+                )
+            },
+        )
+
     # Available-team self-join: caller may add only themselves, only as a
     # standard user.  Enforce that here so the bypass cannot be used as a
     # privilege-escalation or cross-user-injection primitive.
@@ -2290,6 +2310,7 @@ async def _process_team_members(
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
+                budget_duration=data.budget_duration,
             )
         except Exception as e:
             raise HTTPException(
@@ -2315,6 +2336,7 @@ async def _process_team_members(
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
+                    budget_duration=data.budget_duration,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2577,6 +2599,8 @@ async def team_member_add(
         )
     except HTTPException as e:
         raise e
+
+    _validate_budget_duration(data.budget_duration)
 
     prisma_client = cast(PrismaClient, prisma_client)
 
