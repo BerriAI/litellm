@@ -73,7 +73,12 @@ async def test_apply_guardrail_compresses_and_returns_structured_messages(
     )
     mock_response = _make_compress_response(COMPRESSED_MESSAGES)
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response):
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={"model": "gpt-4o"},
@@ -93,7 +98,9 @@ async def test_apply_guardrail_bypass_header_skips_compression(
     )
     request_data = {"proxy_server_request": {"headers": {"x-headroom-bypass": "true"}}}
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
@@ -113,7 +120,9 @@ async def test_apply_guardrail_response_type_passthrough(
         structured_messages=ORIGINAL_MESSAGES,
     )
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={},
@@ -130,7 +139,9 @@ async def test_apply_guardrail_empty_structured_messages_passthrough(
 ):
     inputs = GenericGuardrailAPIInputs(texts=["hello"])
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={},
@@ -152,7 +163,12 @@ async def test_apply_guardrail_http_error_raises():
         structured_messages=ORIGINAL_MESSAGES,
     )
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response):
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs=inputs,
@@ -176,7 +192,12 @@ async def test_apply_guardrail_missing_messages_key_raises():
         structured_messages=ORIGINAL_MESSAGES,
     )
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response):
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs=inputs,
@@ -185,6 +206,41 @@ async def test_apply_guardrail_missing_messages_key_raises():
             )
 
     assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_empty_compressed_messages_raises():
+    guardrail = _make_guardrail()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "messages": ["not-a-dict", 42, None],
+        "tokens_before": 1000,
+        "tokens_after": 0,
+        "compression_ratio": 0,
+    }
+    mock_response.text = "{}"
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert "empty message list" in str(exc_info.value.detail)
 
 
 def test_init_raises_without_api_base():
@@ -196,7 +252,9 @@ def test_bypass_header_case_insensitive():
     guardrail = _make_guardrail()
 
     for header_value in ("true", "True", "TRUE"):
-        data = {"proxy_server_request": {"headers": {"x-headroom-bypass": header_value}}}
+        data = {
+            "proxy_server_request": {"headers": {"x-headroom-bypass": header_value}}
+        }
         assert guardrail._should_bypass(data) is True
 
     data = {"proxy_server_request": {"headers": {"x-headroom-bypass": "false"}}}
@@ -219,7 +277,12 @@ async def test_apply_guardrail_sends_model_from_config():
         structured_messages=ORIGINAL_MESSAGES,
     )
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_post:
         await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={"model": "gpt-4o"},
@@ -241,7 +304,12 @@ async def test_apply_guardrail_sends_model_from_request_data_when_no_config_mode
         structured_messages=ORIGINAL_MESSAGES,
     )
 
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_post:
         await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={"model": "gpt-4o"},

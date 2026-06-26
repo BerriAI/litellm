@@ -131,13 +131,23 @@ class HeadroomGuardrail(CustomGuardrail):
                 },
             )
 
+        filtered = [item for item in compressed_messages if _is_str_object_dict(item)]
+        if not filtered:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service returned empty message list",
+                    "body": response.text,
+                },
+            )
+
         verbose_proxy_logger.debug(
             "Headroom: compressed %s tokens -> %s tokens (ratio %.2f)",
             body.get("tokens_before", "?"),
             body.get("tokens_after", "?"),
             body.get("compression_ratio", 0),
         )
-        return [item for item in compressed_messages if _is_str_object_dict(item)]
+        return filtered
 
     @log_guardrail_information
     async def apply_guardrail(
