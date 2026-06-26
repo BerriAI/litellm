@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    normalize_generic_guardrail_api_usage,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -169,6 +172,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             # Include model information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
+            inputs["usage"] = normalize_generic_guardrail_api_usage(getattr(response, "usage", None))
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,

@@ -4,8 +4,6 @@ Unit tests for OpenAI Text Completion Guardrail Translation Handler
 
 import os
 import sys
-from typing import List, Optional, Tuple
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,15 +14,26 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.completion.guardrail_translation.handler import (
     OpenAITextCompletionHandler,
 )
-from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse
+from litellm.types.utils import (
+    CallTypes,
+    GenericGuardrailAPIUsage,
+    TextChoices,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
+    def __init__(self, guardrail_name: str = "test"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.last_inputs = None
+
     async def apply_guardrail(
         self, inputs: dict, request_data: dict, input_type: str, **kwargs
     ) -> dict:
+        self.last_inputs = inputs
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -179,6 +188,43 @@ class TestOutputProcessing:
         assert result.choices[0].text == "This is indeed a test [GUARDRAILED]"
         assert result.id == "cmpl-test"
         assert result.model == "gpt-3.5-turbo-instruct"
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_passes_generic_guardrail_usage(self):
+        handler = OpenAITextCompletionHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+
+        response = TextCompletionResponse(
+            id="cmpl-usage",
+            choices=[
+                TextChoices(
+                    finish_reason="stop",
+                    index=0,
+                    logprobs=None,
+                    text="This is indeed a test",
+                )
+            ],
+            created=1589478378,
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            usage=Usage(
+                prompt_tokens=5,
+                completion_tokens=8,
+                total_tokens=13,
+                prompt_tokens_details={"cached_tokens": 2},
+            ),
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert guardrail.last_inputs is not None
+        usage = guardrail.last_inputs["usage"]
+        assert isinstance(usage, GenericGuardrailAPIUsage)
+        assert usage.prompt_tokens == 5
+        assert usage.completion_tokens == 8
+        assert usage.total_tokens == 13
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 2
 
     @pytest.mark.asyncio
     async def test_process_output_multiple_choices(self):
