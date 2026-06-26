@@ -143,8 +143,12 @@ Supported client events:
 
 - `session.update`
 - `input_audio_buffer.append`
+- `response.create` with `response.instructions`
+- `session.close`
 
 LiteLLM sends Volcengine `StartConnection` on WebSocket connect, maps the first `session.update` to `StartSession`, forwards `input_audio_buffer.append` PCM bytes as realtime audio, normalizes Volcengine output audio to OpenAI-compatible `pcm16`, and emits `response.output_audio.delta` events.
+
+Volcengine realtime dialogue does not currently expose OpenAI-style realtime tool/function call events. LiteLLM ignores `tools`-only session updates for this provider and does not synthesize function calls.
 
 ## Notes
 

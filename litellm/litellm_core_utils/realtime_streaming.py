@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, ca
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeMessage,
+)
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -85,7 +88,7 @@ class RealTimeStreaming:
         self.current_conversation_id: Optional[str] = None
         self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
-        self.session_configuration_request: Optional[str] = None
+        self.session_configuration_request: Optional[RealtimeMessage] = None
         self.user_api_key_dict = user_api_key_dict
         self.request_data: Dict = request_data or {}
         # Violation counter for end_session_after_n_fails support
@@ -580,7 +583,7 @@ class RealTimeStreaming:
         return True
 
     def _cache_session_configuration_request(
-        self, transformed_message: Union[str, bytes]
+        self, transformed_message: RealtimeMessage
     ) -> None:
         """Store setup payload once sent to backend.
 

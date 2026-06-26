@@ -303,7 +303,7 @@ def test_session_update_after_start_updates_dialog_system_role():
                 "type": "session.update",
                 "session": {
                     "type": "realtime",
-                    "instructions": "You are Mundo's appointment assistant.",
+                    "instructions": "You are a concise assistant.",
                 },
             }
         ),
@@ -318,7 +318,7 @@ def test_session_update_after_start_updates_dialog_system_role():
     assert payload == {
         "dialog": {
             "bot_name": VOLCENGINE_REALTIME_DEFAULT_BOT_NAME,
-            "system_role": "You are Mundo's appointment assistant.",
+            "system_role": "You are a concise assistant.",
             "speaking_style": "",
         }
     }

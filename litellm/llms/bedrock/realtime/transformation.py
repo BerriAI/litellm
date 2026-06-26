@@ -11,7 +11,10 @@ from typing import Any, List, Optional, Union
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeMessage,
+)
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeDoneEvent,
@@ -471,7 +474,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         message: str,
         model: str,
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> List[str]:
         """
         Transform OpenAI realtime request to Bedrock Nova Sonic format.

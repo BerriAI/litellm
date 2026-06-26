@@ -6,7 +6,10 @@ import struct
 from typing import TYPE_CHECKING, Any, Union, cast
 
 from litellm._uuid import uuid
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeMessage,
+)
 from litellm.llms.volcengine.common_utils import VolcEngineError
 from litellm.llms.volcengine.realtime.protocol import (
     EV_ASR_ENDED,
@@ -164,18 +167,15 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
     def requires_session_configuration(self) -> bool:
         return True
 
-    def session_configuration_request(self, model: str) -> str | None:
-        return cast(
-            str,
-            encode_json_event(event=EV_START_CONNECTION, payload={}),
-        )
+    def session_configuration_request(self, model: str) -> RealtimeMessage | None:
+        return encode_json_event(event=EV_START_CONNECTION, payload={})
 
     def transform_realtime_request(
         self,
         message: str,
         model: str,
-        session_configuration_request: str | None = None,
-    ) -> list[str]:
+        session_configuration_request: RealtimeMessage | None = None,
+    ) -> list[RealtimeMessage]:
         try:
             message_obj = json.loads(message)
         except (json.JSONDecodeError, TypeError):
@@ -212,23 +212,20 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             return self._start_session_frame(model=model, session=self._latest_session)
 
         if message_type == "input_audio_buffer.append":
-            frames: list[bytes] = []
+            frames: list[RealtimeMessage] = []
             if not self._session_started:
                 frames.extend(
-                    cast(
-                        list[bytes],
-                        self._start_session_frame(
-                            model=model, session=self._latest_session or {}
-                        ),
+                    self._start_session_frame(
+                        model=model, session=self._latest_session or {}
                     )
                 )
             audio = message_obj.get("audio")
             if not isinstance(audio, str) or not audio:
-                return cast(list[str], frames)
+                return frames
             try:
                 audio_bytes = base64.b64decode(audio)
             except (binascii.Error, ValueError):
-                return cast(list[str], frames)
+                return frames
             audio_bytes = _normalise_input_audio(
                 audio_bytes, self._input_sample_rate_hz
             )
@@ -239,7 +236,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
                     payload=audio_bytes,
                 )
             )
-            return cast(list[str], frames)
+            return frames
 
         if message_type == "response.create":
             self._pending_response_metadata = _extract_response_create_metadata(
@@ -248,14 +245,11 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             instructions = _extract_response_create_instructions(message_obj)
             if not instructions:
                 return []
-            frames: list[bytes] = []
+            frames: list[RealtimeMessage] = []
             if not self._session_started:
                 frames.extend(
-                    cast(
-                        list[bytes],
-                        self._start_session_frame(
-                            model=model, session=self._latest_session or {}
-                        ),
+                    self._start_session_frame(
+                        model=model, session=self._latest_session or {}
                     )
                 )
             frames.append(
@@ -265,18 +259,15 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
                     payload={"content": instructions},
                 )
             )
-            return cast(list[str], frames)
+            return frames
 
         if message_type == "session.close":
-            return cast(
-                list[str],
-                [
-                    encode_json_event(
-                        event=EV_FINISH_CONNECTION,
-                        payload={},
-                    )
-                ],
-            )
+            return [
+                encode_json_event(
+                    event=EV_FINISH_CONNECTION,
+                    payload={},
+                )
+            ]
 
         return []
 
@@ -284,7 +275,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_session_id: str,
-        session_configuration_request: str | None = None,
+        session_configuration_request: RealtimeMessage | None = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
         return self._session_event("session.created", model)
 
@@ -503,20 +494,17 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
                 ]
         return []
 
-    def _start_session_frame(self, model: str, session: Any) -> list[str]:
+    def _start_session_frame(self, model: str, session: Any) -> list[RealtimeMessage]:
         if not isinstance(session, dict):
             session = {}
         self._session_started = True
-        return cast(
-            list[str],
-            [
-                encode_json_event(
-                    event=EV_START_SESSION,
-                    session_id=self._session_id,
-                    payload=_start_session_payload(model=model, session=session),
-                )
-            ],
-        )
+        return [
+            encode_json_event(
+                event=EV_START_SESSION,
+                session_id=self._session_id,
+                payload=_start_session_payload(model=model, session=session),
+            )
+        ]
 
     def _session_event(
         self, event_type: str, model: str

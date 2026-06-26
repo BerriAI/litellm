@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Union
 
 import httpx
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
+    RealtimeMessage,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
@@ -54,8 +55,8 @@ class BaseRealtimeConfig(ABC):
         self,
         message: str,
         model: str,
-        session_configuration_request: Optional[str] = None,
-    ) -> List[str]:
+        session_configuration_request: Optional[RealtimeMessage] = None,
+    ) -> Sequence[RealtimeMessage]:
         pass
 
     def is_setup_message(self, msg_obj: dict) -> bool:
@@ -69,14 +70,16 @@ class BaseRealtimeConfig(ABC):
     ) -> bool:  # initial configuration message sent to setup the realtime session
         return False
 
-    def session_configuration_request(self, model: str) -> Optional[str]:  # message sent to setup the realtime session
+    def session_configuration_request(
+        self, model: str
+    ) -> Optional[RealtimeMessage]:  # message sent to setup the realtime session
         return None
 
     def transform_session_created_event(
         self,
         model: str,
         logging_session_id: str,
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> Optional[Union[dict, OpenAIRealtimeStreamSessionEvents]]:
         """
         Optional hook for providers that defer session setup until client `session.update`.

@@ -7,6 +7,17 @@ import pytest
 from litellm.llms.volcengine.audio_transcription.transformation import (
     VolcEngineAudioTranscriptionConfig,
 )
+from litellm.llms.volcengine.realtime.protocol import (
+    COMP_NONE,
+    EV_CONNECTION_FAILED,
+    EV_CONNECTION_STARTED,
+    EV_START_CONNECTION,
+    FLAG_EVENT,
+    MSG_FULL_SERVER,
+    SER_JSON,
+    decode_realtime_frame,
+    encode_event_frame,
+)
 from litellm.llms.volcengine.realtime.transformation import VolcEngineRealtimeConfig
 from litellm.llms.volcengine.text_to_speech.transformation import (
     VolcEngineTextToSpeechConfig,
@@ -18,8 +29,53 @@ from litellm.utils import ProviderConfigManager
 class FakeLogging:
     litellm_trace_id = "trace-id"
 
-    def update_from_kwargs(self, **kwargs):
+    def update_from_kwargs(self, **kwargs: object) -> None:
         pass
+
+
+class FakeHealthWebSocket:
+    def __init__(self, incoming: list[bytes | str]) -> None:
+        self.incoming = list(incoming)
+        self.sent: list[bytes | str] = []
+
+    async def send(self, data: bytes | str) -> None:
+        self.sent.append(data)
+
+    async def recv(self) -> bytes | str:
+        if not self.incoming:
+            raise AssertionError("unexpected recv")
+        return self.incoming.pop(0)
+
+
+class FakeHealthConnect:
+    def __init__(self, ws: FakeHealthWebSocket) -> None:
+        self.ws = ws
+        self.args: tuple[object, ...] | None = None
+        self.kwargs: dict[str, object] | None = None
+
+    def __call__(self, *args: object, **kwargs: object) -> "FakeHealthConnect":
+        self.args = args
+        self.kwargs = kwargs
+        return self
+
+    async def __aenter__(self) -> FakeHealthWebSocket:
+        return self.ws
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+def volcengine_server_event(
+    event: int, payload: dict[str, object] | None = None
+) -> bytes:
+    return encode_event_frame(
+        message_type=MSG_FULL_SERVER,
+        flags=FLAG_EVENT,
+        serialization=SER_JSON,
+        compression=COMP_NONE,
+        event=event,
+        payload=json.dumps(payload or {}).encode("utf-8"),
+    )
 
 
 def test_provider_registry_returns_volcengine_audio_configs():
@@ -43,13 +99,17 @@ def test_provider_registry_returns_volcengine_audio_configs():
     assert isinstance(realtime_config, VolcEngineRealtimeConfig)
 
 
-def test_volcengine_realtime_uses_dynamic_provider_params(monkeypatch):
-    captured_kwargs = {}
+def test_volcengine_realtime_uses_dynamic_provider_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
 
-    async def mock_async_realtime(**kwargs):
+    async def mock_async_realtime(**kwargs: object) -> None:
         captured_kwargs.update(kwargs)
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(
+        model: str, api_base: str | None, api_key: str | None
+    ) -> tuple[str, str, str, str]:
         return (
             "volc.speech.dialog",
             "volcengine",
@@ -75,6 +135,56 @@ def test_volcengine_realtime_uses_dynamic_provider_params(monkeypatch):
     assert captured_kwargs["api_base"] == "wss://example.test/realtime"
     assert captured_kwargs["api_key"] == "speech-key"
     assert isinstance(captured_kwargs["provider_config"], VolcEngineRealtimeConfig)
+
+
+def test_volcengine_realtime_health_check_waits_for_connection_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOLCENGINE_SPEECH_KEY", "speech-key")
+    fake_ws = FakeHealthWebSocket([volcengine_server_event(EV_CONNECTION_STARTED)])
+    fake_connect = FakeHealthConnect(fake_ws)
+    monkeypatch.setattr("websockets.connect", fake_connect)
+
+    assert (
+        asyncio.run(
+            realtime_main._realtime_health_check(
+                model="volcengine/volc.speech.dialog",
+                custom_llm_provider="volcengine",
+                api_key="speech-key",
+                api_base="wss://example.test/realtime",
+            )
+        )
+        is True
+    )
+
+    assert fake_connect.args == ("wss://example.test/realtime",)
+    assert fake_connect.kwargs is not None
+    headers = fake_connect.kwargs["additional_headers"]
+    assert isinstance(headers, dict)
+    assert headers["X-Api-Key"] == "speech-key"
+    sent_setup = fake_ws.sent[0]
+    assert isinstance(sent_setup, bytes)
+    assert decode_realtime_frame(sent_setup).event == EV_START_CONNECTION
+
+
+def test_volcengine_realtime_health_check_fails_on_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOLCENGINE_SPEECH_KEY", "speech-key")
+    fake_ws = FakeHealthWebSocket(
+        [volcengine_server_event(EV_CONNECTION_FAILED, {"message": "bad key"})]
+    )
+    monkeypatch.setattr("websockets.connect", FakeHealthConnect(fake_ws))
+
+    with pytest.raises(ValueError, match="Volcengine realtime health check failed"):
+        asyncio.run(
+            realtime_main._realtime_health_check(
+                model="volcengine/volc.speech.dialog",
+                custom_llm_provider="volcengine",
+                api_key="speech-key",
+                api_base="wss://example.test/realtime",
+            )
+        )
 
 
 def test_public_audio_apis_dispatch_to_volcengine_provider():
