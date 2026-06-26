@@ -2010,11 +2010,6 @@ async def ui_view_spend_logs(
         order_column = sort_by
         order_direction = (sort_order or "desc").lower()
 
-        # Get total count of records
-        total_records = await SpendLogsRepository(prisma_client).table.count(
-            where=where_conditions,
-        )
-
         # Build raw SQL to fetch paginated data WITHOUT heavy columns
         # (messages, response, proxy_server_request can be hundreds of KB per row).
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
@@ -2128,7 +2123,8 @@ async def ui_view_spend_logs(
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms,
+                COUNT(*) OVER () AS total_count
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
             ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
@@ -2138,13 +2134,34 @@ async def ui_view_spend_logs(
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
+        # `COUNT(*) OVER ()` folds the total-match count into the same scan as the
+        # page data; a standalone `COUNT(*)` is a distributed RPC on sharded
+        # engines like YugabyteDB that contacts every tablet and times out
+        # regardless of row count (LIT-4027). The hot path (page 1 and in-range
+        # pages) always carries the count on its rows, so the count round trip is
+        # gone there. Only an out-of-range page overshoots the last row and comes
+        # back empty; fall back to a direct count there so total/total_pages stay
+        # accurate rather than collapsing to zero.
+        if data:
+            total_records = int(data[0]["total_count"])
+        elif page > 1:
+            total_records = int(
+                await SpendLogsRepository(prisma_client).table.count(
+                    where=where_conditions,
+                )
+            )
+        else:
+            total_records = 0
+
         # query_raw returns the JSONB `metadata` column as a string (the Prisma
         # serialiser bypasses the model-layer JSON hydration we get on the ORM
         # path). The UI reads `metadata.status` / `metadata.error_information`
         # as object fields, so failure rows looked like successes (#29674).
-        # Re-hydrate to dict here.
+        # Re-hydrate to dict here. Also drop the window-function `total_count`
+        # helper column so it does not leak into the serialised rows.
         for row in data:
             if isinstance(row, dict):
+                row.pop("total_count", None)
                 md = row.get("metadata")
                 if isinstance(md, str):
                     try:
