@@ -1053,7 +1053,7 @@ def responses_api_bridge_check(
         and reasoning_effort is not None
         and (
             reasoning_summary is not None
-            or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools)
+            or (OpenAIGPT5Config.is_model_gpt_5_4_model(model) and tools)
         )
     ):
         model_info["mode"] = "responses"
