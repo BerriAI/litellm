@@ -327,7 +327,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             except ValueError:
                 # datetime.fromisoformat cannot handle 'Z' in Python 3.10
                 created_datetime = datetime.fromisoformat(
-                    f'{json_resp["created_at"].rstrip("Z")}+00:00'
+                    f"{json_resp['created_at'].rstrip('Z')}+00:00"
                 )
             model_response.created = int(created_datetime.timestamp())
         else:

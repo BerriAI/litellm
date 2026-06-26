@@ -157,7 +157,7 @@ def create_mock_braintrust_client():
     create_mock_braintrust_factory_client()
 
     verbose_logger.debug(
-        f"[BRAINTRUST MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms"
+        f"[BRAINTRUST MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms"
     )
     verbose_logger.debug(
         "[BRAINTRUST MOCK] Braintrust mock client initialization complete"

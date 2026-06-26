@@ -823,9 +823,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if google_maps_retrieval_config is not None:
             if "toolConfig" not in optional_params:
                 optional_params["toolConfig"] = {}
-            optional_params["toolConfig"][
-                "retrievalConfig"
-            ] = google_maps_retrieval_config
+            optional_params["toolConfig"]["retrievalConfig"] = (
+                google_maps_retrieval_config
+            )
 
         return _tools_list
 
@@ -1271,7 +1271,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 isinstance(value, str) or isinstance(value, dict)
             ):
                 _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value  # type: ignore
+                    model=model,
+                    tool_choice=value,  # type: ignore
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -2198,7 +2199,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         from litellm.types.utils import Delta, StreamingChoices
 
         annotations = chat_completion_message.get("annotations")  # type: ignore
-        provider_specific_fields = chat_completion_message.get("provider_specific_fields")  # type: ignore
+        provider_specific_fields = chat_completion_message.get(
+            "provider_specific_fields"
+        )  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -2473,15 +2476,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
 
                 if audio_response is not None:
-                    cast(Dict[str, Any], chat_completion_message)[
-                        "audio"
-                    ] = audio_response
+                    cast(Dict[str, Any], chat_completion_message)["audio"] = (
+                        audio_response
+                    )
                     chat_completion_message["content"] = None  # OpenAI spec
                 if image_response is not None:
                     # Handle image response - combine with text content into structured format
-                    cast(Dict[str, Any], chat_completion_message)[
-                        "images"
-                    ] = image_response
+                    cast(Dict[str, Any], chat_completion_message)["images"] = (
+                        image_response
+                    )
                 if content is not None:
                     chat_completion_message["content"] = content
 
@@ -2541,13 +2544,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if thought_signatures is not None:
                 if "provider_specific_fields" not in chat_completion_message:
                     chat_completion_message["provider_specific_fields"] = {}
-                chat_completion_message["provider_specific_fields"]["thought_signatures"] = thought_signatures  # type: ignore
+                chat_completion_message["provider_specific_fields"][
+                    "thought_signatures"
+                ] = thought_signatures  # type: ignore
 
             # Store server-side tool invocations in provider_specific_fields
             if server_side_tool_invocations is not None:
                 if "provider_specific_fields" not in chat_completion_message:
                     chat_completion_message["provider_specific_fields"] = {}
-                chat_completion_message["provider_specific_fields"]["server_side_tool_invocations"] = server_side_tool_invocations  # type: ignore
+                chat_completion_message["provider_specific_fields"][
+                    "server_side_tool_invocations"
+                ] = server_side_tool_invocations  # type: ignore
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
@@ -3316,7 +3323,9 @@ class VertexLLM(VertexBase):
             client = client
 
         try:
-            response = client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)  # type: ignore
+            response = client.post(
+                url=url, headers=headers, json=data, logging_obj=logging_obj
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code

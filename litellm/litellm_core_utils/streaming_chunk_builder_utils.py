@@ -213,9 +213,9 @@ class ChunkProcessor:
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        tool_call_map: Dict[int, Dict[str, Any]] = (
-            {}
-        )  # Map to store tool calls by index
+        tool_call_map: Dict[
+            int, Dict[str, Any]
+        ] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -765,15 +765,16 @@ class ChunkProcessor:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
                 model=model, messages=messages
             )
-        except (
-            Exception
-        ):  # don't allow this failing to block a complete streaming response from being returned
+        except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
-        returned_usage.completion_tokens = completion_tokens or token_counter(
-            model=model,
-            text=completion_output,
-            count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+        returned_usage.completion_tokens = (
+            completion_tokens
+            or token_counter(
+                model=model,
+                text=completion_output,
+                count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+            )
         )
         returned_usage.total_tokens = (
             returned_usage.prompt_tokens + returned_usage.completion_tokens

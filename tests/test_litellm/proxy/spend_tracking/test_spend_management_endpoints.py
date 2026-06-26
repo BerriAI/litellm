@@ -342,6 +342,7 @@ def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypat
 
 ignored_keys = [
     "request_id",
+    "metadata.litellm_call_id",
     "session_id",
     "startTime",
     "endTime",

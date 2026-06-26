@@ -747,7 +747,7 @@ def _build_user_info_response(
         user_info = {"spend": spend}
 
     returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-    team_list.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    team_list.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     _user_info = (
         user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
@@ -1054,7 +1054,7 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     # cast all teams to LiteLLM_TeamTable
     _teams_in_db: List = results[0]["teams"] or []
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
-    _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    _teams_in_db.sort(key=lambda x: getattr(x, "team_alias", "") or "")
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
 
     # Get admin's own user_id and user_info
@@ -1721,7 +1721,8 @@ async def bulk_user_update(
         try:
             # Perform bulk database update
             await UserRepository(prisma_client).table.update_many(
-                where={}, data=non_default_values  # Update all users
+                where={},
+                data=non_default_values,  # Update all users
             )
 
             # Create individual success results

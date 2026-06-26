@@ -185,8 +185,10 @@ class NomaGuardrail(CustomGuardrail):
         if not messages:
             return None
 
-        input_items, instructions = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(  # type: ignore[arg-type]
-            messages
+        input_items, instructions = (
+            self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(  # type: ignore[arg-type]
+                messages
+            )
         )
 
         if instructions:

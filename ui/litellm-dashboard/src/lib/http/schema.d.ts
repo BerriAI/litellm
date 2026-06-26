@@ -22426,6 +22426,11 @@ export interface components {
              */
             mcp_trusted_proxy_ranges?: string[] | null;
             /**
+             * Mcp Xff Num Trusted Hops
+             * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
+             */
+            mcp_xff_num_trusted_hops?: number | null;
+            /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
              */

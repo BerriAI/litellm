@@ -502,7 +502,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             "computer_20241022": "computer-use-2024-10-22",
         }
         return computer_tool_beta_mapping.get(
-            computer_tool_version, "computer-use-2024-10-22"  # Default fallback
+            computer_tool_version,
+            "computer-use-2024-10-22",  # Default fallback
         )
 
     def get_anthropic_beta_list(

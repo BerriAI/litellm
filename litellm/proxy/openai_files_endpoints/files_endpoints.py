@@ -270,7 +270,9 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)  # type: ignore
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
+        response = await litellm.acreate_file(
+            **_create_file_request, custom_llm_provider=custom_llm_provider
+        )  # type: ignore
 
     return response
 
@@ -1024,7 +1026,9 @@ async def get_file(
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
             response = await litellm.afile_retrieve(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                **data,  # type: ignore
             )
 
         ### ALERTING ###
@@ -1228,7 +1232,9 @@ async def delete_file(
         else:
             data.pop("file_id", None)
             response = await litellm.afile_delete(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                **data,  # type: ignore
             )
 
         ### ALERTING ###
@@ -1410,7 +1416,9 @@ async def list_files(
                 prepare_data_with_credentials(data=data, credentials=team_credentials)
 
             response = await litellm.afile_list(
-                custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                purpose=purpose,
+                **data,  # type: ignore
             )
 
         if response is None:
