@@ -563,7 +563,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
-        ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
+        // organization_id always sent so the backend route gate can identify
+        // org-admin callers (the gate matches on body.organization_id; omitting
+        // it falls through to default-deny for a non-PROXY_ADMIN caller even
+        // if they admin the team's current org).
+        organization_id:
+          values.organization_id !== undefined ? (values.organization_id ?? null) : info.organization_id,
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
