@@ -2233,7 +2233,10 @@ class BaseLLMHTTPHandler:
             kwargs=kwargs,
         )
 
-        return final_response if final_response is not None else initial_response
+        return self._maybe_websearch_fake_stream_wrap(
+            final_response if final_response is not None else initial_response,
+            logging_obj,
+        )
 
     def anthropic_messages_handler(
         self,
@@ -5504,6 +5507,43 @@ class BaseLLMHTTPHandler:
             **kwargs_for_followup,
         )
 
+    @staticmethod
+    def _maybe_websearch_fake_stream_wrap(
+        response: Any,
+        logging_obj: Optional["LiteLLMLoggingObj"],
+    ) -> Any:
+        """
+        When websearch interception converted stream=True to stream=False for
+        the initial request, re-wrap the final dict as SSE for the client.
+        """
+        from typing import cast
+
+        from litellm._logging import verbose_logger
+        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+        from litellm.types.llms.anthropic_messages.anthropic_response import (
+            AnthropicMessagesResponse,
+        )
+
+        if logging_obj is None:
+            return response
+        if not logging_obj.model_call_details.get(
+            "websearch_interception_converted_stream", False
+        ):
+            return response
+        if hasattr(response, "__aiter__"):
+            return response
+        if not isinstance(response, dict):
+            return response
+
+        verbose_logger.debug(
+            "WebSearchInterception: converting agentic loop response to fake stream"
+        )
+        return FakeAnthropicMessagesStreamIterator(
+            response=cast(AnthropicMessagesResponse, response)
+        )
+
     async def _call_agentic_completion_hooks(
         self,
         response: Any,
@@ -5636,19 +5676,22 @@ class BaseLLMHTTPHandler:
                         callback=callback,
                     )
 
-                return await self._execute_anthropic_agentic_plan(
-                    plan=plan,
-                    model=model,
-                    messages=messages,
-                    anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                    logging_obj=logging_obj,
-                    kwargs=kwargs_with_provider,
-                    depth=depth,
-                    max_loops=max_loops,
-                    fingerprints=fingerprints,
-                    fingerprint=fingerprint,
-                    stream=stream,
-                    callback=callback,
+                return self._maybe_websearch_fake_stream_wrap(
+                    await self._execute_anthropic_agentic_plan(
+                        plan=plan,
+                        model=model,
+                        messages=messages,
+                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                        logging_obj=logging_obj,
+                        kwargs=kwargs_with_provider,
+                        depth=depth,
+                        max_loops=max_loops,
+                        fingerprints=fingerprints,
+                        fingerprint=fingerprint,
+                        stream=stream,
+                        callback=callback,
+                    ),
+                    logging_obj,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5660,42 +5703,10 @@ class BaseLLMHTTPHandler:
                     str(e),
                 )
 
-        # Check if we need to convert response to fake stream
-        # This happens when:
-        # 1. Stream was originally True but converted to False for WebSearch interception
-        # 2. No agentic loop ran (LLM didn't use the tool)
-        # 3. We have a non-streaming response that needs to be converted to streaming
-        websearch_converted_stream = (
-            logging_obj.model_call_details.get(
-                "websearch_interception_converted_stream", False
-            )
-            if logging_obj is not None
-            else False
-        )
-
-        if api_surface == "anthropic_messages" and websearch_converted_stream:
-            from typing import cast
-
-            from litellm._logging import verbose_logger
-            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-                FakeAnthropicMessagesStreamIterator,
-            )
-            from litellm.types.llms.anthropic_messages.anthropic_response import (
-                AnthropicMessagesResponse,
-            )
-
-            verbose_logger.debug(
-                "WebSearchInterception: No tool call made, converting non-streaming response to fake stream"
-            )
-
-            # Convert the non-streaming response to a fake stream
-            # The response should be an AnthropicMessagesResponse (dict)
-            if isinstance(response, dict):
-                # Create a fake streaming iterator
-                fake_stream = FakeAnthropicMessagesStreamIterator(
-                    response=cast(AnthropicMessagesResponse, response)
-                )
-                return fake_stream
+        if api_surface == "anthropic_messages":
+            wrapped = self._maybe_websearch_fake_stream_wrap(response, logging_obj)
+            if wrapped is not response:
+                return wrapped
 
         return None
 
