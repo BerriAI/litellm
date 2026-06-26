@@ -1183,15 +1183,23 @@ async def _fetch_upstream_authorization_server_metadata(
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    payload = await _get_oauth_metadata_json(discovery_url)
-    ttl = (
-        _OAUTH_METADATA_CACHE_TTL_SECONDS
-        if payload is not None
-        else _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS
-    )
-    _OAUTH_METADATA_CACHE[cache_key] = (time.time() + ttl, payload)
-    _prune_oauth_metadata_cache(now)
-    return payload
+    lock = _OAUTH_METADATA_FETCH_LOCKS.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        now = time.time()
+        cached = _OAUTH_METADATA_CACHE.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+
+        payload = await _get_oauth_metadata_json(discovery_url)
+        ttl = (
+            _OAUTH_METADATA_CACHE_TTL_SECONDS
+            if payload is not None
+            else _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS
+        )
+        now = time.time()
+        _OAUTH_METADATA_CACHE[cache_key] = (now + ttl, payload)
+        _prune_oauth_metadata_cache(now)
+        return payload
 
 
 async def _build_oauth_authorization_server_response(

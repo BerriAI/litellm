@@ -2947,6 +2947,47 @@ async def test_discovery_caches_upstream_metadata():
     assert fake_client.get.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_concurrent_authorization_server_metadata_fetch_coalesces():
+    """A cold-cache burst of concurrent discovery calls must coalesce onto a
+    single upstream fetch via the per-key lock, and every caller receives the
+    same cached metadata instead of issuing its own request (thundering herd)."""
+    import asyncio
+
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+
+    de._OAUTH_METADATA_CACHE.clear()
+    de._OAUTH_METADATA_FETCH_LOCKS.clear()
+    server = _make_oauth2_server(
+        server_id="herd_mcp",
+        url="https://graph.microsoft.example/mcp",
+    )
+
+    metadata = {"authorization_endpoint": "https://login.example/authorize"}
+    fetch_calls = 0
+    release = asyncio.Event()
+
+    async def gated_fetch(discovery_url):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        await release.wait()
+        return metadata
+
+    try:
+        with patch.object(de, "_get_oauth_metadata_json", new=AsyncMock(side_effect=gated_fetch)):
+            tasks = [asyncio.create_task(de._fetch_upstream_authorization_server_metadata(server)) for _ in range(8)]
+            await asyncio.sleep(0)
+            release.set()
+            results = await asyncio.gather(*tasks)
+    finally:
+        release.set()
+        de._OAUTH_METADATA_CACHE.clear()
+        de._OAUTH_METADATA_FETCH_LOCKS.clear()
+
+    assert fetch_calls == 1
+    assert all(result is metadata for result in results)
+
+
 def _make_passthrough_server(*, server_id: str, url):
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp import MCPAuth
