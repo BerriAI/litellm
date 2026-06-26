@@ -140,6 +140,35 @@ model_list:
     model_info:
       mode: realtime
 
+  - model_name: rust-ocr-mistral
+    litellm_params:
+      model: mistral/mistral-ocr-latest
+      api_key: os.environ/MISTRAL_API_KEY
+
+  - model_name: rust-ocr-azure-ai
+    litellm_params:
+      model: azure_ai/mistral-document-ai-2505
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+
+  - model_name: rust-ocr-azure-document-intelligence
+    litellm_params:
+      model: azure_ai/doc-intelligence/prebuilt-layout
+      api_base: os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
+      api_key: os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY
+
+  - model_name: rust-ocr-vertex-mistral
+    litellm_params:
+      model: vertex_ai/mistral-ocr-2505
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+
+  - model_name: rust-ocr-vertex-deepseek
+    litellm_params:
+      model: vertex_ai/deepseek-ocr-maas
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+
   # batch models exercised by tests/e2e/batches/
   - model_name: openai-batch
     litellm_params:
@@ -177,36 +206,6 @@ model_list:
       aws_batch_role_arn: os.environ/AWS_BATCH_ROLE_ARN
     model_info:
       mode: batch
-
-
-  - model_name: rust-ocr-mistral
-    litellm_params:
-      model: mistral/mistral-ocr-latest
-      api_key: os.environ/MISTRAL_API_KEY
-
-  - model_name: rust-ocr-azure-ai
-    litellm_params:
-      model: azure_ai/mistral-document-ai-2505
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-
-  - model_name: rust-ocr-azure-document-intelligence
-    litellm_params:
-      model: azure_ai/doc-intelligence/prebuilt-layout
-      api_base: os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
-      api_key: os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY
-
-  - model_name: rust-ocr-vertex-mistral
-    litellm_params:
-      model: vertex_ai/mistral-ocr-2505
-      vertex_project: os.environ/VERTEXAI_PROJECT
-      vertex_location: us-central1
-
-  - model_name: rust-ocr-vertex-deepseek
-    litellm_params:
-      model: vertex_ai/deepseek-ocr-maas
-      vertex_project: os.environ/VERTEXAI_PROJECT
-      vertex_location: us-central1
 
 files_settings:
   - custom_llm_provider: openai
