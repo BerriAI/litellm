@@ -5491,7 +5491,10 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true
     },
     "azure/gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -5533,7 +5536,10 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true
     },
     "azure/gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -5801,8 +5807,9 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.4-mini-2026-03-17": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -5837,8 +5844,9 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.4-nano": {
         "cache_read_input_token_cost": 2e-08,
@@ -5873,8 +5881,9 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.4-nano-2026-03-17": {
         "cache_read_input_token_cost": 2e-08,
@@ -5909,8 +5918,9 @@
         "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
@@ -21796,6 +21806,84 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": false,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true
+    },
+    "gpt-5.1-mini": {
+        "cache_read_input_token_cost": 3.75e-08,
+        "cache_read_input_token_cost_priority": 7.5e-08,
+        "input_cost_per_token": 3.75e-07,
+        "input_cost_per_token_priority": 7.5e-07,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "output_cost_per_token_priority": 6e-06,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_service_tier": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true
+    },
+    "gpt-5.1-nano": {
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_priority": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_priority": 2e-07,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "output_cost_per_token_priority": 1.6e-06,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,

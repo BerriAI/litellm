@@ -1,12 +1,21 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 
 @pytest.fixture()
 def config() -> AzureOpenAIGPT5Config:
     return AzureOpenAIGPT5Config()
+
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
+    )
 
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
@@ -299,3 +308,114 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+# ---------------------------------------------------------------------------
+# Regression: azure/gpt-5.4, azure/gpt-5.4-mini, azure/gpt-5.4-nano
+# temperature support (issue #27351 — Azure variants)
+#
+# azure/gpt-5.4 was missing supports_none_reasoning_effort entirely.
+# azure/gpt-5.4-mini and azure/gpt-5.4-nano had it explicitly set to False.
+# All three must allow temperature when reasoning_effort defaults to "none".
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "azure/gpt-5.4",
+        "azure/gpt-5.4-mini",
+        "azure/gpt-5.4-nano",
+    ],
+)
+def test_azure_gpt5_4_variants_support_none_reasoning_effort(
+    config: AzureOpenAIGPT5Config, model: str
+):
+    """azure/gpt-5.4, azure/gpt-5.4-mini, azure/gpt-5.4-nano must all
+    have supports_none_reasoning_effort=True in the registry."""
+    assert config._supports_reasoning_effort_level(
+        model, "none"
+    ), f"Expected {model!r} to support reasoning_effort='none'"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "azure/gpt-5.4",
+        "azure/gpt-5.4-mini",
+        "azure/gpt-5.4-nano",
+    ],
+)
+def test_azure_gpt5_4_variants_allow_temperature_without_reasoning_effort(
+    config: AzureOpenAIGPT5Config, model: str
+):
+    """azure/gpt-5.4, azure/gpt-5.4-mini, azure/gpt-5.4-nano must accept any
+    temperature when reasoning_effort is omitted (defaults to 'none').
+
+    Regression for https://github.com/BerriAI/litellm/issues/27351.
+    """
+    for temp in [0.0, 0.7, 1.0, 1.5]:
+        params = config.map_openai_params(
+            non_default_params={"temperature": temp},
+            optional_params={},
+            model=model,
+            drop_params=False,
+            api_version="2025-01-01-preview",
+        )
+        assert params["temperature"] == temp, (
+            f"{model}: expected temperature={temp} to pass through, got {params}"
+        )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "azure/gpt-5.4-mini",
+        "azure/gpt-5.4-nano",
+    ],
+)
+def test_azure_gpt5_4_mini_nano_reject_reasoning_effort_minimal(
+    config: AzureOpenAIGPT5Config, model: str
+):
+    """azure/gpt-5.4-mini and azure/gpt-5.4-nano do not support reasoning_effort='minimal'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+            api_version="2025-01-01-preview",
+        )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "azure/gpt-5.4",
+        "azure/gpt-5.4-mini",
+        "azure/gpt-5.4-nano",
+    ],
+)
+def test_azure_gpt5_4_variants_allow_reasoning_effort_xhigh(
+    config: AzureOpenAIGPT5Config, model: str
+):
+    """azure/gpt-5.4, azure/gpt-5.4-mini, azure/gpt-5.4-nano support xhigh."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert params["reasoning_effort"] == "xhigh"
