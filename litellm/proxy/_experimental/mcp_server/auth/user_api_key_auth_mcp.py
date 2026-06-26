@@ -624,7 +624,9 @@ class MCPRequestHandler:
 
         Permission hierarchy (all rules are intersections):
         1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions (key inherits from team, or intersection)
+        2. Get allowed servers from team permissions (key inherits from team, or
+           intersection; or inherits nothing when require_key_mcp_access_defined
+           is enabled, making the team a ceiling rather than a default)
         3. Get allowed servers from end_user permissions (intersected if set)
         4. Get allowed servers from agent permissions (intersected if set)
         5. Get allowed servers from org permissions — org acts as a ceiling: if the org
