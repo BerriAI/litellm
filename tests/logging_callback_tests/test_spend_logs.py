@@ -26,6 +26,7 @@ import pytest
 
 import litellm
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_spend_logs_metadata,
     get_logging_payload,
     _sanitize_request_body_for_spend_logs_payload,
 )
@@ -232,6 +233,58 @@ def test_spend_logs_payload(model_id: Optional[str]):
     assert payload["metadata"]["user_api_key_alias"] == "custom-key-alias"
 
     assert payload["custom_llm_provider"] == "azure"
+
+
+def test_spend_logs_payload_includes_litellm_rust_metadata():
+    input_args: dict = {
+        "kwargs": {
+            "model": "mistral/mistral-ocr-latest",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "sk-test-key",
+                }
+            },
+            "standard_logging_object": {
+                "request_tags": [],
+                "metadata": {
+                    "user_api_key_end_user_id": "test-user",
+                },
+                "model_map_information": {
+                    "model_map_key": "mistral/mistral-ocr-latest",
+                    "model_map_value": None,
+                },
+                "hidden_params": {
+                    "litellm_rust": True,
+                },
+            },
+        },
+        "response_obj": litellm.ModelResponse(
+            id="ocr-response-id",
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=litellm.Message(content="OCR done", role="assistant"),
+                )
+            ],
+            model="mistral/mistral-ocr-latest",
+            usage=litellm.Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+        ),
+        "start_time": datetime.datetime.now(),
+        "end_time": datetime.datetime.now(),
+    }
+
+    payload: SpendLogsPayload = get_logging_payload(**input_args)
+
+    assert isinstance(payload["metadata"], str)
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_rust"] is True
+
+
+def test_spend_logs_metadata_includes_litellm_rust_when_metadata_is_none():
+    metadata = _get_spend_logs_metadata(metadata=None, litellm_rust=True)
+
+    assert metadata["litellm_rust"] is True
 
 
 def test_spend_logs_payload_whisper():
