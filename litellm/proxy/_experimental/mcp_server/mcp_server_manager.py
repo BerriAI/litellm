@@ -67,8 +67,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     to_server_spec,
     to_subject,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.v1_token_store import (
-    V1PerUserTokenStore,
+from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
+    LazyPerUserOAuthTokenStore,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -528,7 +528,7 @@ class MCPServerManager:
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            oauth_token_store=V1PerUserTokenStore(self.get_mcp_server_by_id)
+            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id)
         )
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
