@@ -31,6 +31,7 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
+    def patch_outgoing_session(self, session: dict) -> dict: ...
 
 
 DefaultLoggedRealTimeEventTypes = [
@@ -1462,16 +1463,12 @@ class RealTimeStreaming:
                             message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
-                        patch_outgoing_session = getattr(
-                            self._event_normalizer,
-                            "patch_outgoing_session",
-                            None,
-                        )
-                        if callable(patch_outgoing_session):
-                            session = msg_obj.get("session")
-                            if isinstance(session, dict):
-                                msg_obj["session"] = patch_outgoing_session(session)
-                                message = json.dumps(msg_obj)
+                        session = msg_obj.get("session")
+                        if isinstance(session, dict):
+                            msg_obj["session"] = (
+                                self._event_normalizer.patch_outgoing_session(session)
+                            )
+                            message = json.dumps(msg_obj)
 
                 except (json.JSONDecodeError, AttributeError):
                     pass

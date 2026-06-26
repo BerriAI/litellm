@@ -228,7 +228,7 @@ def test_pipecat_audio_output(
 # ---------------------------------------------------------------------------
 
 
-def _load_wav_chunks(path: Path, chunk_ms: int = 20) -> list[bytes]:
+def _load_wav_chunks(path: Path, chunk_ms: int = 20) -> tuple[list[bytes], int]:
     """Read a PCM16 mono WAV and split into ``chunk_ms``-sized byte chunks."""
     with wave.open(str(path), "rb") as wf:
         assert wf.getnchannels() == 1, "fixture must be mono"
