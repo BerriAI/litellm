@@ -1089,6 +1089,67 @@ class TestToolTransformation:
         assert result_tools[0]["type"] == "computer_use"
         assert web_search_options is None
 
+    def test_drop_unsupported_server_hosted_builtin_tools(self):
+        """
+        Server-hosted Responses built-in tools (image_generation, code_interpreter,
+        file_search) have no Chat Completions equivalent and must be dropped when
+        bridging to Chat Completions, instead of being forwarded verbatim (which
+        makes strict backends reject the whole request). Real function tools in the
+        same request must be preserved.
+        """
+        function_tool = {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+        tools = [
+            {"type": "image_generation"},
+            {"type": "code_interpreter"},
+            {"type": "file_search"},
+            function_tool,
+        ]
+
+        # Execute
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert: the three server-hosted built-ins are dropped; only the
+        # function tool survives so the request can still call its real tools.
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert web_search_options is None
+
+    def test_client_executed_builtin_tools_still_passed_through(self):
+        """
+        Client-executed built-ins (e.g. local_shell) are intentionally passed
+        through unchanged so backends that support them keep working; only the
+        server-hosted built-ins are dropped.
+        """
+        local_shell_tool = {"type": "local_shell"}
+        tools = [local_shell_tool]
+
+        # Execute
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0] == local_shell_tool
+        assert web_search_options is None
+
     def test_transform_web_search_tools_to_web_search_options(self):
         """Test that web_search tools are converted to web_search_options"""
         web_search_tool = {

@@ -11,6 +11,7 @@ from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
@@ -61,6 +62,24 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+
+# OpenAI server-hosted Responses built-in tools that run on OpenAI's side and
+# have no Chat Completions equivalent. When the Responses API is bridged to Chat
+# Completions, forwarding these verbatim breaks backends that only accept tools
+# with type == "function" (e.g. self-hosted vLLM and many OpenAI-compatible
+# gateways) -- the whole request is rejected, taking the request's real
+# (function/mcp) tools down with it. They are therefore dropped during the
+# transform. Notes:
+#   - "web_search"/"web_search_preview" and "mcp" are handled explicitly above.
+#   - Client-executed built-ins ("computer_use"/"computer_use_preview",
+#     "local_shell") are intentionally NOT listed: they are passed through so
+#     backends that support them (e.g. Anthropic computer use) still work.
+UNSUPPORTED_RESPONSES_BUILTIN_TOOL_TYPES: Set[str] = {
+    "image_generation",
+    "image_generation_call",
+    "code_interpreter",
+    "file_search",
+}
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -1418,6 +1437,21 @@ class LiteLLMCompletionResponsesConfig:
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
+                # Drop OpenAI server-hosted built-in tools (image_generation,
+                # code_interpreter, file_search, ...) that have no Chat
+                # Completions equivalent: forwarding them verbatim makes strict
+                # chat-completions backends reject the entire request (and thus
+                # the request's real function/mcp tools). Any other type is
+                # passed through unchanged, preserving existing behavior.
+                _tool_type = tool.get("type")
+                if _tool_type in UNSUPPORTED_RESPONSES_BUILTIN_TOOL_TYPES:
+                    verbose_logger.debug(
+                        "responses->chat-completions bridge: dropping unsupported "
+                        "Responses built-in tool type '%s' (no chat-completions "
+                        "equivalent)",
+                        _tool_type,
+                    )
+                    continue
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
                 )
