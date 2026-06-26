@@ -343,8 +343,8 @@ def get_known_models_from_wildcard(
 
 
 def expand_wildcard_deployments_for_model_info(
-    deployments: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    deployments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Expand wildcard deployments into one row per known provider model.
 
     PR #30025 changed /model/info to read from llm_router.model_list (correct,
@@ -352,7 +352,7 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
-    expanded: List[Dict[str, Any]] = []
+    expanded: list[dict[str, Any]] = []
     for deployment in deployments:
         model_name = deployment.get("model_name") or ""
         litellm_params_dict = deployment.get("litellm_params") or {}
