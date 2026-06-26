@@ -26,6 +26,18 @@ from .success_handler import PassThroughEndpointLogging
 
 class PassThroughStreamingHandler:
     @staticmethod
+    def _stamp_completion_start_time(litellm_logging_obj: LiteLLMLoggingObj) -> None:
+        # Stamp the first streamed chunk's arrival time so the time-to-first-token
+        # metric reflects TTFT. Without it completion_start_time stays None and
+        # litellm_logging falls back to end_time, making TTFT equal full latency.
+        if litellm_logging_obj.completion_start_time is None:
+            completion_start_time = datetime.now()
+            litellm_logging_obj.completion_start_time = completion_start_time
+            litellm_logging_obj.model_call_details["completion_start_time"] = (
+                completion_start_time
+            )
+
+    @staticmethod
     async def chunk_processor(
         response: httpx.Response,
         request_body: Optional[dict],
@@ -58,6 +70,9 @@ class PassThroughStreamingHandler:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
+                    PassThroughStreamingHandler._stamp_completion_start_time(
+                        litellm_logging_obj
+                    )
                     yield chunk
             else:
                 # ``cost_injection_active`` already requires ``model_name`` to
@@ -67,6 +82,9 @@ class PassThroughStreamingHandler:
                 resolved_model_name: str = model_name
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
+                    PassThroughStreamingHandler._stamp_completion_start_time(
+                        litellm_logging_obj
+                    )
                     if endpoint_type == EndpointType.VERTEX_AI:
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
                             modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
