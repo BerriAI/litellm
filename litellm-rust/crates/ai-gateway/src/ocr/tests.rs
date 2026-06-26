@@ -73,6 +73,8 @@ struct RecordedLogEvent {
     model: String,
     call_type: String,
     user_id: Option<String>,
+    api_base: Option<String>,
+    document_type: Option<String>,
     response_object: Option<String>,
     error_kind: Option<String>,
 }
@@ -101,6 +103,8 @@ impl CustomLogger for RecordingOcrLogger {
                 model: model_call_details.model.clone(),
                 call_type: model_call_details.call_type.to_string(),
                 user_id: model_call_details.metadata.user_api_key_user_id.clone(),
+                api_base: log_api_base(model_call_details),
+                document_type: log_document_type(model_call_details),
                 response_object: Some(response_obj.object.clone()),
                 error_kind: None,
             });
@@ -120,6 +124,8 @@ impl CustomLogger for RecordingOcrLogger {
                 model: model_call_details.model.clone(),
                 call_type: model_call_details.call_type.to_string(),
                 user_id: model_call_details.metadata.user_api_key_user_id.clone(),
+                api_base: log_api_base(model_call_details),
+                document_type: log_document_type(model_call_details),
                 response_object: response_obj.map(|value| value.object.clone()),
                 error_kind: model_call_details
                     .failure_error
@@ -129,6 +135,24 @@ impl CustomLogger for RecordingOcrLogger {
             Ok(())
         })
     }
+}
+
+fn log_api_base(model_call_details: &ModelCallDetails) -> Option<String> {
+    model_call_details
+        .extra_metadata
+        .get("api_base")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn log_document_type(model_call_details: &ModelCallDetails) -> Option<String> {
+    model_call_details
+        .extra_metadata
+        .get("document")
+        .and_then(Value::as_object)
+        .and_then(|document| document.get("type"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 struct RecordingOcrGuardrail {
@@ -338,6 +362,8 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             model: "mistral-ocr-latest".to_string(),
             call_type: "ocr".to_string(),
             user_id: Some("user-1".to_string()),
+            api_base: Some(format!("http://{addr}")),
+            document_type: Some("document_url".to_string()),
             response_object: Some("ocr".to_string()),
             error_kind: None,
         }]
@@ -400,6 +426,8 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             model: "mistral-ocr-latest".to_string(),
             call_type: "ocr".to_string(),
             user_id: None,
+            api_base: Some(format!("http://{addr}")),
+            document_type: Some("document_url".to_string()),
             response_object: Some("error".to_string()),
             error_kind: Some("HttpError".to_string()),
         }]
@@ -444,6 +472,8 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
             model: "mistral-ocr-latest".to_string(),
             call_type: "ocr".to_string(),
             user_id: None,
+            api_base: Some(format!("http://{addr}")),
+            document_type: Some("document_url".to_string()),
             response_object: Some("error".to_string()),
             error_kind: Some("InvalidRequest".to_string()),
         }]

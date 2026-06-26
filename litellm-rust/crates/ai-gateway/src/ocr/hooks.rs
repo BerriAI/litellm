@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -25,6 +26,7 @@ pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,
     guardrail_runner: CustomGuardrailRunner,
     request_metadata: RequestMetadata,
+    logging_kwargs: HashMap<String, Value>,
 }
 
 type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
@@ -35,11 +37,13 @@ impl OcrLifecycleHooks {
         logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
         request_metadata: RequestMetadata,
+        logging_kwargs: HashMap<String, Value>,
     ) -> Self {
         Self {
             logger_runner,
             guardrail_runner,
             request_metadata,
+            logging_kwargs,
         }
     }
 
@@ -167,6 +171,18 @@ impl OcrLifecycleHooks {
             messages: None,
         }
     }
+
+    fn model_call_details(
+        &self,
+        context: &CallLifecycleContext,
+        timing: &CallLifecycleTiming,
+    ) -> ModelCallDetails {
+        let mut details = ModelCallDetails::from_standard_logging_payload(
+            self.standard_logging_payload(context, timing),
+        );
+        details.extra_metadata = self.logging_kwargs.clone();
+        details
+    }
 }
 
 impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLifecycleHooks {
@@ -202,11 +218,10 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                 return;
             }
             let response_obj = CallbackValue::new("ocr", response.clone());
+            let model_call_details = self.model_call_details(context, timing);
             self.logger_runner
                 .async_log_success_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.standard_logging_payload(context, timing),
-                    ),
+                    &model_call_details,
                     &response_obj,
                     CallbackTiming::new(timing.start_time, timing.end_time),
                 )
@@ -235,12 +250,12 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                     "kind": logging_error.kind,
                 }),
             );
+            let model_call_details = self
+                .model_call_details(context, timing)
+                .with_failure_error(logging_error);
             self.logger_runner
                 .async_log_failure_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.standard_logging_payload(context, timing),
-                    )
-                    .with_failure_error(logging_error),
+                    &model_call_details,
                     Some(&response_obj),
                     CallbackTiming::new(timing.start_time, timing.end_time),
                 )
@@ -268,7 +283,7 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
     GuardrailContext {
         call_type: CallType::Ocr,
         selected_guardrails: Vec::new(),
-        metadata: std::collections::HashMap::new(),
+        metadata: HashMap::new(),
         user_api_key_hash: metadata.user_api_key_hash.clone(),
         user_api_key_user_id: metadata.user_api_key_user_id.clone(),
         user_api_key_team_id: metadata.user_api_key_team_id.clone(),

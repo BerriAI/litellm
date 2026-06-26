@@ -19,6 +19,8 @@ class RustOcr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callbacks: list[object] | None,
+        guardrails: list[object] | None,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -34,6 +36,8 @@ class RustAocr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callbacks: list[object] | None,
+        guardrails: list[object] | None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
@@ -117,6 +121,8 @@ def ocr(
     extra_headers: dict[str, Any] | None,
     optional_params: dict[str, object],
     timeout: Union[float, httpx.Timeout] | None,
+    callbacks: list[object] | None = None,
+    guardrails: list[object] | None = None,
 ) -> dict[str, object] | None:
     rust_ocr = load_rust_ocr()
     if rust_ocr is None:
@@ -130,6 +136,8 @@ def ocr(
         extra_headers=cast(dict[str, object] | None, extra_headers),
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
+        callbacks=callbacks,
+        guardrails=guardrails,
     )
 
 
@@ -143,6 +151,8 @@ async def aocr(
     extra_headers: dict[str, Any] | None,
     optional_params: dict[str, object],
     timeout: Union[float, httpx.Timeout] | None,
+    callbacks: list[object] | None = None,
+    guardrails: list[object] | None = None,
 ) -> dict[str, object] | None:
     rust_aocr = load_rust_aocr()
     if rust_aocr is None:
@@ -156,4 +166,6 @@ async def aocr(
         extra_headers=cast(dict[str, object] | None, extra_headers),
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
+        callbacks=callbacks,
+        guardrails=guardrails,
     )
