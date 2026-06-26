@@ -83,7 +83,7 @@ def _get_spend_logs_metadata(
     litellm_call_id: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
-        return SpendLogsMetadata(
+        clean_metadata = SpendLogsMetadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
@@ -108,12 +108,14 @@ def _get_spend_logs_metadata(
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
-            litellm_rust=litellm_rust,
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
             litellm_call_id=litellm_call_id,
         )
+        if litellm_rust is not None:
+            clean_metadata["litellm_rust"] = litellm_rust
+        return clean_metadata
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
         + str(list(metadata.keys()))
@@ -136,7 +138,10 @@ def _get_spend_logs_metadata(
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
-    clean_metadata["litellm_rust"] = litellm_rust
+    if litellm_rust is not None:
+        clean_metadata["litellm_rust"] = litellm_rust
+    else:
+        clean_metadata.pop("litellm_rust", None)
     clean_metadata["cost_breakdown"] = cost_breakdown
     clean_metadata["litellm_call_id"] = litellm_call_id
 
