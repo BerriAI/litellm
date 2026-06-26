@@ -127,21 +127,29 @@ def ocr(
     rust_ocr = load_rust_ocr()
     if rust_ocr is None:
         return None
-    kwargs: dict[str, object] = {
-        "model": model,
-        "document": cast(dict[str, object], document),
-        "api_key": api_key,
-        "api_base": api_base,
-        "custom_llm_provider": custom_llm_provider,
-        "extra_headers": cast(dict[str, object] | None, extra_headers),
-        "optional_params": optional_params,
-        "timeout_seconds": _timeout_to_seconds(timeout),
-    }
-    if callbacks:
-        kwargs["callbacks"] = callbacks
-    if guardrails:
-        kwargs["guardrails"] = guardrails
-    return rust_ocr(**kwargs)
+    if callbacks or guardrails:
+        return rust_ocr(
+            model=model,
+            document=cast(dict[str, object], document),
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=cast(dict[str, object] | None, extra_headers),
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+            callbacks=callbacks,
+            guardrails=guardrails,
+        )
+    return rust_ocr(
+        model=model,
+        document=cast(dict[str, object], document),
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=cast(dict[str, object] | None, extra_headers),
+        optional_params=optional_params,
+        timeout_seconds=_timeout_to_seconds(timeout),
+    )
 
 
 async def aocr(
@@ -160,18 +168,26 @@ async def aocr(
     rust_aocr = load_rust_aocr()
     if rust_aocr is None:
         return None
-    kwargs: dict[str, object] = {
-        "model": model,
-        "document": cast(dict[str, object], document),
-        "api_key": api_key,
-        "api_base": api_base,
-        "custom_llm_provider": custom_llm_provider,
-        "extra_headers": cast(dict[str, object] | None, extra_headers),
-        "optional_params": optional_params,
-        "timeout_seconds": _timeout_to_seconds(timeout),
-    }
-    if callbacks:
-        kwargs["callbacks"] = callbacks
-    if guardrails:
-        kwargs["guardrails"] = guardrails
-    return await rust_aocr(**kwargs)
+    if callbacks or guardrails:
+        return await rust_aocr(
+            model=model,
+            document=cast(dict[str, object], document),
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=cast(dict[str, object] | None, extra_headers),
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+            callbacks=callbacks,
+            guardrails=guardrails,
+        )
+    return await rust_aocr(
+        model=model,
+        document=cast(dict[str, object], document),
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=cast(dict[str, object] | None, extra_headers),
+        optional_params=optional_params,
+        timeout_seconds=_timeout_to_seconds(timeout),
+    )
