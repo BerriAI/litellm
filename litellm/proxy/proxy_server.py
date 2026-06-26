@@ -269,6 +269,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
@@ -13429,6 +13430,8 @@ async def model_info_v1(
     all_models: List[dict] = copy.deepcopy(llm_router.model_list)
     alias_models = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
+
+    all_models = expand_wildcard_deployments_for_model_info(all_models)
 
     allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
