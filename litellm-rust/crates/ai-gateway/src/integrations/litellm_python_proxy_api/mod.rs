@@ -16,55 +16,14 @@ use reqwest::Client;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
-use crate::constants::{
-    DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
-    DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH,
-};
-use crate::integrations::custom_logger::{CustomLogger, LogFuture};
-use crate::integrations::types::{
-    CallbackLogsRequest, CallbackTiming, CallbackValue, LogError, LogRecord, LoggingError,
+use crate::constants::{DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH};
+use crate::integrations::custom_logger::{
+    CallbackTiming, CallbackValue, CustomLogger, LogError, LogFuture, LoggingError,
     ModelCallDetails,
 };
+use types::{CallbackLogsRequest, EgressTunables, LogRecord};
 
-/// Egress worker tunables. Each field defaults to the matching `DEFAULT_*` const
-/// in `crate::constants` and is overridable via an env var (read once at logger
-/// construction).
-struct EgressTunables {
-    channel_capacity: usize,
-    max_batch_size: usize,
-    flush_interval: Duration,
-}
-
-impl EgressTunables {
-    fn from_env() -> Self {
-        Self {
-            channel_capacity: env_positive(
-                "LITELLM_LOG_CHANNEL_CAPACITY",
-                DEFAULT_CHANNEL_CAPACITY,
-            ),
-            max_batch_size: env_positive("LITELLM_LOG_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE),
-            flush_interval: Duration::from_millis(env_positive(
-                "LITELLM_LOG_FLUSH_INTERVAL_MS",
-                DEFAULT_FLUSH_INTERVAL_MS,
-            )),
-        }
-    }
-}
-
-/// Parse a positive integer env var, falling back to `default` on missing,
-/// unparseable, or non-positive values. Generic over the integer type so one
-/// helper serves both the `usize` capacities and the `u64` interval.
-fn env_positive<T>(name: &str, default: T) -> T
-where
-    T: std::str::FromStr + PartialOrd + From<u8>,
-{
-    let zero = T::from(0u8);
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<T>().ok())
-        .filter(|n| *n > zero)
-        .unwrap_or(default)
-}
+pub mod types;
 
 /// Ships realtime logging events to the LiteLLM Python proxy.
 pub struct LiteLLMPythonProxyAPILogger {

@@ -3,13 +3,14 @@
 //!
 //! The Python-named async terminal methods are the public Rust callback shape.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::integrations::types::{CallbackTiming, CallbackValue, LogError, ModelCallDetails};
+pub mod types;
 
-pub type LogFuture<'a> = Pin<Box<dyn Future<Output = Result<(), LogError>> + Send + 'a>>;
+pub use types::{
+    CallType, CallbackDispatchReport, CallbackTiming, CallbackValue, LogError, LogFuture,
+    LoggingError, ModelCallDetails,
+};
 
 pub trait CustomLogger: Send + Sync {
     /// Python 1:1 name: `async_log_success_event(model_call_details, response_obj, start_time, end_time)`.
@@ -31,12 +32,6 @@ pub trait CustomLogger: Send + Sync {
     ) -> LogFuture<'a> {
         Box::pin(async { Ok(()) })
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CallbackDispatchReport {
-    pub invoked: usize,
-    pub dropped: usize,
 }
 
 pub struct CustomLoggerRunner {
@@ -104,9 +99,7 @@ impl CustomLoggerRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::types::{
-        CallType, LoggingError, StandardLoggingMetadata, StandardLoggingPayload,
-    };
+    use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -308,5 +301,17 @@ mod tests {
 
         assert!(runner.is_empty());
         assert_eq!(report, CallbackDispatchReport::default());
+    }
+
+    #[test]
+    fn with_standard_logging_payload_keeps_top_level_fields_in_sync() {
+        let details = ModelCallDetails::new("old-model", "old-provider", CallType::Completion)
+            .with_standard_logging_payload(payload("ocr", "mistral-ocr-latest", "mistral"));
+
+        assert_eq!(details.model, "mistral-ocr-latest");
+        assert_eq!(details.custom_llm_provider, "mistral");
+        assert_eq!(details.call_type, CallType::Ocr);
+        assert_eq!(details.request_id, Some("req_ocr".to_string()));
+        assert_eq!(details.litellm_call_id, Some("call_ocr".to_string()));
     }
 }

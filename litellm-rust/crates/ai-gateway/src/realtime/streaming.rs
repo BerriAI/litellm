@@ -13,10 +13,11 @@ use litellm_core::realtime::types::RealtimeEvent;
 use serde_json::Value;
 
 use crate::constants::DEFAULT_PROVIDER;
-use crate::integrations::custom_logger::{CustomLogger, CustomLoggerRunner};
+use crate::integrations::custom_logger::{
+    CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
+};
 use crate::integrations::types::{
-    CallbackTiming, CallbackValue, ModelCallDetails, RequestMetadata, StandardLoggingMetadata,
-    StandardLoggingPayload, Usage,
+    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload, Usage,
 };
 
 /// Current wall-clock time as epoch seconds (float), matching the Python
@@ -203,7 +204,7 @@ impl RealTimeStreaming {
                 self.dropped += report.dropped as u64;
             }
             SessionStatus::Failure => {
-                let error = crate::integrations::types::LoggingError {
+                let error = LoggingError {
                     message: "realtime session ended in failure".to_string(),
                     kind: "RealtimeSessionError".to_string(),
                 };
@@ -231,8 +232,8 @@ impl RealTimeStreaming {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrations::custom_logger::LogError;
     use crate::integrations::custom_logger::LogFuture;
-    use crate::integrations::types::LogError;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn event(raw: &str) -> RealtimeEvent {

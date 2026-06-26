@@ -3,7 +3,7 @@
 //!   - [`custom_guardrail::CustomGuardrail`] — the guardrail callback trait
 //!   - [`custom_logger::CustomLogger`]  — the callback trait
 //!   - [`litellm_python_proxy_api::LiteLLMPythonProxyAPILogger`] — ships events
-//!     to the Python proxy's `/v1/callbacks/logs` endpoint
+//!     to the Python proxy's `/v1/rust_control_plane/logs` endpoint
 //!   - [`types`] — the typed `StandardLoggingPayload` wire contract
 
 pub mod custom_guardrail;

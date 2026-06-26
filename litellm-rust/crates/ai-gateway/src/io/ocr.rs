@@ -4,14 +4,31 @@
 //! resolve the API key, build the URL + body via the pure transforms, POST it,
 //! and normalize the response. The HTTP client is built once and reused.
 
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use litellm_core::call_lifecycle::{
+    CallLifecycle, CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming,
+};
 use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::{OcrAuthStrategy, OcrResponseHandling};
+use litellm_core::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
 use litellm_core::routing_utils::provider::{get_custom_llm_provider, CustomLlmProvider};
 use litellm_core::CoreResult;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
+
+use crate::integrations::custom_guardrail::{
+    CustomGuardrail, CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
+};
+use crate::integrations::custom_logger::{
+    CallType, CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError,
+    ModelCallDetails,
+};
+use crate::integrations::types::{
+    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
+};
 
 mod common_utils;
 
@@ -65,13 +82,17 @@ pub struct OcrRequest<'a> {
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
+    pub callbacks: Vec<Arc<dyn CustomLogger>>,
+    pub guardrails: Vec<Arc<dyn CustomGuardrail>>,
+    pub request_metadata: RequestMetadata,
+    pub litellm_call_id: Option<&'a str>,
 }
 
-/// Perform an OCR call end to end and return the normalized response as
-/// JSON (the shape the Python `OCRResponse` model expects).
-///
-/// Async: intended to be awaited directly by the Python bridge's async entrypoint.
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
+    let call_id = request
+        .litellm_call_id
+        .map(str::to_string)
+        .unwrap_or_else(new_ocr_call_id);
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .unwrap_or(CustomLlmProvider {
             model: request.model,
@@ -79,34 +100,344 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         });
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
-    let config = ocr_provider_config(&custom_llm_provider, &model)
-        .ok_or_else(|| CoreError::InvalidProvider(custom_llm_provider.to_string()))?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
-
-    let headers = string_headers(request.extra_headers)?;
-    let auth_strategy = config.auth_strategy();
-    let api_key = (!has_header(&headers, auth_strategy.header_name()))
-        .then(|| config.resolve_api_key(request.api_key, &env_lookup))
-        .transpose()?;
-    let url = config.complete_url(
-        request.api_base,
-        &model,
-        &request.optional_params,
-        &env_lookup,
-    )?;
-    let filtered_params = config.map_ocr_params(&request.optional_params);
-    let document = if config.requires_data_uri_document() {
-        convert_document_url_to_data_uri(request.document).await?
-    } else {
-        request.document
+    let hooks = OcrLifecycleHooks {
+        logger_runner: CustomLoggerRunner::new(request.callbacks),
+        guardrail_runner: CustomGuardrailRunner::new(request.guardrails),
+        request_metadata: request.request_metadata,
     };
-    let body = config
-        .transform_ocr_request(&model, document, filtered_params)?
-        .data;
-    let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
+    let lifecycle_request = OcrLifecycleRequest {
+        model: model.clone(),
+        custom_llm_provider: custom_llm_provider.clone(),
+        document: request.document,
+        api_key: request.api_key.map(str::to_string),
+        api_base: request.api_base.map(str::to_string),
+        extra_headers: request.extra_headers,
+        optional_params: request.optional_params,
+        timeout: request.timeout,
+    };
 
-    let mut request_builder = http_client().post(&url).json(&body);
-    for (key, value) in &upstream_headers {
+    CallLifecycle::default()
+        .run(
+            CallLifecycleContext::new("ocr", model, custom_llm_provider, call_id),
+            lifecycle_request,
+            &hooks,
+            execute_ocr_provider_call,
+        )
+        .await
+}
+
+fn new_ocr_call_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("ocr-{timestamp}-{sequence}")
+}
+
+struct OcrLifecycleRequest {
+    model: String,
+    custom_llm_provider: String,
+    document: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    extra_headers: Option<Map<String, Value>>,
+    optional_params: Map<String, Value>,
+    timeout: Option<Duration>,
+}
+
+struct OcrProviderRequest {
+    model: String,
+    config: &'static dyn OcrProviderConfig,
+    url: String,
+    body: Value,
+    upstream_headers: Vec<(String, String)>,
+    timeout: Option<Duration>,
+}
+
+struct OcrLifecycleHooks {
+    logger_runner: CustomLoggerRunner,
+    guardrail_runner: CustomGuardrailRunner,
+    request_metadata: RequestMetadata,
+}
+
+type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
+type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
+impl CallLifecycleHooks<OcrLifecycleRequest, OcrProviderRequest, Value> for OcrLifecycleHooks {
+    type PreCallFuture<'a> = OcrFuture<'a, OcrLifecycleRequest>;
+    type DuringCallFuture<'a> = OcrFuture<'a, OcrProviderRequest>;
+    type SuccessFuture<'a> = OcrLogFuture<'a>;
+    type FailureFuture<'a> = OcrLogFuture<'a>;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        request: OcrLifecycleRequest,
+    ) -> Self::PreCallFuture<'a> {
+        Box::pin(async move { self.run_pre_call_guardrails(request).await })
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        request: OcrLifecycleRequest,
+    ) -> Self::DuringCallFuture<'a> {
+        Box::pin(async move { self.prepare_provider_request(request).await })
+    }
+
+    fn async_log_success_event<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        response: &'a Value,
+        timing: &'a CallLifecycleTiming,
+    ) -> Self::SuccessFuture<'a> {
+        Box::pin(async move {
+            if self.logger_runner.is_empty() {
+                return;
+            }
+            let payload = self.standard_logging_payload(context, timing);
+            let response_obj = CallbackValue::new("ocr", response.clone());
+            self.logger_runner
+                .async_log_success_event(
+                    &ModelCallDetails::from_standard_logging_payload(payload),
+                    &response_obj,
+                    CallbackTiming::new(timing.start_time, timing.end_time),
+                )
+                .await;
+        })
+    }
+
+    fn async_log_failure_event<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        error: &'a CoreError,
+        timing: &'a CallLifecycleTiming,
+    ) -> Self::FailureFuture<'a> {
+        Box::pin(async move {
+            if self.logger_runner.is_empty() {
+                return;
+            }
+            let logging_error = LoggingError {
+                message: error.to_string(),
+                kind: core_error_kind(error).to_string(),
+            };
+            let response_obj = CallbackValue::new(
+                "error",
+                json!({
+                    "message": logging_error.message,
+                    "kind": logging_error.kind,
+                }),
+            );
+            self.logger_runner
+                .async_log_failure_event(
+                    &ModelCallDetails::from_standard_logging_payload(
+                        self.standard_logging_payload(context, timing),
+                    )
+                    .with_failure_error(logging_error),
+                    Some(&response_obj),
+                    CallbackTiming::new(timing.start_time, timing.end_time),
+                )
+                .await;
+        })
+    }
+}
+
+impl OcrLifecycleHooks {
+    async fn run_pre_call_guardrails(
+        &self,
+        request: OcrLifecycleRequest,
+    ) -> CoreResult<OcrLifecycleRequest> {
+        if self.guardrail_runner.is_empty() {
+            return Ok(request);
+        }
+
+        let context = guardrail_context(&self.request_metadata);
+        let guardrail_request = GuardrailRequest::new(json!({
+            "model": request.model,
+            "custom_llm_provider": request.custom_llm_provider,
+            "document": request.document,
+            "optional_params": request.optional_params,
+        }));
+        let (guardrail_request, _) = self
+            .guardrail_runner
+            .run_pre_call(&context, guardrail_request)
+            .await
+            .map_err(guardrail_error_to_core_error)?;
+        let (document, optional_params) = parse_ocr_pre_call_guardrail_request(guardrail_request)?;
+        Ok(OcrLifecycleRequest {
+            document,
+            optional_params,
+            ..request
+        })
+    }
+
+    async fn prepare_provider_request(
+        &self,
+        request: OcrLifecycleRequest,
+    ) -> CoreResult<OcrProviderRequest> {
+        let config = ocr_provider_config(&request.custom_llm_provider, &request.model)
+            .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        let headers = string_headers(request.extra_headers)?;
+        let auth_strategy = config.auth_strategy();
+        let api_key = (!has_header(&headers, auth_strategy.header_name()))
+            .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
+            .transpose()?;
+        let url = config.complete_url(
+            request.api_base.as_deref(),
+            &request.model,
+            &request.optional_params,
+            &env_lookup,
+        )?;
+        let filtered_params = config.map_ocr_params(&request.optional_params);
+        let model = request.model.clone();
+        let custom_llm_provider = request.custom_llm_provider.clone();
+        let document = if config.requires_data_uri_document() {
+            convert_document_url_to_data_uri(request.document).await?
+        } else {
+            request.document
+        };
+        let body = config
+            .transform_ocr_request(&request.model, document, filtered_params)?
+            .data;
+        let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
+        let body = self
+            .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
+            .await?;
+        Ok(OcrProviderRequest {
+            model,
+            config,
+            url,
+            body,
+            upstream_headers,
+            timeout: request.timeout,
+        })
+    }
+
+    async fn run_during_call_guardrails(
+        &self,
+        model: &str,
+        custom_llm_provider: &str,
+        url: &str,
+        body: Value,
+    ) -> CoreResult<Value> {
+        if self.guardrail_runner.is_empty() {
+            return Ok(body);
+        }
+
+        let context = guardrail_context(&self.request_metadata);
+        let guardrail_request = GuardrailRequest::new(json!({
+            "model": model,
+            "custom_llm_provider": custom_llm_provider,
+            "url": url,
+            "body": body,
+        }));
+        let (guardrail_request, _) = self
+            .guardrail_runner
+            .run_during_call(&context, guardrail_request)
+            .await
+            .map_err(guardrail_error_to_core_error)?;
+        parse_ocr_during_call_guardrail_request(guardrail_request)
+    }
+
+    fn standard_logging_payload(
+        &self,
+        context: &CallLifecycleContext,
+        timing: &CallLifecycleTiming,
+    ) -> StandardLoggingPayload {
+        StandardLoggingPayload {
+            id: context.litellm_call_id.clone(),
+            litellm_call_id: context.litellm_call_id.clone(),
+            call_type: context.call_type.clone(),
+            model: context.model.clone(),
+            custom_llm_provider: context.custom_llm_provider.clone(),
+            response_cost: 0.0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            start_time: timing.start_time,
+            end_time: timing.end_time,
+            stream: false,
+            metadata: StandardLoggingMetadata {
+                user_api_key_hash: self.request_metadata.user_api_key_hash.clone(),
+                user_api_key_user_id: self.request_metadata.user_api_key_user_id.clone(),
+                user_api_key_team_id: self.request_metadata.user_api_key_team_id.clone(),
+                ..Default::default()
+            },
+            messages: None,
+        }
+    }
+}
+
+fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
+    GuardrailContext {
+        call_type: CallType::Ocr,
+        selected_guardrails: Vec::new(),
+        metadata: std::collections::HashMap::new(),
+        user_api_key_hash: metadata.user_api_key_hash.clone(),
+        user_api_key_user_id: metadata.user_api_key_user_id.clone(),
+        user_api_key_team_id: metadata.user_api_key_team_id.clone(),
+        trace_parent: None,
+    }
+}
+
+fn parse_ocr_pre_call_guardrail_request(
+    request: GuardrailRequest,
+) -> CoreResult<(Value, Map<String, Value>)> {
+    let Value::Object(mut data) = request.data else {
+        return Err(CoreError::InvalidRequest(
+            "OCR pre_call guardrail must return an object".to_string(),
+        ));
+    };
+    let document = data.remove("document").ok_or_else(|| {
+        CoreError::InvalidRequest("OCR pre_call guardrail removed document".to_string())
+    })?;
+    let optional_params = match data.remove("optional_params") {
+        Some(Value::Object(params)) => params,
+        Some(_) => {
+            return Err(CoreError::InvalidRequest(
+                "OCR pre_call guardrail optional_params must be an object".to_string(),
+            ))
+        }
+        None => Map::new(),
+    };
+    Ok((document, optional_params))
+}
+
+fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> CoreResult<Value> {
+    let Value::Object(mut data) = request.data else {
+        return Err(CoreError::InvalidRequest(
+            "OCR during_call guardrail must return an object".to_string(),
+        ));
+    };
+    data.remove("body").ok_or_else(|| {
+        CoreError::InvalidRequest("OCR during_call guardrail removed body".to_string())
+    })
+}
+
+fn guardrail_error_to_core_error(error: GuardrailError) -> CoreError {
+    CoreError::InvalidRequest(format!("{}: {}", error.kind, error.message))
+}
+
+fn core_error_kind(error: &CoreError) -> &'static str {
+    match error {
+        CoreError::Auth(_) => "AuthError",
+        CoreError::InvalidProvider(_) => "InvalidProvider",
+        CoreError::InvalidRequest(_) => "InvalidRequest",
+        CoreError::InvalidType { .. } => "InvalidType",
+        CoreError::MissingField(_) => "MissingField",
+        CoreError::Http { .. } => "HttpError",
+        CoreError::InvalidResponse(_) => "InvalidResponse",
+        CoreError::Network(_) => "NetworkError",
+        CoreError::Routing(_) => "RoutingError",
+    }
+}
+
+async fn execute_ocr_provider_call(request: OcrProviderRequest) -> CoreResult<Value> {
+    let mut request_builder = http_client().post(&request.url).json(&request.body);
+    for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
     }
     if let Some(duration) = request.timeout {
@@ -119,7 +450,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         .map_err(|err| CoreError::Network(err.to_string()))?;
 
     let status = response.status();
-    if config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
+    if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
         && status.as_u16() == 202
     {
         let operation_url = response
@@ -133,11 +464,16 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
                         .to_string(),
                 )
             })?;
-        let response_json =
-            poll_document_intelligence(&operation_url, &url, &upstream_headers, request.timeout)
-                .await?;
-        return Ok(config
-            .transform_ocr_response(&model, response_json)?
+        let response_json = poll_document_intelligence(
+            &operation_url,
+            &request.url,
+            &request.upstream_headers,
+            request.timeout,
+        )
+        .await?;
+        return Ok(request
+            .config
+            .transform_ocr_response(&request.model, response_json)?
             .into_json());
     }
 
@@ -156,15 +492,21 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let response_json: Value = serde_json::from_str(&text)
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
 
-    Ok(config
-        .transform_ocr_response(&model, response_json)?
+    Ok(request
+        .config
+        .transform_ocr_response(&request.model, response_json)?
         .into_json())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrations::custom_guardrail::{
+        GuardrailDecision, GuardrailEventHook, GuardrailFuture,
+    };
+    use crate::integrations::custom_logger::LogFuture;
     use serde_json::json;
+    use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -182,6 +524,170 @@ mod tests {
             }
         }
         String::from_utf8(request).expect("request is utf8")
+    }
+
+    async fn read_http_request(socket: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let header_end = loop {
+            let n = socket.read(&mut buffer).await.expect("reads request");
+            if n == 0 {
+                break request.len();
+            }
+            request.extend_from_slice(&buffer[..n]);
+            if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while request.len().saturating_sub(header_end) < content_length {
+            let n = socket.read(&mut buffer).await.expect("reads body");
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..n]);
+        }
+        String::from_utf8(request).expect("request is utf8")
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct RecordedLogEvent {
+        hook: &'static str,
+        model: String,
+        call_type: String,
+        user_id: Option<String>,
+        response_object: Option<String>,
+        error_kind: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct RecordingOcrLogger {
+        events: Mutex<Vec<RecordedLogEvent>>,
+    }
+
+    impl RecordingOcrLogger {
+        fn events(&self) -> Vec<RecordedLogEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl CustomLogger for RecordingOcrLogger {
+        fn async_log_success_event<'a>(
+            &'a self,
+            model_call_details: &'a ModelCallDetails,
+            response_obj: &'a CallbackValue,
+            _timing: CallbackTiming,
+        ) -> LogFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push(RecordedLogEvent {
+                    hook: "async_log_success_event",
+                    model: model_call_details.model.clone(),
+                    call_type: model_call_details.call_type.to_string(),
+                    user_id: model_call_details.metadata.user_api_key_user_id.clone(),
+                    response_object: Some(response_obj.object.clone()),
+                    error_kind: None,
+                });
+                Ok(())
+            })
+        }
+
+        fn async_log_failure_event<'a>(
+            &'a self,
+            model_call_details: &'a ModelCallDetails,
+            response_obj: Option<&'a CallbackValue>,
+            _timing: CallbackTiming,
+        ) -> LogFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push(RecordedLogEvent {
+                    hook: "async_log_failure_event",
+                    model: model_call_details.model.clone(),
+                    call_type: model_call_details.call_type.to_string(),
+                    user_id: model_call_details.metadata.user_api_key_user_id.clone(),
+                    response_object: response_obj.map(|value| value.object.clone()),
+                    error_kind: model_call_details
+                        .failure_error
+                        .as_ref()
+                        .map(|error| error.kind.clone()),
+                });
+                Ok(())
+            })
+        }
+    }
+
+    struct RecordingOcrGuardrail {
+        hooks: Vec<GuardrailEventHook>,
+        events: Mutex<Vec<&'static str>>,
+        block_pre_call: bool,
+    }
+
+    impl RecordingOcrGuardrail {
+        fn new(hooks: Vec<GuardrailEventHook>) -> Self {
+            Self {
+                hooks,
+                events: Mutex::new(Vec::new()),
+                block_pre_call: false,
+            }
+        }
+
+        fn blocking_pre_call() -> Self {
+            Self {
+                hooks: vec![GuardrailEventHook::PreCall],
+                events: Mutex::new(Vec::new()),
+                block_pre_call: true,
+            }
+        }
+
+        fn events(&self) -> Vec<&'static str> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl CustomGuardrail for RecordingOcrGuardrail {
+        fn guardrail_name(&self) -> &str {
+            "recording-ocr-guardrail"
+        }
+
+        fn supported_event_hooks(&self) -> &[GuardrailEventHook] {
+            &self.hooks
+        }
+
+        fn async_pre_call_hook<'a>(
+            &'a self,
+            _context: &'a GuardrailContext,
+            mut request: GuardrailRequest,
+        ) -> GuardrailFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("async_pre_call_hook");
+                if self.block_pre_call {
+                    return Ok(GuardrailDecision::Block(GuardrailError::blocked(
+                        "blocked before provider",
+                    )));
+                }
+                request.data["document"]["guarded_pre"] = json!(true);
+                Ok(GuardrailDecision::Mask(request))
+            })
+        }
+
+        fn async_moderation_hook<'a>(
+            &'a self,
+            _context: &'a GuardrailContext,
+            mut request: GuardrailRequest,
+        ) -> GuardrailFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("async_moderation_hook");
+                request.data["body"]["guarded_during"] = json!(true);
+                Ok(GuardrailDecision::Mask(request))
+            })
+        }
     }
 
     #[test]
@@ -262,6 +768,183 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let request = read_http_request(&mut socket).await;
+            let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+            request
+        });
+
+        let logger = Arc::new(RecordingOcrLogger::default());
+        let guardrail = Arc::new(RecordingOcrGuardrail::new(vec![
+            GuardrailEventHook::PreCall,
+            GuardrailEventHook::DuringCall,
+        ]));
+        let response = ocr(OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("mistral"),
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+            callbacks: vec![logger.clone()],
+            guardrails: vec![guardrail.clone()],
+            request_metadata: RequestMetadata {
+                user_api_key_user_id: Some("user-1".to_string()),
+                ..Default::default()
+            },
+            litellm_call_id: Some("ocr-call-1"),
+        })
+        .await
+        .expect("ocr request succeeds");
+
+        assert_eq!(response["pages"][0]["markdown"], "ok");
+        assert_eq!(
+            guardrail.events(),
+            vec!["async_pre_call_hook", "async_moderation_hook"]
+        );
+        assert_eq!(
+            logger.events(),
+            vec![RecordedLogEvent {
+                hook: "async_log_success_event",
+                model: "mistral-ocr-latest".to_string(),
+                call_type: "ocr".to_string(),
+                user_id: Some("user-1".to_string()),
+                response_object: Some("ocr".to_string()),
+                error_kind: None,
+            }]
+        );
+
+        let request = server.await.expect("server task completes");
+        assert!(request.contains(r#""guarded_pre":true"#), "{request}");
+        assert!(request.contains(r#""guarded_during":true"#), "{request}");
+    }
+
+    #[tokio::test]
+    async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let _request = read_http_request(&mut socket).await;
+            let response_body = "provider failed";
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+        });
+
+        let logger = Arc::new(RecordingOcrLogger::default());
+        let err = ocr(OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("mistral"),
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+            callbacks: vec![logger.clone()],
+            guardrails: Vec::new(),
+            request_metadata: RequestMetadata::default(),
+            litellm_call_id: Some("ocr-call-2"),
+        })
+        .await
+        .expect_err("provider error propagates");
+
+        assert!(matches!(err, CoreError::Http { status: 500, .. }));
+        server.await.expect("server task completes");
+        assert_eq!(
+            logger.events(),
+            vec![RecordedLogEvent {
+                hook: "async_log_failure_event",
+                model: "mistral-ocr-latest".to_string(),
+                call_type: "ocr".to_string(),
+                user_id: None,
+                response_object: Some("error".to_string()),
+                error_kind: Some("HttpError".to_string()),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        let logger = Arc::new(RecordingOcrLogger::default());
+        let guardrail = Arc::new(RecordingOcrGuardrail::blocking_pre_call());
+
+        let err = ocr(OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("mistral"),
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_millis(100)),
+            callbacks: vec![logger.clone()],
+            guardrails: vec![guardrail.clone()],
+            request_metadata: RequestMetadata::default(),
+            litellm_call_id: Some("ocr-call-3"),
+        })
+        .await
+        .expect_err("guardrail blocks request");
+
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+        assert_eq!(guardrail.events(), vec!["async_pre_call_hook"]);
+        assert_eq!(
+            logger.events(),
+            vec![RecordedLogEvent {
+                hook: "async_log_failure_event",
+                model: "mistral-ocr-latest".to_string(),
+                call_type: "ocr".to_string(),
+                user_id: None,
+                response_object: Some("error".to_string()),
+                error_kind: Some("InvalidRequest".to_string()),
+            }]
+        );
+        let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+        assert!(accepted.is_err(), "provider socket should not be touched");
+    }
+
+    #[tokio::test]
     async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -307,6 +990,10 @@ mod tests {
             extra_headers: Some(headers),
             optional_params: Map::new(),
             timeout: Some(Duration::from_secs(5)),
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: RequestMetadata::default(),
+            litellm_call_id: None,
         })
         .await
         .expect("ocr request succeeds");
@@ -372,6 +1059,10 @@ mod tests {
             extra_headers: None,
             optional_params: Map::new(),
             timeout: Some(Duration::from_secs(5)),
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: RequestMetadata::default(),
+            litellm_call_id: None,
         })
         .await
         .expect("document intelligence request succeeds");

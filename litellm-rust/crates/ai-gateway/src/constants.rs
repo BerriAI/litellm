@@ -26,4 +26,5 @@ pub(crate) const DEFAULT_MAX_BATCH_SIZE: usize = 256;
 pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 
 /// Provider attributed to realtime sessions in the logging payload.
+#[cfg(feature = "server")]
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
