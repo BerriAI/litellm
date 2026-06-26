@@ -71,7 +71,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 response = raw_response.parse()
                 return headers, response
             else:
-                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)  # type: ignore
+                response = openai_client.audio.transcriptions.create(
+                    **data, timeout=timeout
+                )  # type: ignore
                 return None, response
         except Exception as e:
             raise e
@@ -160,7 +162,12 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             original_response=stringified_response,
         )
         hidden_params = {"model": model, "custom_llm_provider": "openai"}
-        final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        final_response: TranscriptionResponse = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            hidden_params=hidden_params,
+            response_type="audio_transcription",
+        )  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(
@@ -220,7 +227,12 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             actual_model = data.get("model", "whisper-1")
             hidden_params = {"model": actual_model, "custom_llm_provider": "openai"}
 
-            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=stringified_response,
+                model_response_object=model_response,
+                hidden_params=hidden_params,
+                response_type="audio_transcription",
+            )  # type: ignore
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(

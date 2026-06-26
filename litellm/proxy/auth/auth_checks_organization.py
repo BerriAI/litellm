@@ -134,7 +134,9 @@ def get_user_organization_info(
         for _membership in user_object.organization_memberships:
             if _membership.organization_id is not None:
                 _user_organizations.append(_membership.organization_id)
-                _user_organization_role_mapping[_membership.organization_id] = _membership.user_role  # type: ignore
+                _user_organization_role_mapping[_membership.organization_id] = (
+                    _membership.user_role
+                )  # type: ignore
 
     return _user_organizations, _user_organization_role_mapping
 

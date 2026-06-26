@@ -2,27 +2,32 @@
 
 This file defines the rules for Rust work in LiteLLM.
 
+## Crates (exactly three — see AGENTS.md)
+
+`litellm-core` describes work; `litellm-ai-gateway` executes it; `litellm-python-bridge`
+exposes it to the Python SDK. A crate is a **layer**, not a route — add modules, not crates.
+
 ## Core Boundary
 
-The `core` and `providers` crates describe work; hosts execute work.
+`litellm-core` is the pure translation layer; the `litellm-ai-gateway` host executes work.
 
 Route-level Rust structure mirrors LiteLLM's Python responsibilities:
 - `core/src/<route>/` owns the route contract, shared types, and provider
   template traits. For OCR, this means `core/src/ocr`.
-- `providers/src/<provider>/<route>/transformation.rs` owns the
+- `core/src/providers/<provider>/<route>/transformation.rs` owns the
   provider-specific transform. For Mistral OCR, this means
-  `providers/src/mistral/ocr/transformation.rs`.
-- Future network execution belongs in a host/transport layer such as
-  `llm_http_handler`, not inside `core` or `providers`.
+  `core/src/providers/mistral/ocr/transformation.rs`.
+- Network execution lives in the host crate `ai-gateway` (`ai-gateway/src/io/`),
+  never inside `core`.
 
-Allowed in `core` and `providers`:
+Allowed in `core`:
 - Pure request transforms
 - Pure response transforms
 - Pure stream chunk normalization
 - Shared data types and validation errors
 - Deterministic token/cost helper logic
 
-Not allowed in `core` or `providers`:
+Not allowed in `core`:
 - Network calls
 - Environment variable or secret reads
 - Filesystem access
@@ -72,6 +77,20 @@ such as `ai-gateway`, router hosts, or standalone servers:
 - Avoid `expect`/`unwrap` in server startup and request paths unless the panic is
   impossible by construction and documented.
 
+## Constants
+
+Magic numbers and fixed strings go in a crate-level `constants.rs`, never
+hardcoded inline — the Rust mirror of Python's `litellm/constants.py`.
+
+- Each crate that needs them has `src/constants.rs` (declared `mod constants;`);
+  import from it (`use crate::constants::...`). Don't scatter `const` values at
+  the top of feature modules.
+- An env-overridable tunable still lives in `constants.rs` as its `DEFAULT_*`
+  value; the env read (with fallback to that default) happens at the host/config
+  resolution layer, not in `core`/`providers`.
+- Exception: a value that is purely local to one function and has no meaning
+  elsewhere may stay inline, but prefer `constants.rs` when in doubt.
+
 ## Checks
 
 Run these before pushing Rust changes. The same checks run in GitHub Actions
@@ -80,7 +99,9 @@ for changes under `litellm-rust/`.
 ```bash
 cd litellm-rust
 cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
+# the ai-gateway binary + server code is behind the `server` feature
+cargo clippy -p litellm-ai-gateway --all-targets --features server -- -D warnings
+cargo clippy -p litellm-core -p litellm-python-bridge --all-targets -- -D warnings
 cargo test --workspace
 ```
 

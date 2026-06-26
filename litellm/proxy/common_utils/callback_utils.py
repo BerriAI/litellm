@@ -186,11 +186,8 @@ def initialize_callbacks_on_proxy(
                 )
 
                 init_params = {}
-                if (
-                    "lakera_prompt_injection" in callback_specific_params
-                    and isinstance(
-                        callback_specific_params["lakera_prompt_injection"], dict
-                    )
+                if "lakera_prompt_injection" in callback_specific_params and isinstance(
+                    callback_specific_params["lakera_prompt_injection"], dict
                 ):
                     init_params = callback_specific_params["lakera_prompt_injection"]
                 lakera_moderations_object = lakeraAI_Moderation(**init_params)
@@ -343,11 +340,8 @@ def initialize_callbacks_on_proxy(
                 )
 
                 init_params = {}
-                if (
-                    "datadog_cost_management" in callback_specific_params
-                    and isinstance(
-                        callback_specific_params["datadog_cost_management"], dict
-                    )
+                if "datadog_cost_management" in callback_specific_params and isinstance(
+                    callback_specific_params["datadog_cost_management"], dict
                 ):
                     init_params = callback_specific_params["datadog_cost_management"]
                 datadog_cost_management_obj = DatadogCostManagementLogger(**init_params)

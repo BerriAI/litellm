@@ -1586,7 +1586,9 @@ def convert_to_gemini_tool_call_result(
                         file_data = (
                             file_content.get("file_data", "")
                             if isinstance(file_content, dict)
-                            else file_content if isinstance(file_content, str) else ""
+                            else file_content
+                            if isinstance(file_content, str)
+                            else ""
                         )
 
                     if file_data:
@@ -2556,9 +2558,7 @@ def anthropic_messages_pt(
                 ChatCompletionToolMessage,
                 ChatCompletionUserMessage,
                 ChatCompletionFunctionMessage,
-            ] = messages[
-                msg_i
-            ]  # type: ignore
+            ] = messages[msg_i]  # type: ignore
             if user_message_types_block["role"] == "user":
                 if isinstance(user_message_types_block["content"], list):
                     for m in user_message_types_block["content"]:
@@ -4926,8 +4926,10 @@ class BedrockConverseMessagesProcessor:
                                     image_url = element["image_url"]["url"]
                                 else:
                                     image_url = element["image_url"]
-                                assistants_part = await BedrockImageProcessor.process_image_async(  # type: ignore
-                                    image_url=image_url
+                                assistants_part = (
+                                    await BedrockImageProcessor.process_image_async(  # type: ignore
+                                        image_url=image_url
+                                    )
                                 )
                                 assistants_parts.append(assistants_part)
                                 # Add cache point block for assistant content elements

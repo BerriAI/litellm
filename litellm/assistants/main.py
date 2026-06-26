@@ -184,7 +184,9 @@ def get_assistants(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
 
@@ -198,7 +200,9 @@ def get_assistants(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
 
@@ -394,7 +398,9 @@ def create_assistants(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
     if response is None:
@@ -761,7 +767,9 @@ def create_thread(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
     return response  # type: ignore
@@ -916,7 +924,9 @@ def get_thread(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
     return response  # type: ignore
@@ -1103,7 +1113,9 @@ def add_message(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
 
@@ -1263,7 +1275,9 @@ def get_messages(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
 
@@ -1478,7 +1492,9 @@ def run_thread(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="create_thread", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
         )
     return response  # type: ignore

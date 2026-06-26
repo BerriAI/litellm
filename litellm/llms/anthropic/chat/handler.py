@@ -364,6 +364,7 @@ class AnthropicChatCompletion(BaseLLM):
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
+            api_base=api_base,
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
@@ -624,7 +625,9 @@ class ModelResponseIterator:
             speed=self.speed,
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],

@@ -1409,7 +1409,9 @@ class LiteLLMCompletionResponsesConfig:
                 if tool.get("defer_loading"):
                     chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
                 if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
+                    chat_completion_tool["allowed_callers"] = tool.get(
+                        "allowed_callers"
+                    )  # type: ignore
                 if tool.get("input_examples"):
                     chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
@@ -1522,7 +1524,11 @@ class LiteLLMCompletionResponsesConfig:
 
                 # Pass through provider_specific_fields as-is if present
                 if provider_specific_fields:
-                    setattr(output_tool_call, "provider_specific_fields", provider_specific_fields)  # type: ignore
+                    setattr(
+                        output_tool_call,
+                        "provider_specific_fields",
+                        provider_specific_fields,
+                    )  # type: ignore
 
                 responses_tools.append(output_tool_call)
         return responses_tools

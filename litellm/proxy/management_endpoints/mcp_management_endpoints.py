@@ -2540,9 +2540,9 @@ if MCP_AVAILABLE:
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"][
-                "public_mcp_servers"
-            ] = litellm.public_mcp_servers
+            config["litellm_settings"]["public_mcp_servers"] = (
+                litellm.public_mcp_servers
+            )
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)
