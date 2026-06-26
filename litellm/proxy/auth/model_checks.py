@@ -358,10 +358,14 @@ def expand_wildcard_deployments_for_model_info(
         litellm_params_dict = deployment.get("litellm_params") or {}
         litellm_model = litellm_params_dict.get("model") or ""
 
-        # Determine the wildcard pattern to expand
+        # Determine the wildcard pattern to expand.
+        # Branch order matters: only fall to litellm_model when model_name is
+        # also a wildcard, so a concrete model_name is never overwritten.
         if _check_wildcard_routing(model_name) and "/" in model_name:
             wildcard_pattern = model_name
-        elif _check_wildcard_routing(litellm_model):
+        elif _check_wildcard_routing(model_name) and _check_wildcard_routing(
+            litellm_model
+        ):
             wildcard_pattern = litellm_model
         elif _check_wildcard_routing(model_name):
             wildcard_pattern = model_name
@@ -369,9 +373,13 @@ def expand_wildcard_deployments_for_model_info(
             expanded.append(deployment)
             continue
 
-        litellm_params = (
-            LiteLLM_Params(**litellm_params_dict) if litellm_params_dict else None
-        )
+        try:
+            litellm_params = (
+                LiteLLM_Params(**litellm_params_dict) if litellm_params_dict else None
+            )
+        except Exception:
+            expanded.append(deployment)
+            continue
         expanded_names = get_known_models_from_wildcard(
             wildcard_model=wildcard_pattern,
             litellm_params=litellm_params,
