@@ -5609,6 +5609,79 @@ class TestCheckOauth2UpstreamAuth:
         mock_probe.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_probes_servers_concurrently_and_surfaces_single_upstream_401(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _check_oauth2_upstream_auth,
+        )
+
+        servers = [
+            self._oauth2_server(
+                server_id="oauth-1",
+                name="oauth_one",
+                url="https://one.example.com/mcp",
+            ),
+            self._oauth2_server(
+                server_id="oauth-2",
+                name="oauth_two",
+                url="https://two.example.com/mcp",
+            ),
+            self._oauth2_server(
+                server_id="oauth-3",
+                name="oauth_three",
+                url="https://three.example.com/mcp",
+            ),
+        ]
+        upstream_www = 'Bearer error="invalid_token", resource_metadata="https://one/x"'
+        probe_results_by_url = {
+            "https://one.example.com/mcp": (401, upstream_www),
+            "https://two.example.com/mcp": (200, None),
+            "https://three.example.com/mcp": (200, None),
+        }
+
+        all_probes_started = asyncio.Event()
+        probed_urls: list[str] = []
+
+        async def probe_side_effect(url, auth_header):
+            probed_urls.append(url)
+            if len(probed_urls) == len(servers):
+                all_probes_started.set()
+            await all_probes_started.wait()
+            return probe_results_by_url[url]
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new=AsyncMock(return_value=servers),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
+                new=AsyncMock(side_effect=probe_side_effect),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await asyncio.wait_for(
+                    _check_oauth2_upstream_auth(
+                        scope=self._scope(),
+                        user_api_key_auth=UserAPIKeyAuth(
+                            api_key="sk-test", user_id="u1"
+                        ),
+                        mcp_servers=["oauth_one", "oauth_two", "oauth_three"],
+                        oauth2_headers={"Authorization": "Bearer stale-token"},
+                        client_ip=None,
+                    ),
+                    timeout=2.0,
+                )
+
+        assert all_probes_started.is_set()
+        assert set(probed_urls) == set(probe_results_by_url)
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["www-authenticate"] == upstream_www
+
+    @pytest.mark.asyncio
     async def test_handler_propagates_stale_token_401(self):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,

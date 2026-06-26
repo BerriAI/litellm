@@ -3750,14 +3750,19 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        for server in allowed_servers:
-            if not server.needs_user_oauth_token or not server.url:
-                continue
-            if (
-                allowed_server_ids is not None
-                and server.server_id not in allowed_server_ids
-            ):
-                continue
+        candidate_servers = tuple(
+            server
+            for server in allowed_servers
+            if server.needs_user_oauth_token
+            and server.url
+            and (allowed_server_ids is None or server.server_id in allowed_server_ids)
+        )
+        if not candidate_servers:
+            return
+
+        async def _probe_oauth2_server(
+            server: MCPServer,
+        ) -> tuple[MCPServer, int, str | None] | None:
             stored_headers = await _get_user_oauth_extra_headers_from_db(
                 server=server,
                 user_api_key_auth=user_api_key_auth,
@@ -3765,12 +3770,19 @@ if MCP_AVAILABLE:
             preflight_headers = stored_headers or oauth2_headers
             auth_header = (preflight_headers or {}).get("Authorization")
             if not auth_header:
-                continue
+                return None
             probe_status, upstream_www_authenticate = await _probe_upstream_auth(
-                server.url, auth_header
+                server.url or "", auth_header
             )
-            if probe_status != 401:
+            return server, probe_status, upstream_www_authenticate
+
+        probe_results = await asyncio.gather(
+            *(_probe_oauth2_server(server) for server in candidate_servers)
+        )
+        for result in probe_results:
+            if result is None or result[1] != 401:
                 continue
+            server, _, upstream_www_authenticate = result
             raise HTTPException(
                 status_code=401,
                 detail="Unauthorized",
