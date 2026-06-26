@@ -164,9 +164,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             if litellm_logging_obj is not None:
-                slg_info = (data.get("metadata") or {}).get(
-                    "standard_logging_guardrail_information"
-                )
+                slg_info = (
+                    data.get("metadata") or data.get("litellm_metadata") or {}
+                ).get("standard_logging_guardrail_information")
                 print(
                     f"[headroom-propagate] slg_info={slg_info is not None} "
                     f"logging_obj_type={type(litellm_logging_obj).__name__} "
