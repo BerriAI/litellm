@@ -394,6 +394,62 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         return dynamic_headers
 
+    def construct_dynamic_otel_endpoint(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[str]:
+        """
+        Construct a per-key/team Langfuse OTLP endpoint from the dynamic host.
+
+        Per-key Langfuse credentials are only valid against the host that issued
+        them, so the host must travel with the credentials. Returns None when the
+        dynamic host is unset or not allowed, falling back to the env-configured
+        endpoint.
+
+        Security: callback vars can be supplied on requests, so a dynamic host is
+        only honored when the proxy operator has explicitly allow-listed it in the
+        ``LANGFUSE_ALLOWED_DYNAMIC_HOSTS`` env var (comma-separated base URLs, e.g.
+        ``https://us.cloud.langfuse.com,https://langfuse.internal.example``). When
+        unset, dynamic hosts are ignored entirely — the exporter destination is
+        always operator-controlled via the env.
+
+        The dynamic host must be a fully-qualified ``http(s)://`` base URL; it is
+        matched against the allowlist as-is (modulo trailing slashes) and never
+        rewritten. Prefers ``langfuse_base_url`` (the Langfuse v3 naming) and falls
+        back to the deprecated ``langfuse_host``, mirroring the SDK's own
+        ``base_url`` -> ``host`` resolution order.
+        """
+        dynamic_langfuse_base_url = standard_callback_dynamic_params.get(
+            "langfuse_base_url"
+        ) or standard_callback_dynamic_params.get("langfuse_host")
+        if not dynamic_langfuse_base_url:
+            return None
+
+        normalized_base_url = dynamic_langfuse_base_url.strip().rstrip("/")
+        if not normalized_base_url.startswith(("http://", "https://")):
+            verbose_logger.warning(
+                "Ignoring dynamic langfuse host %r: must be a fully-qualified "
+                "http(s):// base URL. Falling back to the env-configured Langfuse "
+                "OTEL endpoint.",
+                dynamic_langfuse_base_url,
+            )
+            return None
+
+        allowed_hosts = [
+            host.strip().rstrip("/")
+            for host in os.environ.get("LANGFUSE_ALLOWED_DYNAMIC_HOSTS", "").split(",")
+            if host.strip()
+        ]
+        if normalized_base_url not in allowed_hosts:
+            verbose_logger.warning(
+                "Ignoring dynamic langfuse host %r: not present in the "
+                "LANGFUSE_ALLOWED_DYNAMIC_HOSTS env var. Falling back to the "
+                "env-configured Langfuse OTEL endpoint.",
+                normalized_base_url,
+            )
+            return None
+
+        return f"{normalized_base_url}/api/public/otel"
+
     def create_litellm_proxy_request_started_span(
         self,
         start_time: datetime,

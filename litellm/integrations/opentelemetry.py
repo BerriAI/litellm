@@ -999,9 +999,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if dynamic_headers is not None:
             # Create spans using a temporary tracer with dynamic headers
-            tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
+            dynamic_endpoint = self._get_dynamic_otel_endpoint_from_kwargs(kwargs)
+            tracer_to_use = self._get_tracer_with_dynamic_headers(
+                dynamic_headers, dynamic_endpoint=dynamic_endpoint
+            )
             verbose_logger.debug(
-                "[OTEL DEBUG] Using DYNAMIC tracer with headers: %s", dynamic_headers
+                "[OTEL DEBUG] Using DYNAMIC tracer with headers: %s endpoint: %s",
+                dynamic_headers,
+                dynamic_endpoint,
             )
         else:
             # For langfuse_otel without dynamic headers, create a provider with env var credentials
@@ -1048,12 +1053,29 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return dynamic_headers if dynamic_headers else None
 
-    def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
+    def _get_dynamic_otel_endpoint_from_kwargs(self, kwargs) -> Optional[str]:
+        """Extract a dynamic OTLP endpoint from kwargs if available."""
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
+
+        if not standard_callback_dynamic_params:
+            return None
+
+        return self.construct_dynamic_otel_endpoint(
+            standard_callback_dynamic_params=standard_callback_dynamic_params
+        )
+
+    def _get_tracer_with_dynamic_headers(
+        self, dynamic_headers: dict, dynamic_endpoint: Optional[str] = None
+    ):
         """Create a temporary tracer with dynamic headers for this request only."""
         from opentelemetry.sdk.trace import TracerProvider
 
         # Prevents thread exhaustion by reusing providers for the same credential sets (e.g. per-team keys)
         cache_key = str(sorted(dynamic_headers.items()))
+        if dynamic_endpoint:
+            cache_key = f"{cache_key}|{dynamic_endpoint}"
         if cache_key in self._tracer_provider_cache:
             return self._tracer_provider_cache[cache_key].get_tracer(
                 LITELLM_TRACER_NAME
@@ -1062,7 +1084,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Create a temporary tracer provider with dynamic headers
         temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
         temp_provider.add_span_processor(
-            self._get_span_processor(dynamic_headers=dynamic_headers)
+            self._get_span_processor(
+                dynamic_headers=dynamic_headers, dynamic_endpoint=dynamic_endpoint
+            )
         )
 
         # Store in cache for reuse
@@ -1080,6 +1104,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         Returns:
             dict: A dictionary of dynamic headers
+        """
+        return None
+
+    def construct_dynamic_otel_endpoint(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[str]:
+        """
+        Construct a per-request OTLP endpoint from standard callback dynamic params.
+
+        Override in subclasses (e.g. Langfuse OTEL) where per-key/team credentials
+        are bound to a per-key host. Returning None keeps the env-configured endpoint.
         """
         return None
 
@@ -2938,7 +2973,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         return None, None
 
-    def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
+    def _get_span_processor(
+        self,
+        dynamic_headers: Optional[dict] = None,
+        dynamic_endpoint: Optional[str] = None,
+    ):
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -3004,7 +3043,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
             )
             normalized_endpoint = self._normalize_otel_endpoint(
-                self.OTEL_ENDPOINT, "traces"
+                dynamic_endpoint or self.OTEL_ENDPOINT, "traces"
             )
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
@@ -3027,7 +3066,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
             )
             normalized_endpoint = self._normalize_otel_endpoint(
-                self.OTEL_ENDPOINT, "traces"
+                dynamic_endpoint or self.OTEL_ENDPOINT, "traces"
             )
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(

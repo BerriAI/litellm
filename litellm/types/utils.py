@@ -3050,6 +3050,8 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret: Optional[str]
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
+    # Langfuse v3 naming for the host; preferred over langfuse_host where set
+    langfuse_base_url: Optional[str]
 
     # Langfuse prompt version
     langfuse_prompt_version: Optional[int]

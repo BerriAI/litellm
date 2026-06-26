@@ -1281,7 +1281,8 @@ class TestOpenTelemetry(unittest.TestCase):
             # Assertions
             mock_get_headers.assert_called_once_with(kwargs)
             mock_get_tracer.assert_called_once_with(
-                {"arize-space-id": "test-space", "api_key": "test-key"}
+                {"arize-space-id": "test-space", "api_key": "test-key"},
+                dynamic_endpoint=None,
             )
             self.assertEqual(result, mock_dynamic_tracer)
 
@@ -1375,7 +1376,7 @@ class TestOpenTelemetry(unittest.TestCase):
 
             # Assertions
             mock_get_span_processor.assert_called_once_with(
-                dynamic_headers=dynamic_headers
+                dynamic_headers=dynamic_headers, dynamic_endpoint=None
             )
             mock_provider_instance.add_span_processor.assert_called_once_with(
                 mock_span_processor
@@ -2104,6 +2105,56 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
 
         # Verify the exporter is the HTTP variant
         self.assertIsInstance(processor.span_exporter, OTLPSpanExporterHTTP)
+
+    def test_get_span_processor_uses_dynamic_endpoint_over_env(self):
+        """The dynamic per-key endpoint overrides self.OTEL_ENDPOINT (the core regression).
+
+        Would FAIL on current code, where the exporter is always pinned to OTEL_ENDPOINT.
+        """
+        config = OpenTelemetryConfig(
+            exporter="otlp_http", endpoint="https://cloud.langfuse.com/api/public/otel"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor(
+            dynamic_headers={"Authorization": "Basic abc"},
+            dynamic_endpoint="https://us.cloud.langfuse.com/api/public/otel",
+        )
+        # OTLP HTTP exporter stores the resolved endpoint on ._endpoint
+        endpoint = processor.span_exporter._endpoint
+        assert endpoint == "https://us.cloud.langfuse.com/api/public/otel/v1/traces"
+
+    def test_get_span_processor_falls_back_to_env_endpoint(self):
+        """No dynamic endpoint -> env endpoint is used (no Arize/env-only regression)."""
+        config = OpenTelemetryConfig(
+            exporter="otlp_http", endpoint="https://cloud.langfuse.com/api/public/otel"
+        )
+        otel = OpenTelemetry(config=config)
+        processor = otel._get_span_processor(
+            dynamic_headers={"Authorization": "Basic abc"}
+        )
+        assert (
+            processor.span_exporter._endpoint
+            == "https://cloud.langfuse.com/api/public/otel/v1/traces"
+        )
+
+    def test_dynamic_tracer_cache_key_separates_by_endpoint(self):
+        """Same creds + different host => distinct cached providers (cache-collision regression).
+
+        Would FAIL if the host is dropped from the cache key: the 2nd host would reuse
+        the 1st host's provider/exporter.
+        """
+        otel = OpenTelemetry()
+        headers = {"Authorization": "Basic abc"}
+        with patch.object(otel, "_get_span_processor", return_value=MagicMock()):
+            otel._get_tracer_with_dynamic_headers(
+                headers, dynamic_endpoint="https://cloud.langfuse.com/api/public/otel"
+            )
+            otel._get_tracer_with_dynamic_headers(
+                headers,
+                dynamic_endpoint="https://us.cloud.langfuse.com/api/public/otel",
+            )
+        assert len(otel._tracer_provider_cache) == 2
 
     def test_get_span_processor_uses_console_exporter_for_console(self):
         """Test that console protocol uses ConsoleSpanExporter"""
