@@ -5196,6 +5196,107 @@ async def test_auth_builder_alias_only_token_resolves_alias_not_db_fallback():
 
 
 @pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_alias_wins_over_team_id_default():
+    """When the JWT carries only an alias claim (no team_id claim) and
+    team_id_default is configured, alias resolution must win. get_team_id
+    silently substitutes team_id_default for a missing claim, which would
+    otherwise mask the alias-resolved team and mis-attribute spend/access
+    to the configured default team."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_alias_jwt_field="team_alias",
+            team_id_default="config_default_team",
+        ),
+    )
+
+    jwt_token = {"sub": "user-1", "team_alias": "my-team"}
+    alias_team = LiteLLM_TeamTable(
+        team_id="alias_resolved_team", team_alias="my-team"
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_by_id,
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+        ) as mock_get_by_alias,
+    ):
+        mock_get_by_alias.return_value = alias_team
+
+        team_id, team_obj = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert team_id == "alias_resolved_team"
+    assert team_obj == alias_team
+    mock_get_by_id.assert_not_called()
+    mock_get_by_alias.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_team_id_default_used_without_alias():
+    """When the token carries neither a team_id nor an alias claim and
+    team_id_default is configured, the default still resolves the team. The
+    alias-precedence fix must not regress this baseline fallback behavior."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_alias_jwt_field="team_alias",
+            team_id_default="config_default_team",
+        ),
+    )
+
+    jwt_token = {"sub": "user-1"}
+    default_team = LiteLLM_TeamTable(team_id="config_default_team")
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_by_id,
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+        ) as mock_get_by_alias,
+    ):
+        mock_get_by_id.return_value = default_team
+
+        team_id, team_obj = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert team_id == "config_default_team"
+    assert team_obj == default_team
+    mock_get_by_alias.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_db_fallback_enforces_passthrough_route_access():
     """A team selected only via _resolve_db_team_fallback must still pass the
     auth-enforced passthrough route check; previously the earlier gate ran while

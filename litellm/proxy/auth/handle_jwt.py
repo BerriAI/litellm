@@ -1294,10 +1294,24 @@ class JWTAuthManager:
         individual_team_id = jwt_handler.get_team_id(
             token=jwt_valid_token, default_value=None
         )
+        team_alias = jwt_handler.get_team_alias(
+            token=jwt_valid_token, default_value=None
+        )
+
+        # `get_team_id` silently substitutes `team_id_default` for a missing
+        # JWT team_id claim. When the token actually carries an alias claim,
+        # that substitution would mask the alias-resolved team, so prefer
+        # alias resolution. `get_all_jwt_team_ids` ignores `team_id_default`;
+        # an empty result means no real JWT team_id claim is present.
+        if (
+            team_alias
+            and individual_team_id is not None
+            and not jwt_handler.get_all_jwt_team_ids(token=jwt_valid_token)
+        ):
+            individual_team_id = None
 
         team_object: Optional[LiteLLM_TeamTable] = None
 
-        # First try to get team by team_id
         if individual_team_id:
             try:
                 team_object = await get_team_object(
@@ -1323,10 +1337,6 @@ class JWTAuthManager:
                 )
                 return None, None
 
-        # If no team_id found, try to resolve via team_alias_jwt_field
-        team_alias = jwt_handler.get_team_alias(
-            token=jwt_valid_token, default_value=None
-        )
         if team_alias:
             verbose_proxy_logger.info(
                 f"JWT Auth: Resolving team by alias: '{team_alias}'"
