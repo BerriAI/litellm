@@ -79,6 +79,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
+        MCPInfo,
         MCPServer,
         _tool_name_matches,
         execute_mcp_tool,
@@ -238,14 +239,24 @@ if MCP_AVAILABLE:
             )
             return {}
 
-    def _create_tool_response_objects(tools, server_mcp_info):
-        """Helper function to create tool response objects."""
+    def _create_tool_response_objects(tools, server: MCPServer):
+        """Helper function to create tool response objects.
+
+        Enriches the server's ``mcp_info`` with ``server_id`` and ``alias`` so
+        REST clients can map the internal ``server_name`` to the user-facing
+        alias without needing access to the ``mcp_routes``-gated server listing.
+        """
+        enriched_mcp_info: MCPInfo = {
+            **(server.mcp_info or {}),
+            "server_id": server.server_id,
+            "alias": server.alias,
+        }
         return [
             ListMCPToolsRestAPIResponseObject(
                 name=tool.name,
                 description=tool.description,
                 inputSchema=tool.inputSchema,
-                mcp_info=server_mcp_info,
+                mcp_info=enriched_mcp_info,
             )
             for tool in tools
         ]
@@ -405,7 +416,7 @@ if MCP_AVAILABLE:
         )
 
         if not apply_tool_filters:
-            return _create_tool_response_objects(tools, server.mcp_info)
+            return _create_tool_response_objects(tools, server)
 
         # Always apply allowed_tools/disallowed_tools so the blacklist is
         # enforced even when no allowlist is set (matches the SSE/HTTP path).
@@ -436,7 +447,7 @@ if MCP_AVAILABLE:
                     if _tool_name_matches(tool.name, allowed_tools_for_server)
                 ]
 
-        return _create_tool_response_objects(tools, server.mcp_info)
+        return _create_tool_response_objects(tools, server)
 
     async def _resolve_allowed_mcp_servers_for_tool_call(
         user_api_key_dict: UserAPIKeyAuth,
@@ -587,6 +598,8 @@ if MCP_AVAILABLE:
                     "mcp_info": {
                         "server_name": "zapier",
                         "logo_url": "https://www.zapier.com/logo.png",
+                        "server_id": "a1b2c3d4-...",
+                        "alias": "zapier_prod",
                     }
                 }
             ],

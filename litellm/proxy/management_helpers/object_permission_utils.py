@@ -361,10 +361,10 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
-    access_group_servers: List[str] = (
-        await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            team_object_permission.mcp_access_groups or []
-        )
+    access_group_servers: List[
+        str
+    ] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        team_object_permission.mcp_access_groups or []
     )
     raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
     if isinstance(raw_tool_perms, str):
@@ -469,6 +469,7 @@ async def validate_key_mcp_servers_against_team(
     object_permission: Optional[dict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: Optional[PrismaClient] = None,
+    is_proxy_admin: bool = False,
 ) -> Optional[dict]:
     """
     Validate that MCP servers requested on a key are within the allowed scope.
@@ -476,12 +477,17 @@ async def validate_key_mcp_servers_against_team(
     Rules:
     - If key is in a team: key's mcp_servers must be a subset of
       (team's allowed servers + allow_all_keys servers)
-    - If key is NOT in a team: key's mcp_servers must only contain
-      allow_all_keys servers
+    - If key is NOT in a team and the caller is a proxy admin: any server or
+      access group may be assigned. A proxy admin can already reach every MCP
+      server, and runtime access is granted directly from the key's own
+      object_permission, so the key is scoped to exactly what the admin selected
+    - If key is NOT in a team and the caller is not a proxy admin: key's
+      mcp_servers must only contain allow_all_keys servers
     - If team has no MCP config: key can only use allow_all_keys servers
 
     Raises HTTPException(403) if validation fails.
     """
+    teamless_admin_assignment = team_obj is None and is_proxy_admin
     requested_servers = _extract_requested_mcp_server_ids(object_permission)
     requested_access_groups = _extract_requested_mcp_access_groups(object_permission)
 
@@ -526,7 +532,11 @@ async def validate_key_mcp_servers_against_team(
             identifier_to_server_ids
         )
 
-        disallowed_servers = active_requested_servers - all_allowed_servers
+        allowed_servers = all_allowed_servers
+        if teamless_admin_assignment:
+            allowed_servers = all_allowed_servers | active_requested_servers
+
+        disallowed_servers = active_requested_servers - allowed_servers
         if disallowed_servers:
             if team_obj is not None:
                 team_id = team_obj.team_id
@@ -557,7 +567,11 @@ async def validate_key_mcp_servers_against_team(
         ):
             team_access_groups = set(team_obj.object_permission.mcp_access_groups)
 
-        disallowed_groups = requested_access_groups - team_access_groups
+        allowed_access_groups = team_access_groups
+        if teamless_admin_assignment:
+            allowed_access_groups = team_access_groups | requested_access_groups
+
+        disallowed_groups = requested_access_groups - allowed_access_groups
         if disallowed_groups:
             if team_obj is not None:
                 team_id = team_obj.team_id

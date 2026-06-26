@@ -372,7 +372,9 @@ class GitLabPromptManager(CustomPromptManagement):
             if parsed_messages:
                 final_messages: List[AllMessageValues] = parsed_messages
             else:
-                final_messages = [{"role": "user", "content": rendered_prompt}] + messages  # type: ignore
+                final_messages = [
+                    {"role": "user", "content": rendered_prompt}
+                ] + messages  # type: ignore
 
             if litellm_params is None:
                 litellm_params = {}
@@ -412,24 +414,41 @@ class GitLabPromptManager(CustomPromptManagement):
             low = line.lower()
             if low.startswith("system:"):
                 if current_role and current_content:
-                    messages.append({"role": current_role, "content": "\n".join(current_content).strip()})  # type: ignore
+                    messages.append(
+                        {
+                            "role": current_role,
+                            "content": "\n".join(current_content).strip(),
+                        }
+                    )  # type: ignore
                 current_role = "system"
                 current_content = [line[7:].strip()]
             elif low.startswith("user:"):
                 if current_role and current_content:
-                    messages.append({"role": current_role, "content": "\n".join(current_content).strip()})  # type: ignore
+                    messages.append(
+                        {
+                            "role": current_role,
+                            "content": "\n".join(current_content).strip(),
+                        }
+                    )  # type: ignore
                 current_role = "user"
                 current_content = [line[5:].strip()]
             elif low.startswith("assistant:"):
                 if current_role and current_content:
-                    messages.append({"role": current_role, "content": "\n".join(current_content).strip()})  # type: ignore
+                    messages.append(
+                        {
+                            "role": current_role,
+                            "content": "\n".join(current_content).strip(),
+                        }
+                    )  # type: ignore
                 current_role = "assistant"
                 current_content = [line[10:].strip()]
             else:
                 current_content.append(line)
 
         if current_role and current_content:
-            messages.append({"role": current_role, "content": "\n".join(current_content).strip()})  # type: ignore
+            messages.append(
+                {"role": current_role, "content": "\n".join(current_content).strip()}
+            )  # type: ignore
         if not messages and prompt_content.strip():
             messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
         return messages

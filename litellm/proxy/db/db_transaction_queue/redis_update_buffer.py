@@ -186,24 +186,12 @@ class RedisUpdateBuffer:
             return
 
         # Get all transactions
-        db_spend_update_transactions = (
-            await spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
-        )
-        daily_spend_update_transactions = (
-            await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        )
-        daily_team_spend_update_transactions = (
-            await daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        )
-        daily_org_spend_update_transactions = (
-            await daily_org_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        )
-        daily_end_user_spend_update_transactions = (
-            await daily_end_user_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        )
-        daily_agent_spend_update_transactions = (
-            await daily_agent_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        )
+        db_spend_update_transactions = await spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+        daily_spend_update_transactions = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        daily_team_spend_update_transactions = await daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        daily_org_spend_update_transactions = await daily_org_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        daily_end_user_spend_update_transactions = await daily_end_user_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        daily_agent_spend_update_transactions = await daily_agent_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
 
         verbose_proxy_logger.debug(
             "ALL DB SPEND UPDATE TRANSACTIONS: %s", db_spend_update_transactions
@@ -576,9 +564,7 @@ class RedisUpdateBuffer:
         """
         Flush in-memory daily tag spend updates and append them to Redis.
         """
-        daily_tag_spend_update_transactions = (
-            await daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        )
+        daily_tag_spend_update_transactions = await daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         await self._store_transactions_in_redis(
             transactions=daily_tag_spend_update_transactions,
             redis_key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,

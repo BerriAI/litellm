@@ -272,8 +272,8 @@ def _map_openai_exception(
         else:
             message = str(original_exception)
 
-    if message is not None and isinstance(
-        message, str
+    if (
+        message is not None and isinstance(message, str)
     ):  # done to prevent user-confusion. Relevant issue - https://github.com/BerriAI/litellm/issues/1414
         message = message.replace("OPENAI", custom_llm_provider.upper())
         message = message.replace(
@@ -726,7 +726,6 @@ def _map_openai_like_exception(
     extra_information: str,
 ) -> None:
     if "authorization denied for" in error_str:
-
         # Predibase returns the raw API Key in the response - this block ensures it's not returned in the exception
         if (
             error_str is not None
@@ -1161,7 +1160,9 @@ def _map_vertex_exception(
             response=httpx.Response(
                 status_code=500,
                 content=str(original_exception),
-                request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(
+                    method="completion", url="https://github.com/BerriAI/litellm"
+                ),  # type: ignore
             ),
             litellm_debug_info=extra_information,
         )
@@ -1327,7 +1328,9 @@ def _map_vertex_exception(
                 response=httpx.Response(
                     status_code=500,
                     content=str(original_exception),
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(
+                        method="completion", url="https://github.com/BerriAI/litellm"
+                    ),  # type: ignore
                 ),
             )
         if original_exception.status_code == 502:
@@ -1965,13 +1968,9 @@ def _map_azure_exception(
                 # content policy violation even when the top-level
                 # code is generic (e.g. "invalid_request_error").
                 if azure_error_code != "content_policy_violation":
-                    _inner = body_dict["error"].get(
-                        "inner_error"
-                    ) or body_dict[  # type: ignore[index]
+                    _inner = body_dict["error"].get("inner_error") or body_dict[  # type: ignore[index]
                         "error"
-                    ].get(
-                        "innererror"
-                    )  # type: ignore[index]
+                    ].get("innererror")  # type: ignore[index]
                     if (
                         isinstance(_inner, dict)
                         and _inner.get("code") == "ResponsibleAIPolicyViolation"

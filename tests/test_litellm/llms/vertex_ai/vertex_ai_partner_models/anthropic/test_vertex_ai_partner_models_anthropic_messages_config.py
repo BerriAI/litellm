@@ -1,10 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -233,40 +234,36 @@ def test_both_compact_and_context_management_headers_added():
         ), f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
 
 
-def test_validate_environment_with_authorization_header_calculates_api_base():
-    """Test that api_base is calculated even when Authorization header is already present"""
+def test_validate_environment_always_refreshes_token_ignoring_stale_bearer():
+    """Regression: stale Authorization in shared deployment extra_headers must not
+    skip token refresh on /v1/messages — _ensure_access_token is always called."""
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
-    # Simulate scenario where Authorization is already in headers (e.g., from cached extra_headers)
-    headers = {"Authorization": "Bearer existing-token"}
+    headers = {"Authorization": "Bearer EXPIRED"}
     litellm_params = {
         "vertex_project": "test-project",
         "vertex_location": "us-central1",
-        "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
     }
-    optional_params = {}
 
-    with patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-vertex-url"
-    ) as mock_get_url:
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("fresh-token", "test-project")
+        ) as mock_ensure,
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-vertex-url"
+        ),
+    ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
             model="claude-sonnet-4",
             messages=[],
-            optional_params=optional_params,
+            optional_params={},
             litellm_params=litellm_params,
             api_base=None,
         )
 
-        # Verify that api_base was calculated even though Authorization was already present
-        assert (
-            api_base == "https://mock-vertex-url"
-        ), f"api_base should be calculated even with Authorization header. Got: {api_base}"
-        assert mock_get_url.called, "get_complete_vertex_url should be called"
-
-        # Verify Authorization header is still present
-        assert (
-            "Authorization" in updated_headers
-        ), "Authorization header should be preserved"
+        mock_ensure.assert_called_once()
+        assert updated_headers["Authorization"] == "Bearer fresh-token"
+        assert api_base == "https://mock-vertex-url"
 
 
 def test_transform_anthropic_messages_request_removes_scope_from_cache_control():
@@ -371,3 +368,77 @@ def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instanc
         assert first_config is second_config
     finally:
         ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
+
+
+def test_validate_environment_does_not_mutate_caller_headers():
+    """Regression: beta headers (e.g. web-search) must not leak into the caller's
+    headers dict — which may be the shared deployment extra_headers object."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    caller_headers: dict = {}
+
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
+    ):
+        config.validate_anthropic_messages_environment(
+            headers=caller_headers,
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={
+                "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+            },
+            litellm_params={
+                "vertex_ai_project": "p",
+                "vertex_ai_location": "us-central1",
+            },
+            api_base=None,
+        )
+
+    assert (
+        caller_headers == {}
+    ), "validate_anthropic_messages_environment must not mutate the caller's headers dict"
+
+
+def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
+    """Regression: router shallow-copies litellm_params so extra_headers is a shared
+    reference. Verify that the chat/completions path builds a new headers dict instead
+    of calling .update() on the shared object."""
+    handler = VertexAIPartnerModels()
+    shared_extra_headers = {}  # simulates deployment["litellm_params"]["extra_headers"]
+
+    mock_response = MagicMock()
+
+    with (
+        patch.object(
+            handler, "_ensure_access_token", return_value=("ya29.fresh", "proj")
+        ),
+        patch.object(
+            handler, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
+        patch(
+            "litellm.llms.anthropic.chat.AnthropicChatCompletion.completion",
+            return_value=mock_response,
+        ),
+    ):
+        handler.completion(
+            model="claude-haiku-4-5@20251001",
+            messages=[{"role": "user", "content": "hi"}],
+            model_response=MagicMock(),
+            print_verbose=lambda *a, **k: None,
+            encoding=None,
+            logging_obj=MagicMock(),
+            api_base=None,
+            optional_params={},
+            custom_prompt_dict={},
+            headers=shared_extra_headers,
+            timeout=30,
+            litellm_params={},
+        )
+
+    assert (
+        shared_extra_headers == {}
+    ), "extra_headers must not be mutated by completion()"

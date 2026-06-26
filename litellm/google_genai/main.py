@@ -49,6 +49,7 @@ class GenerateContentSetupResult(BaseModel):
     custom_llm_provider: str
     generate_content_provider_config: Optional[BaseGoogleGenAIGenerateContentConfig]
     generate_content_config_dict: Dict[str, Any]
+    native_request_fields: dict[str, object]
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
     litellm_call_id: Optional[str]
@@ -152,6 +153,7 @@ class GenerateContentHelper:
                 request_body={},  # Will be handled by adapter
                 generate_content_provider_config=None,  # type: ignore
                 generate_content_config_dict=dict(config or {}),
+                native_request_fields={},
                 litellm_params=litellm_params,
                 litellm_logging_obj=litellm_logging_obj,
                 litellm_call_id=litellm_call_id,
@@ -171,6 +173,12 @@ class GenerateContentHelper:
         system_instruction = kwargs.get("systemInstruction") or kwargs.get(
             "system_instruction"
         )
+        # Native top-level REST fields arrive as loose kwargs and are otherwise dropped.
+        native_request_fields: dict[str, object] = {
+            field: kwargs[field]
+            for field in generate_content_provider_config.get_generate_content_request_top_level_fields()
+            if field in kwargs
+        }
         request_body = (
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
@@ -201,10 +209,27 @@ class GenerateContentHelper:
             request_body=request_body,
             generate_content_provider_config=generate_content_provider_config,
             generate_content_config_dict=generate_content_config_dict,
+            native_request_fields=native_request_fields,
             litellm_params=litellm_params,
             litellm_logging_obj=litellm_logging_obj,
             litellm_call_id=litellm_call_id,
         )
+
+
+def _merge_native_request_fields(
+    native_request_fields: dict[str, object],
+    extra_body: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """
+    Merge native top-level request fields into ``extra_body`` so the HTTP handler
+    forwards them verbatim onto the outgoing request body. An explicit ``extra_body``
+    value wins on conflict. Returns ``None`` only when there is genuinely nothing to
+    forward (no native fields and no caller-supplied ``extra_body``), preserving the
+    prior behavior without discarding an explicit ``extra_body={}``.
+    """
+    if not native_request_fields and extra_body is None:
+        return None
+    return {**native_request_fields, **(extra_body or {})}
 
 
 @client
@@ -350,7 +375,9 @@ def generate_content(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=_merge_native_request_fields(
+                setup_result.native_request_fields, extra_body
+            ),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
@@ -447,7 +474,9 @@ async def agenerate_content_stream(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=_merge_native_request_fields(
+                setup_result.native_request_fields, extra_body
+            ),
             timeout=timeout or request_timeout,
             _is_async=True,
             client=kwargs.get("client"),
@@ -503,6 +532,11 @@ def generate_content_stream(
             **kwargs,
         )
 
+        # Extract systemInstruction from kwargs to pass to handler
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
+
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             if "stream" in kwargs:
@@ -531,12 +565,15 @@ def generate_content_stream(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=_merge_native_request_fields(
+                setup_result.native_request_fields, extra_body
+            ),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            system_instruction=system_instruction,
         )
 
     except Exception as e:
