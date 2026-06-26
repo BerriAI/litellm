@@ -71,9 +71,15 @@ class TokenRefresher(Protocol):
     ``client_credentials`` grant, or an RFC 8693 re-exchange. Returns ``None`` when it cannot
     refresh (e.g. no ``refresh_token``), which the caller turns into a 401 challenge. It must
     persist the new token so later requests (and the surrounding cache) read it without refreshing.
+
+    ``server_id`` selects the upstream's config (token endpoint, client credentials, scopes) the
+    grant runs against; ``(user_id, server_id)`` is the key the new token is persisted under. They
+    are not derivable from ``token``, so the seam threads them alongside it.
     """
 
-    async def refresh(self, token: OAuthToken) -> OAuthToken | None: ...
+    async def refresh(
+        self, user_id: str, server_id: str, token: OAuthToken
+    ) -> OAuthToken | None: ...
 
 
 class CachedOAuthTokenStore:
@@ -190,7 +196,9 @@ class RefreshingTokenStore:
             # result (or exception). The done-callback removes the entry, so the map self-cleans and
             # is bounded by in-flight refreshes, not by the number of distinct users/servers. The
             # task is detached from the caller, so a cancelled caller does not abort the refresh.
-            task = asyncio.ensure_future(self._refresher.refresh(token))
+            task = asyncio.ensure_future(
+                self._refresher.refresh(user_id, server_id, token)
+            )
             self._inflight[key] = task
             task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
         return await task

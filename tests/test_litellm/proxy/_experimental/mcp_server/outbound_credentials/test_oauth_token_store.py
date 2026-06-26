@@ -176,13 +176,17 @@ class _RefreshablePair:
         self._current = initial
         self.fetch_calls = 0
         self.refresh_calls = 0
+        self.refresh_args: List[Tuple[str, str]] = []
 
     async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
         self.fetch_calls += 1
         return self._current
 
-    async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]:
+    async def refresh(
+        self, user_id: str, server_id: str, token: OAuthToken
+    ) -> Optional[OAuthToken]:
         self.refresh_calls += 1
+        self.refresh_args.append((user_id, server_id))
         await asyncio.sleep(
             0
         )  # yield so other concurrent callers reach the lock and wait
@@ -210,6 +214,9 @@ async def test_refreshing_mints_a_fresh_token_when_expired():
     token = await store.fetch("u", "s")
     assert token is not None and token.access_token == "refreshed"
     assert pair.refresh_calls == 1
+    assert pair.refresh_args == [
+        ("u", "s")
+    ]  # the seam threads the grant/persist key through
 
 
 async def test_refreshing_returns_none_when_it_cannot_refresh():
@@ -217,7 +224,9 @@ async def test_refreshing_returns_none_when_it_cannot_refresh():
         async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
             return OAuthToken(access_token="old", expires_at=900.0)
 
-        async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]:
+        async def refresh(
+            self, user_id: str, server_id: str, token: OAuthToken
+        ) -> Optional[OAuthToken]:
             return None  # e.g. no refresh_token
 
     src = _NoRefresh()
@@ -245,7 +254,9 @@ async def test_refresh_failure_is_shared_by_joiners_not_re_run():
         async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
             return OAuthToken(access_token="old", expires_at=900.0)
 
-        async def refresh(self, token: OAuthToken) -> Optional[OAuthToken]:
+        async def refresh(
+            self, user_id: str, server_id: str, token: OAuthToken
+        ) -> Optional[OAuthToken]:
             self.calls += 1
             await asyncio.sleep(0)  # let the concurrent callers join the same task
             raise RuntimeError("refresh boom")
