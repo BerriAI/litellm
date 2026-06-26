@@ -33,6 +33,11 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
 # Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
 
+# Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
+# request in the cost-calc path, so the f-strings are built once here instead
+# of being rebuilt for every model_info key on every call.
+_SERVICE_TIER_SUFFIXES: tuple[str, ...] = tuple(f"_{st.value}" for st in ServiceTier)
+
 
 def _get_token_detail_value(details: object, key: str) -> Optional[int]:
     if isinstance(details, dict):
@@ -252,7 +257,7 @@ def _get_token_base_cost(
         k
         for k in model_info
         if k.startswith("input_cost_per_token_above_")
-        and not any(k.endswith(f"_{st.value}") for st in ServiceTier)
+        and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
         return (
@@ -418,9 +423,8 @@ def _get_cost_per_unit(
 
     # If the service tier key doesn't exist or is None, try to fall back to the standard key
     if cost_per_unit is None:
-        # Check if any service tier suffix exists in the cost key using ServiceTier enum
-        for service_tier in ServiceTier:
-            suffix = f"_{service_tier.value}"
+        # Check if any service tier suffix exists in the cost key
+        for suffix in _SERVICE_TIER_SUFFIXES:
             if suffix in cost_key:
                 # Extract the base key by removing the matched suffix
                 base_key = cost_key.replace(suffix, "")

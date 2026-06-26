@@ -1682,3 +1682,51 @@ def test_priority_service_tier_above_threshold_falls_back_to_standard_for_cache_
     expected_completion = 1_000 * 2.25e-5
     assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
     assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
+
+
+def test_service_tier_suffixes_constant_in_sync_with_enum():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _SERVICE_TIER_SUFFIXES
+    from litellm.types.utils import ServiceTier
+
+    assert _SERVICE_TIER_SUFFIXES == tuple(f"_{st.value}" for st in ServiceTier)
+
+
+def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit
+
+    model_info = {"input_cost_per_token": 2e-6}
+    # service-tier key is absent -> falls back to the base key
+    assert _get_cost_per_unit(model_info, "input_cost_per_token_priority") == 2e-6
+    # service-tier key present -> used directly, no fallback
+    model_info_direct = {
+        "input_cost_per_token_priority": 5e-6,
+        "input_cost_per_token": 2e-6,
+    }
+    assert (
+        _get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
+    )
+
+
+def test_threshold_keys_exclude_service_tier_variants():
+    from typing import cast
+
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+    from litellm.types.utils import ModelInfo, Usage
+
+    # The service-tier-suffixed above-threshold key must be excluded from
+    # threshold detection. The _priority variant has a higher threshold (300k),
+    # so if it were not excluded it would sort first and drive a 9e-6 rate for
+    # this non-tier request. With the exclusion only the standard 200k key
+    # applies, giving 3e-6.
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "input_cost_per_token_above_200k_tokens": 3e-6,
+            "input_cost_per_token_above_300k_tokens_priority": 9e-6,
+            "output_cost_per_token": 2e-6,
+        },
+    )
+    usage = Usage(prompt_tokens=350_000, completion_tokens=1_000, total_tokens=351_000)
+    prompt_base, *_ = _get_token_base_cost(model_info=model_info, usage=usage)
+    assert prompt_base == 3e-6
