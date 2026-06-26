@@ -34,7 +34,9 @@ MOCK_TINYFISH_RESPONSE = {
 }
 
 
-def _make_mock_response(json_data: dict, status_code: int = 200, request_url: str | None = None) -> MagicMock:
+def _make_mock_response(
+    json_data: dict, status_code: int = 200, request_url: str | None = None
+) -> MagicMock:
     mock = MagicMock()
     mock.status_code = status_code
     mock.json.return_value = json_data
