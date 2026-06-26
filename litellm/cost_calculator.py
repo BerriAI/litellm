@@ -185,9 +185,9 @@ def _cost_per_token_custom_pricing_helper(
 ) -> Optional[Tuple[float, float]]:
     """Internal helper function for calculating cost, if custom pricing given.
 
-    prompt_tokens is assumed to include both cached_tokens and cache_creation_tokens
-    (OpenAI-compatible convention). Anthropic-style usage where prompt_tokens excludes
-    cache tokens is handled at the caller (cost_per_token) before invoking this helper.
+    prompt_tokens is assumed to include both cached_tokens and cache_creation_tokens.
+    litellm normalizes every provider's usage to this convention before calling the
+    helper, so the uncached input is prompt_tokens minus the two cache counts.
     """
     if custom_cost_per_token is None and custom_cost_per_second is None:
         return None
@@ -359,14 +359,14 @@ def cost_per_token(
         )
 
     ## CUSTOM PRICING ##
-    # Normalize cache token counts across providers:
-    #   - OpenAI-compatible: usage.prompt_tokens_details.cached_tokens
-    #     (prompt_tokens already INCLUDES cached_tokens)
-    #   - Anthropic: usage.cache_read_input_tokens / cache_creation_input_tokens
-    #     (prompt_tokens does NOT include these — adjust before calling helper)
+    # prompt_tokens is cache-inclusive for every provider litellm supports:
+    # OpenAI-compatible usage counts cached_tokens within prompt_tokens, and the
+    # Anthropic transformer (AnthropicConfig.calculate_usage) folds
+    # cache_creation_input_tokens and cache_read_input_tokens into prompt_tokens.
+    # Pull the cache counts out so the helper can price them at their own rates;
+    # it subtracts them from prompt_tokens to recover the uncached input.
     _cache_read_tokens: float = 0
     _cache_creation_tokens: float = 0
-    _is_anthropic_style = False
 
     if usage_object is not None:
         _pt_details = getattr(usage_object, "prompt_tokens_details", None)
@@ -383,25 +383,28 @@ def cost_per_token(
 
         _anthropic_read = getattr(usage_object, "cache_read_input_tokens", None)
         _anthropic_create = getattr(usage_object, "cache_creation_input_tokens", None)
-        if _anthropic_read is not None or _anthropic_create is not None:
-            _is_anthropic_style = True
-            if _anthropic_read is not None:
-                _cache_read_tokens = float(_anthropic_read)
-            if _anthropic_create is not None:
-                _cache_creation_tokens = float(_anthropic_create)
+        if _anthropic_read is not None:
+            _cache_read_tokens = float(_anthropic_read)
+        if _anthropic_create is not None:
+            _cache_creation_tokens = float(_anthropic_create)
 
     if not _cache_read_tokens and cache_read_input_tokens:
         _cache_read_tokens = float(cache_read_input_tokens)
-        _is_anthropic_style = True
     if not _cache_creation_tokens and cache_creation_input_tokens:
         _cache_creation_tokens = float(cache_creation_input_tokens)
-        _is_anthropic_style = True
 
-    # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
-    # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
-    _normalized_prompt_tokens = float(prompt_tokens)
-    if _is_anthropic_style:
-        _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
+    # prompt_tokens is normally cache-inclusive and the helper subtracts the cache
+    # counts to recover the uncached input. A direct caller that instead passes raw
+    # cache-exclusive prompt_tokens is unambiguous when the value is smaller than the
+    # cache tokens it would have to contain; fold the cache tokens in for that case so
+    # the uncached input is not clamped to zero.
+    _raw_prompt_tokens = float(prompt_tokens)
+    _cache_total = _cache_read_tokens + _cache_creation_tokens
+    _normalized_prompt_tokens = (
+        _raw_prompt_tokens + _cache_total
+        if _raw_prompt_tokens < _cache_total
+        else _raw_prompt_tokens
+    )
 
     response_cost = _cost_per_token_custom_pricing_helper(
         prompt_tokens=_normalized_prompt_tokens,
