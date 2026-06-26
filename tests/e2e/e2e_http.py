@@ -10,6 +10,7 @@ requests itself imports.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Generic, Iterator, Literal, NewType, TypeVar, cast
 
 import pytest
@@ -17,6 +18,18 @@ import requests
 from pydantic import BaseModel, ConfigDict, Field
 
 URL = NewType("URL", str)
+
+
+@dataclass(frozen=True, slots=True)
+class MultipartFile:
+    """The file part of a multipart/form-data upload. Raw bytes (not a pydantic
+    model) since the content is passed straight to the encoder, never serialized to
+    JSON - and a batch JSONL can be large enough that a copy would matter."""
+
+    filename: str
+    content: bytes
+    content_type: str
+    field_name: str = "file"
 
 
 class Headers(BaseModel):
@@ -304,3 +317,28 @@ def stream(
     """Streaming (SSE) call: consumes the stream counting events, and captures the
     x-litellm-call-id + content-type headers. Body is elided."""
     return send(url, headers=headers, json=json, stream=True, timeout=timeout)
+
+
+def upload[R: BaseModel](
+    url: URL,
+    *,
+    headers: BaseModel,
+    form: BaseModel,
+    file: MultipartFile,
+    response_type: type[R],
+    timeout: float = 120.0,
+) -> Result[R]:
+    """multipart/form-data POST (e.g. /v1/files): the text fields come from `form`,
+    the file part from `file`. requests sets the multipart Content-Type + boundary,
+    so `headers` must carry only auth (no Content-Type)."""
+    try:
+        resp = requests.post(
+            str(url),
+            headers=_headers(headers),
+            data=form.model_dump(by_alias=True, exclude_none=True),
+            files={file.field_name: (file.filename, file.content, file.content_type)},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)

@@ -13,12 +13,29 @@ from typing import Protocol
 from pydantic import BaseModel
 
 import e2e_http
-from e2e_http import URL, AuthHeaders, ProbeResult, Result, StreamingResponse
+from e2e_http import (
+    URL,
+    AuthHeaders,
+    MultipartFile,
+    ProbeResult,
+    Result,
+    StreamingResponse,
+)
 
 
 class Transport(Protocol):
     def post[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]: ...
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: BaseModel,
+        file: MultipartFile,
+        response_type: type[R],
     ) -> Result[R]: ...
 
     def stream(
@@ -79,6 +96,24 @@ class HttpTransport:
             self._url(path),
             headers=headers,
             json=json,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: BaseModel,
+        file: MultipartFile,
+        response_type: type[R],
+    ) -> Result[R]:
+        return e2e_http.upload(
+            self._url(path),
+            headers=headers,
+            form=form,
+            file=file,
             response_type=response_type,
             timeout=self.request_timeout,
         )
@@ -201,6 +236,19 @@ class SplitTransport:
     ) -> Result[R]:
         return self._route(path).post(
             path, headers=headers, json=json, response_type=response_type
+        )
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: BaseModel,
+        file: MultipartFile,
+        response_type: type[R],
+    ) -> Result[R]:
+        return self._route(path).upload(
+            path, headers=headers, form=form, file=file, response_type=response_type
         )
 
     def get[R: BaseModel](
