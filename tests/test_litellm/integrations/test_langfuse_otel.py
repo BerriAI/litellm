@@ -13,7 +13,7 @@ from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
-def _export_langfuse_generation_span(metadata, *, generation_name="gen", model="doubao"):
+def _export_generation_span_for_kwargs(kwargs, *, generation_name):
     """Run a success event through a real (in-memory) Langfuse OTEL exporter and
     return the finished generation span, so trace-id tests assert against the
     actually-exported OTEL span context rather than a mock."""
@@ -22,14 +22,6 @@ def _export_langfuse_generation_span(metadata, *, generation_name="gen", model="
         config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
         callback_name="langfuse_otel",
     )
-    kwargs = {
-        "litellm_params": {
-            "metadata": {"generation_name": generation_name, **metadata}
-        },
-        "messages": [{"role": "user", "content": "hi"}],
-        "model": model,
-        "call_type": "acompletion",
-    }
     response_obj = {
         "id": "chatcmpl-test",
         "choices": [{"message": {"role": "assistant", "content": "ok"}}],
@@ -45,6 +37,20 @@ def _export_langfuse_generation_span(metadata, *, generation_name="gen", model="
         for span in exporter.get_finished_spans()
         if span.attributes.get("langfuse.generation.name") == generation_name
     )
+
+
+def _export_langfuse_generation_span(
+    metadata, *, generation_name="gen", model="doubao"
+):
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"generation_name": generation_name, **metadata}
+        },
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": model,
+        "call_type": "acompletion",
+    }
+    return _export_generation_span_for_kwargs(kwargs, generation_name=generation_name)
 
 
 class TestLangfuseOtelIntegration:
@@ -286,9 +292,9 @@ class TestLangfuseOtelIntegration:
         import hashlib
 
         trace_id = "global_20260225143025_ord2468"
-        expected_otel_trace_id = hashlib.sha256(trace_id.encode("utf-8")).digest()[
-            :16
-        ].hex()
+        expected_otel_trace_id = (
+            hashlib.sha256(trace_id.encode("utf-8")).digest()[:16].hex()
+        )
         generation_name = "ishaan-test-generation"
         exporter = InMemorySpanExporter()
         logger = LangfuseOtelLogger(
@@ -329,7 +335,9 @@ class TestLangfuseOtelIntegration:
         )
 
         assert generation_span.attributes.get("langfuse.trace.id") == trace_id
-        assert format(generation_span.context.trace_id, "032x") == expected_otel_trace_id
+        assert (
+            format(generation_span.context.trace_id, "032x") == expected_otel_trace_id
+        )
 
     def test_valid_hex_trace_id_used_directly(self):
         """A ``metadata.trace_id`` that is already a valid 32-hex OTEL id must be
@@ -349,8 +357,7 @@ class TestLangfuseOtelIntegration:
             {"trace_id": "123e4567-e89b-12d3-a456-426614174000"}
         )
         assert (
-            format(span.context.trace_id, "032x")
-            == "123e4567e89b12d3a456426614174000"
+            format(span.context.trace_id, "032x") == "123e4567e89b12d3a456426614174000"
         )
 
     def test_existing_trace_id_takes_precedence_over_trace_id(self):
@@ -377,6 +384,58 @@ class TestLangfuseOtelIntegration:
         assert span.attributes.get("langfuse.generation.name") == "my-gen"
         assert span.name == "my-gen"
         assert format(span.context.trace_id, "032x") == expected
+
+    def test_traceparent_header_wins_over_metadata_trace_id(self):
+        """Distributed tracing must not regress: a traceparent header keeps
+        control of the trace identity even when metadata.trace_id is present."""
+        parent_trace_hex = "11111111111111111111111111111111"
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "generation_name": "gen",
+                    "trace_id": "global_20260225143025_ord2468",
+                },
+                "proxy_server_request": {
+                    "headers": {
+                        "traceparent": f"00-{parent_trace_hex}-2222222222222222-01"
+                    }
+                },
+            },
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "doubao",
+            "call_type": "acompletion",
+        }
+        span = _export_generation_span_for_kwargs(kwargs, generation_name="gen")
+        assert format(span.context.trace_id, "032x") == parent_trace_hex
+
+    def test_explicit_parent_span_wins_over_metadata_trace_id(self):
+        """An explicit proxy parent span keeps control of the trace identity even
+        when metadata.trace_id is present (the common proxy nesting case)."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        parent = TracerProvider().get_tracer("test").start_span("parent")
+        parent_trace_hex = format(parent.get_span_context().trace_id, "032x")
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "generation_name": "gen",
+                    "trace_id": "global_20260225143025_ord2468",
+                    "litellm_parent_otel_span": parent,
+                },
+            },
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "doubao",
+            "call_type": "acompletion",
+        }
+        span = _export_generation_span_for_kwargs(kwargs, generation_name="gen")
+        assert format(span.context.trace_id, "032x") == parent_trace_hex
+
+    def test_no_trace_id_keeps_independent_random_root_spans(self):
+        """Without a metadata trace id the default behavior is unchanged: each
+        request gets its own random root trace, not a shared anchored one."""
+        first = _export_langfuse_generation_span({})
+        second = _export_langfuse_generation_span({})
+        assert first.context.trace_id != second.context.trace_id
 
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
