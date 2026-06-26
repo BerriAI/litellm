@@ -2,7 +2,7 @@ import asyncio
 import html as _html
 import json
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -453,7 +453,7 @@ async def exchange_token_with_server(
         # substituting the proxy callback (RFC 6749 §4.1.3). In relay mode the
         # provider only ever saw the proxy callback, so the exchange must
         # replay it.
-        if mcp_server.delegate_auth_to_upstream:
+        if mcp_server.delegates_oauth_to_upstream:
             effective_redirect_uri = redirect_uri
         else:
             effective_redirect_uri = f"{proxy_base_url}/callback"
@@ -1118,6 +1118,18 @@ async def oauth_protected_resource_mcp(
     )
 
 
+def _has_usable_passthrough_endpoint(metadata: Dict[str, object]) -> bool:
+    """True iff ``metadata`` advertises at least one passthrough endpoint as a
+    non-empty string, matching ``_select_passthrough_endpoint``'s usability
+    test. The discovery probe relies on this so it keeps trying later RFC 8414
+    candidates instead of stopping on one whose endpoints are null/empty.
+    """
+    values = (
+        metadata.get(key) for key in ("authorization_endpoint", "registration_endpoint")
+    )
+    return any(isinstance(value, str) and value for value in values)
+
+
 def _select_passthrough_endpoint(
     configured: Optional[str],
     upstream_metadata: Optional[dict],
@@ -1136,7 +1148,7 @@ def _select_passthrough_endpoint(
     return relay
 
 
-async def _get_oauth_metadata_json(discovery_url: str) -> Optional[dict]:
+async def _get_oauth_metadata_json(discovery_url: str) -> Optional[Dict[str, object]]:
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     try:
         response = await async_client.get(
@@ -1156,7 +1168,9 @@ async def _get_oauth_metadata_json(discovery_url: str) -> Optional[dict]:
         decoded: object = response.json()
     except Exception:
         return None
-    return decoded if isinstance(decoded, dict) else None
+    if not isinstance(decoded, dict):
+        return None
+    return cast(Dict[str, object], decoded)
 
 
 async def _fetch_upstream_authorization_server_metadata(
@@ -1208,10 +1222,17 @@ async def _fetch_upstream_authorization_server_metadata(
         if cached is not None and cached[0] > now:
             return cached[1]
 
+        # Accept a candidate only when it actually advertises a usable upstream
+        # endpoint; a 200 that decodes to {}, omits both keys, or carries
+        # null/empty endpoints must not short-circuit the remaining RFC 8414
+        # candidates (e.g. the path-suffix form) nor get cached as usable.
         payload = None
         for candidate in candidates:
-            payload = await _get_oauth_metadata_json(candidate)
-            if payload is not None:
+            candidate_payload = await _get_oauth_metadata_json(candidate)
+            if candidate_payload is None:
+                continue
+            if _has_usable_passthrough_endpoint(candidate_payload):
+                payload = candidate_payload
                 break
 
         ttl = (
@@ -1261,14 +1282,11 @@ async def _build_oauth_authorization_server_response(
 
     # Upstream endpoints are advertised only for oauth2 servers that explicitly
     # delegate auth to the upstream provider; otherwise discovery keeps
-    # advertising the relay so relay-mode deployments stay on the old flow.
-    # delegate_auth_to_upstream is honored only for auth_type oauth2, so a
-    # non-oauth2 (e.g. pass-through) server never takes this path.
+    # advertising the relay so relay-mode deployments stay on the old flow. The
+    # token exchange gates on the same predicate so the two never drift.
     delegated_server = (
         mcp_server
-        if mcp_server is not None
-        and mcp_server.auth_type == MCPAuth.oauth2
-        and mcp_server.delegate_auth_to_upstream
+        if mcp_server is not None and mcp_server.delegates_oauth_to_upstream
         else None
     )
 

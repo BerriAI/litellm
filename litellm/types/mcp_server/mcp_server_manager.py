@@ -199,6 +199,18 @@ class MCPServer(BaseModel):
         return any(h.lower() == "authorization" for h in self.extra_headers)
 
     @property
+    def delegates_oauth_to_upstream(self) -> bool:
+        """True iff OAuth discovery should advertise the upstream provider's own
+        authorization/registration endpoints and the token exchange should
+        replay the client's redirect_uri rather than the relay callback.
+
+        Honored only for ``auth_type == oauth2``, matching the documented scope
+        of ``delegate_auth_to_upstream``. Keeping discovery and token-exchange
+        on this single predicate prevents the two paths from drifting apart.
+        """
+        return self.auth_type == MCPAuth.oauth2 and self.delegate_auth_to_upstream
+
+    @property
     def has_token_exchange_config(self) -> bool:
         """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
         return (

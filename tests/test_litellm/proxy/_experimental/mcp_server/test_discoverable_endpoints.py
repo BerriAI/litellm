@@ -2789,6 +2789,63 @@ async def test_token_exchange_ignores_client_redirect_uri_without_delegation():
 
 
 @pytest.mark.asyncio
+async def test_token_exchange_ignores_redirect_uri_for_non_oauth2_delegated_server():
+    """The token exchange gates redirect_uri replay on delegates_oauth_to_upstream,
+    the same oauth2-only predicate discovery uses. A non-oauth2 server that sets
+    delegate_auth_to_upstream still advertises the relay authorize endpoint, so
+    the code exchange must replay the proxy callback, not the client's URI;
+    forwarding the loopback here would mismatch the upstream binding."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="none_delegated",
+        name="none_delegated",
+        server_name="none_delegated",
+        alias="none_delegated",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        client_id="cid",
+        client_secret="cs",
+        token_url="https://provider.example/token",
+        delegate_auth_to_upstream=True,
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+    fake_response.raise_for_status = MagicMock()
+    fake_client = MagicMock()
+    fake_client.post = AsyncMock(return_value=fake_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=fake_client,
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth_code",
+            redirect_uri="http://localhost:6274/oauth/callback",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+
+    data = fake_client.post.call_args.kwargs["data"]
+    assert data["redirect_uri"] == "https://litellm.example.com/callback"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_scope,expected_scope",
     [
@@ -3354,6 +3411,114 @@ async def test_authorization_server_and_protected_resource_caches_do_not_collide
     assert pr == pr_payload
     # If the two caches collided on (server_id, url), this would be pr_payload.
     assert auth_server == as_payload
+
+
+@pytest.mark.asyncio
+async def test_discovery_skips_empty_metadata_and_tries_path_candidate():
+    """A host-only well-known that returns 200 with no authorization_endpoint
+    must not short-circuit discovery: the candidate loop continues to the RFC
+    8414 path-suffix form and uses the real metadata found there, instead of
+    caching the empty document and falling back to the relay."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    de._OAUTH_METADATA_CACHE.clear()
+    global_mcp_server_manager.registry.clear()
+    server = _make_oauth2_server(
+        server_id="empty_then_path",
+        url="https://graph.microsoft.example/tenant/mcp",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    host_empty = MagicMock()
+    host_empty.status_code = 200
+    host_empty.json.return_value = {}
+    path_hit = MagicMock()
+    path_hit.status_code = 200
+    path_hit.json.return_value = {
+        "authorization_endpoint": "https://login.example/authorize",
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[host_empty, path_hit])
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            response = await de._build_oauth_authorization_server_response(
+                request=mock_request, mcp_server_name="empty_then_path"
+            )
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        global_mcp_server_manager.registry.clear()
+
+    # The empty host-only 200 must not have ended the probe.
+    assert fake_client.get.await_count == 2
+    assert response["authorization_endpoint"] == "https://login.example/authorize"
+
+
+@pytest.mark.asyncio
+async def test_discovery_skips_null_endpoint_and_tries_path_candidate():
+    """A host-only well-known that returns the endpoint keys with null/empty
+    values is just as unusable as one that omits them: ``_select_passthrough_endpoint``
+    would discard the null and fall back to the relay. The candidate loop must
+    treat presence-without-a-usable-string the same as a miss and keep probing
+    the RFC 8414 path-suffix form, otherwise it stops early and leaks the relay."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    de._OAUTH_METADATA_CACHE.clear()
+    global_mcp_server_manager.registry.clear()
+    server = _make_oauth2_server(
+        server_id="null_then_path",
+        url="https://graph.microsoft.example/tenant/mcp",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    host_null = MagicMock()
+    host_null.status_code = 200
+    host_null.json.return_value = {
+        "authorization_endpoint": None,
+        "registration_endpoint": "",
+    }
+    path_hit = MagicMock()
+    path_hit.status_code = 200
+    path_hit.json.return_value = {
+        "authorization_endpoint": "https://login.example/authorize",
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[host_null, path_hit])
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            response = await de._build_oauth_authorization_server_response(
+                request=mock_request, mcp_server_name="null_then_path"
+            )
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        global_mcp_server_manager.registry.clear()
+
+    # null/empty endpoints in the host-only 200 must not have ended the probe.
+    assert fake_client.get.await_count == 2
+    assert response["authorization_endpoint"] == "https://login.example/authorize"
 
 
 @pytest.mark.asyncio
