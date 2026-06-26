@@ -2,7 +2,7 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -111,9 +111,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
                 sanitized_tools.append(tool)
         return sanitized_tools
 
-    def _fill_reasoning_content(
-        self, messages: List[Dict]
-    ) -> List[Dict]:
+    def _fill_reasoning_content(self, messages: list[dict]) -> list[dict]:
         """
         DeepSeek thinking mode requires `reasoning_content` to be passed back on
         every assistant message in multi-turn conversations. If it is missing,
@@ -130,13 +128,9 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
              present (LiteLLM stores provider-specific response fields there).
           2. Otherwise inject a single space — the minimum value the API accepts.
         """
-        result: List[Dict] = []
+        result: list[dict] = []
         for msg in messages:
-            if (
-                isinstance(msg, dict)
-                and msg.get("role") == "assistant"
-                and not msg.get("reasoning_content")
-            ):
+            if isinstance(msg, dict) and msg.get("role") == "assistant" and not msg.get("reasoning_content"):
                 patched = dict(msg)
                 provider_fields = patched.get("provider_specific_fields") or {}
                 stored = provider_fields.get("reasoning_content")
@@ -179,11 +173,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         anthropic_messages_request = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
@@ -192,12 +186,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         if "tools" in anthropic_messages_request:
-            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(
-                anthropic_messages_request["tools"]
-            )
-        if self._thinking_mode_active(
-            model=model, optional_params=anthropic_messages_optional_request_params
-        ) and "messages" in anthropic_messages_request:
+            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
+        if (
+            self._thinking_mode_active(model=model, optional_params=anthropic_messages_optional_request_params)
+            and "messages" in anthropic_messages_request
+        ):
             anthropic_messages_request["messages"] = self._fill_reasoning_content(
                 anthropic_messages_request["messages"]
             )
