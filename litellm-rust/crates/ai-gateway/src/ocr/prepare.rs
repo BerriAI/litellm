@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use litellm_core::routing_utils::provider::{get_custom_llm_provider, CustomLlmProvider};
+use serde_json::{json, Value};
 
 use super::hooks::OcrLifecycleHooks;
 use super::types::{OcrRequest, PreparedOcrRequest};
@@ -25,6 +27,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
         });
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
+    let logging_kwargs = ocr_logging_kwargs(&request, &model, &custom_llm_provider);
 
     PreparedOcrCall {
         request: PreparedOcrRequest {
@@ -42,8 +45,51 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             CustomLoggerRunner::new(request.callbacks),
             CustomGuardrailRunner::new(request.guardrails),
             request.request_metadata,
+            logging_kwargs,
         ),
     }
+}
+
+fn ocr_logging_kwargs(
+    request: &OcrRequest<'_>,
+    model: &str,
+    custom_llm_provider: &str,
+) -> HashMap<String, Value> {
+    let mut kwargs = HashMap::new();
+    kwargs.insert("model".to_string(), json!(model));
+    kwargs.insert(
+        "custom_llm_provider".to_string(),
+        json!(custom_llm_provider),
+    );
+    kwargs.insert("call_type".to_string(), json!("ocr"));
+    kwargs.insert("document".to_string(), request.document.clone());
+    kwargs.insert(
+        "optional_params".to_string(),
+        Value::Object(request.optional_params.clone()),
+    );
+    kwargs.insert(
+        "api_base".to_string(),
+        request
+            .api_base
+            .map(|api_base| json!(api_base))
+            .unwrap_or(Value::Null),
+    );
+    kwargs.insert(
+        "headers".to_string(),
+        request
+            .extra_headers
+            .clone()
+            .map(Value::Object)
+            .unwrap_or(Value::Null),
+    );
+    kwargs.insert(
+        "timeout".to_string(),
+        request
+            .timeout
+            .map(|timeout| json!(timeout.as_secs_f64()))
+            .unwrap_or(Value::Null),
+    );
+    kwargs
 }
 
 fn new_ocr_call_id() -> String {

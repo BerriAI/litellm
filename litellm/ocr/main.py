@@ -49,6 +49,8 @@ class _PreparedRustOCRCall:
     api_base: str | None
     headers: dict[str, object]
     optional_params: dict[str, object]
+    callbacks: list[object]
+    guardrails: list[object]
 
 
 _RUST_OCR_PROVIDERS = {
@@ -242,12 +244,31 @@ def _prepare_rust_ocr_call(
             "headers": resolved_headers,
         },
     )
+    callbacks, guardrails = _get_rust_bridge_callbacks()
     return _PreparedRustOCRCall(
         api_key=resolved_api_key,
         api_base=rust_api_base,
         headers=cast(dict[str, object], resolved_headers),
         optional_params=rust_optional_params,
+        callbacks=callbacks,
+        guardrails=guardrails,
     )
+
+
+def _get_rust_bridge_callbacks() -> tuple[list[object], list[object]]:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_logger import CustomLogger
+
+    active_callbacks = litellm.logging_callback_manager._get_all_callbacks()
+    guardrails: list[object] = []
+    callbacks: list[object] = []
+    for callback in active_callbacks:
+        if isinstance(callback, CustomGuardrail):
+            if callback not in guardrails:
+                guardrails.append(callback)
+        if isinstance(callback, CustomLogger) and callback not in callbacks:
+            callbacks.append(callback)
+    return callbacks, guardrails
 
 
 def _run_rust_ocr(
@@ -269,6 +290,8 @@ def _run_rust_ocr(
         extra_headers=prepared.headers,
         optional_params=prepared.optional_params,
         timeout=prepared_request.effective_timeout,
+        callbacks=prepared.callbacks,
+        guardrails=prepared.guardrails,
     )
     if rust_response is None:
         return None
@@ -294,6 +317,8 @@ async def _run_rust_aocr(
         extra_headers=prepared.headers,
         optional_params=prepared.optional_params,
         timeout=prepared_request.effective_timeout,
+        callbacks=prepared.callbacks,
+        guardrails=prepared.guardrails,
     )
     if rust_response is None:
         return None

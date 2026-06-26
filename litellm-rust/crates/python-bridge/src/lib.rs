@@ -8,6 +8,7 @@ use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
+mod integrations_bridge;
 
 type MarshaledOcrInputs = (
     Value,
@@ -83,7 +84,7 @@ fn marshal_inputs(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, callbacks=None, guardrails=None))]
 #[allow(clippy::too_many_arguments)]
 fn ocr(
     py: Python<'_>,
@@ -95,6 +96,8 @@ fn ocr(
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    callbacks: Option<Py<PyAny>>,
+    guardrails: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
@@ -103,6 +106,8 @@ fn ocr(
         optional_params,
         timeout_seconds,
     )?;
+    let callbacks = integrations_bridge::py_callbacks_to_rust(py, callbacks)?;
+    let guardrails = integrations_bridge::py_guardrails_to_rust(py, guardrails)?;
 
     let result = gil::release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
@@ -114,8 +119,8 @@ fn ocr(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
+            callbacks,
+            guardrails,
             request_metadata: Default::default(),
             litellm_call_id: None,
         }))
@@ -128,7 +133,7 @@ fn ocr(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, callbacks=None, guardrails=None))]
 #[allow(clippy::too_many_arguments)]
 fn aocr(
     py: Python<'_>,
@@ -140,6 +145,8 @@ fn aocr(
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    callbacks: Option<Py<PyAny>>,
+    guardrails: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'_, PyAny>> {
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
@@ -148,6 +155,8 @@ fn aocr(
         optional_params,
         timeout_seconds,
     )?;
+    let callbacks = integrations_bridge::py_callbacks_to_rust(py, callbacks)?;
+    let guardrails = integrations_bridge::py_guardrails_to_rust(py, guardrails)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let value = run_ocr(OcrRequest {
@@ -159,8 +168,8 @@ fn aocr(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
+            callbacks,
+            guardrails,
             request_metadata: Default::default(),
             litellm_call_id: None,
         })
