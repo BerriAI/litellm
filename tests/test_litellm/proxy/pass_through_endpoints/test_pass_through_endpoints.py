@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import Request, UploadFile
-from starlette.datastructures import Headers, QueryParams
+from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 sys.path.insert(
@@ -94,7 +94,7 @@ async def test_make_multipart_http_request():
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
-    form_data = {"file": upload_file, "text_field": "test value"}
+    form_data = FormData([("file", upload_file), ("text_field", "test value")])
     request.form = AsyncMock(return_value=form_data)
 
     # Mock httpx client
@@ -123,9 +123,61 @@ async def test_make_multipart_http_request():
 
     assert call_args["method"] == "POST"
     assert str(call_args["url"]) == "http://test.com"
-    assert isinstance(call_args["files"], dict)
-    assert isinstance(call_args["data"], dict)
-    assert call_args["data"]["text_field"] == "test value"
+    assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
+    assert call_args["data"] == {"text_field": ["test value"]}
+
+
+@pytest.mark.asyncio
+async def test_make_multipart_http_request_forwards_repeated_fields():
+    """
+    Regression: a client sending several parts under the same field name
+    (e.g. ``-F file=@a.pdf -F file=@b.pdf``) must have every part forwarded.
+    Starlette's ``FormData.items()`` collapses duplicate keys to the last value,
+    so the handler must read ``multi_items()`` and emit one httpx files tuple per
+    file plus a list value per repeated non-file field.
+    """
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    def _upload(filename: str, content: bytes) -> UploadFile:
+        f = UploadFile(
+            file=BytesIO(content),
+            filename=filename,
+            headers=Headers({"content-type": "application/pdf"}),
+        )
+        f.read = AsyncMock(return_value=content)
+        return f
+
+    form_data = FormData(
+        [
+            ("file", _upload("a.pdf", b"PDF-ONE")),
+            ("file", _upload("b.pdf", b"PDF-TWO")),
+            ("other_parameter", "xxx"),
+            ("other_parameter", "yyy"),
+        ]
+    )
+    request.form = AsyncMock(return_value=form_data)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    async_client = MagicMock()
+    async_client.request = AsyncMock(return_value=mock_response)
+
+    await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com"),
+        headers={},
+        requested_query_params=None,
+    )
+
+    call_args = async_client.request.call_args[1]
+
+    assert call_args["files"] == [
+        ("file", ("a.pdf", b"PDF-ONE", "application/pdf")),
+        ("file", ("b.pdf", b"PDF-TWO", "application/pdf")),
+    ]
+    assert call_args["data"] == {"other_parameter": ["xxx", "yyy"]}
 
 
 @pytest.mark.asyncio
@@ -149,7 +201,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
-    form_data = {"file": upload_file, "key": "value"}
+    form_data = FormData([("file", upload_file), ("key", "value")])
     request.form = AsyncMock(return_value=form_data)
 
     # Mock httpx client
@@ -193,9 +245,8 @@ async def test_make_multipart_http_request_removes_content_type_header():
     # Verify other parameters are correct
     assert call_args["method"] == "POST"
     assert str(call_args["url"]) == "http://test.com"
-    assert isinstance(call_args["files"], dict)
-    assert isinstance(call_args["data"], dict)
-    assert call_args["data"]["key"] == "value"
+    assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
+    assert call_args["data"] == {"key": ["value"]}
     assert call_args["params"] == {"param": "value"}
 
     # Verify the original headers dict was not modified (copy was used)
@@ -219,7 +270,7 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     upload_headers = Headers({"content-type": "text/plain"})
     upload_file = UploadFile(file=file, filename="test.txt", headers=upload_headers)
     upload_file.read = AsyncMock(return_value=file_content)
-    request.form = AsyncMock(return_value={"file": upload_file})
+    request.form = AsyncMock(return_value=FormData([("file", upload_file)]))
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -240,7 +291,7 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     call_args = async_client.request.call_args[1]
     assert "files" in call_args
     assert "json" not in call_args
-    assert call_args["files"]["file"][0] == "test.txt"
+    assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
 
 
 @pytest.mark.asyncio
@@ -3225,7 +3276,8 @@ async def test_multipart_passthrough_preserves_boundary():
     async def mock_httpx_request(method, url, **kwargs):
         # Verify that files parameter is passed (not json)
         assert "files" in kwargs, "Files should be passed for multipart requests"
-        assert "file" in kwargs["files"], "File field should be in files dict"
+        files = dict(kwargs["files"])
+        assert "file" in files, "File field should be in files"
 
         # Verify content-type is NOT in headers (httpx will set it with correct boundary)
         headers = kwargs.get("headers", {})
@@ -3233,7 +3285,7 @@ async def test_multipart_passthrough_preserves_boundary():
             "content-type" not in headers
         ), "content-type should be removed for multipart"
 
-        filename, content, content_type = kwargs["files"]["file"]
+        filename, content, content_type = files["file"]
         assert filename == "test.txt"
         assert content == b"test file content"
         assert content_type == "text/plain"
@@ -3255,7 +3307,7 @@ async def test_multipart_passthrough_preserves_boundary():
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
-    form_data = {"file": upload_file}
+    form_data = FormData([("file", upload_file)])
     request.form = AsyncMock(return_value=form_data)
 
     # Test the multipart handler directly

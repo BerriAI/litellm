@@ -477,20 +477,44 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         requested_query_params: Optional[dict] = None,
         stream: bool = False,
     ) -> httpx.Response:
-        """Process multipart/form-data requests, handling both files and form fields"""
-        form_data = await request.form()
-        files = {}
-        form_data_dict = {}
+        """Process multipart/form-data requests, handling both files and form fields.
 
-        for field_name, field_value in form_data.items():
-            if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[
-                    field_name
-                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+        Iterates ``form.multi_items()`` rather than ``form.items()`` so repeated
+        field names (e.g. several ``-F file=@...`` parts) are all forwarded;
+        ``items()`` collapses duplicate keys to the last value. Files go out as a
+        list of ``(field_name, (filename, content, content_type))`` tuples and
+        repeated non-file fields are grouped into list values, both of which httpx
+        encodes as separate multipart parts.
+        """
+        form_items = (await request.form()).multi_items()
+
+        files = [
+            (
+                field_name,
+                await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
                     upload_file=field_value
-                )
-            else:
-                form_data_dict[field_name] = field_value
+                ),
+            )
+            for field_name, field_value in form_items
+            if isinstance(field_value, (StarletteUploadFile, UploadFile))
+        ]
+
+        field_names = tuple(
+            dict.fromkeys(
+                field_name
+                for field_name, field_value in form_items
+                if not isinstance(field_value, (StarletteUploadFile, UploadFile))
+            )
+        )
+        form_data_dict = {
+            name: [
+                field_value
+                for field_name, field_value in form_items
+                if field_name == name
+                and not isinstance(field_value, (StarletteUploadFile, UploadFile))
+            ]
+            for name in field_names
+        }
 
         # Remove content-type header - httpx will set it correctly with the new boundary
         # when it creates the multipart body from files/data parameters
