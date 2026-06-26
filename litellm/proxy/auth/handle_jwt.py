@@ -1835,8 +1835,11 @@ class JWTAuthManager:
                     ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
 
-        # Sync team memberships
-        jwt_team_ids = set(jwt_handler.get_team_ids_from_jwt(jwt_valid_token))
+        # Sync team memberships; include both plural and singular claim shapes so
+        # IdPs that populate only the singular field (e.g. Okta/Auth0) are not
+        # treated as claimless, which would otherwise leave stale DB memberships
+        # eligible for selection by _resolve_db_team_fallback on later requests.
+        jwt_team_ids = set(jwt_handler.get_all_jwt_team_ids(jwt_valid_token))
         existing_teams = set(user_object.teams or [])
         teams_to_add = jwt_team_ids - existing_teams
         preserve_db_teams_without_claims = (
@@ -1995,6 +1998,7 @@ class JWTAuthManager:
         from litellm.proxy.proxy_server import llm_router
 
         user_team_ids = user_object.teams if user_object else []
+        any_team_resolved = False
         for candidate_team_id in user_team_ids:
             try:
                 team_object = await get_team_object(
@@ -2009,6 +2013,7 @@ class JWTAuthManager:
                 continue
             if not team_object:
                 continue
+            any_team_resolved = True
             if requested_model:
                 try:
                     await can_team_access_model(
@@ -2047,6 +2052,14 @@ class JWTAuthManager:
             return candidate_team_id, team_object, None
 
         if enforce_team_based_model_access:
+            if requested_model and any_team_resolved:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"No team has access to the requested model: {requested_model}. "
+                        f"Checked teams={user_team_ids}. Check `/models` to see all available models."
+                    ),
+                )
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -2181,7 +2194,16 @@ class JWTAuthManager:
         specific_team_id = jwt_handler.get_team_id(
             token=jwt_valid_token, default_value=None
         )
-        if specific_team_id:
+
+        # `get_team_id` can return `team_id_default` when no JWT field is present,
+        # which would otherwise hide claimless tokens from the DB-fallback path.
+        # `get_all_jwt_team_ids` deliberately ignores that default, so use it to
+        # detect whether the token actually carries any IdP team claim.
+        db_team_fallback = (
+            jwt_handler.litellm_jwtauth.fallback_to_db_teams
+            and not jwt_handler.get_all_jwt_team_ids(token=jwt_valid_token)
+        )
+        if specific_team_id and not db_team_fallback:
             all_team_ids.add(specific_team_id)
 
         header_team_id = JWTAuthManager.get_team_id_from_header(
@@ -2199,7 +2221,7 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
-        elif not team_id:
+        elif not team_id and not db_team_fallback:
             ## SPECIFIC TEAM ID
             (
                 team_id,
@@ -2294,9 +2316,6 @@ class JWTAuthManager:
         )
 
         # If JWT did not resolve team_id, attempt a team fallback.
-        db_team_fallback = (
-            jwt_handler.litellm_jwtauth.fallback_to_db_teams and not all_team_ids
-        )
         if team_id is None and db_team_fallback:
             (
                 team_id,
@@ -2313,6 +2332,15 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
+            # The earlier passthrough gate ran when team_id was None; re-check
+            # against the DB-resolved team so a fallback-selected team must also
+            # pass the auth-enforced passthrough allowlist.
+            if team_id and not JWTAuthManager._team_has_passthrough_route_access(
+                team_object=team_object,
+                route=route,
+                request_method=request_method,
+            ):
+                JWTAuthManager._raise_team_passthrough_route_denial(route=route)
         elif team_id is None:
             (
                 team_id,

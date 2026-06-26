@@ -4954,3 +4954,282 @@ async def test_auth_builder_db_fallback_does_not_validate_rbac_team_against_db_m
         )
 
     assert result["team_id"] == rbac_team
+
+
+@pytest.mark.asyncio
+async def test_resolve_db_team_fallback_distinguishes_no_membership_vs_model_denied():
+    """When enforce_team_based_model_access is on, a user with no DB memberships
+    and a user with memberships that all fail the model-access check must surface
+    different 403s; collapsing both into the no-membership message hides the real
+    cause and diverges from find_team_with_model_access's claim-based message."""
+    membership_user = LiteLLM_UserTable(
+        user_id="u_no_model",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["only_team"],
+    )
+    no_membership_user = LiteLLM_UserTable(
+        user_id="u_empty",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=[],
+    )
+
+    async def fake_get_team(team_id, **kwargs):
+        return LiteLLM_TeamTable(team_id=team_id, models=["other"])
+
+    async def fake_can_access(model, team_object, llm_router, team_model_aliases=None):
+        raise Exception("model access denied")
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            side_effect=fake_can_access,
+        ),
+    ):
+        with pytest.raises(HTTPException) as model_denied:
+            await JWTAuthManager._resolve_db_team_fallback(
+                user_object=membership_user,
+                user_id=None,
+                requested_model="gpt-4",
+                enforce_team_based_model_access=True,
+                team_id_upsert=False,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+            )
+
+        with pytest.raises(HTTPException) as no_member:
+            await JWTAuthManager._resolve_db_team_fallback(
+                user_object=no_membership_user,
+                user_id=None,
+                requested_model="gpt-4",
+                enforce_team_based_model_access=True,
+                team_id_upsert=False,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+            )
+
+    assert model_denied.value.status_code == 403
+    assert "requested model" in model_denied.value.detail
+    assert "gpt-4" in model_denied.value.detail
+
+    assert no_member.value.status_code == 403
+    assert "not a member of any team" in no_member.value.detail
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_db_fallback_runs_when_only_team_id_default_set():
+    """team_id_default makes JWTHandler.get_team_id return a non-None team for a
+    claimless token. The fallback gate must look at real JWT team claims (not the
+    operator-configured default) so fallback_to_db_teams still attributes to the
+    user's DB memberships instead of silently routing to the default team."""
+    user_id = "u_default_token"
+    user_object = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["db_team_for_user"],
+    )
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        fallback_to_db_teams=True,
+        team_id_default="config_default_team",
+    )
+
+    async def fake_get_team(team_id, **kwargs):
+        return LiteLLM_TeamTable(team_id=team_id)
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=(user_id, "u@example.com", True),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, user_id),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        mock_auth_jwt.return_value = {"sub": user_id, "scope": ""}
+        result = await JWTAuthManager.auth_builder(
+            api_key="test_jwt_token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={"enforce_rbac": False},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            request_headers=None,
+        )
+
+    assert result["team_id"] == "db_team_for_user"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_db_fallback_enforces_passthrough_route_access():
+    """A team selected only via _resolve_db_team_fallback must still pass the
+    auth-enforced passthrough route check; previously the earlier gate ran while
+    team_id was None and the fallback-resolved team bypassed it entirely."""
+    user_id = "u_passthrough"
+    user_object = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_no_passthrough"],
+    )
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(fallback_to_db_teams=True)
+
+    passthrough_route = "/vertex_ai/v1/projects/p/locations/us/publishers/google/models/gemini:generateContent"
+
+    async def fake_get_team(team_id, **kwargs):
+        return LiteLLM_TeamTable(team_id=team_id, metadata={})
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=(user_id, "u@example.com", True),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, user_id),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "_team_has_passthrough_route_access",
+            return_value=False,
+        ),
+    ):
+        mock_auth_jwt.return_value = {"sub": user_id, "scope": ""}
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.auth_builder(
+                api_key="test_jwt_token",
+                jwt_handler=jwt_handler,
+                request_data={"model": "gemini"},
+                general_settings={"enforce_rbac": False},
+                route=passthrough_route,
+                prisma_client=None,
+                user_api_key_cache=None,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+                request_headers=None,
+                request_method="POST",
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "passthrough route" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams_singular_claim_reconciles_memberships():
+    """When fallback_to_db_teams is on but the JWT carries a singular team claim
+    (Okta/Auth0 default for users with one primary team), sync must treat it as a
+    real claim and reconcile DB memberships against it. Otherwise stale DB teams
+    persist and a subsequent claimless JWT for the same user is silently attributed
+    to a team the IdP never asserted on the singular-claim login."""
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="primary_team",
+            sync_user_role_and_teams=True,
+            fallback_to_db_teams=True,
+        ),
+    )
+
+    token = {"sub": "u_singular", "primary_team": "team_primary"}
+    user = LiteLLM_UserTable(
+        user_id="u_singular",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        teams=["team_stale_a", "team_stale_b"],
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        new_callable=AsyncMock,
+    ) as mock_patch:
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler, token, user, AsyncMock()
+        )
+
+    mock_patch.assert_awaited_once()
+    assert set(mock_patch.call_args.kwargs["teams_ids_to_remove_user_from"]) == {
+        "team_stale_a",
+        "team_stale_b",
+    }
+    assert set(mock_patch.call_args.kwargs["teams_ids_to_add_user_to"]) == {
+        "team_primary"
+    }
+    assert user.teams == ["team_primary"]
