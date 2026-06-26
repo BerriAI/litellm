@@ -516,12 +516,13 @@ def _override_openai_response_model(
     LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
     That internal identifier should not be returned to clients in the OpenAI `model` field.
 
-    Note: This is intentionally verbose. A model mismatch is a useful signal that an internal
-    model identifier is being stamped/preserved somewhere in the request/response pipeline.
-    We log mismatches as warnings (and then restamp to the client-requested value) so these
-    paths stay observable for maintainers/operators without breaking client compatibility.
+    Note: This is intentionally verbose at debug level. A model mismatch is a useful signal that an
+    internal model identifier is being stamped/preserved somewhere in the request/response pipeline.
+    We log mismatches as debug (and then restamp to the client-requested value) so these paths stay
+    observable for maintainers without breaking client compatibility or alarming operators.
 
-    Errors are reserved for cases where the proxy cannot read/override the response model field.
+    Responses that omit an OpenAI-style `model` field are left unchanged (silent return),
+    including dict responses with no `model` key.
 
     Exceptions:
     1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
@@ -577,6 +578,8 @@ def _override_openai_response_model(
         return
 
     if isinstance(response_obj, dict):
+        if "model" not in response_obj:
+            return
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
             verbose_proxy_logger.debug(
@@ -589,11 +592,6 @@ def _override_openai_response_model(
         return
 
     if not hasattr(response_obj, "model"):
-        verbose_proxy_logger.error(
-            "%s: cannot override response model; missing `model` attribute. response_type=%s",
-            log_context,
-            type(response_obj),
-        )
         return
 
     downstream_model = getattr(response_obj, "model", None)
@@ -608,7 +606,7 @@ def _override_openai_response_model(
     try:
         setattr(response_obj, "model", requested_model)
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.debug(
             "%s: failed to override response.model=%r on response_type=%s. error=%s",
             log_context,
             requested_model,
