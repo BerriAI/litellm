@@ -7,7 +7,6 @@ from typing import (
     Callable,
     Dict,
     List,
-    Literal,
     Optional,
     Set,
     Tuple,
@@ -991,12 +990,17 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
-            _oauth2_flow: Optional[
-                Literal["client_credentials", "authorization_code"]
-            ] = request.oauth2_flow or (
-                "client_credentials"
-                if client_id and client_secret and request.token_url
-                else None
+            # Match load-time flow resolution: only treat this as M2M when there
+            # is no authorization_url, so interactive/OBO OAuth servers keep the
+            # user's forwarded token instead of having it dropped for a
+            # client_credentials token fetch.
+            _oauth2_flow = global_mcp_server_manager._resolve_oauth2_flow(
+                auth_type=request.auth_type,
+                oauth2_flow=request.oauth2_flow,
+                token_url=request.token_url,
+                authorization_url=request.authorization_url,
+                client_id=client_id,
+                client_secret=client_secret,
             )
             # client_credentials requires token_url to fetch a token; without it the
             # incoming auth header would be dropped with nothing to replace it.
