@@ -22,7 +22,6 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
-
 _UrlEncodableParams = TypeAdapter(dict[str, str | int | bool])
 _StrList = TypeAdapter(list[str])
 _StrFrozenSet = TypeAdapter(frozenset[str])
@@ -222,17 +221,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
                 headers=dict(raw_response.headers),
             )
 
-        # SearchResult requires title/url/snippet. Default missing/null values to ""
-        # rather than raise, so a degraded result (e.g. one TinyFish couldn't parse
-        # fully) flows through with empty strings instead of failing the whole call.
-        if isinstance(raw_json, dict):
-            results_in = raw_json.get("results")
-            if isinstance(results_in, list):
-                for item in results_in:
-                    if isinstance(item, dict):
-                        for field in ("title", "url", "snippet"):
-                            if not isinstance(item.get(field), str):
-                                item[field] = ""
+        _default_missing_result_fields(raw_json)
 
         try:
             parsed = SearchResponse.model_validate(raw_json)
@@ -245,32 +234,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
                 headers=dict(raw_response.headers),
             )
 
-        # Re-fire any TinyFish-side `parameter_warnings` as verbose_logger.warning
-        # lines. Schema per entry: {type, parameter, message, docs_url?}. See ML-2085.
-        # Defensive: skip silently on any shape we don't recognize so a malformed
-        # entry (or an early/partial rollout of the field) never throws.
-        warnings_field: object = (
-            getattr(parsed, "parameter_warnings", None)  # any-ok: extras=allow field
-        )
-        if isinstance(warnings_field, list):
-            for entry in warnings_field:
-                if not isinstance(entry, dict):
-                    continue
-                warning_type: object = entry.get("type")  # any-ok: untyped dict
-                parameter: object = entry.get("parameter")  # any-ok: untyped dict
-                message: object = entry.get("message")  # any-ok: untyped dict
-                if not isinstance(warning_type, str) or not warning_type:
-                    continue
-                if not isinstance(parameter, str) or not parameter:
-                    continue
-                if not isinstance(message, str) or not message:
-                    continue
-                verbose_logger.warning(
-                    "TinyFish Search parameter_warning (%s) `%s`: %s",
-                    warning_type,
-                    parameter,
-                    message,
-                )
+        _emit_parameter_warnings(parsed)
 
         max_results = self._caller_max_results or _TINYFISH_RESULT_CAP
         return SearchResponse(results=list(parsed.results[:max_results]))
@@ -318,3 +282,54 @@ class TinyfishSearchConfig(BaseSearchConfig):
 def _append_domain_filters(query: str, domains: list[str]) -> str:
     domain_clauses = " OR ".join(f"site:{d}" for d in domains)
     return f"({query}) ({domain_clauses})"
+
+
+def _default_missing_result_fields(raw_json: object) -> None:
+    """Default missing/null title/url/snippet to "" on each result item in place.
+
+    SearchResult requires these three fields; a degraded TinyFish result flows
+    through with empty strings instead of failing the whole call.
+    """
+    if not isinstance(raw_json, dict):
+        return
+    results_in = raw_json.get("results")
+    if not isinstance(results_in, list):
+        return
+    for item in results_in:
+        if not isinstance(item, dict):
+            continue
+        for field in ("title", "url", "snippet"):
+            if not isinstance(item.get(field), str):
+                item[field] = ""
+
+
+def _emit_parameter_warnings(parsed: SearchResponse) -> None:
+    """Re-fire TinyFish-side ``parameter_warnings`` (see ML-2085) as warnings.
+
+    Defensive: skip silently on any shape we don't recognize so a malformed
+    entry (or an early/partial rollout of the field) never throws.
+    Schema per entry: ``{type, parameter, message, docs_url?}``.
+    """
+    warnings_field: object = (
+        getattr(parsed, "parameter_warnings", None)  # any-ok: extras=allow field
+    )
+    if not isinstance(warnings_field, list):
+        return
+    for entry in warnings_field:
+        if not isinstance(entry, dict):
+            continue
+        warning_type: object = entry.get("type")  # any-ok: untyped dict
+        parameter: object = entry.get("parameter")  # any-ok: untyped dict
+        message: object = entry.get("message")  # any-ok: untyped dict
+        if not isinstance(warning_type, str) or not warning_type:
+            continue
+        if not isinstance(parameter, str) or not parameter:
+            continue
+        if not isinstance(message, str) or not message:
+            continue
+        verbose_logger.warning(
+            "TinyFish Search parameter_warning (%s) `%s`: %s",
+            warning_type,
+            parameter,
+            message,
+        )
