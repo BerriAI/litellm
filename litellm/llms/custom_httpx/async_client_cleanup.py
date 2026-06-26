@@ -50,19 +50,21 @@ async def close_litellm_async_clients():
         # Handle any other cached async client. Most expose aclose(), but some
         # SDK clients -- notably the openai SDK's AsyncOpenAI / AsyncAzureOpenAI,
         # which are cached here (set_cached_openai_client) and built on litellm's
-        # aiohttp transport -- name the async teardown close() instead. Accept
-        # either, guarding on iscoroutinefunction so sync close() methods
-        # (sync OpenAI / HTTPHandler) are left untouched.
+        # aiohttp transport -- name the async teardown close() instead. Try each
+        # candidate independently, guarding on iscoroutinefunction so sync
+        # teardowns (sync OpenAI / HTTPHandler) are left untouched. Checking them
+        # separately (rather than `aclose or close`) avoids picking a truthy but
+        # synchronous aclose() and then skipping a real async close() alongside it.
         else:
-            closer = getattr(handler, "aclose", None) or getattr(
-                handler, "close", None
-            )
-            if closer is not None and inspect.iscoroutinefunction(closer):
-                try:
-                    await closer()
-                except Exception:
-                    # Silently ignore errors during cleanup
-                    pass
+            for name in ("aclose", "close"):
+                closer = getattr(handler, name, None)
+                if closer is not None and inspect.iscoroutinefunction(closer):
+                    try:
+                        await closer()
+                    except Exception:
+                        # Silently ignore errors during cleanup
+                        pass
+                    break
 
     # Close the global base_llm_aiohttp_handler instance (issue #12443)
     # This is used by Gemini and other providers that use aiohttp
