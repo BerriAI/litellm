@@ -73,6 +73,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
+    VALID_MESSAGE_ROLES,
 )
 
 _CachingHandlerResponse = None
@@ -8233,6 +8234,12 @@ def validate_and_fix_openai_messages(messages: List):
     for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
+        elif message["role"] not in VALID_MESSAGE_ROLES:
+            raise BadRequestError(
+                message=f"Invalid role: '{message['role']}'. Supported roles are: {sorted(VALID_MESSAGE_ROLES)}",
+                model="",
+                llm_provider="",
+            )
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 

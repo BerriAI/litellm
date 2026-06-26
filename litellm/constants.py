@@ -1807,3 +1807,6 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+# Valid roles for OpenAI chat completion messages
+VALID_MESSAGE_ROLES = {"system", "user", "assistant", "tool", "function", "developer"}
