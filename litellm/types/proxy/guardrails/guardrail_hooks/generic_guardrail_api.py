@@ -89,6 +89,7 @@ class GenericGuardrailAPIResponse:
     texts: Optional[List[str]]
     images: Optional[List[str]]
     tools: Optional[List[ChatCompletionToolParam]]
+    structured_messages: Optional[List[AllMessageValues]]
     action: str
     blocked_reason: Optional[str]
 
@@ -99,12 +100,14 @@ class GenericGuardrailAPIResponse:
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
         tools: Optional[List[ChatCompletionToolParam]] = None,
+        structured_messages: Optional[List[AllMessageValues]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.structured_messages = structured_messages
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
@@ -114,4 +117,5 @@ class GenericGuardrailAPIResponse:
             texts=data.get("texts"),
             images=data.get("images"),
             tools=data.get("tools"),
+            structured_messages=data.get("structured_messages"),
         )

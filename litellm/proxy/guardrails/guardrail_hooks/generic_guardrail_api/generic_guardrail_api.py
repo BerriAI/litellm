@@ -329,8 +329,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools: Any,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
-        # Action is NONE or no modifications needed
         return_inputs = GenericGuardrailAPIInputs(texts=texts)
+        if guardrail_response.structured_messages:
+            return_inputs["structured_messages"] = guardrail_response.structured_messages
         if guardrail_response.texts:
             return_inputs["texts"] = guardrail_response.texts
         if guardrail_response.images:

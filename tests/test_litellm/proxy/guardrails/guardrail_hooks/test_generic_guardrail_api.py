@@ -581,6 +581,34 @@ class TestGuardrailActions:
             assert result_texts == ["[REDACTED]"]
             assert result_images is None
 
+    @pytest.mark.asyncio
+    async def test_action_intervened_with_structured_messages(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        compressed_messages = [
+            {"role": "user", "content": "Analyze this."},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "compressed json"}]},
+        ]
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "structured_messages": compressed_messages,
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Analyze this."], "structured_messages": [
+                    {"role": "user", "content": "Analyze this."},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "very long uncompressed json " * 100}]},
+                ]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+            assert guardrailed_inputs.get("structured_messages") == compressed_messages
+
 
 class TestImageSupport:
     """Test image handling in guardrail requests"""

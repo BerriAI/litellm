@@ -12,9 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
@@ -51,9 +49,7 @@ class MockDynamicGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
-        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data
-        )
+        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         return inputs
 
 
@@ -103,17 +99,11 @@ class TestAnthropicMessagesHandlerInputProcessing:
         data = {
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "hello"}],
-            "litellm_metadata": {
-                "guardrails": [
-                    {"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}
-                ]
-            },
+            "litellm_metadata": {"guardrails": [{"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}]},
         }
 
         with patch("litellm.proxy.proxy_server.premium_user", True):
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
@@ -216,9 +206,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         # Mock _check_streaming_has_ended to return False (stream not ended)
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=False),
-            patch.object(
-                handler, "get_streaming_string_so_far", return_value="partial text"
-            ),
+            patch.object(handler, "get_streaming_string_so_far", return_value="partial text"),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -249,9 +237,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         data = {
             "model": "claude-opus-4-6",
-            "messages": [
-                {"role": "user", "content": "What is the weather in San Francisco?"}
-            ],
+            "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
             "tools": [
                 {
                     "type": "tool_search_tool_regex_20251119",
@@ -293,6 +279,122 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[1]["name"] == "get_weather"
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
+
+
+class MockStructuredMessagesGuardrail(CustomGuardrail):
+    """Mock guardrail that returns compressed structured_messages."""
+
+    def __init__(self, guardrail_name: str, compressed_messages: List[Any]):
+        super().__init__(guardrail_name=guardrail_name)
+        self.compressed_messages = compressed_messages
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        result = dict(inputs)
+        result["structured_messages"] = self.compressed_messages
+        return GenericGuardrailAPIInputs(**result)
+
+
+class TestAnthropicStructuredMessagesApplied:
+    """Test that structured_messages from guardrail response are applied back in Anthropic format."""
+
+    @pytest.mark.asyncio
+    async def test_structured_messages_replaced_in_anthropic_format(self):
+        """When guardrail returns structured_messages (OpenAI format), they must be
+        converted back to Anthropic format and written to data['messages']."""
+        handler = AnthropicMessagesHandler()
+
+        compressed_openai_messages = [
+            {"role": "user", "content": "compressed content"},
+        ]
+        guardrail = MockStructuredMessagesGuardrail(
+            guardrail_name="test-compressor",
+            compressed_messages=compressed_openai_messages,
+        )
+
+        data: dict = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "original long content that gets compressed"},
+            ],
+        }
+
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        messages = result["messages"]
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        content = messages[0]["content"]
+        if isinstance(content, str):
+            assert content == "compressed content"
+        elif isinstance(content, list):
+            assert any(block.get("text") == "compressed content" for block in content if isinstance(block, dict))
+
+    @pytest.mark.asyncio
+    async def test_no_structured_messages_falls_back_to_text_patching(self):
+        """When guardrail returns no structured_messages, the original text-patch path runs."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        original_content = "original content"
+        data: dict = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "user", "content": original_content}],
+        }
+
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        messages = result["messages"]
+        assert len(messages) == 1
+        content = messages[0]["content"]
+        if isinstance(content, str):
+            assert content == original_content
+
+
+class TestFunctionSetupLitellmMetadataReference:
+    """Regression test: guardrail info written to litellm_metadata must appear in
+    standard logging payload for endpoints that use litellm_metadata (e.g. /v1/messages)."""
+
+    def test_litellm_metadata_reference_not_copy(self):
+        """litellm_params['metadata'] must be the same object as kwargs['litellm_metadata']
+        so mutations by guardrails after function_setup are visible at logging time."""
+        import litellm
+        from datetime import datetime
+
+        litellm_metadata_dict: dict = {"user_api_key": "test-key"}
+        kwargs = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "user", "content": "hello"}],
+            "litellm_call_id": "test-call-id",
+            "litellm_metadata": litellm_metadata_dict,
+        }
+
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="anthropic_messages",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),
+            **kwargs,
+        )
+
+        litellm_metadata_dict["standard_logging_guardrail_information"] = [
+            {"guardrail_name": "test-guardrail", "guardrail_status": "success"}
+        ]
+
+        metadata_in_logging = logging_obj.litellm_params.get("metadata", {})
+        assert "standard_logging_guardrail_information" in metadata_in_logging, (
+            "guardrail info written to litellm_metadata after function_setup must be "
+            "visible in litellm_params['metadata'] — check function_setup uses a "
+            "reference not a copy for litellm_metadata endpoints"
+        )
 
 
 if __name__ == "__main__":

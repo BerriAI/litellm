@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: headroom-proxy
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: HEADROOM_TELEMETRY
+        value: "off"
+    healthCheckPath: /health

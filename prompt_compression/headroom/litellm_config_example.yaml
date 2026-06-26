@@ -1,0 +1,12 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+
+guardrails:
+  - guardrail_name: headroom-compression
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: pre_call
+      api_base: http://localhost:8100
+      # api_key: your-secret-key  # matches GUARDRAIL_API_KEY in the service
